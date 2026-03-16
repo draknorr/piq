@@ -4,13 +4,13 @@ import { Card } from "@/components/ui";
 import { WORKFLOW_STEPS } from "./config/content";
 
 const primaryLinkStyles =
-  "inline-flex items-center justify-center gap-2 rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:-translate-y-0.5 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+  "landing-button inline-flex items-center justify-center gap-2 rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 export function MidPageCTA() {
   return (
     <section className="px-4 py-16 sm:px-6 sm:py-20">
       <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <Card variant="elevated" className="h-full">
+        <Card variant="elevated" className="landing-panel h-full">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
             How the workflow stays compact
           </p>
@@ -23,9 +23,9 @@ export function MidPageCTA() {
             and less noise.
           </p>
           <div className="mt-8">
-            <Link href="/waitlist" className={primaryLinkStyles}>
-              Request access
-              <ArrowRight className="h-4 w-4" />
+            <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
+              <span>Request access</span>
+              <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
           </div>
         </Card>
@@ -34,7 +34,7 @@ export function MidPageCTA() {
           {WORKFLOW_STEPS.map((step) => (
             <div
               key={step.step}
-              className="rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
+              className="landing-panel rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
             >
               <div className="grid gap-3 sm:grid-cols-[auto_1fr]">
                 <span className="font-data text-caption text-accent-primary">

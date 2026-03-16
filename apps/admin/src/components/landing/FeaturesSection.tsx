@@ -34,10 +34,10 @@ export function FeaturesSection() {
               <Card
                 key={feature.title}
                 variant="interactive"
-                className="h-full animate-fade-in-up"
+                className="landing-panel group h-full animate-fade-in-up"
                 style={{ animationDelay: `${120 + index * 80}ms` }}
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-primary-muted text-accent-primary">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-primary-muted text-accent-primary transition-transform duration-300 group-hover:rotate-3 group-hover:scale-105">
                   <Icon className="h-4 w-4" />
                 </div>
                 <p className="mt-4 text-caption uppercase tracking-[0.16em] text-text-tertiary">

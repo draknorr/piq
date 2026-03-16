@@ -3,16 +3,16 @@ import { Badge } from "@/components/ui";
 import { CTA_BULLETS } from "./config/content";
 
 const primaryLinkStyles =
-  "inline-flex items-center justify-center rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:-translate-y-0.5 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+  "landing-button inline-flex items-center justify-center rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 const secondaryLinkStyles =
-  "inline-flex items-center justify-center rounded-md border border-border-muted bg-surface-raised px-5 py-3 text-body text-text-primary transition-colors duration-150 hover:border-border-prominent hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+  "landing-button inline-flex items-center justify-center rounded-md border border-border-muted bg-surface-raised px-5 py-3 text-body text-text-primary transition-colors duration-150 hover:border-border-prominent hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 export function WaitlistCTA() {
   return (
     <section className="px-4 pb-20 pt-16 sm:px-6 sm:pb-24 sm:pt-20">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[28px] border border-border-muted bg-surface-raised p-6 shadow-card sm:p-8 lg:p-10">
+        <div className="landing-panel rounded-[28px] border border-border-muted bg-surface-raised p-6 shadow-card sm:p-8 lg:p-10">
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)] lg:items-start">
             <div>
               <Badge variant="primary">Invite-only beta</Badge>
@@ -26,7 +26,7 @@ export function WaitlistCTA() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-border-subtle bg-surface p-5">
+            <div className="landing-panel rounded-2xl border border-border-subtle bg-surface p-5">
               <p className="text-body font-medium text-text-primary">
                 What to expect
               </p>
@@ -43,11 +43,11 @@ export function WaitlistCTA() {
               </ul>
 
               <div className="mt-6 flex flex-col gap-3">
-                <Link href="/waitlist" className={primaryLinkStyles}>
-                  Request access
+                <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
+                  <span>Request access</span>
                 </Link>
                 <Link href="/login" className={secondaryLinkStyles}>
-                  Already approved? Sign in
+                  <span>Already approved? Sign in</span>
                 </Link>
               </div>
             </div>

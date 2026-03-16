@@ -8,11 +8,16 @@ import {
   LANDING_JOBS,
 } from "./config/content";
 
+const HERO_NOTES = [
+  { label: "Release watch", value: "14 grouped signals" },
+  { label: "Pricing sweep", value: "3 repeating patterns" },
+] as const;
+
 const primaryLinkStyles =
-  "inline-flex items-center justify-center gap-2 rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:-translate-y-0.5 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+  "landing-button inline-flex items-center justify-center gap-2 rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 const secondaryLinkStyles =
-  "inline-flex items-center justify-center rounded-md border border-border-muted bg-surface-raised px-5 py-3 text-body text-text-primary transition-colors duration-150 hover:border-border-prominent hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+  "landing-button inline-flex items-center justify-center rounded-md border border-border-muted bg-surface-raised px-5 py-3 text-body text-text-primary transition-colors duration-150 hover:border-border-prominent hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 export function HeroSection() {
   return (
@@ -45,12 +50,12 @@ export function HeroSection() {
           </div>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Link href="/waitlist" className={primaryLinkStyles}>
-              Request access
-              <ArrowRight className="h-4 w-4" />
+            <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
+              <span>Request access</span>
+              <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
             <Link href="/login" className={secondaryLinkStyles}>
-              Sign in
+              <span>Sign in</span>
             </Link>
           </div>
 
@@ -58,12 +63,17 @@ export function HeroSection() {
             {LANDING_JOBS.map((job, index) => (
               <Card
                 key={job.title}
-                className="h-full animate-fade-in-up"
+                className="landing-panel h-full animate-fade-in-up"
                 style={{ animationDelay: `${120 + index * 60}ms` }}
               >
-                <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-                  {job.title}
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
+                    {job.title}
+                  </p>
+                  <span className="text-accent-primary">
+                    <span className="landing-beacon" />
+                  </span>
+                </div>
                 <p className="mt-3 text-body text-text-secondary">
                   {job.description}
                 </p>
@@ -72,19 +82,30 @@ export function HeroSection() {
           </div>
         </div>
 
-        <Card variant="elevated" className="overflow-hidden">
-          <div className="border-b border-border-subtle pb-4">
-            <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-              The daily loop
-            </p>
-            <p className="mt-3 text-heading-sm text-text-primary">
-              Start with a question. Open the proof.
-            </p>
+        <Card variant="elevated" className="landing-panel overflow-hidden">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-subtle pb-4">
+            <div>
+              <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
+                The daily loop
+              </p>
+              <p className="mt-3 text-heading-sm text-text-primary">
+                Start with a question. Open the proof.
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface px-3 py-1 text-caption text-text-secondary shadow-xs">
+              <span className="text-accent-primary">
+                <span className="landing-beacon" />
+              </span>
+              Example workflow
+            </div>
           </div>
 
           <div className="mt-5 space-y-4">
             {HERO_LOOP.map((item) => (
-              <div key={item.step} className="grid grid-cols-[auto_1fr] gap-3">
+              <div
+                key={item.step}
+                className="grid grid-cols-[auto_1fr] gap-3 rounded-2xl px-2 py-1 transition-transform duration-200 hover:translate-x-1"
+              >
                 <span className="font-data text-caption text-accent-primary">
                   {item.step}
                 </span>
@@ -104,13 +125,33 @@ export function HeroSection() {
             {HERO_SIGNAL_TILES.map((tile) => (
               <div
                 key={tile.label}
-                className="rounded-xl border border-border-subtle bg-surface p-3"
+                className="landing-panel rounded-xl border border-border-subtle bg-surface p-3"
               >
                 <p className="font-data text-heading-sm text-text-primary">
                   {tile.value}
                 </p>
                 <p className="mt-1 text-body-sm text-text-secondary">
                   {tile.label}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            {HERO_NOTES.map((note, index) => (
+              <div
+                key={note.label}
+                className={`rounded-2xl border border-border-subtle bg-surface px-3 py-2 shadow-xs transition-transform duration-300 ${
+                  index % 2 === 0
+                    ? "-rotate-1 hover:rotate-0"
+                    : "rotate-1 hover:rotate-0"
+                }`}
+              >
+                <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
+                  {note.label}
+                </p>
+                <p className="mt-1 text-body-sm font-medium text-text-primary">
+                  {note.value}
                 </p>
               </div>
             ))}

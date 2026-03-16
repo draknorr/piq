@@ -18,11 +18,17 @@ export function StatsSection() {
         </div>
 
         <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {COVERAGE_STATS.map((stat) => (
+          {COVERAGE_STATS.map((stat, index) => (
             <div
               key={stat.label}
-              className="rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
+              className="landing-panel relative rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
             >
+              <span
+                className="pointer-events-none absolute right-4 top-3 font-data text-[2.5rem] leading-none"
+                style={{ color: "var(--border-muted)" }}
+              >
+                {String(index + 1).padStart(2, "0")}
+              </span>
               <p className="font-data text-display-sm text-text-primary">
                 {stat.value}
               </p>
