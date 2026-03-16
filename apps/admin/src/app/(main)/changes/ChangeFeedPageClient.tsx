@@ -1054,7 +1054,7 @@ export function ChangeFeedPageClient({
     return () => {
       cancelled = true;
     };
-  }, [detailLoadingId, details, expandedId]);
+  }, [details, expandedId]);
 
   const handleParamChange = (updates: Record<string, string | null>) => {
     const nextUrl = buildUrl(pathname, searchParams, {
