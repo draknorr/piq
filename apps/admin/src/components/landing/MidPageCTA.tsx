@@ -1,51 +1,57 @@
-'use client';
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+import { Card } from "@/components/ui";
+import { WORKFLOW_STEPS } from "./config/content";
 
-import Link from 'next/link';
-import { motion } from 'framer-motion';
-import { VARIANTS, LANDING_COLORS } from './config/animations';
+const primaryLinkStyles =
+  "inline-flex items-center justify-center gap-2 rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:-translate-y-0.5 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 export function MidPageCTA() {
   return (
-    <section className="relative z-10 px-4 py-16 sm:px-6 sm:py-20">
-      <div className="mx-auto max-w-2xl text-center">
-        {/* Subtle radial glow */}
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: 'radial-gradient(ellipse at 50% 50%, rgba(0, 255, 163, 0.04) 0%, transparent 60%)',
-          }}
-        />
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-80px' }}
-          variants={VARIANTS.fadeInUp}
-          className="relative"
-        >
-          <h3
-            className="mb-4 text-2xl font-bold tracking-tight text-white sm:text-3xl"
-            style={{ letterSpacing: '-0.03em' }}
-          >
-            Ready to try it?
-          </h3>
-          <p
-            className="mx-auto mb-8 max-w-lg text-sm sm:text-base"
-            style={{ color: LANDING_COLORS.textSecondary }}
-          >
-            See your games&apos; data come to life with AI-powered analytics.
+    <section className="px-4 py-16 sm:px-6 sm:py-20">
+      <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <Card variant="elevated" className="h-full">
+          <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
+            How the workflow stays compact
           </p>
-          <Link
-            href="/waitlist"
-            className="landing-cta-glow inline-block rounded-lg px-6 py-3 text-sm font-semibold transition-all hover:-translate-y-0.5 sm:text-base"
-            style={{
-              background: `linear-gradient(135deg, ${LANDING_COLORS.neonGreen} 0%, ${LANDING_COLORS.neonBlue} 100%)`,
-              color: '#0a0a0f',
-              boxShadow: '0 0 20px rgba(0, 255, 163, 0.2)',
-            }}
-          >
-            Get Early Access
-          </Link>
-        </motion.div>
+          <h2 className="mt-3 text-display-sm text-text-primary">
+            The dataset is large. The interface should not feel large.
+          </h2>
+          <p className="mt-4 text-body-lg text-text-secondary">
+            The goal is not more dashboard chrome. It is faster movement from
+            incoming signal to decision-ready context, with less tool-switching
+            and less noise.
+          </p>
+          <div className="mt-8">
+            <Link href="/waitlist" className={primaryLinkStyles}>
+              Join the beta
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </Card>
+
+        <div className="grid gap-3">
+          {WORKFLOW_STEPS.map((step) => (
+            <div
+              key={step.step}
+              className="rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
+            >
+              <div className="grid gap-3 sm:grid-cols-[auto_1fr]">
+                <span className="font-data text-caption text-accent-primary">
+                  {step.step}
+                </span>
+                <div>
+                  <p className="text-body font-medium text-text-primary">
+                    {step.title}
+                  </p>
+                  <p className="mt-2 text-body-sm text-text-secondary">
+                    {step.description}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

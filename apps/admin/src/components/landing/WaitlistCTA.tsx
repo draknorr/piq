@@ -1,52 +1,58 @@
-'use client';
+import Link from "next/link";
+import { Badge } from "@/components/ui";
+import { CTA_BULLETS } from "./config/content";
 
-import Link from 'next/link';
-import { motion } from 'framer-motion';
-import { VARIANTS, LANDING_COLORS } from './config/animations';
+const primaryLinkStyles =
+  "inline-flex items-center justify-center rounded-md bg-accent-primary px-5 py-3 text-body font-medium text-white shadow-subtle transition-all duration-150 hover:-translate-y-0.5 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+
+const secondaryLinkStyles =
+  "inline-flex items-center justify-center rounded-md border border-border-muted bg-surface-raised px-5 py-3 text-body text-text-primary transition-colors duration-150 hover:border-border-prominent hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 export function WaitlistCTA() {
   return (
-    <section className="relative z-10 px-4 py-24 sm:px-6 sm:py-32">
-      <div className="mx-auto max-w-3xl text-center">
-        {/* Glow background */}
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: `radial-gradient(ellipse at 50% 50%, rgba(0, 255, 163, 0.06) 0%, transparent 60%)`,
-          }}
-        />
+    <section className="px-4 pb-20 pt-16 sm:px-6 sm:pb-24 sm:pt-20">
+      <div className="mx-auto max-w-7xl">
+        <div className="rounded-[28px] border border-border-muted bg-surface-raised p-6 shadow-card sm:p-8 lg:p-10">
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)] lg:items-start">
+            <div>
+              <Badge variant="primary">Invite-only beta</Badge>
+              <h2 className="mt-4 text-display-sm text-text-primary">
+                Get access to a calmer research workflow.
+              </h2>
+              <p className="mt-4 max-w-2xl text-body-lg text-text-secondary">
+                Join the waitlist if you want launch watch, catalog research,
+                company benchmarking, and change intelligence in one place
+                instead of spread across tabs and spreadsheets.
+              </p>
+            </div>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-100px' }}
-          variants={VARIANTS.fadeInUp}
-          className="relative"
-        >
-          <h2
-            className="mb-6 text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl"
-            style={{ letterSpacing: '-0.03em' }}
-          >
-            Stop guessing. Start knowing.
-          </h2>
-          <p
-            className="mx-auto mb-10 max-w-xl text-base sm:text-lg"
-            style={{ color: LANDING_COLORS.textSecondary }}
-          >
-            Get early access to AI-powered gaming intelligence. Free during beta.
-          </p>
-          <Link
-            href="/waitlist"
-            className="landing-cta-glow inline-block rounded-xl px-8 py-4 text-base font-semibold transition-all hover:-translate-y-0.5 sm:text-lg"
-            style={{
-              background: `linear-gradient(135deg, ${LANDING_COLORS.neonGreen} 0%, ${LANDING_COLORS.neonBlue} 100%)`,
-              color: '#0a0a0f',
-              boxShadow: `0 0 30px rgba(0, 255, 163, 0.3), 0 0 60px rgba(0, 255, 163, 0.1)`,
-            }}
-          >
-            Get Early Access
-          </Link>
-        </motion.div>
+            <div className="rounded-2xl border border-border-subtle bg-surface p-5">
+              <p className="text-body font-medium text-text-primary">
+                What to expect
+              </p>
+              <ul className="mt-4 space-y-3">
+                {CTA_BULLETS.map((bullet) => (
+                  <li
+                    key={bullet}
+                    className="flex gap-2 text-body-sm text-text-secondary"
+                  >
+                    <span className="mt-[0.45rem] h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent-primary" />
+                    <span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="mt-6 flex flex-col gap-3">
+                <Link href="/waitlist" className={primaryLinkStyles}>
+                  Join waitlist
+                </Link>
+                <Link href="/login" className={secondaryLinkStyles}>
+                  Already have access? Sign in
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

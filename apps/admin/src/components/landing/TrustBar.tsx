@@ -1,39 +1,22 @@
-'use client';
-
-import { motion } from 'framer-motion';
-import { VARIANTS, LANDING_COLORS } from './config/animations';
-
-const TRUST_ITEMS = [
-  { value: '200K+', label: 'Games' },
-  { value: '15M+', label: 'Data Points' },
-  { value: '4', label: 'Data Sources' },
-  { value: '15min', label: 'Update Cycle' },
-];
+import { TRUST_ITEMS } from "./config/content";
 
 export function TrustBar() {
   return (
-    <motion.div
-      initial="hidden"
-      whileInView="visible"
-      viewport={{ once: true, margin: '-50px' }}
-      variants={VARIANTS.fadeIn}
-      className="relative z-10 px-4 py-8 sm:py-12"
-    >
-      <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-6 sm:gap-10">
-        {TRUST_ITEMS.map((item, i) => (
-          <div key={item.label} className="flex items-center gap-2">
-            {i > 0 && (
-              <div className="mr-4 hidden h-4 w-px sm:block" style={{ background: 'rgba(255,255,255,0.1)' }} />
-            )}
-            <span className="font-mono text-sm font-semibold text-white sm:text-base" style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {item.value}
-            </span>
-            <span className="text-xs sm:text-sm" style={{ color: LANDING_COLORS.textMuted }}>
-              {item.label}
-            </span>
-          </div>
-        ))}
+    <section className="px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-6xl rounded-2xl border border-border-subtle bg-surface-raised px-4 py-4 shadow-xs sm:px-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {TRUST_ITEMS.map((item) => (
+            <div key={item.label} className="flex items-center gap-3">
+              <span className="font-data text-heading-sm text-text-primary">
+                {item.value}
+              </span>
+              <span className="text-body-sm text-text-secondary">
+                {item.label}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
-    </motion.div>
+    </section>
   );
 }

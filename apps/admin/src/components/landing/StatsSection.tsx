@@ -1,88 +1,40 @@
-'use client';
-
-import { motion, useInView } from 'framer-motion';
-import { useRef, useState, useEffect } from 'react';
-import { VARIANTS, LANDING_COLORS } from './config/animations';
-import { STATS } from './config/content';
-
-function AnimatedNumber({ value, inView }: { value: string; inView: boolean }) {
-  const [displayed, setDisplayed] = useState('0');
-  const numericPart = value.replace(/[^0-9]/g, '');
-  const suffix = value.replace(/[0-9]/g, '');
-
-  useEffect(() => {
-    if (!inView) return;
-
-    const target = parseInt(numericPart, 10);
-    const duration = 1500;
-    const steps = 40;
-    const stepTime = duration / steps;
-    let step = 0;
-
-    const interval = setInterval(() => {
-      step++;
-      const progress = step / steps;
-      // Ease-out quad
-      const eased = 1 - (1 - progress) * (1 - progress);
-      const current = Math.round(target * eased);
-
-      if (target >= 1000) {
-        setDisplayed(`${Math.round(current / 1000)}K`);
-      } else {
-        setDisplayed(String(current));
-      }
-
-      if (step >= steps) {
-        clearInterval(interval);
-        // Restore original formatted value
-        setDisplayed(value.replace(suffix, ''));
-      }
-    }, stepTime);
-
-    return () => clearInterval(interval);
-  }, [inView, numericPart, value, suffix]);
-
-  return (
-    <span>
-      {displayed}
-      {suffix}
-    </span>
-  );
-}
+import { COVERAGE_STATS } from "./config/content";
 
 export function StatsSection() {
-  const ref = useRef<HTMLDivElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-100px' });
-
   return (
-    <section className="relative z-10 px-4 py-24 sm:px-6 sm:py-32">
-      <div className="mx-auto max-w-5xl">
-        <motion.div
-          ref={ref}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-100px' }}
-          variants={VARIANTS.staggerContainerFast}
-          className="grid grid-cols-2 gap-8 md:grid-cols-4"
-        >
-          {STATS.map((stat) => (
-            <motion.div
+    <section className="px-4 py-16 sm:px-6 sm:py-20">
+      <div className="mx-auto max-w-7xl">
+        <div className="max-w-2xl">
+          <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
+            Coverage
+          </p>
+          <h2 className="mt-3 text-display-sm text-text-primary">
+            Coverage that stays usable.
+          </h2>
+          <p className="mt-4 text-body-lg text-text-secondary">
+            Breadth matters, but the real value is breadth organized into
+            surfaces that remain quick to scan, query, and compare.
+          </p>
+        </div>
+
+        <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {COVERAGE_STATS.map((stat) => (
+            <div
               key={stat.label}
-              variants={VARIANTS.countUp}
-              className="text-center"
+              className="rounded-2xl border border-border-subtle bg-surface-raised p-5 shadow-xs"
             >
-              <div
-                className="mb-2 text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl"
-                style={{ color: LANDING_COLORS.neonGreen, letterSpacing: '-0.03em' }}
-              >
-                <AnimatedNumber value={stat.value} inView={inView} />
-              </div>
-              <div className="text-xs uppercase tracking-widest sm:text-sm" style={{ color: LANDING_COLORS.textMuted }}>
+              <p className="font-data text-display-sm text-text-primary">
+                {stat.value}
+              </p>
+              <p className="mt-3 text-body font-medium text-text-primary">
                 {stat.label}
-              </div>
-            </motion.div>
+              </p>
+              <p className="mt-2 text-body-sm text-text-secondary">
+                {stat.description}
+              </p>
+            </div>
           ))}
-        </motion.div>
+        </div>
       </div>
     </section>
   );
