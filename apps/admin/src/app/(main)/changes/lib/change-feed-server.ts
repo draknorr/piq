@@ -521,6 +521,88 @@ function getLegacyPresetForView(view: ChangeFeedActivityParams['view']): ChangeF
   }
 }
 
+function shouldUseComposedActivityFastPath(params: ChangeFeedActivityParams): boolean {
+  if (params.mode === 'changes') {
+    return false;
+  }
+
+  if (params.signalFamilies && !params.signalFamilies.includes('announcement')) {
+    return false;
+  }
+
+  return true;
+}
+
+async function fetchComposedChangeFeedActivityResponse(
+  params: ChangeFeedActivityParams
+): Promise<ChangeFeedActivityResponse> {
+  const { offset } = decodeActivityCursor(params.cursor);
+  const internalLimit = Math.min(Math.max(offset + params.limit + 100, 150), 1000);
+  const changeSignalFamilies = params.signalFamilies?.filter((family) => family !== 'announcement') ?? null;
+
+  const [changeRows, newsResponse] = await Promise.all([
+    params.mode === 'announcements'
+      ? Promise.resolve<ChangeActivityRow[]>([])
+      : (async () => {
+          const data = await executeChangeFeedRpc<ActivityRpcRow[]>('get_change_feed_activity', {
+            p_days: params.days,
+            p_view: params.view,
+            p_mode: 'changes',
+            p_app_types: params.appTypes,
+            p_search: params.search,
+            p_signal_families: changeSignalFamilies,
+            p_sort:
+              params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
+            p_cursor_score: null,
+            p_cursor_time: null,
+            p_cursor_activity_id: null,
+            p_limit: internalLimit,
+          });
+
+          return (data ?? []).map(mapChangeActivityRow);
+        })(),
+    fetchChangeFeedNewsResponse({
+      days: params.days,
+      appTypes: params.appTypes,
+      search: params.search,
+      cursorTime: null,
+      cursorKey: null,
+      limit: internalLimit,
+    }),
+  ]);
+
+  let items: ChangeActivityRow[] = [
+    ...changeRows,
+    ...(newsResponse.items ?? []).map(buildAnnouncementActivityRow),
+  ];
+
+  items = filterActivitiesForView(items, params.view);
+  items = filterActivitiesBySignalFamilies(items, params.signalFamilies);
+  items = sortActivities(
+    items,
+    params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort
+  );
+
+  const pageItems = items.slice(offset, offset + params.limit);
+  const nextCursor =
+    items.length > offset + params.limit ? encodeActivityCursor({ offset: offset + params.limit }) : null;
+
+  return {
+    items: pageItems,
+    nextCursor,
+    meta: {
+      days: params.days,
+      view: params.view,
+      mode: params.mode,
+      sort: params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
+      limit: params.limit,
+      appTypes: params.appTypes,
+      signalFamilies: params.signalFamilies,
+      search: params.search,
+    },
+  };
+}
+
 async function fetchLegacyChangeFeedActivityResponse(
   params: ChangeFeedActivityParams
 ): Promise<ChangeFeedActivityResponse> {
@@ -597,6 +679,19 @@ export async function fetchChangeFeedActivityResponse(
     Date.now() - defaultActivityCache.cachedAt < DEFAULT_CACHE_TTL_MS
   ) {
     return defaultActivityCache.data;
+  }
+
+  if (shouldUseComposedActivityFastPath(params)) {
+    const response = await fetchComposedChangeFeedActivityResponse(params);
+
+    if (isDefaultRequest) {
+      defaultActivityCache = {
+        data: response,
+        cachedAt: Date.now(),
+      };
+    }
+
+    return response;
   }
 
   const rpcCursor = decodeActivityScoreCursor(params.cursor);

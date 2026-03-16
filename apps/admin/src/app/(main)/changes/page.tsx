@@ -18,6 +18,17 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic';
 
+function rangeToDays(range: string | undefined): string {
+  switch (range) {
+    case '24h':
+      return '1';
+    case '30d':
+      return '30';
+    default:
+      return '7';
+  }
+}
+
 function toUrlSearchParams(params: Record<string, string | undefined>): URLSearchParams {
   const urlSearchParams = new URLSearchParams();
 
@@ -68,6 +79,10 @@ export default async function ChangeFeedPage({ searchParams }: PageProps) {
 
   if (legacyView) {
     urlSearchParams.set('view', parseChangeActivityView(legacyView));
+  }
+
+  if (!urlSearchParams.has('days')) {
+    urlSearchParams.set('days', rangeToDays(params.range));
   }
 
   let initialActivityResponse: ChangeFeedActivityResponse | undefined;

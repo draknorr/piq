@@ -869,6 +869,7 @@ export function ChangeFeedPageClient({
   const sort = view === 'all-activity' && rawSort === 'relevant' ? 'newest' : rawSort;
   const search = searchParams.get('search') ?? initialSearch ?? '';
   const queryKey = `${view}|${mode}|${range}|${appType}|${signalFamilies.join(',')}|${sort}|${search}`;
+  const hasServerActivityResponse = Boolean(initialActivityResponse);
 
   const [searchInput, setSearchInput] = useState(search);
   const deferredSearch = useDeferredValue(searchInput);
@@ -903,14 +904,20 @@ export function ChangeFeedPageClient({
       return;
     }
 
-    const nextUrl = buildUrl(pathname, searchParams, {
-      search: deferredSearch || null,
-      cursor: null,
-    });
+    const timeoutId = window.setTimeout(() => {
+      const nextUrl = buildUrl(pathname, searchParams, {
+        search: deferredSearch || null,
+        cursor: null,
+      });
 
-    startTransition(() => {
-      router.replace(nextUrl, { scroll: false });
-    });
+      startTransition(() => {
+        router.replace(nextUrl, { scroll: false });
+      });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [deferredSearch, pathname, router, search, searchParams]);
 
   useEffect(() => {
@@ -920,20 +927,38 @@ export function ChangeFeedPageClient({
 
     previousQueryKeyRef.current = queryKey;
     requestVersionRef.current += 1;
-    setItems([]);
-    setCursor(null);
     setError(null);
     setLoading(false);
     setLoadingMore(false);
-    setLoadedKey(null);
     setExpandedId(null);
     setDetails({});
     setDetailErrors({});
     setDetailLoadingId(null);
-  }, [queryKey]);
+
+    if (hasServerActivityResponse) {
+      return;
+    }
+
+    setItems([]);
+    setCursor(null);
+    setLoadedKey(null);
+  }, [hasServerActivityResponse, queryKey]);
 
   useEffect(() => {
-    if (!authReady || loadedKey === queryKey) {
+    if (!initialActivityResponse) {
+      return;
+    }
+
+    setItems(initialActivityResponse.items);
+    setCursor(initialActivityResponse.nextCursor);
+    setError(null);
+    setLoading(false);
+    setLoadingMore(false);
+    setLoadedKey(queryKey);
+  }, [initialActivityResponse, queryKey]);
+
+  useEffect(() => {
+    if (!authReady || hasServerActivityResponse || loadedKey === queryKey) {
       return;
     }
 
@@ -981,7 +1006,19 @@ export function ChangeFeedPageClient({
     return () => {
       cancelled = true;
     };
-  }, [authReady, loadedKey, queryKey, range, view, mode, sort, appType, signalFamilies, search]);
+  }, [
+    authReady,
+    hasServerActivityResponse,
+    loadedKey,
+    queryKey,
+    range,
+    view,
+    mode,
+    sort,
+    appType,
+    signalFamilies,
+    search,
+  ]);
 
   useEffect(() => {
     if (!authReady) {
