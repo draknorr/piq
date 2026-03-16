@@ -34,12 +34,12 @@ export function HeroSection() {
           </h1>
 
           <p className="mt-5 max-w-2xl text-body-lg text-text-secondary">
-            PublisherIQ gives publishers, studios, investors, and analysts
-            tools no other platform puts in one system: evidence-linked change
-            intelligence, company benchmarking, and plain-English research
-            grounded in the data. Start with the deepest Steam workflows in
-            the market and carry the same research flow into broader signals
-            over time.
+            Track launch timing, pricing, store changes, company moves, and
+            market signals in one system. Ask questions in plain English,
+            compare the titles and companies behind the move, and open the
+            supporting evidence fast. Other teams still do this across
+            dashboards, spreadsheets, and point tools. PublisherIQ does it in
+            one workflow.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
@@ -52,7 +52,7 @@ export function HeroSection() {
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-              <span>Apply for beta access</span>
+              <span>Request beta access</span>
               <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
             <Link href="/login" className={secondaryLinkStyles}>
@@ -87,7 +87,7 @@ export function HeroSection() {
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-subtle pb-4">
             <div>
               <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-                The daily advantage
+                The operating loop
               </p>
               <p className="mt-3 text-heading-sm text-text-primary">
                 Ask once. Follow the thread to proof.

@@ -6,14 +6,14 @@ export function StatsSection() {
       <div className="mx-auto max-w-7xl">
         <div className="max-w-2xl">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-            Why the coverage matters
+            Depth that holds up
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            Coverage built for action, not database tourism.
+            Deepest on Steam today. Built to lead the wider market next.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            The hard part is turning breadth into something operators can
-            actually monitor, query, and compare.
+            Breadth matters only if teams can monitor it, query it, compare
+            it, and open the proof without leaving the workflow.
           </p>
         </div>
 

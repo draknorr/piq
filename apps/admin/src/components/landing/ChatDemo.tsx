@@ -23,7 +23,7 @@ export function ChatDemo() {
               Example workspace
             </span>
             <span className="text-caption text-text-tertiary sm:ml-auto">
-              One workflow from signal to proof
+              The full loop in one system
             </span>
           </div>
 
@@ -34,8 +34,9 @@ export function ChatDemo() {
                   <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary-muted text-accent-primary">
                     <Search className="h-4 w-4" />
                   </span>
-                  Which publishers tightened release timing this week, and what
-                  changed first?
+                  Which publishers changed release timing this week, what
+                  changed on the store page first, and who else is repeating
+                  the pattern?
                 </div>
               </div>
 

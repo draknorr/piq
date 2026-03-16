@@ -17,12 +17,13 @@ export function WaitlistCTA() {
             <div>
               <Badge variant="primary">Invite-only beta</Badge>
               <h2 className="mt-4 text-display-sm text-text-primary">
-                Get access to the workflow other teams still do by hand.
+                Get access to the category leader.
               </h2>
               <p className="mt-4 max-w-2xl text-body-lg text-text-secondary">
-                Tell us what you need to research or monitor. We are
-                prioritizing teams that need depth, repeatability, and
-                evidence.
+                Tell us what you need to track: launches, pricing, competitor
+                moves, diligence, or portfolio strategy. We are prioritizing
+                teams that need serious monitoring, benchmarking, and
+                evidence-backed research now.
               </p>
             </div>
 
@@ -44,7 +45,7 @@ export function WaitlistCTA() {
 
               <div className="mt-6 flex flex-col gap-3">
                 <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-                  <span>Apply for beta access</span>
+                  <span>Request beta access</span>
                 </Link>
                 <Link href="/login" className={secondaryLinkStyles}>
                   <span>Already approved? Sign in</span>

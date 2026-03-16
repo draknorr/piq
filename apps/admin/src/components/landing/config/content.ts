@@ -7,40 +7,40 @@ export const LANDING_AUDIENCES = [
 
 export const LANDING_JOBS = [
   {
-    title: "Change intelligence",
+    title: "Monitor the move",
     description:
       "See release timing, pricing, store-page, and announcement moves as one readable story.",
   },
   {
-    title: "Market research",
+    title: "Ask the market",
     description:
-      "Ask about games, genres, publishers, and developers in plain English, then open the evidence trail.",
+      "Ask about games, genres, publishers, developers, and market patterns in plain English, then open the evidence trail.",
   },
   {
-    title: "Company intelligence",
+    title: "Benchmark the actors",
     description:
-      "Compare portfolios, commercial patterns, and momentum before you make the call.",
+      "Compare titles, portfolios, commercial patterns, and momentum before you make the call.",
   },
 ] as const;
 
 export const HERO_LOOP = [
   {
     step: "01",
-    title: "Ask the real question",
+    title: "Ask the actual market question",
     description:
-      "Start with the market question, not the filters you have to assemble first.",
+      "Start with the question you need answered, not the filters another tool makes you assemble first.",
   },
   {
     step: "02",
-    title: "Pressure-test the signal",
+    title: "Pressure-test the move",
     description:
-      "Slice by launch timing, pricing, platform, company type, momentum, or recent activity in a few moves.",
+      "Cut by launch timing, pricing, platform, company behavior, momentum, or recent activity until you know whether it matters.",
   },
   {
     step: "03",
-    title: "Open the evidence trail",
+    title: "Open the proof",
     description:
-      "Jump from the summary into before / after diffs, related announcements, and the entities driving the move.",
+      "Jump straight into before / after diffs, related announcements, linked entities, and the evidence behind the conclusion.",
   },
 ] as const;
 
@@ -56,14 +56,14 @@ export const PREVIEW_PANELS = [
     eyebrow: "Change Feed",
     title: "14 upcoming titles tightened release timing in the last 24 hours",
     description:
-      "Grouped change cards turn scattered market movement into an immediate launch-watch view, with the evidence attached.",
+      "Grouped change cards turn scattered release movement into an immediate launch-watch view, with the proof attached.",
     tags: ["Launch Watch", "Release timing", "Store refresh"],
   },
   {
     eyebrow: "Companies",
     title: "3 publishers are repeating the same pricing playbook this week",
     description:
-      "Open the portfolios, compare the pattern, and decide whether it is discounting, launch setup, or something bigger.",
+      "Open the portfolios, compare the pattern, and decide whether it is discount pressure, launch setup, or a bigger commercial shift.",
     tags: ["Commercial Moves", "Pricing", "Benchmark"],
   },
 ] as const;
@@ -80,7 +80,7 @@ export const WATCHLIST_ITEMS = [
     variant: "orange",
   },
   {
-    name: "Studios with momentum but weak GTM",
+    name: "Studios with strong products and weak GTM",
     detail: "9 titles look stronger than their current store presentation",
     variant: "success",
   },
@@ -88,8 +88,8 @@ export const WATCHLIST_ITEMS = [
 
 export const WORKBENCH_METRICS = [
   { label: "Question to evidence", value: "< 1 min" },
-  { label: "Activity cards per page", value: "50" },
-  { label: "Entity coverage", value: "Games, publishers, developers" },
+  { label: "Grouped activity cards", value: "50" },
+  { label: "Coverage in one system", value: "Games, publishers, developers" },
 ] as const;
 
 export const TRUST_ITEMS = [
@@ -104,10 +104,10 @@ export const FEATURES = [
     eyebrow: "Ask",
     title: "Ask the market a real question",
     description:
-      "Ask in plain English, resolve to the right entities, then inspect the proof without losing the thread.",
+      "Ask in plain English, resolve to the right entities, then inspect the proof instead of settling for a vague summary.",
     points: [
       "Go from a question to the exact game, company, or pattern worth opening.",
-      "Keep the answer tied to the dataset instead of a generic summary.",
+      "Keep the answer tied to the data and the evidence behind it.",
     ],
   },
   {
@@ -116,7 +116,7 @@ export const FEATURES = [
     description:
       "Change intelligence tracks release timing, pricing, store refreshes, announcements, and the response that follows.",
     points: [
-      "Grouped activity makes noisy updates readable without hiding the proof.",
+      "Grouped activity turns noisy updates into something operators can actually read.",
       "See commercial, launch, and presentation changes in one operating surface.",
     ],
   },
@@ -124,7 +124,7 @@ export const FEATURES = [
     eyebrow: "Compare",
     title: "Benchmark companies and titles without breaking context",
     description:
-      "Move from a game to a publisher to the wider pattern without starting over.",
+      "Move from a title to a publisher to the wider pattern without breaking context or starting over.",
     points: [
       "Compare portfolios, momentum, and commercial behavior in the same system.",
       "Carry context from one signal into the next decision.",
@@ -137,13 +137,13 @@ export const WORKFLOW_STEPS = [
     step: "01",
     title: "Start with the market question",
     description:
-      "A prompt, saved view, or change-feed slice gets you to the interesting part of the market fast.",
+      "A prompt, saved view, or change-feed slice gets you to the important part of the market fast.",
   },
   {
     step: "02",
     title: "Narrow the move that matters",
     description:
-      "Refine by timing, pricing, platform, company type, or momentum without opening five disconnected tools.",
+      "Refine by timing, pricing, platform, company type, or momentum without reopening the research in five disconnected tools.",
   },
   {
     step: "03",
@@ -158,30 +158,30 @@ export const COVERAGE_STATS = [
     value: "200K+",
     label: "Steam listings indexed",
     description:
-      "The deepest current wedge: games, demos, DLC, tools, and other entities organized for serious research.",
+      "Games, demos, DLC, tools, and other entities structured for research, monitoring, and benchmarking.",
   },
   {
     value: "15M+",
     label: "Tracked data points",
     description:
-      "Enough depth to support monitoring, benchmarking, and plain-English analysis.",
+      "Depth that supports change intelligence, benchmarking, and plain-English analysis.",
   },
   {
     value: "4",
     label: "Signal sources",
     description:
-      "Steam plus adjacent sources already shaping a broader research flow.",
+      "Steam plus adjacent sources already feeding a broader market workflow.",
   },
   {
     value: "15 min",
     label: "Freshness target",
     description:
-      "Fast enough for live monitoring workflows, not just retrospective reporting.",
+      "Fast enough for live monitoring and decision support, not just retrospective reporting.",
   },
 ] as const;
 
 export const CTA_BULLETS = [
-  "We review beta access based on who needs serious research and monitoring depth now.",
+  "We prioritize teams that need recurring market research and monitoring depth now.",
   "Tell us what you track: launches, pricing, competitor moves, diligence, or portfolio strategy.",
   "If your email is already approved, sign in and pick up where the last question ended.",
 ] as const;

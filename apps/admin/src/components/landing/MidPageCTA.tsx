@@ -12,18 +12,18 @@ export function MidPageCTA() {
       <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <Card variant="elevated" className="landing-panel h-full">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-            Why the workflow wins
+            Built for operators
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            The advantage is not more data. It is what you can do with it.
+            Track the signal. Test the move. Open the proof. Make the call.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            PublisherIQ moves from signal to decision while the window still
-            matters, with less hunting, less re-querying, and less noise.
+            That is the job. Other teams still split it across dashboards,
+            spreadsheets, and one-off tools.
           </p>
           <div className="mt-8">
             <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-              <span>Apply for beta access</span>
+              <span>Request beta access</span>
               <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
           </div>

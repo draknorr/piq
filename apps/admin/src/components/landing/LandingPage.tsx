@@ -1,7 +1,5 @@
 import { LandingNav } from "./LandingNav";
 import { HeroSection } from "./HeroSection";
-import { ChatDemo } from "./ChatDemo";
-import { TrustBar } from "./TrustBar";
 import { FeaturesSection } from "./FeaturesSection";
 import { MidPageCTA } from "./MidPageCTA";
 import { StatsSection } from "./StatsSection";
@@ -55,8 +53,6 @@ export function LandingPage() {
 
       <main className="relative z-10">
         <HeroSection />
-        <ChatDemo />
-        <TrustBar />
         <FeaturesSection />
         <MidPageCTA />
         <StatsSection />

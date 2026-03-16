@@ -40,7 +40,7 @@ export function LandingNav() {
               <span className="text-accent-primary">
                 <span className="landing-beacon" />
               </span>
-              Deepest on Steam today
+              The category leader in game market intelligence
             </p>
           </div>
         </Link>
@@ -54,7 +54,7 @@ export function LandingNav() {
             <span>Sign in</span>
           </Link>
           <Link href="/waitlist" className={primaryLinkStyles}>
-            <span>Apply for beta access</span>
+            <span>Request beta access</span>
           </Link>
         </div>
       </div>
