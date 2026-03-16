@@ -46,7 +46,7 @@ export const HERO_LOOP = [
 
 export const HERO_SIGNAL_TILES = [
   { value: "200K+", label: "Steam listings indexed" },
-  { value: "15M+", label: "Daily metric facts" },
+  { value: "15M+", label: "Tracked data points" },
   { value: "4", label: "Signal sources unified" },
   { value: "15 min", label: "Freshness target" },
 ] as const;
@@ -54,14 +54,14 @@ export const HERO_SIGNAL_TILES = [
 export const PREVIEW_PANELS = [
   {
     eyebrow: "Change Feed",
-    title: "14 titles tightened release timing in the last 24 hours",
+    title: "14 titles narrowed their release window in the last 24 hours",
     description:
       "Grouped activity turns noisy Steam updates into one readable launch-prep story with related evidence attached.",
     tags: ["Launch Watch", "Release timing", "Store refresh"],
   },
   {
     eyebrow: "Companies",
-    title: "3 publishers repeated pricing and package moves this week",
+    title: "3 publishers repeated pricing and package changes this week",
     description:
       "Open the affected portfolios immediately and compare the commercial pattern before it turns into spreadsheet work.",
     tags: ["Commercial Moves", "Pricing", "Benchmark"],
@@ -87,14 +87,14 @@ export const WATCHLIST_ITEMS = [
 ] as const;
 
 export const WORKBENCH_METRICS = [
-  { label: "Query to evidence", value: "< 1 min" },
-  { label: "Grouped activities", value: "50 / page" },
+  { label: "Question to evidence", value: "< 1 min" },
+  { label: "Activity cards per page", value: "50" },
   { label: "Entity coverage", value: "Games, publishers, developers" },
 ] as const;
 
 export const TRUST_ITEMS = [
   { value: "200K+", label: "Listings indexed" },
-  { value: "15M+", label: "Metric facts per day" },
+  { value: "15M+", label: "Tracked data points" },
   { value: "4", label: "Signal sources unified" },
   { value: "15 min", label: "Update cadence target" },
 ] as const;
@@ -102,32 +102,32 @@ export const TRUST_ITEMS = [
 export const FEATURES = [
   {
     eyebrow: "Ask",
-    title: "Use natural language without losing analytical rigor",
+    title: "Ask in plain English, then open the supporting data",
     description:
-      "Search and chat share the same underlying entities, so questions can turn into structured follow-up workflows immediately.",
+      "Search and chat are tied to the same underlying entities, so a broad question can turn into a concrete app, company, or evidence trail immediately.",
     points: [
-      "Move from a prompt to the relevant app or company surface quickly.",
-      "Keep the answer tied to the underlying dataset instead of a generic summary.",
+      "Move from a question to the relevant game or company without retyping filters.",
+      "Keep answers anchored to the dataset instead of a generic AI summary.",
     ],
   },
   {
     eyebrow: "Monitor",
-    title: "Keep launch and commercial signals in one stream",
+    title: "Keep launch, pricing, and store signals in one stream",
     description:
-      "Change intelligence is organized around the workflows market teams actually repeat: launch watch, pricing, store refreshes, and announcement context.",
+      "Change intelligence is organized around the workflows market teams repeat most: launch watch, pricing moves, store refreshes, and announcement context.",
     points: [
       "Grouped activity cards reduce Steam noise without hiding the evidence.",
-      "Filters stay compact enough for daily use instead of feeling like admin overhead.",
+      "Filters stay compact enough for daily use instead of turning into dashboard overhead.",
     ],
   },
   {
     eyebrow: "Compare",
-    title: "Benchmark games and companies from the same workspace",
+    title: "Compare games and companies without losing context",
     description:
-      "Catalog research, publisher analysis, and developer comparison live in the same system, which keeps context from breaking every time the question changes.",
+      "Catalog research, publisher analysis, and developer comparison live in one system, so context does not break every time the question changes.",
     points: [
-      "Open portfolios, momentum, and commercial shifts from one place.",
-      "Stay close to the data while moving across games, publishers, and developers.",
+      "Open portfolios, momentum, and commercial shifts from the same workspace.",
+      "Stay close to the evidence while moving across games, publishers, and developers.",
     ],
   },
 ] as const;
@@ -162,7 +162,7 @@ export const COVERAGE_STATS = [
   },
   {
     value: "15M+",
-    label: "Daily metric facts",
+    label: "Tracked data points",
     description:
       "Enough coverage to matter, shaped into surfaces that remain fast to scan.",
   },
@@ -181,9 +181,9 @@ export const COVERAGE_STATS = [
 ] as const;
 
 export const CTA_BULLETS = [
-  "Invite-only beta with access granted in waves.",
-  "Designed for repeated daily analysis, not one-off report generation.",
-  "If you already have access, sign in immediately and keep working.",
+  "We review access requests in waves during the beta.",
+  "Tell us your role and what you need to research or monitor.",
+  "If your email is already approved, sign in with that address.",
 ] as const;
 
 export const FOOTER_LINKS = {

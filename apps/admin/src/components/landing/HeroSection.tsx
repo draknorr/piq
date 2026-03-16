@@ -25,14 +25,15 @@ export function HeroSection() {
           </div>
 
           <h1 className="mt-6 max-w-3xl text-display-lg text-text-primary sm:text-[4.25rem]">
-            Research the Steam market with evidence already organized.
+            Research the Steam market with the evidence already grouped for you.
           </h1>
 
           <p className="mt-5 max-w-2xl text-body-lg text-text-secondary">
             PublisherIQ helps publishers, developers, investors, and analysts
-            move from question to evidence quickly. Ask about catalogs, monitor
-            change intelligence, benchmark companies, and open the supporting
-            context without stitching together four different tools.
+            move from a question to decision-ready context quickly. Research
+            catalogs, monitor pricing and launch changes, benchmark companies,
+            and open the supporting evidence without stitching together four
+            different tools.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
@@ -45,7 +46,7 @@ export function HeroSection() {
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link href="/waitlist" className={primaryLinkStyles}>
-              Get early access
+              Request access
               <ArrowRight className="h-4 w-4" />
             </Link>
             <Link href="/login" className={secondaryLinkStyles}>
@@ -77,7 +78,7 @@ export function HeroSection() {
               The daily loop
             </p>
             <p className="mt-3 text-heading-sm text-text-primary">
-              Start with a question. Stay close to the evidence.
+              Start with a question. Open the proof.
             </p>
           </div>
 

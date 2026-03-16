@@ -15,7 +15,7 @@ export function MidPageCTA() {
             How the workflow stays compact
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            The dataset is large. The interface should not feel large.
+            A large dataset should still feel easy to work through.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
             The goal is not more dashboard chrome. It is faster movement from
@@ -24,7 +24,7 @@ export function MidPageCTA() {
           </p>
           <div className="mt-8">
             <Link href="/waitlist" className={primaryLinkStyles}>
-              Join the beta
+              Request access
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>

@@ -37,7 +37,7 @@ export function LandingNav() {
               PublisherIQ
             </p>
             <p className="hidden text-body-sm text-text-secondary sm:block">
-              Gaming industry intelligence
+              Steam market intelligence
             </p>
           </div>
         </Link>
@@ -51,7 +51,7 @@ export function LandingNav() {
             Sign in
           </Link>
           <Link href="/waitlist" className={primaryLinkStyles}>
-            Join waitlist
+            Request access
           </Link>
         </div>
       </div>

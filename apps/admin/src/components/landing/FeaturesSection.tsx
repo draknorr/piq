@@ -17,12 +17,12 @@ export function FeaturesSection() {
             What the product is built to do
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            A research workflow, not a toy demo.
+            A research workflow built for repeated daily use.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            PublisherIQ is strongest when the question changes quickly but the
-            context needs to stay intact. The interface keeps dense analysis
-            compact enough for repeated daily use.
+            PublisherIQ is strongest when the question changes quickly and the
+            context still needs to stay intact. The interface keeps dense
+            analysis compact enough to revisit throughout the day.
           </p>
         </div>
 

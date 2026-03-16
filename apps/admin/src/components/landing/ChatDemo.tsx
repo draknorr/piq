@@ -17,7 +17,7 @@ export function ChatDemo() {
             <Badge variant="default">Companies</Badge>
             <Badge variant="default">Catalog</Badge>
             <span className="text-caption text-text-tertiary sm:ml-auto">
-              One workflow from question to evidence
+              One workflow from question to proof
             </span>
           </div>
 
@@ -26,8 +26,8 @@ export function ChatDemo() {
               <div className="rounded-2xl border border-border-subtle bg-surface p-4">
                 <div className="flex items-center gap-2 text-body-sm text-text-secondary">
                   <Search className="h-4 w-4" />
-                  Which publishers tightened release timing this week, and what
-                  changed on their store pages?
+                  Which publishers changed release timing this week, and what
+                  changed on the store page?
                 </div>
               </div>
 
@@ -63,7 +63,7 @@ export function ChatDemo() {
               <div className="rounded-2xl border border-border-subtle bg-surface p-5">
                 <div className="flex items-center gap-2 text-body-sm font-medium text-text-primary">
                   <Activity className="h-4 w-4 text-accent-primary" />
-                  Live watchlists
+                  Active watchlists
                 </div>
                 <div className="mt-4 space-y-3">
                   {WATCHLIST_ITEMS.map((item) => (

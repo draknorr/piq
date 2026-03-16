@@ -17,12 +17,12 @@ export function WaitlistCTA() {
             <div>
               <Badge variant="primary">Invite-only beta</Badge>
               <h2 className="mt-4 text-display-sm text-text-primary">
-                Get access to a calmer research workflow.
+                Request access to PublisherIQ.
               </h2>
               <p className="mt-4 max-w-2xl text-body-lg text-text-secondary">
-                Join the waitlist if you want launch watch, catalog research,
-                company benchmarking, and change intelligence in one place
-                instead of spread across tabs and spreadsheets.
+                Tell us what you need to research or monitor. We review access
+                requests during the beta and approve accounts that fit the
+                current rollout.
               </p>
             </div>
 
@@ -44,10 +44,10 @@ export function WaitlistCTA() {
 
               <div className="mt-6 flex flex-col gap-3">
                 <Link href="/waitlist" className={primaryLinkStyles}>
-                  Join waitlist
+                  Request access
                 </Link>
                 <Link href="/login" className={secondaryLinkStyles}>
-                  Already have access? Sign in
+                  Already approved? Sign in
                 </Link>
               </div>
             </div>
