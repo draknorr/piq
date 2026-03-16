@@ -9,8 +9,8 @@ import {
 } from "./config/content";
 
 const HERO_NOTES = [
-  { label: "Release watch", value: "14 grouped signals" },
-  { label: "Pricing sweep", value: "3 repeating patterns" },
+  { label: "Launch watch", value: "14 grouped moves" },
+  { label: "Company pattern", value: "3 repeated pricing plays" },
 ] as const;
 
 const primaryLinkStyles =
@@ -26,19 +26,20 @@ export function HeroSection() {
         <div className="max-w-3xl">
           <div className="flex flex-wrap items-center gap-2 animate-fade-in-up">
             <Badge variant="primary">Invite-only beta</Badge>
-            <Badge variant="default">Steam market intelligence</Badge>
+            <Badge variant="default">Deepest on Steam today</Badge>
           </div>
 
           <h1 className="mt-6 max-w-3xl text-display-lg text-text-primary sm:text-[4.25rem]">
-            Research the Steam market with the evidence already grouped for you.
+            The most advanced market-intelligence workflow in games.
           </h1>
 
           <p className="mt-5 max-w-2xl text-body-lg text-text-secondary">
-            PublisherIQ helps publishers, developers, investors, and analysts
-            move from a question to decision-ready context quickly. Research
-            catalogs, monitor pricing and launch changes, benchmark companies,
-            and open the supporting evidence without stitching together four
-            different tools.
+            PublisherIQ gives publishers, studios, investors, and analysts
+            tools no other platform puts in one system: evidence-linked change
+            intelligence, company benchmarking, and plain-English research that
+            stays grounded in the data. Start with the deepest Steam workflows
+            in the market and carry the same research flow into broader signals
+            as the platform expands.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
@@ -51,7 +52,7 @@ export function HeroSection() {
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-              <span>Request access</span>
+              <span>Apply for beta access</span>
               <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
             <Link href="/login" className={secondaryLinkStyles}>
@@ -86,17 +87,17 @@ export function HeroSection() {
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-subtle pb-4">
             <div>
               <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-                The daily loop
+                The daily advantage
               </p>
               <p className="mt-3 text-heading-sm text-text-primary">
-                Start with a question. Open the proof.
+                Ask once. Follow the thread to proof.
               </p>
             </div>
             <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface px-3 py-1 text-caption text-text-secondary shadow-xs">
               <span className="text-accent-primary">
                 <span className="landing-beacon" />
               </span>
-              Example workflow
+              Live workflow
             </div>
           </div>
 

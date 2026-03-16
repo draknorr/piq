@@ -17,12 +17,12 @@ export function WaitlistCTA() {
             <div>
               <Badge variant="primary">Invite-only beta</Badge>
               <h2 className="mt-4 text-display-sm text-text-primary">
-                Request access to PublisherIQ.
+                Get access to the workflow other teams still do by hand.
               </h2>
               <p className="mt-4 max-w-2xl text-body-lg text-text-secondary">
-                Tell us what you need to research or monitor. We review access
-                requests during the beta and approve accounts that fit the
-                current rollout.
+                Tell us what you need to research or monitor. We are
+                prioritizing teams that need depth, repeatability, and
+                evidence, not another generic dashboard.
               </p>
             </div>
 
@@ -44,7 +44,7 @@ export function WaitlistCTA() {
 
               <div className="mt-6 flex flex-col gap-3">
                 <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-                  <span>Request access</span>
+                  <span>Apply for beta access</span>
                 </Link>
                 <Link href="/login" className={secondaryLinkStyles}>
                   <span>Already approved? Sign in</span>

@@ -12,19 +12,19 @@ export function MidPageCTA() {
       <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <Card variant="elevated" className="landing-panel h-full">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-            How the workflow stays compact
+            Why the workflow wins
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            A large dataset should still feel easy to work through.
+            The advantage is not more data. It is what you can do with it.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            The goal is not more dashboard chrome. It is faster movement from
-            incoming signal to decision-ready context, with less tool-switching
-            and less noise.
+            Anyone can dump more rows on the screen. PublisherIQ gives you a
+            workflow that moves from signal to decision while the window still
+            matters, with less hunting, less re-querying, and less noise.
           </p>
           <div className="mt-8">
             <Link href="/waitlist" className={`${primaryLinkStyles} group`}>
-              <span>Request access</span>
+              <span>Apply for beta access</span>
               <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" />
             </Link>
           </div>

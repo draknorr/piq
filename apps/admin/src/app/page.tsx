@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { LandingPage } from "@/components/landing/LandingPage";
 
 export const metadata: Metadata = {
-  title: "PublisherIQ - Steam Market Intelligence",
+  title: "PublisherIQ - Game Market Intelligence, Deepest on Steam Today",
   description:
-    "Research Steam games and companies, monitor launch and pricing changes, and compare publishers with supporting evidence in one workspace.",
+    "Track launch, pricing, store, and company signals. Ask plain-English questions. Open the evidence. PublisherIQ gives game teams the most advanced market-intelligence workflow, starting with Steam.",
 };
 
 export default function Page() {

@@ -6,14 +6,15 @@ export function StatsSection() {
       <div className="mx-auto max-w-7xl">
         <div className="max-w-2xl">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-            Coverage
+            Why the coverage matters
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            Coverage that stays usable.
+            Coverage built for action, not database tourism.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            Breadth matters, but the real value is breadth organized into
-            surfaces that remain quick to scan, query, and compare.
+            Plenty of products can show you more rows. The hard part is turning
+            breadth into something operators can actually monitor, query, and
+            compare.
           </p>
         </div>
 

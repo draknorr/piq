@@ -14,15 +14,16 @@ export function FeaturesSection() {
       <div className="mx-auto max-w-7xl">
         <div className="max-w-2xl">
           <p className="text-caption uppercase tracking-[0.16em] text-text-tertiary">
-            What the product is built to do
+            Why teams switch
           </p>
           <h2 className="mt-3 text-display-sm text-text-primary">
-            A research workflow built for repeated daily use.
+            The tools other platforms still make you piece together.
           </h2>
           <p className="mt-4 text-body-lg text-text-secondary">
-            PublisherIQ is strongest when the question changes quickly and the
-            context still needs to stay intact. The interface keeps dense
-            analysis compact enough to revisit throughout the day.
+            PublisherIQ is built for operators who need to research, monitor,
+            and compare without losing the thread. That is why it feels faster
+            than a database, more grounded than generic AI, and more useful
+            than another dashboard.
           </p>
         </div>
 

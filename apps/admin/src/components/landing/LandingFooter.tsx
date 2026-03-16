@@ -14,7 +14,7 @@ export function LandingFooter() {
               PublisherIQ
             </p>
             <p className="text-body-sm text-text-secondary">
-              Steam market intelligence platform
+              Game market intelligence, deepest on Steam today
             </p>
           </div>
         </div>

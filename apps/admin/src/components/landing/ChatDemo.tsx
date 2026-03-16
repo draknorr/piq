@@ -23,7 +23,7 @@ export function ChatDemo() {
               Example workspace
             </span>
             <span className="text-caption text-text-tertiary sm:ml-auto">
-              One workflow from question to proof
+              One workflow from signal to proof
             </span>
           </div>
 
@@ -34,8 +34,8 @@ export function ChatDemo() {
                   <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary-muted text-accent-primary">
                     <Search className="h-4 w-4" />
                   </span>
-                  Which publishers changed release timing this week, and what
-                  changed on the store page?
+                  Which publishers tightened release timing this week, and what
+                  changed first?
                 </div>
               </div>
 
@@ -54,7 +54,7 @@ export function ChatDemo() {
                         <span className="text-accent-primary">
                           <span className="landing-beacon" />
                         </span>
-                        Evidence linked
+                        Evidence ready
                       </span>
                     </div>
                     <h2 className="mt-3 text-heading-sm text-text-primary">
@@ -71,7 +71,7 @@ export function ChatDemo() {
                       ))}
                     </div>
                     <div className="mt-5 border-t border-border-subtle pt-3 text-caption uppercase tracking-[0.16em] text-text-tertiary">
-                      Ready to open the related evidence trail
+                      Open the evidence trail
                     </div>
                   </div>
                 ))}
@@ -111,7 +111,7 @@ export function ChatDemo() {
               <div className="landing-panel rounded-2xl border border-border-subtle bg-surface p-5">
                 <div className="flex items-center gap-2 text-body-sm font-medium text-text-primary">
                   <Building2 className="h-4 w-4 text-accent-primary" />
-                  Workbench summary
+                  Workflow snapshot
                 </div>
                 <div className="mt-4 space-y-3">
                   {WORKBENCH_METRICS.map((metric) => (
@@ -129,7 +129,7 @@ export function ChatDemo() {
                   ))}
                 </div>
                 <div className="group mt-5 inline-flex items-center gap-1 text-body-sm text-accent-primary">
-                  Open the full workflow
+                  Follow the full workflow
                   <ArrowUpRight className="h-4 w-4 transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </div>
               </div>
