@@ -1,12 +1,13 @@
 import type { TypedSupabaseClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
-import { fetchAppNews, type NewsItem } from '../apis/steam-web.js';
+import { fetchAppNews } from '../apis/steam-web.js';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
 import { HeroAssetArchiver } from '../change-intel/hero-archive.js';
 import { diffNewsVersions, normalizeNewsVersion } from '../change-intel/news.js';
 import {
   completeCaptureQueueItems,
   enqueueCaptureJobs,
+  getLastNewsSyncAt,
   getLatestMediaVersion,
   getLatestNewsVersion,
   getLatestStorefrontSnapshot,
@@ -27,6 +28,55 @@ import {
 
 const log = logger.child({ component: 'change-intel-support' });
 const STEAM_NEWS_MAX_LENGTH = 20_000;
+const DEFAULT_NEWS_STALE_HOURS = 24;
+const DEFAULT_INCREMENTAL_NEWS_COUNT = 25;
+const DEFAULT_CATCHUP_MAX_PAGES = 5;
+
+export type NewsCaptureMode = 'incremental' | 'catchup';
+
+export interface CaptureNewsOptions {
+  mode: NewsCaptureMode;
+  triggerCursor: string | null;
+}
+
+function getNewsStaleWindowMs(): number {
+  const hours = Math.max(1, parseInt(process.env.STEAM_NEWS_STALE_HOURS || `${DEFAULT_NEWS_STALE_HOURS}`, 10));
+  return hours * 60 * 60 * 1000;
+}
+
+function getIncrementalNewsCount(): number {
+  return Math.max(1, parseInt(process.env.STEAM_NEWS_INCREMENTAL_COUNT || `${DEFAULT_INCREMENTAL_NEWS_COUNT}`, 10));
+}
+
+function getCatchupMaxPages(): number {
+  return Math.max(
+    1,
+    parseInt(process.env.STEAM_NEWS_CATCHUP_MAX_PAGES || process.env.STEAM_NEWS_MAX_PAGES || `${DEFAULT_CATCHUP_MAX_PAGES}`, 10)
+  );
+}
+
+export function resolveNewsCaptureMode(triggerReason: string): NewsCaptureMode {
+  return triggerReason === 'stale_news_catchup' ? 'catchup' : 'incremental';
+}
+
+export function shouldCaptureIncrementalNews(
+  lastNewsSync: string | null,
+  observedAt = new Date().toISOString(),
+  staleWindowMs = getNewsStaleWindowMs()
+): boolean {
+  if (!lastNewsSync) {
+    return true;
+  }
+
+  const lastNewsSyncMs = Date.parse(lastNewsSync);
+  const observedAtMs = Date.parse(observedAt);
+
+  if (Number.isNaN(lastNewsSyncMs) || Number.isNaN(observedAtMs)) {
+    return true;
+  }
+
+  return observedAtMs - lastNewsSyncMs >= staleWindowMs;
+}
 
 export function buildHintCursor(lastModified: number, priceChangeNumber: number): string {
   return `${lastModified}:${priceChangeNumber}`;
@@ -99,15 +149,23 @@ export async function captureStorefrontState(
   }
 
   if (snapshotVersion.inserted) {
-    await enqueueCaptureJobs(supabase, [
-      {
+    const lastNewsSync = await getLastNewsSyncAt(supabase, appid);
+    if (shouldCaptureIncrementalNews(lastNewsSync, observedAt)) {
+      await enqueueCaptureJobs(supabase, [
+        {
+          appid,
+          source: 'news',
+          triggerReason: 'storefront_snapshot_change',
+          triggerCursor: null,
+          priority: 75,
+        },
+      ]);
+    } else {
+      log.debug('Skipping snapshot-triggered news enqueue because app news is still fresh', {
         appid,
-        source: 'news',
-        triggerReason: 'storefront_snapshot_change',
-        triggerCursor: trigger.triggerCursor,
-        priority: 75,
-      },
-    ]);
+        lastNewsSync,
+      });
+    }
   }
 
   return {
@@ -116,14 +174,33 @@ export async function captureStorefrontState(
   };
 }
 
-async function fetchReachableNewsHistory(appid: number, maxPages: number): Promise<NewsItem[]> {
-  const seen = new Set<string>();
-  const items: NewsItem[] = [];
-  let endDateUnix: number | undefined;
+export async function captureNewsForApp(
+  supabase: TypedSupabaseClient,
+  appid: number,
+  options: CaptureNewsOptions
+): Promise<number> {
+  const observedAt = new Date().toISOString();
+  if (options.mode === 'incremental') {
+    const lastNewsSync = await getLastNewsSyncAt(supabase, appid);
+    if (!shouldCaptureIncrementalNews(lastNewsSync, observedAt)) {
+      log.debug('Skipping incremental news capture because app is already fresh', {
+        appid,
+        lastNewsSync,
+      });
+      return 0;
+    }
+  }
 
-  for (let page = 0; page < maxPages; page++) {
+  const seen = new Set<string>();
+  const maxPages = options.mode === 'catchup' ? getCatchupMaxPages() : 1;
+  const pageSize = options.mode === 'catchup' ? 100 : getIncrementalNewsCount();
+  let processedCount = 0;
+  let endDateUnix: number | undefined;
+  let stopPagination = false;
+
+  for (let page = 0; page < maxPages && !stopPagination; page += 1) {
     const batch = await fetchAppNews(appid, {
-      count: 100,
+      count: pageSize,
       endDateUnix,
       maxLength: STEAM_NEWS_MAX_LENGTH,
     });
@@ -133,52 +210,45 @@ async function fetchReachableNewsHistory(appid: number, maxPages: number): Promi
     }
 
     for (const item of batch) {
-      if (!seen.has(item.gid)) {
-        seen.add(item.gid);
-        items.push(item);
+      if (seen.has(item.gid)) {
+        continue;
+      }
+
+      seen.add(item.gid);
+      processedCount += 1;
+
+      const normalized = normalizeNewsVersion(item);
+      const previousVersion = await getLatestNewsVersion(supabase, item.gid);
+
+      await upsertNewsItem(supabase, appid, normalized);
+      const version = await writeNewsVersion(supabase, normalized, observedAt);
+      const events = diffNewsVersions(previousVersion, normalized);
+
+      await insertChangeEvents(supabase, appid, events, {
+        newsItemGid: item.gid,
+        triggerCursor: options.triggerCursor,
+      });
+
+      if (previousVersion && !version.inserted && events.length === 0) {
+        stopPagination = true;
+        break;
       }
     }
 
+    if (stopPagination) {
+      break;
+    }
+
     const oldestTimestamp = Math.min(...batch.map((item) => item.date));
-    if (batch.length < 100 || !Number.isFinite(oldestTimestamp) || oldestTimestamp <= 1) {
+    if (batch.length < pageSize || !Number.isFinite(oldestTimestamp) || oldestTimestamp <= 1) {
       break;
     }
 
     endDateUnix = oldestTimestamp - 1;
   }
 
-  return items;
-}
-
-export async function captureNewsForApp(
-  supabase: TypedSupabaseClient,
-  appid: number,
-  triggerCursor: string | null
-): Promise<number> {
-  const observedAt = new Date().toISOString();
-  const maxPages = parseInt(process.env.STEAM_NEWS_MAX_PAGES || '5', 10);
-  const newsItems = await fetchReachableNewsHistory(appid, maxPages);
-
-  for (const item of newsItems) {
-    const normalized = normalizeNewsVersion(item);
-    const previousVersion = await getLatestNewsVersion(supabase, item.gid);
-
-    await upsertNewsItem(supabase, appid, normalized);
-    const version = await writeNewsVersion(supabase, normalized, observedAt);
-    const events = diffNewsVersions(previousVersion, normalized);
-
-    await insertChangeEvents(supabase, appid, events, {
-      newsItemGid: item.gid,
-      triggerCursor,
-    });
-
-    if (!version.inserted) {
-      continue;
-    }
-  }
-
   await updateSyncStatusFields(supabase, appid, { last_news_sync: observedAt });
-  return newsItems.length;
+  return processedCount;
 }
 
 export async function archiveHeroAssetsForApp(

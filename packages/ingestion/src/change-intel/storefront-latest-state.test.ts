@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeAppType, upsertLatestStorefrontState } from './storefront-latest-state.js';
+import { normalizeAppType, sanitizeStorefrontPriceCents, upsertLatestStorefrontState } from './storefront-latest-state.js';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
 
 function buildStorefrontApp(overrides: Partial<ParsedStorefrontApp> = {}): ParsedStorefrontApp {
@@ -47,6 +47,13 @@ test('normalizeAppType falls back to game for unknown values', () => {
   assert.equal(normalizeAppType('DLC'), 'dlc');
 });
 
+test('sanitizeStorefrontPriceCents drops unreasonable storefront prices', () => {
+  assert.equal(sanitizeStorefrontPriceCents(null), null);
+  assert.equal(sanitizeStorefrontPriceCents(-1), null);
+  assert.equal(sanitizeStorefrontPriceCents(50001), null);
+  assert.equal(sanitizeStorefrontPriceCents(1999), 1999);
+});
+
 test('upsertLatestStorefrontState sends null release_date when parsing failed', async () => {
   let rpcCall: { fn: string; args: Record<string, unknown> } | null = null;
   const supabase = {
@@ -79,4 +86,24 @@ test('upsertLatestStorefrontState sends null release_date when parsing failed', 
       p_publishers: ['Publisher'],
     },
   });
+});
+
+test('upsertLatestStorefrontState passes null price for unreasonable storefront values', async () => {
+  let rpcCall: { fn: string; args: Record<string, unknown> } | null = null;
+  const supabase = {
+    rpc(fn: string, args: Record<string, unknown>) {
+      rpcCall = { fn, args };
+      return Promise.resolve({ error: null });
+    },
+  };
+
+  await upsertLatestStorefrontState(supabase as any, 36150, buildStorefrontApp({
+    priceCents: 90000,
+  }));
+
+  if (!rpcCall) {
+    throw new Error('Expected upsert_storefront_app RPC to be called');
+  }
+  const capturedCall = rpcCall as { fn: string; args: Record<string, unknown> };
+  assert.equal(capturedCall.args.p_current_price_cents, null);
 });

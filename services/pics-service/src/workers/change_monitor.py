@@ -34,6 +34,9 @@ class ChangeMonitorWorker:
         self._change_queue: deque = deque(maxlen=settings.max_queue_size)
         self._processing_set: Set[int] = set()
         self._running = False
+        self._consecutive_poll_failures = 0
+        self._last_poll_error: Optional[str] = None
+        self._last_successful_change_poll_at: Optional[str] = None
 
     def run(self):
         """
@@ -67,6 +70,9 @@ class ChangeMonitorWorker:
             try:
                 # Check for new changes
                 changes = self._fetcher.get_changes_since(last_change)
+                self._consecutive_poll_failures = 0
+                self._last_poll_error = None
+                self._last_successful_change_poll_at = datetime.utcnow().isoformat()
 
                 if changes and changes.change_number > last_change:
                     # Queue changed apps
@@ -93,26 +99,26 @@ class ChangeMonitorWorker:
                 self._process_queue(last_change)
 
                 # Update health status
-                if self._health:
-                    self._health.update_status(
-                        {
-                            "mode": "change_monitor",
-                            "last_change": last_change,
-                            "queue_size": len(self._change_queue),
-                            "processing": len(self._processing_set),
-                            "connected": self._steam.is_connected,
-                            "connection_age_seconds": round(self._steam.connection_age_seconds or 0, 1),
-                        }
-                    )
+                self._update_health_status(last_change)
 
                 # Wait before next poll
                 time.sleep(settings.poll_interval)
 
             except Exception as e:
-                logger.error(f"Error in change monitor loop: {e}")
-                # Client auto-reconnect will handle disconnection
-                # Just wait a bit before continuing the loop
-                time.sleep(10)
+                self._consecutive_poll_failures += 1
+                self._last_poll_error = str(e)
+                backoff_seconds = min(
+                    max(settings.poll_interval, 10) * (2 ** min(self._consecutive_poll_failures - 1, 4)),
+                    300,
+                )
+                logger.error(
+                    "Error in change monitor loop (failure #%s, backing off %ss): %s",
+                    self._consecutive_poll_failures,
+                    backoff_seconds,
+                    e,
+                )
+                self._update_health_status(last_change)
+                time.sleep(backoff_seconds)
 
         # Cleanup
         self._steam.disconnect()
@@ -169,3 +175,33 @@ class ChangeMonitorWorker:
         """Signal the monitor to stop."""
         logger.info("Stopping change monitor")
         self._running = False
+
+    def _update_health_status(self, last_change: int):
+        """Publish worker health and Steam reconnect state."""
+        if not self._health:
+            return
+
+        health_state = "ok"
+        if self._consecutive_poll_failures > 0 or not self._steam.is_connected:
+            health_state = "degraded"
+
+        self._health.update_status(
+            {
+                "mode": "change_monitor",
+                "health_state": health_state,
+                "last_change": last_change,
+                "queue_size": len(self._change_queue),
+                "processing": len(self._processing_set),
+                "connected": self._steam.is_connected,
+                "steam_connected": self._steam.is_connected,
+                "connection_age_seconds": round(self._steam.connection_age_seconds or 0, 1),
+                "reconnect_in_progress": self._steam.is_reconnecting,
+                "reconnect_attempts": self._steam.reconnect_attempts,
+                "last_reconnect_error": self._steam.last_reconnect_error,
+                "last_disconnect_at": self._steam.last_disconnect_at,
+                "last_successful_connection_at": self._steam.last_successful_connection_at,
+                "last_successful_change_poll_at": self._last_successful_change_poll_at,
+                "consecutive_poll_failures": self._consecutive_poll_failures,
+                "last_poll_error": self._last_poll_error,
+            }
+        )

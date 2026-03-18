@@ -12,6 +12,19 @@ import type {
 } from './types.js';
 
 const log = logger.child({ component: 'change-intel-repository' });
+const DEFAULT_SUPABASE_RETRY_ATTEMPTS = 3;
+const DEFAULT_SUPABASE_RETRY_DELAY_MS = 250;
+
+interface SupabaseLikeError {
+  message?: string | null;
+  details?: string | null;
+  hint?: string | null;
+}
+
+interface SupabaseOperationResult<T> {
+  data: T;
+  error: SupabaseLikeError | null;
+}
 
 function getDb(supabase: TypedSupabaseClient): any {
   return supabase as any;
@@ -23,6 +36,72 @@ function castRecord<T>(value: Record<string, unknown>): T {
 
 function castRecords<T>(value: Array<Record<string, unknown>>): T {
   return value as unknown as T;
+}
+
+function getSupabaseRetryAttempts(): number {
+  return Math.max(1, parseInt(process.env.CHANGE_INTEL_SUPABASE_RETRY_ATTEMPTS || `${DEFAULT_SUPABASE_RETRY_ATTEMPTS}`, 10));
+}
+
+function getSupabaseRetryDelayMs(): number {
+  return Math.max(25, parseInt(process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS || `${DEFAULT_SUPABASE_RETRY_DELAY_MS}`, 10));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatSupabaseError(error: SupabaseLikeError | null | undefined): string {
+  if (!error) {
+    return 'Unknown Supabase error';
+  }
+
+  return [error.message, error.details, error.hint].filter(Boolean).join(' | ');
+}
+
+function isTransientSupabaseError(error: SupabaseLikeError | null | undefined): boolean {
+  const message = formatSupabaseError(error);
+  return [
+    /502/i,
+    /503/i,
+    /504/i,
+    /bad gateway/i,
+    /statement timeout/i,
+    /timed out/i,
+    /connection reset/i,
+    /fetch failed/i,
+    /temporar/i,
+  ].some((pattern) => pattern.test(message));
+}
+
+async function runSupabaseOperation<T>(
+  operation: string,
+  fn: () => Promise<SupabaseOperationResult<T>>
+): Promise<SupabaseOperationResult<T>> {
+  const maxAttempts = getSupabaseRetryAttempts();
+  const baseDelayMs = getSupabaseRetryDelayMs();
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const result = await fn();
+    if (!result.error) {
+      return result;
+    }
+
+    if (!isTransientSupabaseError(result.error) || attempt === maxAttempts - 1) {
+      return result;
+    }
+
+    const delayMs = baseDelayMs * 2 ** attempt;
+    log.warn('Retrying transient Supabase operation', {
+      operation,
+      attempt: attempt + 1,
+      maxAttempts,
+      delayMs,
+      error: formatSupabaseError(result.error),
+    });
+    await sleep(delayMs);
+  }
+
+  return fn();
 }
 
 interface SnapshotRow {
@@ -396,11 +475,15 @@ export async function claimCaptureQueue(
   limit: number,
   workerId: string
 ): Promise<CaptureQueueJob[]> {
-  const { data, error } = await getDb(supabase).rpc('claim_app_capture_queue', {
-    p_sources: sources,
-    p_worker_id: workerId,
-    p_limit: limit,
-  });
+  const { data, error } = await runSupabaseOperation<Array<Record<string, unknown>> | null>(
+    'claim_app_capture_queue',
+    () =>
+      getDb(supabase).rpc('claim_app_capture_queue', {
+        p_sources: sources,
+        p_worker_id: workerId,
+        p_limit: limit,
+      })
+  );
 
   if (error) {
     throw new Error(`Failed to claim app capture queue: ${error.message}`);
@@ -426,11 +509,13 @@ export async function completeCaptureQueueItems(
     return;
   }
 
-  const { error } = await getDb(supabase).rpc('complete_app_capture_queue', {
-    p_ids: jobIds.map(Number),
-    p_status: status,
-    p_error: errorMessage ?? null,
-  });
+  const { error } = await runSupabaseOperation('complete_app_capture_queue', () =>
+    getDb(supabase).rpc('complete_app_capture_queue', {
+      p_ids: jobIds.map(Number),
+      p_status: status,
+      p_error: errorMessage ?? null,
+    })
+  );
 
   if (error) {
     throw new Error(`Failed to complete app capture queue jobs: ${error.message}`);
@@ -448,14 +533,18 @@ export async function requeueStaleCaptureClaims(
   }
 
   const boundedLimit = Math.max(1, Math.min(limit, 500));
-  const { data, error } = await getDb(supabase)
-    .from('app_capture_queue')
-    .select('id')
-    .eq('status', 'claimed')
-    .in('source', sources)
-    .lt('claimed_at', claimedBeforeIso)
-    .order('claimed_at', { ascending: true })
-    .limit(boundedLimit);
+  const { data, error } = await runSupabaseOperation<Array<{ id: number }> | null>(
+    'select_stale_app_capture_claims',
+    () =>
+      getDb(supabase)
+        .from('app_capture_queue')
+        .select('id')
+        .eq('status', 'claimed')
+        .in('source', sources)
+        .lt('claimed_at', claimedBeforeIso)
+        .order('claimed_at', { ascending: true })
+        .limit(boundedLimit)
+  );
 
   if (error) {
     throw new Error(`Failed to fetch stale app capture queue claims: ${error.message}`);
@@ -475,19 +564,119 @@ export async function updateSyncStatusFields(
   appid: number,
   values: Record<string, unknown>
 ): Promise<void> {
-  const { error } = await getDb(supabase)
-    .from('sync_status')
-    .upsert(
-      {
-        appid,
-        ...values,
-      },
-      { onConflict: 'appid' }
-    );
+  const { error } = await runSupabaseOperation('upsert_sync_status', () =>
+    getDb(supabase)
+      .from('sync_status')
+      .upsert(
+        {
+          appid,
+          ...values,
+        },
+        { onConflict: 'appid' }
+      )
+  );
 
   if (error) {
     throw new Error(`Failed to update sync_status: ${error.message}`);
   }
+}
+
+export async function getLastNewsSyncAt(
+  supabase: TypedSupabaseClient,
+  appid: number
+): Promise<string | null> {
+  const { data, error } = await runSupabaseOperation<{ last_news_sync: string | null } | null>(
+    'select_last_news_sync',
+    () =>
+      getDb(supabase)
+        .from('sync_status')
+        .select('last_news_sync')
+        .eq('appid', appid)
+        .maybeSingle()
+  );
+
+  if (error) {
+    throw new Error(`Failed to fetch last_news_sync: ${error.message}`);
+  }
+
+  return data?.last_news_sync ?? null;
+}
+
+export async function createSyncJobRecord(
+  supabase: TypedSupabaseClient,
+  jobType: string,
+  batchSize: number
+): Promise<string | null> {
+  const { data, error } = await runSupabaseOperation<{ id: string | number } | null>(
+    'insert_sync_job',
+    () =>
+      getDb(supabase)
+        .from('sync_jobs')
+        .insert({
+          job_type: jobType,
+          status: 'running',
+          batch_size: batchSize,
+        })
+        .select('id')
+        .maybeSingle()
+  );
+
+  if (error) {
+    throw new Error(`Failed to create sync job: ${error.message}`);
+  }
+
+  return data?.id ? String(data.id) : null;
+}
+
+export async function updateSyncJobRecord(
+  supabase: TypedSupabaseClient,
+  id: string,
+  values: Record<string, unknown>
+): Promise<void> {
+  const { error } = await runSupabaseOperation('update_sync_job', () =>
+    getDb(supabase)
+      .from('sync_jobs')
+      .update(values)
+      .eq('id', id)
+  );
+
+  if (error) {
+    throw new Error(`Failed to update sync job ${id}: ${error.message}`);
+  }
+}
+
+export async function abandonStaleChangeIntelSyncJobs(
+  supabase: TypedSupabaseClient,
+  jobTypes: string[],
+  startedBeforeIso: string,
+  errorMessage = 'worker_abandoned'
+): Promise<number> {
+  if (jobTypes.length === 0) {
+    return 0;
+  }
+
+  const completedAt = new Date().toISOString();
+  const { data, error } = await runSupabaseOperation<Array<{ id: string | number }> | null>(
+    'abandon_stale_change_intel_sync_jobs',
+    () =>
+      getDb(supabase)
+        .from('sync_jobs')
+        .update({
+          status: 'failed',
+          completed_at: completedAt,
+          error_message: errorMessage,
+        })
+        .in('job_type', jobTypes)
+        .eq('status', 'running')
+        .lt('started_at', startedBeforeIso)
+        .select('id')
+  );
+
+  if (error) {
+    throw new Error(`Failed to abandon stale sync jobs: ${error.message}`);
+  }
+
+  return data?.length ?? 0;
 }
 
 export async function getLatestMediaVersion(

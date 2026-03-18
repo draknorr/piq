@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueCaptureJobs, requeueStaleCaptureClaims } from './repository.js';
+import { claimCaptureQueue, enqueueCaptureJobs, requeueStaleCaptureClaims } from './repository.js';
 
 interface QueueRpcArgs {
   p_jobs: Array<Record<string, unknown>>;
@@ -192,4 +192,55 @@ test('requeueStaleCaptureClaims skips completion when no stale rows were found',
 
   assert.equal(requeued, 0);
   assert.equal(rpcCalled, false);
+});
+
+test('claimCaptureQueue retries transient RPC failures before succeeding', async () => {
+  const originalDelay = process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS;
+  process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS = '1';
+
+  try {
+    let attempts = 0;
+    const supabase = {
+      rpc() {
+        attempts += 1;
+        if (attempts === 1) {
+          return Promise.resolve({ data: null, error: { message: '502 Bad gateway' } });
+        }
+
+        return Promise.resolve({
+          data: [
+            {
+              id: 99,
+              appid: 730,
+              source: 'news',
+              trigger_reason: 'storefront_snapshot_change',
+              trigger_cursor: '',
+              attempts: 1,
+            },
+          ],
+          error: null,
+        });
+      },
+    } as any;
+
+    const jobs = await claimCaptureQueue(supabase, ['news'], 5, 'worker-1');
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(jobs, [
+      {
+        id: '99',
+        appid: 730,
+        source: 'news',
+        triggerReason: 'storefront_snapshot_change',
+        triggerCursor: '',
+        attempts: 1,
+      },
+    ]);
+  } finally {
+    if (originalDelay === undefined) {
+      delete process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS;
+    } else {
+      process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS = originalDelay;
+    }
+  }
 });

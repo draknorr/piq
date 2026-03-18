@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Optional
 
 import gevent
 from steam.client import SteamClient
@@ -21,10 +21,13 @@ class PICSSteamClient:
         self._reconnect_attempts = 0
         self._reconnect_delay = 5  # seconds (base delay)
         self._max_reconnect_delay = 300  # 5 minutes max
+        self._last_reconnect_error: Optional[str] = None
 
         # Connection tracking
         self._connection_time: Optional[datetime] = None
         self._last_activity: Optional[datetime] = None
+        self._last_disconnect_time: Optional[datetime] = None
+        self._last_successful_connection_time: Optional[datetime] = None
 
         # Heartbeat settings
         self._heartbeat_greenlet: Optional[gevent.Greenlet] = None
@@ -54,8 +57,10 @@ class PICSSteamClient:
                 self._connected = True
                 self._connection_time = datetime.utcnow()
                 self._last_activity = datetime.utcnow()
+                self._last_successful_connection_time = self._connection_time
                 self._reconnect_attempts = 0
                 self._reconnecting = False
+                self._last_reconnect_error = None
 
                 # Start heartbeat to prevent idle disconnect
                 self._start_heartbeat()
@@ -66,26 +71,36 @@ class PICSSteamClient:
                 )
                 return True
             else:
-                logger.error(f"Failed to connect to Steam: {result}")
+                self._last_reconnect_error = f"Failed to connect to Steam: {result}"
+                logger.error(self._last_reconnect_error)
+                self._cleanup_client()
                 return False
         except Exception as e:
             logger.error(f"Exception during Steam connection: {e}")
+            self._last_reconnect_error = str(e)
+            self._cleanup_client()
             self._connected = False
             return False
 
-    def reconnect(self, max_attempts: int = 0) -> bool:
+    def reconnect(self, max_attempts: int = 0, force: bool = False) -> bool:
         """
         Attempt to reconnect with exponential backoff.
 
         Args:
             max_attempts: Maximum reconnection attempts (0 = unlimited, default)
+            force: Reset any stale reconnect marker before retrying
 
         Returns:
             True if reconnected successfully
         """
         if self._reconnecting:
-            logger.debug("Reconnection already in progress, skipping")
-            return False
+            if not force:
+                logger.debug("Reconnection already in progress, skipping")
+                return False
+
+            logger.warning("Forcing Steam reconnect after stale reconnect state")
+            self._cleanup_client()
+            self._reconnecting = False
 
         self._reconnecting = True
         attempt = 0
@@ -93,6 +108,7 @@ class PICSSteamClient:
         try:
             while max_attempts == 0 or attempt < max_attempts:
                 attempt += 1
+                self._reconnect_attempts = attempt
                 delay = min(self._reconnect_delay * (2 ** (attempt - 1)), self._max_reconnect_delay)
 
                 logger.info(
@@ -120,9 +136,25 @@ class PICSSteamClient:
         finally:
             self._reconnecting = False
 
+    def ensure_connected(self, wait_timeout: float = 120, reconnect_attempts: int = 3) -> bool:
+        """Wait for auto-reconnect, then force a bounded manual reconnect if needed."""
+        if self.is_connected:
+            return True
+
+        logger.warning("Steam client is disconnected, waiting for auto-reconnect")
+        if self.wait_for_connection(timeout=wait_timeout):
+            return True
+
+        logger.warning(
+            "Auto-reconnect did not recover Steam client within %.1fs, forcing reconnect",
+            wait_timeout,
+        )
+        return self.reconnect(max_attempts=reconnect_attempts, force=True)
+
     def disconnect(self):
         """Disconnect from Steam."""
         self._auto_reconnect = False  # Prevent auto-reconnect on intentional disconnect
+        self._reconnecting = False
         self._stop_heartbeat()
 
         if self._client:
@@ -132,6 +164,7 @@ class PICSSteamClient:
                 logger.warning(f"Error during disconnect: {e}")
             finally:
                 self._connected = False
+                self._connection_time = None
                 self._client = None
 
     def _cleanup_client(self):
@@ -144,6 +177,7 @@ class PICSSteamClient:
                 pass
             self._client = None
         self._connected = False
+        self._connection_time = None
 
     def _start_heartbeat(self):
         """Start background heartbeat to prevent idle disconnect."""
@@ -179,6 +213,7 @@ class PICSSteamClient:
         """Handle disconnection events with automatic reconnection."""
         was_connected = self._connected
         self._connected = False
+        self._last_disconnect_time = datetime.utcnow()
         self._stop_heartbeat()
 
         # Calculate connection duration
@@ -208,6 +243,7 @@ class PICSSteamClient:
 
     def _on_error(self, error):
         """Handle error events."""
+        self._last_reconnect_error = str(error)
         logger.error(f"Steam client error: {error}")
 
     def wait_for_connection(self, timeout: float = 120) -> bool:
@@ -267,3 +303,32 @@ class PICSSteamClient:
     def last_change_number(self, value: int):
         """Set the last known PICS change number."""
         self._last_change_number = value
+
+    @property
+    def is_reconnecting(self) -> bool:
+        """Check whether a reconnect attempt is currently in progress."""
+        return self._reconnecting
+
+    @property
+    def reconnect_attempts(self) -> int:
+        """Get the current reconnect attempt counter."""
+        return self._reconnect_attempts
+
+    @property
+    def last_reconnect_error(self) -> Optional[str]:
+        """Get the most recent reconnect-related error message."""
+        return self._last_reconnect_error
+
+    @property
+    def last_successful_connection_at(self) -> Optional[str]:
+        """Get the timestamp of the last successful Steam connection."""
+        if self._last_successful_connection_time is None:
+            return None
+        return self._last_successful_connection_time.isoformat()
+
+    @property
+    def last_disconnect_at(self) -> Optional[str]:
+        """Get the timestamp of the last disconnect event."""
+        if self._last_disconnect_time is None:
+            return None
+        return self._last_disconnect_time.isoformat()

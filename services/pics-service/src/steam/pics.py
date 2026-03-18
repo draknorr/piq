@@ -26,6 +26,8 @@ class PICSFetcher:
     REQUEST_DELAY = 0.5  # Seconds between batches (conservative)
     DEFAULT_TIMEOUT = 60  # Seconds per batch fetch
     DEFAULT_MAX_RETRIES = 5  # Retry attempts per batch
+    AUTO_RECONNECT_WAIT_TIMEOUT = 30  # Seconds to wait before forcing reconnect
+    MANUAL_RECONNECT_ATTEMPTS = 3  # Manual reconnect attempts when polling changes
 
     def __init__(
         self,
@@ -41,6 +43,16 @@ class PICSFetcher:
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
 
+    def _ensure_connection(self, wait_timeout: float = AUTO_RECONNECT_WAIT_TIMEOUT) -> None:
+        """Recover a disconnected Steam client before issuing a request."""
+        if self._client.ensure_connected(
+            wait_timeout=wait_timeout,
+            reconnect_attempts=self.MANUAL_RECONNECT_ATTEMPTS,
+        ):
+            return
+
+        raise RuntimeError("Failed to reconnect to Steam")
+
     def fetch_apps_batch(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
         """
         Fetch PICS data for a batch of apps with retry logic.
@@ -52,15 +64,7 @@ class PICSFetcher:
             Dict mapping appid to PICS data
         """
         for attempt in range(self.max_retries):
-            # Check connection before each attempt - wait for auto-reconnect or trigger manual
-            if not self._client.is_connected:
-                logger.warning("Not connected to Steam, waiting for reconnection...")
-                # Wait up to 2 minutes for auto-reconnect to complete
-                if not self._client.wait_for_connection(timeout=120):
-                    # Auto-reconnect didn't work, try manual reconnect
-                    logger.warning("Auto-reconnect timeout, attempting manual reconnect...")
-                    if not self._client.reconnect():
-                        raise RuntimeError("Failed to reconnect to Steam")
+            self._ensure_connection(wait_timeout=120)
 
             try:
                 response = self._client.client.get_product_info(apps=appids, timeout=self.timeout)
@@ -155,24 +159,39 @@ class PICSFetcher:
         Returns:
             PICSChange with new change_number and list of changed app IDs
         """
-        if not self._client.is_connected:
-            raise RuntimeError("Not connected to Steam")
+        for attempt in range(self.max_retries):
+            try:
+                self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
+                response = self._client.client.get_changes_since(
+                    change_number,
+                    app_changes=True,
+                    package_changes=False,  # We only care about apps
+                )
 
-        try:
-            response = self._client.client.get_changes_since(
-                change_number,
-                app_changes=True,
-                package_changes=False,  # We only care about apps
-            )
+                if response is None:
+                    return None
 
-            if response is None:
-                return None
+                return PICSChange(
+                    change_number=response.current_change_number,
+                    app_changes=[c.appid for c in (response.app_changes or [])],
+                    package_changes=[],
+                )
+            except BaseException as e:
+                if attempt < self.max_retries - 1:
+                    delay = min(2 ** attempt, 30)
+                    logger.warning(
+                        "Change poll attempt %s/%s failed, retrying in %ss: %s",
+                        attempt + 1,
+                        self.max_retries,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                    continue
 
-            return PICSChange(
-                change_number=response.current_change_number,
-                app_changes=[c.appid for c in response.app_changes],
-                package_changes=[],
-            )
-        except Exception as e:
-            logger.error(f"Error getting PICS changes: {e}")
-            return None
+                logger.error(
+                    "Failed to fetch PICS changes after %s attempts: %s",
+                    self.max_retries,
+                    e,
+                )
+                raise RuntimeError(f"Failed to get PICS changes: {e}") from e
