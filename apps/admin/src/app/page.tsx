@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { LandingPage } from "@/components/landing/LandingPage";
 
 export const metadata: Metadata = {
-  title: "PublisherIQ - The Category Leader in Game Market Intelligence",
+  title:
+    "PublisherIQ - The most advanced intelligence system in the gaming industry.",
   description:
-    "Track launch timing, pricing, store changes, company moves, and market signals in one system. Ask questions in plain English, compare the titles and companies behind the move, and open the supporting evidence fast.",
+    "Intelligence for publishers, studios, investors, and analysts. Track launch timing, pricing, store changes, company moves, and industry signals in one system.",
 };
 
 export default function Page() {

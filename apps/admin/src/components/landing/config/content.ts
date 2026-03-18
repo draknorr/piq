@@ -1,191 +1,97 @@
-export const LANDING_AUDIENCES = [
-  "Publishers",
-  "Studios",
-  "Investors",
-  "Analysts",
-] as const;
+export const QUERIES_ID = "sample-queries";
 
-export const LANDING_JOBS = [
-  {
-    title: "Monitor the move",
-    description:
-      "See release timing, pricing, store-page, and announcement moves as one readable story.",
-  },
-  {
-    title: "Ask the market",
-    description:
-      "Ask about games, genres, publishers, developers, and market patterns in plain English, then open the evidence trail.",
-  },
-  {
-    title: "Benchmark the actors",
-    description:
-      "Compare titles, portfolios, commercial patterns, and momentum before you make the call.",
-  },
-] as const;
-
-export const HERO_LOOP = [
-  {
-    step: "01",
-    title: "Ask the actual market question",
-    description:
-      "Start with the question you need answered, not the filters another tool makes you assemble first.",
-  },
-  {
-    step: "02",
-    title: "Pressure-test the move",
-    description:
-      "Cut by launch timing, pricing, platform, company behavior, momentum, or recent activity until you know whether it matters.",
-  },
-  {
-    step: "03",
-    title: "Open the proof",
-    description:
-      "Jump straight into before / after diffs, related announcements, linked entities, and the evidence behind the conclusion.",
-  },
-] as const;
-
-export const HERO_SIGNAL_TILES = [
-  { value: "200K+", label: "Steam listings indexed" },
-  { value: "15M+", label: "Tracked data points" },
-  { value: "4", label: "Signal sources unified" },
-  { value: "15 min", label: "Freshness target" },
-] as const;
-
-export const PREVIEW_PANELS = [
-  {
-    eyebrow: "Change Feed",
-    title: "14 upcoming titles tightened release timing in the last 24 hours",
-    description:
-      "Grouped change cards turn scattered release movement into an immediate launch-watch view, with the proof attached.",
-    tags: ["Launch Watch", "Release timing", "Store refresh"],
-  },
-  {
-    eyebrow: "Companies",
-    title: "3 publishers are repeating the same pricing playbook this week",
-    description:
-      "Open the portfolios, compare the pattern, and decide whether it is discount pressure, launch setup, or a bigger commercial shift.",
-    tags: ["Commercial Moves", "Pricing", "Benchmark"],
-  },
-] as const;
-
-export const WATCHLIST_ITEMS = [
-  {
-    name: "Upcoming extraction shooters",
-    detail: "6 release-window shifts and 2 new trailer pushes today",
-    variant: "warning",
-  },
-  {
-    name: "Mid-market publishers on discount cadence",
-    detail: "3 companies repeated the same pricing pattern this week",
-    variant: "orange",
-  },
-  {
-    name: "Studios with strong products and weak GTM",
-    detail: "9 titles look stronger than their current store presentation",
-    variant: "success",
-  },
-] as const;
-
-export const WORKBENCH_METRICS = [
-  { label: "Question to evidence", value: "< 1 min" },
-  { label: "Grouped activity cards", value: "50" },
-  { label: "Coverage in one system", value: "Games, publishers, developers" },
-] as const;
-
-export const TRUST_ITEMS = [
-  { value: "200K+", label: "Listings indexed" },
-  { value: "15M+", label: "Tracked data points" },
-  { value: "4", label: "Signal sources unified" },
-  { value: "15 min", label: "Update cadence target" },
-] as const;
-
-export const FEATURES = [
-  {
-    eyebrow: "Ask",
-    title: "Ask the market a real question",
-    description:
-      "Ask in plain English, resolve to the right entities, then inspect the proof instead of settling for a vague summary.",
-    points: [
-      "Go from a question to the exact game, company, or pattern worth opening.",
-      "Keep the answer tied to the data and the evidence behind it.",
+export const LANDING_CONTENT = {
+  hero: {
+    eyebrow: "Game market intelligence",
+    headline:
+      "The most advanced intelligence system in the gaming industry.",
+    body: "Ask questions about games, companies, pricing, launches, and market shifts in plain English — and get evidence-backed answers from tens of millions of tracked data points.",
+    primaryCta: "Request access",
+    secondaryCta: "See sample queries",
+    proofPoints: [
+      { value: "200K+", label: "titles covered" },
+      { value: "15M+", label: "tracked data points" },
+      { value: "100+", label: "monitored market inputs" },
+      { value: "Real-time", label: "change detection" },
     ],
   },
-  {
-    eyebrow: "Monitor",
-    title: "See the move before it turns into consensus",
-    description:
-      "Change intelligence tracks release timing, pricing, store refreshes, announcements, and the response that follows.",
-    points: [
-      "Grouped activity turns noisy updates into something operators can actually read.",
-      "See commercial, launch, and presentation changes in one operating surface.",
+  coreArgument: {
+    headline:
+      "Other platforms show you fragments. PublisherIQ gives you the full picture.",
+    body: "Public tools are good for lookups. Owned-title analytics are good for your own games. Market reports are good for broad context. But serious teams still need to figure out what changed, who moved first, whether it matters, how it compares, and what to do next. PublisherIQ brings all of that into one system.",
+  },
+  capabilities: [
+    {
+      title: "Query the industry with precision",
+      body: "Use natural-language intelligence to go from broad industry questions to highly specific asks about titles, companies, genres, pricing patterns, launch windows, commercial behavior, and market shifts. PublisherIQ is built for focused queries, not generic summaries.",
+    },
+    {
+      title: "See the move before it becomes obvious",
+      body: "Track release timing changes, pricing behavior, store refreshes, announcements, and related movement as one readable story instead of a pile of disconnected diffs.",
+    },
+    {
+      title: "Benchmark without breaking context",
+      body: "Move from a title to a publisher, from a publisher to the wider pattern, and from the pattern to the surrounding industry context without starting over.",
+    },
+    {
+      title: "Open the proof",
+      body: "Jump from the summary into before-and-after changes, linked announcements, affected entities, and the evidence behind the conclusion.",
+    },
+  ],
+  queries: {
+    headline: "Sample Chat Queries",
+    items: [
+      {
+        question:
+          "Which upcoming games changed their release-date messaging from vague to exact in the last 30 days?",
+        description:
+          "Detect titles showing likely launch-commitment signals before they become obvious.",
+        signals: ["Release timing", "Store copy", "Evidence attached"],
+      },
+      {
+        question:
+          "Find games that look like they started a new marketing push in the last 30 days.",
+        description:
+          "Group likely push patterns across announcements, asset refreshes, pricing moves, and surrounding activity.",
+        signals: [
+          "Announcements",
+          "Asset refresh",
+          "Pricing",
+          "Signal grouping",
+        ],
+      },
+      {
+        question:
+          "Find signable indie games where product quality looks stronger than go-to-market execution.",
+        description:
+          "Surface titles with strong product signals and visible execution gaps that matter to publishing, BD, and strategy teams.",
+        signals: ["Quality vs GTM", "Benchmarking", "Operator lens"],
+      },
     ],
   },
-  {
-    eyebrow: "Compare",
-    title: "Benchmark companies and titles without breaking context",
-    description:
-      "Move from a title to a publisher to the wider pattern without breaking context or starting over.",
-    points: [
-      "Compare portfolios, momentum, and commercial behavior in the same system.",
-      "Carry context from one signal into the next decision.",
-    ],
+  whyItMatters: {
+    headline:
+      "This level of industry intelligence used to require an internal research stack.",
+    body: "The industry now moves too fast for teams still working across dashboards, spreadsheets, and manual research. Teams that can detect shifts, investigate what changed, and act before competitors do will outperform them. PublisherIQ gives your team a faster, clearer way to make the call.",
   },
-] as const;
-
-export const WORKFLOW_STEPS = [
-  {
-    step: "01",
-    title: "Start with the market question",
-    description:
-      "A prompt, saved view, or change-feed slice gets you to the important part of the market fast.",
+  leadership: [
+    {
+      title: "The deepest Steam coverage available",
+      body: "200K+ titles tracked with change detection, evidence capture, and structured data across every storefront update.",
+    },
+    {
+      title: "A connected system, not a collection of features",
+      body: "Other products stop at a chart, a search result, or a database view. PublisherIQ connects the whole loop from question to signal to proof to export.",
+    },
+    {
+      title: "Built with partners, not around them",
+      body: "PublisherIQ works directly with partners on custom requests, bespoke dashboards, new capabilities, and feature development. If your team needs something specific, we help build it.",
+    },
+  ],
+  finalCta: {
+    headline: "Interested?",
+    body: "PublisherIQ is currently closed-access. Request an invite and we'll be in touch.",
+    primaryCta: "Request access",
+    secondaryCta: "Already approved? Sign in",
   },
-  {
-    step: "02",
-    title: "Narrow the move that matters",
-    description:
-      "Refine by timing, pricing, platform, company type, or momentum without reopening the research in five disconnected tools.",
-  },
-  {
-    step: "03",
-    title: "Follow the thread to proof",
-    description:
-      "Jump from a signal to the title, the company, the surrounding pattern, and the supporting evidence in one flow.",
-  },
-] as const;
-
-export const COVERAGE_STATS = [
-  {
-    value: "200K+",
-    label: "Steam listings indexed",
-    description:
-      "Games, demos, DLC, tools, and other entities structured for research, monitoring, and benchmarking.",
-  },
-  {
-    value: "15M+",
-    label: "Tracked data points",
-    description:
-      "Depth that supports change intelligence, benchmarking, and plain-English analysis.",
-  },
-  {
-    value: "4",
-    label: "Signal sources",
-    description:
-      "Steam plus adjacent sources already feeding a broader market workflow.",
-  },
-  {
-    value: "15 min",
-    label: "Freshness target",
-    description:
-      "Fast enough for live monitoring and decision support, not just retrospective reporting.",
-  },
-] as const;
-
-export const CTA_BULLETS = [
-  "We prioritize teams that need recurring market research and monitoring depth now.",
-  "Tell us what you track: launches, pricing, competitor moves, diligence, or portfolio strategy.",
-  "If your email is already approved, sign in and pick up where the last question ended.",
-] as const;
-
-export const FOOTER_LINKS = {
-  author: { name: "Ryan", url: "https://www.ryanbohmann.com" },
 } as const;
