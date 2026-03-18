@@ -44,9 +44,10 @@ import {
   CHANGE_ACTIVITY_SORTS,
   CHANGE_ACTIVITY_VIEWS,
   CHANGE_FEED_APP_TYPES,
+  getDefaultChangeActivitySort,
   parseChangeActivityMode,
-  parseChangeActivitySort,
   parseChangeActivityView,
+  resolveChangeActivitySort,
 } from './lib';
 
 type FeedRange = '24h' | '7d' | '30d';
@@ -265,6 +266,8 @@ function buildUrl(
   updates: Record<string, string | null>
 ): string {
   const params = new URLSearchParams(searchParams.toString());
+  const nextView = parseChangeActivityView(updates.view ?? searchParams.get('view'));
+  const defaultSort = getDefaultChangeActivitySort(nextView);
 
   Object.entries(updates).forEach(([key, value]) => {
     const shouldDelete =
@@ -274,7 +277,7 @@ function buildUrl(
       (key === 'view' && value === 'overview') ||
       (key === 'mode' && value === 'all') ||
       (key === 'range' && value === '7d') ||
-      (key === 'sort' && value === 'relevant');
+      (key === 'sort' && value === defaultSort);
 
     if (shouldDelete) {
       params.delete(key);
@@ -865,8 +868,7 @@ export function ChangeFeedPageClient({
   const range = parseRange(searchParams.get('range') ?? initialRange);
   const appType = parseAppType(searchParams.get('appTypes') ?? initialAppTypes);
   const signalFamilies = parseSignalFamilies(searchParams.get('signals') ?? initialSignals);
-  const rawSort = parseChangeActivitySort(searchParams.get('sort') ?? initialSort);
-  const sort = view === 'all-activity' && rawSort === 'relevant' ? 'newest' : rawSort;
+  const sort = resolveChangeActivitySort(searchParams.get('sort') ?? initialSort, view);
   const search = searchParams.get('search') ?? initialSearch ?? '';
   const queryKey = `${view}|${mode}|${range}|${appType}|${signalFamilies.join(',')}|${sort}|${search}`;
   const hasServerActivityResponse = Boolean(initialActivityResponse);

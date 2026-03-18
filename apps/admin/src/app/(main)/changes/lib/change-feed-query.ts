@@ -173,6 +173,33 @@ export function parseChangeActivitySort(value: string | null | undefined): Chang
     : 'relevant';
 }
 
+export function getDefaultChangeActivitySort(view: ChangeActivityView): ChangeActivitySort {
+  switch (view) {
+    case 'launch-watch':
+    case 'all-activity':
+      return 'newest';
+    default:
+      return 'relevant';
+  }
+}
+
+export function resolveChangeActivitySort(
+  value: string | null | undefined,
+  view: ChangeActivityView
+): ChangeActivitySort {
+  const parsed = parseChangeActivitySort(value);
+
+  if (!value) {
+    return getDefaultChangeActivitySort(view);
+  }
+
+  if (view === 'all-activity' && parsed === 'relevant') {
+    return 'newest';
+  }
+
+  return parsed;
+}
+
 export function toSqlChangeFeedPreset(preset: ChangeFeedPreset): string {
   return CHANGE_FEED_SQL_PRESET_MAP[preset];
 }
@@ -208,12 +235,13 @@ export function parseChangeFeedActivityParams(
     Math.max(parseInteger(searchParams.get('limit'), DEFAULT_LIMIT), 1),
     MAX_LIMIT
   );
+  const view = parseChangeActivityView(searchParams.get('view'));
 
   return {
     days,
-    view: parseChangeActivityView(searchParams.get('view')),
+    view,
     mode: parseChangeActivityMode(searchParams.get('mode')),
-    sort: parseChangeActivitySort(searchParams.get('sort')),
+    sort: resolveChangeActivitySort(searchParams.get('sort'), view),
     appTypes: filterAppTypes(parseStringList(searchParams.get('appTypes'))),
     signalFamilies: filterSignalFamilies(parseStringList(searchParams.get('signals'))),
     search: normalizeText(searchParams.get('search')),
