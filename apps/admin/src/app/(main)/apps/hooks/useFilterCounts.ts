@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { useAuthReady } from '@/hooks/useAuthReady';
 import { createBrowserClient } from '@/lib/supabase/client';
 import type { AppType } from '../lib/apps-types';
 
@@ -34,6 +35,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * Calls get_apps_filter_option_counts RPC when dropdowns open.
  */
 export function useFilterCounts() {
+  const authReady = useAuthReady();
   const [loading, setLoading] = useState<Record<FilterType, boolean>>({
     genre: false,
     tag: false,
@@ -99,6 +101,15 @@ export function useFilterCounts() {
       appType: AppType = 'game',
       contextFilters?: ContextFilters
     ): Promise<FilterOption[]> => {
+      if (!authReady) {
+        setData((prev) => (
+          prev[filterType].length === 0
+            ? prev
+            : { ...prev, [filterType]: [] }
+        ));
+        return [];
+      }
+
       const cacheKey = buildCacheKey(filterType, appType, contextFilters);
 
       // Check cache first
@@ -141,6 +152,17 @@ export function useFilterCounts() {
         const { data: result, error } = response;
 
         if (error) {
+          const errorMessage = error.message.toLowerCase();
+          const isUnauthorized =
+            errorMessage.includes('authentication required') ||
+            errorMessage.includes('jwt') ||
+            errorMessage.includes('unauthorized');
+
+          if (isUnauthorized) {
+            setData((prev) => ({ ...prev, [filterType]: [] }));
+            return [];
+          }
+
           console.error(`Error fetching ${filterType} counts:`, error);
           throw error;
         }
@@ -160,7 +182,7 @@ export function useFilterCounts() {
         setLoading((prev) => ({ ...prev, [filterType]: false }));
       }
     },
-    [data]
+    [authReady, data]
   );
 
   /**

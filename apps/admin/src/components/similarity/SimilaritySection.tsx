@@ -65,6 +65,9 @@ const popularityOptions: { value: PopularityFilter; label: string }[] = [
   { value: 'more_popular', label: 'More Popular' },
 ];
 
+const SIMILARITY_FETCH_TIMEOUT_MS = 12000;
+const SIMILARITY_TIMEOUT_MESSAGE = 'Similarity search timed out. Please try again.';
+
 export function SimilaritySection({
   entityId,
   entityName,
@@ -102,7 +105,18 @@ export function SimilaritySection({
         params.set('popularity_comparison', popularityFilter);
       }
 
-      const response = await fetch(`/api/similarity?${params.toString()}`);
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), SIMILARITY_FETCH_TIMEOUT_MS);
+      let response: Response;
+
+      try {
+        response = await fetch(`/api/similarity?${params.toString()}`, {
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+
       if (response.status === 401) {
         setError('Authentication required');
         setResults([]);
@@ -123,10 +137,15 @@ export function SimilaritySection({
           detail: data.results && data.results.length > 0 ? `${data.results.length} results` : 'Indexed (no results)',
         });
       }
-    } catch {
-      setError('Failed to fetch similar entities');
+    } catch (error) {
+      const message =
+        error instanceof Error && error.name === 'AbortError'
+          ? SIMILARITY_TIMEOUT_MESSAGE
+          : 'Failed to fetch similar entities';
+
+      setError(message);
       setResults([]);
-      onStatusChange?.({ status: 'missing', detail: 'Request failed' });
+      onStatusChange?.({ status: 'missing', detail: message });
     } finally {
       setLoading(false);
     }

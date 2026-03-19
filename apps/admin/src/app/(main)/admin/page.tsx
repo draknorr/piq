@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getServiceSupabase } from '@/lib/supabase-service';
+import { requireAdmin } from '@/lib/auth-utils';
 import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import {
   getSyncHealthData,
@@ -163,6 +164,7 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
 }
 
 export default async function AdminDashboardPage() {
+  await requireAdmin();
   const data = await getAdminDashboardData();
 
   if (!data) {

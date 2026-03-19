@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { getServiceSupabase } from '@/lib/supabase-service';
 import { getPortfolioPICSData } from '@/lib/portfolio-pics';
 import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { notFound } from 'next/navigation';
@@ -10,13 +11,15 @@ import { PublisherDetailSections } from './PublisherDetailSections';
 import { getCCUSparklinesBatch, getPortfolioCCUSparkline, type CCUSparklineData } from '@/lib/ccu-queries';
 import { PinButton } from '@/components/PinButton';
 import { getUser, createServerClient } from '@/lib/supabase/server';
+import { getAppsByIds } from '@/app/(main)/apps/lib/apps-queries';
+import type { App as AppSummary } from '@/app/(main)/apps/lib/apps-types';
 
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
   if (!isSupabaseConfigured()) return { title: 'Publisher Details' };
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
   const { data: publisher } = await supabase.from('publishers').select('name').eq('id', Number(id)).single();
   return { title: publisher?.name || 'Publisher Details' };
 }
@@ -80,9 +83,46 @@ interface ReviewHistogram {
   games: ReviewHistogramGame[];
 }
 
+interface AppTrend {
+  appid: number;
+  trend_30d_direction: string | null;
+  trend_30d_change_pct: number | null;
+}
+
+function mapAppSummaryToPublisherApp(
+  app: AppSummary,
+  trend: AppTrend | null
+): PublisherApp {
+  const totalReviews = app.total_reviews ?? 0;
+  const positiveReviews = app.positive_reviews ?? 0;
+  const unreleasedStates = new Set(['coming_soon', 'prerelease', 'unreleased']);
+
+  return {
+    appid: app.appid,
+    name: app.name,
+    type: app.type,
+    is_free: app.is_free,
+    release_date: app.release_date,
+    is_released: app.release_state
+      ? !unreleasedStates.has(app.release_state.toLowerCase())
+      : true,
+    is_delisted: app.is_delisted,
+    review_score: app.positive_percentage ?? app.review_score ?? null,
+    review_score_desc: null,
+    total_reviews: totalReviews,
+    positive_reviews: positiveReviews,
+    negative_reviews: Math.max(totalReviews - positiveReviews, 0),
+    owners_min: app.owners_min ?? null,
+    owners_max: app.owners_max ?? null,
+    ccu_peak: app.ccu_peak ?? null,
+    trend_30d_direction: trend?.trend_30d_direction ?? null,
+    trend_30d_change_pct: trend?.trend_30d_change_pct ?? null,
+  };
+}
+
 async function getPublisher(id: number): Promise<Publisher | null> {
   if (!isSupabaseConfigured()) return null;
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   const { data, error } = await supabase
     .from('publishers')
@@ -96,7 +136,7 @@ async function getPublisher(id: number): Promise<Publisher | null> {
 
 async function getPublisherApps(publisherId: number): Promise<PublisherApp[]> {
   if (!isSupabaseConfigured()) return [];
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   // Get all appids for this publisher
   const { data: appLinks } = await supabase
@@ -106,76 +146,26 @@ async function getPublisherApps(publisherId: number): Promise<PublisherApp[]> {
 
   if (!appLinks || appLinks.length === 0) return [];
 
-  const appIds = appLinks.map(a => a.appid);
+  const appIds = [...new Set(appLinks.map((appLink) => appLink.appid))];
+  const [apps, trendsResult] = await Promise.all([
+    getAppsByIds(appIds),
+    supabase
+      .from('app_trends')
+      .select('appid, trend_30d_direction, trend_30d_change_pct')
+      .in('appid', appIds),
+  ]);
 
-  // Get app details with latest metrics
-  const { data: apps } = await supabase
-    .from('apps')
-    .select(`
-      appid,
-      name,
-      type,
-      is_free,
-      release_date,
-      is_released,
-      is_delisted,
-      daily_metrics (
-        review_score,
-        review_score_desc,
-        total_reviews,
-        positive_reviews,
-        negative_reviews,
-        owners_min,
-        owners_max,
-        ccu_peak,
-        metric_date
-      ),
-      app_trends (
-        trend_30d_direction,
-        trend_30d_change_pct
-      )
-    `)
-    .in('appid', appIds);
+  const trendsMap = new Map<number, AppTrend>();
+  for (const trend of trendsResult.data ?? []) {
+    trendsMap.set(trend.appid, trend as AppTrend);
+  }
 
-  if (!apps) return [];
-
-  type MetricRow = { metric_date: string; review_score: number | null; review_score_desc: string | null; total_reviews: number | null; positive_reviews: number | null; negative_reviews: number | null; owners_min: number | null; owners_max: number | null; ccu_peak: number | null };
-  type TrendRow = { trend_30d_direction: string | null; trend_30d_change_pct: number | null };
-
-  return apps.map((app: Record<string, unknown>) => {
-    const metricsArr = app.daily_metrics as MetricRow[] | MetricRow | null;
-    const latestMetrics = Array.isArray(metricsArr)
-      ? metricsArr.sort((a, b) => new Date(b.metric_date).getTime() - new Date(a.metric_date).getTime())[0]
-      : metricsArr;
-
-    const trendsArr = app.app_trends as TrendRow[] | TrendRow | null;
-    const trends = Array.isArray(trendsArr) ? trendsArr[0] : trendsArr;
-
-    return {
-      appid: app.appid as number,
-      name: app.name as string,
-      type: app.type as string,
-      is_free: app.is_free as boolean,
-      release_date: app.release_date as string | null,
-      is_released: app.is_released as boolean,
-      is_delisted: app.is_delisted as boolean,
-      review_score: latestMetrics?.review_score ?? null,
-      review_score_desc: latestMetrics?.review_score_desc ?? null,
-      total_reviews: latestMetrics?.total_reviews ?? null,
-      positive_reviews: latestMetrics?.positive_reviews ?? null,
-      negative_reviews: latestMetrics?.negative_reviews ?? null,
-      owners_min: latestMetrics?.owners_min ?? null,
-      owners_max: latestMetrics?.owners_max ?? null,
-      ccu_peak: latestMetrics?.ccu_peak ?? null,
-      trend_30d_direction: trends?.trend_30d_direction ?? null,
-      trend_30d_change_pct: trends?.trend_30d_change_pct ?? null,
-    };
-  });
+  return apps.map((app) => mapAppSummaryToPublisherApp(app, trendsMap.get(app.appid) ?? null));
 }
 
 async function getRelatedDevelopers(publisherId: number): Promise<RelatedDeveloper[]> {
   if (!isSupabaseConfigured()) return [];
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   // Get all apps by this publisher
   const { data: pubApps } = await supabase
@@ -224,7 +214,7 @@ async function getRelatedDevelopers(publisherId: number): Promise<RelatedDevelop
 
 async function getPublisherTags(publisherId: number): Promise<{ tag: string; count: number }[]> {
   if (!isSupabaseConfigured()) return [];
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   // Get all apps by this publisher
   const { data: appLinks } = await supabase
@@ -261,7 +251,7 @@ async function getPublisherTags(publisherId: number): Promise<{ tag: string; cou
 
 async function getPublisherReviewHistogram(publisherId: number): Promise<ReviewHistogram[]> {
   if (!isSupabaseConfigured()) return [];
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   // Get all apps by this publisher with their names
   const { data: appLinks } = await supabase
@@ -342,7 +332,7 @@ async function getPublisherReviewHistogram(publisherId: number): Promise<ReviewH
 
 async function getSimilarPublishers(publisherId: number, topTags: string[]): Promise<SimilarPublisher[]> {
   if (!isSupabaseConfigured() || topTags.length === 0) return [];
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
   // First, get tag_ids for the tag names from steam_tags
   const { data: steamTags } = await supabase

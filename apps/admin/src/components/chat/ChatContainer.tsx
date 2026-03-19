@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { MessageSquare, StopCircle, Database } from 'lucide-react';
-import { getRandomPrompts } from '@/lib/example-prompts';
+import { getExamplePrompts } from '@/lib/example-prompts';
 import { useChatStream } from '@/hooks/useChatStream';
 import { generatePostResponseSuggestions } from '@/lib/chat/suggestion-generator';
 import type { QuerySuggestion } from '@/lib/chat/query-templates';
@@ -15,7 +15,7 @@ interface ChatContainerProps {
 
 export function ChatContainer({ initialQuery }: ChatContainerProps) {
   const [error, setError] = useState<string | null>(null);
-  const [suggestions] = useState(() => getRandomPrompts(4));
+  const suggestions = useMemo(() => getExamplePrompts('chat', 4), []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const hasSubmittedInitialQuery = useRef(false);

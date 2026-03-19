@@ -6,7 +6,7 @@ import { TOOLS } from '@/lib/llm/tools';
 import { CUBE_TOOLS } from '@/lib/llm/cube-tools';
 import { executeQuery } from '@/lib/query-executor';
 import { executeCubeQuery } from '@/lib/cube-executor';
-import { findSimilar, type FindSimilarArgs } from '@/lib/qdrant/search-service';
+import { findSimilarWithTimeout, type FindSimilarArgs } from '@/lib/qdrant/search-service';
 import { searchGames, type SearchGamesArgs } from '@/lib/search/game-search';
 import { lookupTags, type LookupTagsArgs } from '@/lib/search/tag-lookup';
 import {
@@ -109,7 +109,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           });
         } else if (toolCall.name === 'find_similar') {
           const args = toolCall.arguments as unknown as FindSimilarArgs;
-          result = await findSimilar(args);
+          result = await findSimilarWithTimeout(args);
         } else if (toolCall.name === 'search_games') {
           const args = toolCall.arguments as unknown as SearchGamesArgs;
           result = await searchGames(args);

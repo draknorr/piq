@@ -52,6 +52,55 @@ async function generateQueryEmbedding(text: string): Promise<number[]> {
 // Maximum results to return
 const MAX_RESULTS = 50;
 const DEFAULT_RESULTS = 10;
+export const QDRANT_SEARCH_TIMEOUT_MS = 10000;
+export const QDRANT_TIMEOUT_ERROR = 'Similarity search timed out. Please try again.';
+
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return message.includes('timeout') || message.includes('aborted');
+}
+
+async function withSearchTimeout<T extends { success: boolean; error?: string }>(
+  label: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const operationPromise = operation().catch((error) => {
+    console.error(`${label} failed:`, error);
+
+    return {
+      success: false,
+      error: isTimeoutError(error)
+        ? QDRANT_TIMEOUT_ERROR
+        : error instanceof Error
+          ? error.message
+          : 'Unexpected similarity search error.',
+    } as T;
+  });
+
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(`${label} exceeded ${QDRANT_SEARCH_TIMEOUT_MS}ms`);
+      resolve({
+        success: false,
+        error: QDRANT_TIMEOUT_ERROR,
+      } as T);
+    }, QDRANT_SEARCH_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([operationPromise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 /**
  * Arguments for find_similar tool
@@ -676,6 +725,12 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
   };
 }
 
+export async function findSimilarWithTimeout(
+  args: FindSimilarArgs
+): Promise<FindSimilarResult> {
+  return withSearchTimeout('Similarity search', () => findSimilar(args));
+}
+
 /**
  * Arguments for search_by_concept tool
  */
@@ -811,4 +866,10 @@ export async function searchByConcept(args: SearchByConceptArgs): Promise<Search
     results,
     total_found: searchResult.length,
   };
+}
+
+export async function searchByConceptWithTimeout(
+  args: SearchByConceptArgs
+): Promise<SearchByConceptResult> {
+  return withSearchTimeout('Concept similarity search', () => searchByConcept(args));
 }

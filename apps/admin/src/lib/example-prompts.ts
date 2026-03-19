@@ -1,6 +1,6 @@
 /**
- * Example prompts for the chat interface
- * Displayed randomly on the dashboard and chat pages
+ * Example prompts for the chat interface.
+ * Selections are deterministic per surface to avoid hydration mismatches.
  */
 
 export const EXAMPLE_PROMPTS = [
@@ -35,11 +35,25 @@ export const EXAMPLE_PROMPTS = [
   "Which multiplayer games have the best reviews?",
 ];
 
+export type ExamplePromptSurface = 'dashboard' | 'chat' | 'chat-input';
+
+function getSurfaceOffset(surface: ExamplePromptSurface): number {
+  return [...surface].reduce((hash, char) => {
+    return (hash * 31 + char.charCodeAt(0)) % EXAMPLE_PROMPTS.length;
+  }, 0);
+}
+
 /**
- * Returns a random selection of example prompts
- * @param count Number of prompts to return (default: 4)
+ * Returns a deterministic selection of example prompts for a UI surface.
  */
-export function getRandomPrompts(count: number = 4): string[] {
-  const shuffled = [...EXAMPLE_PROMPTS].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+export function getExamplePrompts(
+  surface: ExamplePromptSurface,
+  count: number = 4
+): string[] {
+  const safeCount = Math.max(0, Math.min(count, EXAMPLE_PROMPTS.length));
+  const offset = getSurfaceOffset(surface);
+
+  return Array.from({ length: safeCount }, (_, index) => {
+    return EXAMPLE_PROMPTS[(offset + index) % EXAMPLE_PROMPTS.length];
+  });
 }

@@ -286,6 +286,7 @@ function SummarySection({
   const displayedTags = tagsExpanded ? tags : tags.slice(0, TAG_LIMIT);
   const displayedFeatures = picsData ? (featuresExpanded ? picsData.categories : picsData.categories.slice(0, FEATURE_LIMIT)) : [];
   const displayedLanguages = picsData ? (languagesExpanded ? picsData.languages : picsData.languages.slice(0, LANGUAGE_LIMIT)) : [];
+  const coverageTotalGames = picsData?.platformStats.totalGames ?? totalGames;
 
   return (
     <section>
@@ -349,9 +350,9 @@ function SummarySection({
                 <h3 className="text-body-sm font-medium text-text-primary">Platform Coverage</h3>
               </div>
               <div className="space-y-2">
-                <PlatformBar label="Windows" count={picsData.platformStats.platforms.windows} total={totalGames} />
-                <PlatformBar label="macOS" count={picsData.platformStats.platforms.macos} total={totalGames} />
-                <PlatformBar label="Linux" count={picsData.platformStats.platforms.linux} total={totalGames} />
+                <PlatformBar label="Windows" count={picsData.platformStats.platforms.windows} total={coverageTotalGames} />
+                <PlatformBar label="macOS" count={picsData.platformStats.platforms.macos} total={coverageTotalGames} />
+                <PlatformBar label="Linux" count={picsData.platformStats.platforms.linux} total={coverageTotalGames} />
               </div>
             </Card>
 
@@ -362,10 +363,10 @@ function SummarySection({
                 <h3 className="text-body-sm font-medium text-text-primary">Steam Deck</h3>
               </div>
               <div className="space-y-1.5">
-                <DistributionRow label="Verified" count={picsData.platformStats.steamDeck.verified} total={totalGames} color="green" />
-                <DistributionRow label="Playable" count={picsData.platformStats.steamDeck.playable} total={totalGames} color="yellow" />
-                <DistributionRow label="Unsupported" count={picsData.platformStats.steamDeck.unsupported} total={totalGames} color="red" />
-                <DistributionRow label="Unknown" count={picsData.platformStats.steamDeck.unknown} total={totalGames} color="gray" />
+                <DistributionRow label="Verified" count={picsData.platformStats.steamDeck.verified} total={coverageTotalGames} color="green" />
+                <DistributionRow label="Playable" count={picsData.platformStats.steamDeck.playable} total={coverageTotalGames} color="yellow" />
+                <DistributionRow label="Unsupported" count={picsData.platformStats.steamDeck.unsupported} total={coverageTotalGames} color="red" />
+                <DistributionRow label="Unknown" count={picsData.platformStats.steamDeck.unknown} total={coverageTotalGames} color="gray" />
               </div>
             </Card>
 
@@ -376,9 +377,9 @@ function SummarySection({
                 <h3 className="text-body-sm font-medium text-text-primary">Controller Support</h3>
               </div>
               <div className="space-y-1.5">
-                <DistributionRow label="Full" count={picsData.platformStats.controllerSupport.full} total={totalGames} color="green" />
-                <DistributionRow label="Partial" count={picsData.platformStats.controllerSupport.partial} total={totalGames} color="yellow" />
-                <DistributionRow label="None" count={picsData.platformStats.controllerSupport.none} total={totalGames} color="gray" />
+                <DistributionRow label="Full" count={picsData.platformStats.controllerSupport.full} total={coverageTotalGames} color="green" />
+                <DistributionRow label="Partial" count={picsData.platformStats.controllerSupport.partial} total={coverageTotalGames} color="yellow" />
+                <DistributionRow label="None" count={picsData.platformStats.controllerSupport.none} total={coverageTotalGames} color="gray" />
               </div>
             </Card>
           </div>
@@ -386,7 +387,7 @@ function SummarySection({
 
         {/* Row 3: Genre Distribution - Horizontal Bar Chart */}
         {picsData && picsData.genres.length > 0 && (
-          <GenreBarChart genres={picsData.genres} totalGames={totalGames} />
+          <GenreBarChart genres={picsData.genres} totalGames={coverageTotalGames} />
         )}
 
         {/* Row 4: Features + Franchises */}
@@ -508,7 +509,9 @@ function GenreBarChart({ genres, totalGames }: GenreBarChartProps) {
       </div>
       <div className="space-y-2">
         {genres.slice(0, 8).map((genre, i) => {
-          const percentage = Math.round(((genre.game_count ?? 0) / totalGames) * 100);
+          const percentage = totalGames > 0
+            ? Math.round(((genre.game_count ?? 0) / totalGames) * 100)
+            : 0;
           return (
             <div key={genre.genre_id} className="flex items-center gap-2 sm:gap-3">
               <div className="w-16 sm:w-24 text-caption text-text-secondary truncate" title={genre.name}>

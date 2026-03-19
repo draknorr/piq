@@ -9,7 +9,7 @@ import {
   matchTemplates,
   generateGameSuggestions,
 } from '@/lib/chat/query-templates';
-import { getRandomPrompts } from '@/lib/example-prompts';
+import { getExamplePrompts } from '@/lib/example-prompts';
 import type { SearchResponse } from '@/components/search/types';
 
 interface ChatInputProps {
@@ -37,7 +37,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const { tags, genres, isLoading: isLoadingTags } = useAutocompleteData();
 
   // Random example prompts for empty state
-  const examplePrompts = useMemo(() => getRandomPrompts(4), []);
+  const examplePrompts = useMemo(() => getExamplePrompts('chat-input', 4), []);
 
   // Auto-resize textarea
   useEffect(() => {

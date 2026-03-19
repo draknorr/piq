@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { findSimilar, type FindSimilarArgs } from '@/lib/qdrant/search-service';
+import {
+  findSimilarWithTimeout,
+  QDRANT_TIMEOUT_ERROR,
+  type FindSimilarArgs,
+} from '@/lib/qdrant/search-service';
 import type { PopularityComparison, ReviewComparison } from '@publisheriq/qdrant';
 import { createServerClient } from '@/lib/supabase/server';
 
@@ -95,7 +99,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    const result = await findSimilar({
+    const result = await findSimilarWithTimeout({
       entity_type: entityType,
       reference_id: referenceId !== null && !isNaN(referenceId) ? referenceId : undefined,
       reference_name: referenceName ?? undefined,
@@ -103,7 +107,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       limit,
     });
 
-    return NextResponse.json(result);
+    const status = result.success
+      ? 200
+      : result.error === QDRANT_TIMEOUT_ERROR
+        ? 504
+        : 200;
+
+    return NextResponse.json(result, { status });
   } catch (error) {
     console.error('Similarity API error:', error);
     return NextResponse.json(

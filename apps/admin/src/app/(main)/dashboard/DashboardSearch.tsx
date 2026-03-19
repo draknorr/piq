@@ -1,13 +1,12 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { getRandomPrompts } from '@/lib/example-prompts';
+import { getExamplePrompts } from '@/lib/example-prompts';
 import { useGlobalSearch } from '@/components/search';
 
 export function DashboardSearch() {
-  const [suggestions] = useState(() => getRandomPrompts(4));
+  const suggestions = getExamplePrompts('dashboard', 4);
   const router = useRouter();
   const { open } = useGlobalSearch();
 

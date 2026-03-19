@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
+import { useAuthReady } from '@/hooks/useAuthReady';
 import { createBrowserClient } from '@/lib/supabase/client';
 
 export interface SparklineData {
@@ -24,6 +25,7 @@ export interface UseSparklineLoaderReturn {
  * Batches multiple visible rows into a single RPC call for efficiency
  */
 export function useSparklineLoader(): UseSparklineLoaderReturn {
+  const authReady = useAuthReady();
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadedRef = useRef<Map<number, SparklineData>>(new Map());
   const loadingRef = useRef<Set<number>>(new Set());
@@ -57,6 +59,11 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
     pendingBatchRef.current.clear();
 
     if (appids.length === 0) return;
+
+    if (!authReady) {
+      forceUpdate((n) => n + 1);
+      return;
+    }
 
     // Mark all as loading
     appids.forEach(appid => loadingRef.current.add(appid));
@@ -105,7 +112,7 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
       appids.forEach(appid => loadingRef.current.delete(appid));
       forceUpdate((n) => n + 1);
     }
-  }, [calculateTrend]);
+  }, [authReady, calculateTrend]);
 
   // Queue an appid for batch loading
   const queueForLoading = useCallback(
@@ -157,6 +164,20 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
       }
     };
   }, [queueForLoading]);
+
+  useEffect(() => {
+    if (!authReady) {
+      loadedRef.current.clear();
+      loadingRef.current.clear();
+      pendingBatchRef.current.clear();
+      forceUpdate((n) => n + 1);
+      return;
+    }
+
+    elementsRef.current.forEach((_element, appid) => {
+      queueForLoading(appid);
+    });
+  }, [authReady, queueForLoading]);
 
   // Register a row element for observation
   const registerRow = useCallback(

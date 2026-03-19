@@ -19,82 +19,170 @@ interface UserUsage {
   total_messages_sent: number;
 }
 
-async function getUsageStats() {
-  const supabase = await createServerClient();
-
-  // Get aggregate stats
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: profiles } = await (supabase.from('user_profiles') as any)
-    .select('credit_balance, total_credits_used, total_messages_sent') as {
-      data: Array<{ credit_balance: number; total_credits_used: number; total_messages_sent: number }> | null
-    };
-
-  const totalCreditsInSystem = profiles?.reduce((sum, p) => sum + p.credit_balance, 0) ?? 0;
-  const totalCreditsUsed = profiles?.reduce((sum, p) => sum + p.total_credits_used, 0) ?? 0;
-  const totalMessages = profiles?.reduce((sum, p) => sum + p.total_messages_sent, 0) ?? 0;
-
-  // Get recent chat activity (last 7 days)
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: recentLogs, count: recentCount } = await (supabase.from('chat_query_logs') as any)
-    .select('*', { count: 'exact' })
-    .gte('created_at', sevenDaysAgo);
-
-  const recentCredits = recentLogs?.reduce(
-    (sum: number, log: { total_credits_charged?: number }) =>
-      sum + (log.total_credits_charged ?? 0),
-    0
-  ) ?? 0;
-
-  return {
-    totalCreditsInSystem,
-    totalCreditsUsed,
-    totalMessages,
-    messagesLast7Days: recentCount ?? 0,
-    creditsUsedLast7Days: recentCredits,
-  };
+interface UsageStats {
+  totalCreditsInSystem: number;
+  totalCreditsUsed: number;
+  totalMessages: number;
+  messagesLast7Days: number;
+  creditsUsedLast7Days: number;
 }
 
-async function getTopUsers(): Promise<UserUsage[]> {
-  const supabase = await createServerClient();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: users } = await (supabase.from('user_profiles') as any)
-    .select('id, email, full_name, credit_balance, total_credits_used, total_messages_sent')
-    .order('total_credits_used', { ascending: false })
-    .limit(10);
-
-  return users ?? [];
+interface ToolUsage {
+  name: string;
+  count: number;
 }
 
-async function getToolUsageBreakdown() {
+interface ChatUsageLog {
+  user_id: string | null;
+  total_credits_charged: number | null;
+  tool_names: string[] | null;
+  created_at: string;
+}
+
+interface UserProfileSummary {
+  id: string;
+  email: string;
+  full_name: string | null;
+  credit_balance: number;
+}
+
+const CHAT_LOGS_PAGE_SIZE = 1000;
+
+async function fetchAllChatLogs(): Promise<ChatUsageLog[]> {
+  const supabase = await createServerClient();
+  const logs: ChatUsageLog[] = [];
+
+  for (let from = 0; ; from += CHAT_LOGS_PAGE_SIZE) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase.from('chat_query_logs') as any)
+      .select('user_id, total_credits_charged, tool_names, created_at')
+      .order('created_at', { ascending: false })
+      .range(from, from + CHAT_LOGS_PAGE_SIZE - 1) as {
+        data: ChatUsageLog[] | null;
+        error: { message: string } | null;
+      };
+
+    if (error) {
+      throw new Error(`Failed to fetch chat usage logs: ${error.message}`);
+    }
+
+    if (!data || data.length === 0) {
+      break;
+    }
+
+    logs.push(...data);
+
+    if (data.length < CHAT_LOGS_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return logs;
+}
+
+async function getUsagePageData(): Promise<{
+  stats: UsageStats;
+  topUsers: UserUsage[];
+  toolUsage: ToolUsage[];
+}> {
   const supabase = await createServerClient();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: logs } = await (supabase.from('chat_query_logs') as any)
-    .select('tool_names')
-    .not('tool_names', 'is', null);
+  const [logs, profilesResult] = await Promise.all([
+    fetchAllChatLogs(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase.from('user_profiles') as any)
+      .select('id, email, full_name, credit_balance') as PromiseLike<{
+        data: UserProfileSummary[] | null;
+      }>,
+  ]);
 
+  const profiles = profilesResult.data ?? [];
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
   const toolCounts: Record<string, number> = {};
+  const userUsage = new Map<string, { total_credits_used: number; total_messages_sent: number }>();
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-  logs?.forEach((log: { tool_names: string[] | null }) => {
-    log.tool_names?.forEach((tool: string) => {
+  let totalCreditsUsed = 0;
+  let messagesLast7Days = 0;
+  let creditsUsedLast7Days = 0;
+
+  for (const log of logs) {
+    const creditsCharged = log.total_credits_charged ?? 0;
+    totalCreditsUsed += creditsCharged;
+
+    if (new Date(log.created_at).getTime() >= sevenDaysAgo) {
+      messagesLast7Days += 1;
+      creditsUsedLast7Days += creditsCharged;
+    }
+
+    log.tool_names?.forEach((tool) => {
       toolCounts[tool] = (toolCounts[tool] || 0) + 1;
     });
-  });
 
-  return Object.entries(toolCounts)
+    if (!log.user_id) {
+      continue;
+    }
+
+    const existing = userUsage.get(log.user_id) ?? {
+      total_credits_used: 0,
+      total_messages_sent: 0,
+    };
+
+    existing.total_credits_used += creditsCharged;
+    existing.total_messages_sent += 1;
+    userUsage.set(log.user_id, existing);
+  }
+
+  const totalCreditsInSystem = profiles.reduce((sum, profile) => {
+    return sum + (profile.credit_balance ?? 0);
+  }, 0);
+
+  const topUsers = [...userUsage.entries()]
+    .map(([userId, usage]) => {
+      const profile = profileMap.get(userId);
+      if (!profile) {
+        return null;
+      }
+
+      return {
+        id: userId,
+        email: profile.email,
+        full_name: profile.full_name,
+        credit_balance: profile.credit_balance,
+        total_credits_used: usage.total_credits_used,
+        total_messages_sent: usage.total_messages_sent,
+      };
+    })
+    .filter((user): user is UserUsage => user !== null)
+    .sort((a, b) => {
+      if (b.total_credits_used !== a.total_credits_used) {
+        return b.total_credits_used - a.total_credits_used;
+      }
+
+      return b.total_messages_sent - a.total_messages_sent;
+    })
+    .slice(0, 10);
+
+  const toolUsage = Object.entries(toolCounts)
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
+
+  return {
+    stats: {
+      totalCreditsInSystem,
+      totalCreditsUsed,
+      totalMessages: logs.length,
+      messagesLast7Days,
+      creditsUsedLast7Days,
+    },
+    topUsers,
+    toolUsage,
+  };
 }
 
 export default async function AdminUsagePage() {
   await requireAdmin();
-  const [stats, topUsers, toolUsage] = await Promise.all([
-    getUsageStats(),
-    getTopUsers(),
-    getToolUsageBreakdown(),
-  ]);
+  const { stats, topUsers, toolUsage } = await getUsagePageData();
 
   return (
     <div className="space-y-6">

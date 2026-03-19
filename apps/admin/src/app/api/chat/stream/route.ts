@@ -6,7 +6,12 @@ import { TOOLS } from '@/lib/llm/tools';
 import { CUBE_TOOLS } from '@/lib/llm/cube-tools';
 import { executeQuery } from '@/lib/query-executor';
 import { executeCubeQuery } from '@/lib/cube-executor';
-import { findSimilar, searchByConcept, type FindSimilarArgs, type SearchByConceptArgs } from '@/lib/qdrant/search-service';
+import {
+  findSimilarWithTimeout,
+  searchByConceptWithTimeout,
+  type FindSimilarArgs,
+  type SearchByConceptArgs,
+} from '@/lib/qdrant/search-service';
 import { searchGames, type SearchGamesArgs } from '@/lib/search/game-search';
 import { lookupTags, type LookupTagsArgs } from '@/lib/search/tag-lookup';
 import {
@@ -70,10 +75,10 @@ async function executeTool(toolCall: ToolCall): Promise<{ success: boolean; erro
     });
   } else if (toolCall.name === 'find_similar') {
     const args = toolCall.arguments as unknown as FindSimilarArgs;
-    return findSimilar(args);
+    return findSimilarWithTimeout(args);
   } else if (toolCall.name === 'search_by_concept') {
     const args = toolCall.arguments as unknown as SearchByConceptArgs;
-    return searchByConcept(args);
+    return searchByConceptWithTimeout(args);
   } else if (toolCall.name === 'search_games') {
     const args = toolCall.arguments as unknown as SearchGamesArgs;
     return searchGames(args);

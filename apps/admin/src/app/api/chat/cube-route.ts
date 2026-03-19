@@ -10,7 +10,7 @@ import { createProvider } from '@/lib/llm/providers';
 import { buildCubeSystemPrompt } from '@/lib/llm/cube-system-prompt';
 import { CUBE_TOOLS } from '@/lib/llm/cube-tools';
 import { executeCubeQuery } from '@/lib/cube-executor';
-import { findSimilar, type FindSimilarArgs } from '@/lib/qdrant/search-service';
+import { findSimilarWithTimeout, type FindSimilarArgs } from '@/lib/qdrant/search-service';
 import { searchGames, type SearchGamesArgs } from '@/lib/search/game-search';
 import { lookupTags, type LookupTagsArgs } from '@/lib/search/tag-lookup';
 import {
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           const args = toolCall.arguments as unknown as FindSimilarArgs;
 
           // Execute the similarity search (unchanged - uses Qdrant)
-          const similarityResult = await findSimilar(args);
+          const similarityResult = await findSimilarWithTimeout(args);
 
           // Track the tool call
           executedToolCalls.push({
