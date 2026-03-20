@@ -29,11 +29,13 @@ import {
 import {
   applyCompanyToolResultPolicy,
   buildGenericCompanyLookupSkipResult,
+  classifyCompanyIntent,
   buildRedundantCompanySkipResult,
   extractCompanyAnswerState,
   normalizeCompanyToolCall,
   type CompanyAnswerState,
 } from '@/lib/chat/company-answer-policy';
+import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
 import { logChatQuery } from '@/lib/chat-query-logger';
 import {
   compareChangeBeforeAfter,
@@ -54,7 +56,7 @@ import {
   DEFAULT_RESERVATION,
   getCreditBreakdown,
 } from '@/lib/credits';
-import type { Message, ChatRequest, Tool, QueryResult, SimilarityResult, ToolCall } from '@/lib/llm/types';
+import type { Message, ChatRequest, Tool, QueryResult, SimilarityResult, ToolCall, ChatToolCall } from '@/lib/llm/types';
 import type {
   StreamEvent,
   TextDeltaEvent,
@@ -263,9 +265,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         let totalLlmMs = 0;
         let totalToolsMs = 0;
         const executedToolNames: string[] = []; // Track only executed tools for logging + credits
+        const executedToolCalls: ChatToolCall[] = [];
         let lastBroadDiscoveryState: BroadDiscoveryState | null = null;
         let lastCompanyState: CompanyAnswerState | null = null;
         const lastUserPrompt = body.messages.filter((message) => message.role === 'user').pop()?.content ?? '';
+        const shouldBufferCompanyResponse = Boolean(classifyCompanyIntent(lastUserPrompt));
 
         // Debug stats - zero additional cost, just counters
         const debugStats: StreamDebugInfo = {
@@ -291,11 +295,13 @@ export async function POST(request: NextRequest): Promise<Response> {
           for await (const chunk of llmStream) {
             if (chunk.type === 'text' && chunk.text) {
               accumulatedText += chunk.text;
-              debugStats.textDeltaCount++;
-              debugStats.totalChars += chunk.text.length;
-              iterationTextCount++;
-              const textEvent: TextDeltaEvent = { type: 'text_delta', delta: chunk.text };
-              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              if (!shouldBufferCompanyResponse) {
+                debugStats.textDeltaCount++;
+                debugStats.totalChars += chunk.text.length;
+                iterationTextCount++;
+                const textEvent: TextDeltaEvent = { type: 'text_delta', delta: chunk.text };
+                controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              }
             }
 
             if (chunk.type === 'tool_use_start' && chunk.toolCall) {
@@ -324,6 +330,23 @@ export async function POST(request: NextRequest): Promise<Response> {
           }
 
           totalLlmMs += performance.now() - llmStart;
+
+          if (shouldBufferCompanyResponse && completedToolCalls.length === 0 && accumulatedText.length > 0) {
+            accumulatedText = sanitizeCompanyAssistantResponse(
+              lastUserPrompt,
+              accumulatedText,
+              executedToolCalls
+            );
+
+            if (accumulatedText.length > 0) {
+              debugStats.textDeltaCount++;
+              debugStats.totalChars += accumulatedText.length;
+              iterationTextCount++;
+              const textEvent: TextDeltaEvent = { type: 'text_delta', delta: accumulatedText };
+              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+            }
+          }
+
           debugStats.lastIterationHadText = iterationTextCount > 0;
           debugStats.toolCallCount += completedToolCalls.length;
 
@@ -399,6 +422,12 @@ export async function POST(request: NextRequest): Promise<Response> {
             controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
 
             toolResults.push({ toolCall: effectiveToolCall, result });
+            executedToolCalls.push({
+              name: effectiveToolCall.name,
+              arguments: effectiveToolCall.arguments,
+              result,
+              timing: { executionMs: Math.round(toolExecutionMs) },
+            });
             lastBroadDiscoveryState = extractBroadDiscoveryState(
               effectiveToolCall.name,
               effectiveToolCall.arguments,

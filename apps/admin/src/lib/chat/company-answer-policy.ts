@@ -5,7 +5,13 @@ import { getServiceSupabase } from '@/lib/supabase-service';
 type Primitive = string | number | boolean;
 type CompanyEntityType = 'publisher' | 'developer';
 type CompanyWindowSegment = 'lastYear' | 'last6Months' | 'last3Months' | 'last30Days';
-type CompanyRankingMode = 'meaningful_first' | 'raw_count';
+type CompanyAnswerMode =
+  | 'meaningful_first'
+  | 'raw_count'
+  | 'top_ranked'
+  | 'recent_ranked'
+  | 'profile'
+  | 'precision_first';
 
 interface QueryAnalyticsArgs {
   cube: string;
@@ -52,8 +58,8 @@ interface CompanyAnswerMetricHint {
 }
 
 interface CompanyAnswerHints {
-  family: Extract<CompanyIntentFamily, 'time_window_ranking' | 'constrained_company_screen'>;
-  rankingMode: CompanyRankingMode;
+  family: CompanyIntentFamily;
+  answerMode: CompanyAnswerMode;
   lowSignalIncluded: boolean;
   lowSignalReason?: string;
   primaryMetric: CompanyAnswerMetricHint;
@@ -105,6 +111,76 @@ const RAW_COUNT_MARKERS = [
   /\bliteral release count\b/i,
 ];
 
+const PORTFOLIO_TOP_MARKERS = [
+  /\btop games?\b/i,
+  /\bbest games?\b/i,
+  /\bstrongest games?\b/i,
+  /\bmost popular games?\b/i,
+  /\bmost reviewed games?\b/i,
+  /\bflagship titles?\b/i,
+  /\bnotable titles?\b/i,
+  /\bbiggest games?\b/i,
+];
+
+const PORTFOLIO_RECENT_MARKERS = [
+  /\blatest games?\b/i,
+  /\bnewest games?\b/i,
+  /\brecent games?\b/i,
+  /\brecent releases?\b/i,
+  /\blatest releases?\b/i,
+  /\bnewest releases?\b/i,
+];
+
+const COMPANY_ENTITY_MARKER = /\b(publisher|publishers|developer|developers|studio|studios|company|companies)\b/i;
+
+const COMPANY_SIMILARITY_MARKERS = [
+  /\bsimilar to\b/i,
+  /\bcompanies like\b/i,
+  /\bpublishers like\b/i,
+  /\bdevelopers like\b/i,
+  /\bstudios like\b/i,
+  /\bpeer publishers?\b/i,
+  /\bpeer developers?\b/i,
+  /\bpeers? to\b/i,
+  /\bcomparable to\b/i,
+  /\bcomparable publishers?\b/i,
+  /\bcomparable developers?\b/i,
+];
+
+const TIME_WINDOW_RANKING_MARKERS = [
+  /\bmost games?\b/i,
+  /\bmost releases?\b/i,
+  /\bmost games released\b/i,
+  /\breleasing the most\b/i,
+  /\breleased the most\b/i,
+  /\btop publishers?\b/i,
+  /\btop developers?\b/i,
+  /\btop studios?\b/i,
+  /\bhighest release count\b/i,
+];
+
+const RELEASE_COUNT_MARKERS = [
+  /\brelease count\b/i,
+  /\breleases?\b/i,
+  /\bgames? released\b/i,
+];
+
+const COUNT_THRESHOLD_MARKERS = [
+  /\b\d+\s*\+\s*games?\b/i,
+  /\b\d+\s*\+\s*releases?\b/i,
+  /\bat least\s+\d+\s+(games?|releases?)\b/i,
+  /\b\d+\s+or more\s+(games?|releases?)\b/i,
+];
+
+const UNIVERSAL_CONSTRAINT_MARKERS = [
+  /\ball above\b/i,
+  /\bevery game above\b/i,
+  /\bevery release above\b/i,
+  /\bnone below\b/i,
+  /\bminimum\b/i,
+  /\bat least\s+\d+%/i,
+];
+
 const GENERIC_RELATIONSHIP_LOOKUPS = new Set([
   'indie',
   'indie developer',
@@ -129,6 +205,25 @@ function normalizePrompt(prompt: string): string {
 
 function normalizeLookupQuery(query: string): string {
   return normalizePrompt(query).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function hasCompanyEntityLanguage(text: string): boolean {
+  return COMPANY_ENTITY_MARKER.test(text);
+}
+
+function isCompanyCountProfilePrompt(text: string): boolean {
+  return (
+    (/\bhow many games\b/.test(text) && /\b(published|developed|released|made)\b/.test(text)) ||
+    /\b(published|developed|released|made)\s+how many games\b/.test(text) ||
+    (/\bgame count\b/.test(text) && /\b(publisher|developer|published|developed|released|made)\b/.test(text))
+  );
+}
+
+function isCompanySimilarityPrompt(text: string): boolean {
+  return (
+    COMPANY_SIMILARITY_MARKERS.some((pattern) => pattern.test(text)) &&
+    hasCompanyEntityLanguage(text)
+  );
 }
 
 function inferCompanyEntityType(
@@ -169,11 +264,26 @@ function extractPercentThreshold(prompt: string): number | null {
 }
 
 function extractGameCountThreshold(prompt: string): number | null {
-  const match = normalizePrompt(prompt).match(/(\d+)\s*\+\s*games?/);
-  if (!match) return null;
+  const text = normalizePrompt(prompt);
+  const patterns = [
+    /(\d+)\s*\+\s*(games?|releases?)/,
+    /at least\s+(\d+)\s+(games?|releases?)/,
+    /(\d+)\s+or more\s+(games?|releases?)/,
+  ];
 
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : null;
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
 }
 
 function extractYear(prompt: string): number | null {
@@ -222,19 +332,42 @@ function detectTimeWindow(
   return null;
 }
 
+function isCompanyTimeWindowRankingPrompt(text: string): boolean {
+  if (!hasCompanyEntityLanguage(text) || !detectTimeWindow(text)) {
+    return false;
+  }
+
+  if (TIME_WINDOW_RANKING_MARKERS.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  return wantsRawCountRanking(text) && RELEASE_COUNT_MARKERS.some((pattern) => pattern.test(text));
+}
+
+function isConstrainedCompanyScreenPrompt(text: string): boolean {
+  if (!hasCompanyEntityLanguage(text) || !detectTimeWindow(text)) {
+    return false;
+  }
+
+  const hasCountThreshold = COUNT_THRESHOLD_MARKERS.some((pattern) => pattern.test(text));
+  const hasUniversalConstraint =
+    UNIVERSAL_CONSTRAINT_MARKERS.some((pattern) => pattern.test(text)) ||
+    /\b\d+%\b/.test(text);
+
+  return hasCountThreshold && hasUniversalConstraint;
+}
+
 export function classifyCompanyIntent(prompt: string): CompanyIntentFamily | null {
   const text = normalizePrompt(prompt);
 
-  if (
-    /\bhow many games has\b/.test(text) &&
-    /\b(published|developed|released|made)\b/.test(text)
-  ) {
+  if (isCompanyCountProfilePrompt(text)) {
     return 'company_count_profile';
   }
 
   if (
-    (/\btop games?\b/.test(text) || /\bbest games?\b/.test(text)) &&
-    /\b(from|by)\b/.test(text)
+    (PORTFOLIO_TOP_MARKERS.some((pattern) => pattern.test(text)) ||
+      PORTFOLIO_RECENT_MARKERS.some((pattern) => pattern.test(text))) &&
+    (/\b(from|by)\b/.test(text) || /'s\b/.test(text))
   ) {
     return 'portfolio_top_titles';
   }
@@ -245,26 +378,15 @@ export function classifyCompanyIntent(prompt: string): CompanyIntentFamily | nul
     return 'relationship_screen';
   }
 
-  if (
-    /\b(similar to|like)\b/.test(text) &&
-    /\b(publisher|publishers|developer|developers|studio|studios|company|companies)\b/.test(text)
-  ) {
+  if (isCompanySimilarityPrompt(text)) {
     return 'company_similarity';
   }
 
-  if (
-    /\b(publisher|publishers|developer|developers)\b/.test(text) &&
-    /\b(most games|releasing the most|released the most)\b/.test(text) &&
-    detectTimeWindow(text)
-  ) {
+  if (isCompanyTimeWindowRankingPrompt(text)) {
     return 'time_window_ranking';
   }
 
-  if (
-    /\b(publisher|publishers|developer|developers)\b/.test(text) &&
-    /\bwith\b/.test(text) &&
-    /\b\d+\s*\+\s*games?\b/.test(text)
-  ) {
+  if (isConstrainedCompanyScreenPrompt(text)) {
     return 'constrained_company_screen';
   }
 
@@ -336,6 +458,10 @@ function wantsRawCountRanking(prompt: string): boolean {
   return RAW_COUNT_MARKERS.some((pattern) => pattern.test(prompt));
 }
 
+function wantsRecentPortfolioTitles(prompt: string): boolean {
+  return PORTFOLIO_RECENT_MARKERS.some((pattern) => pattern.test(prompt));
+}
+
 function rewriteRelationshipScreen(
   prompt: string,
   args: QueryAnalyticsArgs
@@ -394,6 +520,62 @@ function rewriteRelationshipScreen(
     order,
     limit: Math.min(args.limit ?? 10, 10),
     reasoning: normalizeReasoning('relationship_screen', prompt),
+  };
+}
+
+function rewritePortfolioTopTitles(
+  prompt: string,
+  args: QueryAnalyticsArgs
+): QueryAnalyticsArgs | null {
+  const cube = args.cube;
+  if (cube !== 'PublisherGameMetrics' && cube !== 'DeveloperGameMetrics') {
+    return null;
+  }
+
+  const isRecentMode = wantsRecentPortfolioTitles(prompt);
+  const idMember = cube === 'PublisherGameMetrics'
+    ? 'PublisherGameMetrics.publisherId'
+    : 'DeveloperGameMetrics.developerId';
+  const nameMember = cube === 'PublisherGameMetrics'
+    ? 'PublisherGameMetrics.publisherName'
+    : 'DeveloperGameMetrics.developerName';
+
+  const filters = Array.isArray(args.filters) ? [...args.filters] : [];
+  const existingIdFilter = filters.some((filter) => filter.member === idMember);
+  const existingNameFilter = filters.some((filter) => filter.member === nameMember);
+  if (!existingIdFilter && !existingNameFilter) {
+    return null;
+  }
+
+  return {
+    cube,
+    dimensions: [
+      `${cube}.appid`,
+      `${cube}.gameName`,
+      cube === 'PublisherGameMetrics'
+        ? 'PublisherGameMetrics.publisherId'
+        : 'DeveloperGameMetrics.developerId',
+      cube === 'PublisherGameMetrics'
+        ? 'PublisherGameMetrics.publisherName'
+        : 'DeveloperGameMetrics.developerName',
+      `${cube}.totalReviews`,
+      `${cube}.reviewPercentage`,
+      `${cube}.owners`,
+      `${cube}.releaseDate`,
+    ],
+    filters,
+    order: isRecentMode
+      ? { [`${cube}.releaseDate`]: 'desc' }
+      : {
+          [`${cube}.totalReviews`]: 'desc',
+          [`${cube}.reviewPercentage`]: 'desc',
+          [`${cube}.owners`]: 'desc',
+          [`${cube}.releaseDate`]: 'desc',
+        },
+    limit: Math.min(args.limit ?? 10, 10),
+    reasoning: isRecentMode
+      ? `Use the company game surface to answer the recent company titles request: ${prompt}`
+      : `Use the company game surface to answer the top company titles request with review-backed ranking: ${prompt}`,
   };
 }
 
@@ -476,7 +658,12 @@ function rewriteConstrainedCompanyScreen(
   args: QueryAnalyticsArgs
 ): QueryAnalyticsArgs | null {
   const entityType = inferCompanyEntityType(prompt, args);
-  const timeWindow = detectTimeWindow(prompt);
+  const normalizedPrompt = normalizePrompt(prompt);
+  const detectedTimeWindow = detectTimeWindow(prompt);
+  const timeWindow =
+    detectedTimeWindow?.type === 'year' && /\blast year\b/.test(normalizedPrompt)
+      ? { type: 'segment' as const, segment: 'lastYear' as const }
+      : detectedTimeWindow;
   const minGames = extractGameCountThreshold(prompt);
   const reviewPercentage = extractPercentThreshold(prompt);
 
@@ -557,7 +744,9 @@ export function normalizeCompanyToolCall(toolCall: ToolCall, userPrompt: string)
 
   let rewritten: QueryAnalyticsArgs | null = null;
 
-  if (family === 'relationship_screen') {
+  if (family === 'portfolio_top_titles') {
+    rewritten = rewritePortfolioTopTitles(userPrompt, args);
+  } else if (family === 'relationship_screen') {
     rewritten = rewriteRelationshipScreen(userPrompt, args);
   } else if (family === 'time_window_ranking') {
     rewritten = rewriteTimeWindowRanking(userPrompt, args);
@@ -589,7 +778,7 @@ function isCompanyTopTitlesQuery(toolCall: ToolCall): boolean {
   return dimensions.has(`${args.cube}.gameName`) || dimensions.has(`${args.cube}.appid`);
 }
 
-function filterLowSignalTopTitles<T extends Record<string, unknown>>(result: T): T {
+function filterLowSignalTopTitles<T extends Record<string, unknown>>(result: T, userPrompt: string): T {
   const data = Array.isArray(result.data) ? result.data : [];
   if (data.length === 0) {
     return result;
@@ -607,6 +796,7 @@ function filterLowSignalTopTitles<T extends Record<string, unknown>>(result: T):
     ...result,
     data: trimmedRows,
     rowCount: trimmedRows.length,
+    companyAnswerHints: buildPortfolioAnswerHints(userPrompt, sparseTail),
     sufficient_to_answer: true,
     sufficiency_reason: sparseTail
       ? 'Returned the strongest available company titles after filtering low-signal tail rows. Respond directly and say the qualifying set is sparse if helpful.'
@@ -687,7 +877,7 @@ function compareRowsByNumericMembers(
 
 function buildWindowAnswerHints(
   family: Extract<CompanyIntentFamily, 'time_window_ranking' | 'constrained_company_screen'>,
-  rankingMode: CompanyRankingMode,
+  answerMode: Extract<CompanyAnswerMode, 'meaningful_first' | 'raw_count'>,
   lowSignalIncluded: boolean,
   segment: CompanyWindowSegment,
   options: {
@@ -704,7 +894,7 @@ function buildWindowAnswerHints(
   if (family === 'constrained_company_screen') {
     return {
       family,
-      rankingMode,
+      answerMode,
       lowSignalIncluded,
       lowSignalReason: options.lowSignalReason,
       primaryMetric: {
@@ -735,7 +925,7 @@ function buildWindowAnswerHints(
 
   return {
     family,
-    rankingMode,
+    answerMode,
     lowSignalIncluded,
     lowSignalReason: options.lowSignalReason,
     primaryMetric: {
@@ -759,11 +949,95 @@ function buildWindowAnswerHints(
       'Representative Titles',
     ],
     narrativeInstruction:
-      rankingMode === 'raw_count'
+      answerMode === 'raw_count'
         ? 'Treat this as a literal raw release-count ranking because the prompt explicitly asked to ignore quality or reviews. Keep the context columns, but do not reinterpret the ranking as quality-first.'
         : lowSignalIncluded
           ? `Describe this as a recent release-volume ranking among companies with review-backed releases, and explicitly note that the lower rows are low-signal fillers because the stronger pool in the ${segmentLabel} is limited.`
           : `Describe this as a recent release-volume ranking among companies with review-backed releases in the ${segmentLabel}.`,
+  };
+}
+
+function buildPortfolioAnswerHints(
+  prompt: string,
+  lowSignalIncluded: boolean
+): CompanyAnswerHints {
+  const recentMode = wantsRecentPortfolioTitles(prompt);
+
+  return {
+    family: 'portfolio_top_titles',
+    answerMode: recentMode ? 'recent_ranked' : 'top_ranked',
+    lowSignalIncluded,
+    lowSignalReason: lowSignalIncluded
+      ? 'Lower-ranked portfolio rows were trimmed or filtered because stronger supported titles existed.'
+      : undefined,
+    primaryMetric: {
+      label: recentMode ? 'Release Date' : 'Total Reviews',
+      member: recentMode ? 'releaseDate' : 'totalReviews',
+    },
+    proofMetric: {
+      label: recentMode ? 'Total Reviews' : 'Review Percentage',
+      member: recentMode ? 'totalReviews' : 'reviewPercentage',
+    },
+    contextMetrics: [
+      { label: 'Owners', member: 'owners' },
+      { label: 'Release Date', member: 'releaseDate' },
+    ],
+    requiredColumns: recentMode
+      ? ['Game', 'Release Date', 'Total Reviews', 'Review Percentage', 'Owners']
+      : ['Game', 'Total Reviews', 'Review Percentage', 'Owners', 'Release Date'],
+    narrativeInstruction: recentMode
+      ? 'Describe this as a recent company-title list ranked by newest releases. Do not call it a top or best-of ranking.'
+      : 'Describe this as a top company-title list ranked by review-backed popularity, not by recency.',
+  };
+}
+
+function buildCompanyCountProfileHints(
+  entityType: CompanyEntityType
+): CompanyAnswerHints {
+  return {
+    family: 'company_count_profile',
+    answerMode: 'profile',
+    lowSignalIncluded: false,
+    primaryMetric: {
+      label: 'Game Count',
+      member: entityType === 'publisher' ? 'gameCount' : 'gameCount',
+    },
+    proofMetric: {
+      label: 'Total Reviews',
+      member: entityType === 'publisher' ? 'totalReviews' : 'totalReviews',
+    },
+    contextMetrics: [
+      { label: 'Average Review Score', member: 'avgReviewScore' },
+    ],
+    requiredColumns: ['Company', 'Game Count', 'Total Reviews', 'Average Review Score', 'Representative Titles'],
+    narrativeInstruction: 'Answer with the linked company name, the requested game count, review context, and 2 to 3 representative linked titles. Do not answer with a bare count alone.',
+  };
+}
+
+function buildCompanySimilarityHints(sparse: boolean): CompanyAnswerHints {
+  return {
+    family: 'company_similarity',
+    answerMode: 'precision_first',
+    lowSignalIncluded: sparse,
+    lowSignalReason: sparse
+      ? 'Only a small number of strong peers survived the precision-first similarity filters.'
+      : undefined,
+    primaryMetric: {
+      label: 'Peer Fit',
+      member: 'score',
+    },
+    proofMetric: {
+      label: 'Match Reasons',
+      member: 'matchReasons',
+    },
+    contextMetrics: [
+      { label: 'Review Percentage', member: 'review_percentage' },
+      { label: 'Flagship Titles', member: 'flagshipTitles' },
+    ],
+    requiredColumns: ['Company', 'Flagship Titles', 'Review Percentage', 'Why It Matches'],
+    narrativeInstruction: sparse
+      ? 'Return the smaller precise peer set and explicitly say that the comparable company set is limited. Do not pad with weaker lexical peers.'
+      : 'Return only precise peers and explain each with the provided match reasons. Do not use external company URLs.',
   };
 }
 
@@ -789,7 +1063,7 @@ function normalizeCompanyWindowRows(
   const minReviewMember = buildWindowRowField('minReviewPercentage', segment);
 
   if (family === 'time_window_ranking') {
-    const rankingMode: CompanyRankingMode = wantsRawCountRanking(userPrompt) ? 'raw_count' : 'meaningful_first';
+    const rankingMode: Extract<CompanyAnswerMode, 'meaningful_first' | 'raw_count'> = wantsRawCountRanking(userPrompt) ? 'raw_count' : 'meaningful_first';
     const orderedRows = rows.slice().sort((left, right) => {
       if (rankingMode === 'raw_count') {
         return compareRowsByNumericMembers(left, right, [
@@ -851,7 +1125,6 @@ function normalizeCompanyWindowRows(
   }
 
   if (family === 'constrained_company_screen') {
-    const minGames = extractGameCountThreshold(userPrompt) ?? 0;
     const orderedRows = rows.slice().sort((left, right) =>
       compareRowsByNumericMembers(left, right, [
         meaningfulMember,
@@ -865,14 +1138,17 @@ function normalizeCompanyWindowRows(
     for (const row of orderedRows) {
       const meaningfulCount = numberFromRow(row, meaningfulMember);
       const totalReviews = numberFromRow(row, totalReviewsMember);
-      if (meaningfulCount >= minGames || totalReviews >= 1000) {
+      if (meaningfulCount >= 1 || totalReviews >= 1000) {
         strongRows.push(row);
       } else {
         weakRows.push(row);
       }
     }
 
-    const finalRows = [...strongRows, ...weakRows].slice(0, 20);
+    const strongSlice = strongRows.slice(0, 10);
+    const finalRows = strongSlice.length >= 8
+      ? strongSlice
+      : [...strongSlice, ...weakRows].slice(0, 10);
     const lowSignalIncluded = finalRows.some((row) => weakRows.includes(row));
 
     return {
@@ -1121,6 +1397,7 @@ async function enrichSimilarityResultsWithTitles(
   return {
     ...result,
     results: trimmedResults,
+    companyAnswerHints: buildCompanySimilarityHints(sparse),
     sufficient_to_answer: trimmedResults.length > 0,
     sufficiency_reason: sparse
       ? heuristic
@@ -1197,7 +1474,7 @@ export async function applyCompanyToolResultPolicy<
     result.success === true &&
     isCompanyTopTitlesQuery(toolCall)
   ) {
-    return filterLowSignalTopTitles(result);
+    return filterLowSignalTopTitles(result, userPrompt);
   }
 
   if (
@@ -1219,11 +1496,16 @@ export async function applyCompanyToolResultPolicy<
   const windowPolicy = normalizeCompanyWindowRows(family, userPrompt, result.data);
   const enrichedRows = await enrichCompanyRowsWithTitles(family, userPrompt, windowPolicy.rows);
   const sufficiency = annotateSparseCompanyRows(family, enrichedRows, windowPolicy.hints);
+  const entityType = family === 'company_count_profile'
+    ? inferEntityTypeFromResultRows(enrichedRows)
+    : null;
+  const profileHints = entityType ? buildCompanyCountProfileHints(entityType) : null;
 
   return {
     ...result,
     data: enrichedRows,
     rowCount: enrichedRows.length,
+    ...(profileHints ? { companyAnswerHints: profileHints } : {}),
     ...(windowPolicy.hints ? { companyAnswerHints: windowPolicy.hints } : {}),
     ...sufficiency,
   };

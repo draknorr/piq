@@ -361,6 +361,7 @@ interface CompanyMergedCandidate {
 
 interface RankedCompanySimilarityResult extends SimilarEntity {
   rawScore: number;
+  portfolioScore: number;
   type: CompanyEntityType;
   game_count: number;
   genres?: string[];
@@ -770,7 +771,7 @@ function hasLexicalBrandContamination(referenceName: string, candidateName: stri
     return true;
   }
 
-  return sharesShortBrandStem && candidateTokens.length === 1 && primaryPrefixRatio >= 0.45;
+  return sharesShortBrandStem && primaryPrefixRatio >= 0.45;
 }
 
 function mergeGameCountFloor(
@@ -900,7 +901,7 @@ function buildCompanySimilarityScore(
     cadenceCloseness * 0.1;
 
   const dualMatchBonus = matchedBothVariants ? 0.1 : 0;
-  const score = Math.min(1, semanticScore * 0.35 + portfolioScore * 0.55 + dualMatchBonus);
+  const score = Math.min(1, semanticScore * 0.25 + portfolioScore * 0.65 + dualMatchBonus);
   const matchReasons = buildPortfolioMatchReasons(source, candidate, genreOverlap, tagOverlap);
 
   if (matchedBothVariants) {
@@ -1007,7 +1008,7 @@ function shouldRejectCompanyCandidate(
     return true;
   }
 
-  if (!matchedBothVariants && hasLexicalBrandContamination(referenceName, candidateName) && portfolioScore < 0.45) {
+  if (hasLexicalBrandContamination(referenceName, candidateName) && portfolioScore < (matchedBothVariants ? 0.6 : 0.45)) {
     return true;
   }
 
@@ -1017,6 +1018,28 @@ function shouldRejectCompanyCandidate(
   }
 
   return false;
+}
+
+function isStrongCompanySimilarityCandidate(
+  referenceName: string,
+  candidateName: string,
+  similarityScore: number,
+  portfolioScore: number,
+  matchedBothVariants: boolean
+): boolean {
+  const lexicalContamination = hasLexicalBrandContamination(referenceName, candidateName);
+
+  if (lexicalContamination) {
+    return matchedBothVariants
+      ? portfolioScore >= 0.65 && similarityScore >= 0.45
+      : portfolioScore >= 0.7 && similarityScore >= 0.45;
+  }
+
+  if (matchedBothVariants) {
+    return portfolioScore >= 0.35 && similarityScore >= 0.35;
+  }
+
+  return portfolioScore >= 0.45 && similarityScore >= 0.4;
 }
 
 async function findSimilarCompaniesSemantic(
@@ -1135,6 +1158,7 @@ async function findSimilarCompaniesSemantic(
         name: snapshot.name,
         score: Math.round(scored.score * 100),
         rawScore: Math.round(candidate.semanticScore * 100),
+        portfolioScore: scored.portfolioScore,
         type: entityType,
         game_count: snapshot.gameCount,
         genres: extractCompanyGenres(candidate.payloads),
@@ -1149,10 +1173,16 @@ async function findSimilarCompaniesSemantic(
     rankedResults.sort((left, right) => right.score - left.score);
     rankedResults.splice(limit);
 
-    const strongResults = rankedResults.filter(
-      (candidate) => candidate.matchReasons && candidate.matchReasons.length > 0
+    const strongResults = rankedResults.filter((candidate) =>
+      isStrongCompanySimilarityCandidate(
+        reference.name,
+        candidate.name,
+        candidate.rawScore / 100,
+        candidate.portfolioScore,
+        candidate.variantScores.identity !== undefined && candidate.variantScores.portfolio !== undefined
+      )
     );
-    const finalResults = strongResults.length >= Math.min(3, limit) ? strongResults : rankedResults;
+    const finalResults = strongResults;
 
     if (finalResults.length === 0) {
       continue;
@@ -1167,7 +1197,7 @@ async function findSimilarCompaniesSemantic(
         name: reference.name,
         type: entityType,
       },
-      results: finalResults.map(({ variantScores: _variantScores, ...candidate }) => candidate),
+      results: finalResults.map(({ variantScores: _variantScores, portfolioScore: _portfolioScore, ...candidate }) => candidate),
       total_found: mergedCandidates.length,
       debug: {
         searchParams: {

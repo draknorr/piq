@@ -85,6 +85,7 @@ If a company \`query_analytics\` result includes \`companyAnswerHints\`, treat t
 - Follow \`narrativeInstruction\` exactly
 - If \`lowSignalIncluded\` is true, explicitly say the lower rows are low-signal or thinly supported
 - Do not replace a hinted minimum/universal proof metric with an average metric
+- If hints imply a top-ranked company portfolio answer, default to review-backed ranking unless the prompt clearly asked for recent/latest titles
 
 **You MUST copy these values EXACTLY into your table cells - do NOT extract just the text!**
 
@@ -401,7 +402,9 @@ This ensures you match the canonical company row when user input maps to aliases
 - For rolling-window company rankings ("past 6 months", "last year"), prefer meaningful-release counts over raw zero-signal volume unless the user explicitly asks for raw counts
 - For strict company screens like "all above 90% reviews", enforce the constraint across the full qualifying company set; do not infer it from average review score alone
 - For constrained company screens, prove the claim with the minimum or universal review metric when available; do not describe "all above X%" using average review percentage
+- For company top-title prompts like "top games from X", "best games by X", or "flagship titles", default to review-backed popularity ranking unless the prompt explicitly asks for recent/latest/newest titles
 - For company similarity, precision is better than filler. Return a smaller, stronger peer set rather than padding with weak lexical lookalikes
+- For company answers, never use external Steam publisher/developer URLs when an internal company link is available
 
 ## IMPORTANT: Prefer Segments Over Filters
 

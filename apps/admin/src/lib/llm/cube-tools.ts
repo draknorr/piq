@@ -59,7 +59,7 @@ ALWAYS include appid and name dimensions for game lists (e.g., Discovery.appid +
 
 When the tool result includes sufficient_to_answer: true, respond from those rows instead of issuing another adjacent broad discovery query.
 
-If a company query result includes companyAnswerHints, follow those hints exactly for ranking semantics, proof metrics, required columns, and low-signal labeling.
+If a company query result includes companyAnswerHints, follow those hints exactly for ranking semantics, proof metrics, required columns, sparse/low-signal labeling, and narrative framing.
 
 For publisher/developer/company queries, prefer filtering by publisherId/developerId from lookup results instead of filtering by name strings.`,
     parameters: {

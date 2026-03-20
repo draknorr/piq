@@ -34,6 +34,7 @@ import {
   normalizeCompanyToolCall,
   type CompanyAnswerState,
 } from '@/lib/chat/company-answer-policy';
+import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
 import {
   compareChangeBeforeAfter,
   findChangePatterns,
@@ -248,8 +249,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
       totalMs: Math.round(performance.now() - requestStart),
     };
 
+    const finalResponse = sanitizeCompanyAssistantResponse(
+      lastUserPrompt,
+      response?.content || 'I was unable to generate a response.',
+      executedToolCalls
+    );
+
     return NextResponse.json({
-      response: response?.content || 'I was unable to generate a response.',
+      response: finalResponse,
       toolCalls: executedToolCalls.length > 0 ? executedToolCalls : undefined,
       timing,
     });
