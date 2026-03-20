@@ -61,6 +61,7 @@ const DEFAULT_RESULTS = 10;
 export const QDRANT_SEARCH_TIMEOUT_MS = 10000;
 export const QDRANT_TIMEOUT_ERROR = 'Similarity search timed out. Please try again.';
 const DEFAULT_COMPANY_RESULTS = 6;
+const MIN_USEFUL_COMPANY_SIMILARITY_RESULTS = 3;
 const MAX_COMPANY_REFERENCE_TITLES = 4;
 const COMPANY_GAME_EVIDENCE_NEIGHBORS = 10;
 const MIN_COMPANY_GAME_EVIDENCE_SCORE = 0.6;
@@ -1927,6 +1928,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
 
   if (entity_type !== 'game') {
     let semanticFailure: FindSimilarResult | null = null;
+    let sparseSemanticResult: FindSimilarResult | null = null;
 
     try {
       const semanticCompanyResult = await findSimilarCompaniesSemantic(
@@ -1938,7 +1940,21 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       );
 
       if (semanticCompanyResult?.success && semanticCompanyResult.results && semanticCompanyResult.results.length > 0) {
-        return semanticCompanyResult;
+        if (semanticCompanyResult.results.length >= MIN_USEFUL_COMPANY_SIMILARITY_RESULTS) {
+          return semanticCompanyResult;
+        }
+
+        sparseSemanticResult = {
+          ...semanticCompanyResult,
+          debug: {
+            searchParams: {
+              ...(semanticCompanyResult.debug?.searchParams ?? {}),
+              semanticSparseFallbackTriggered: true,
+              semanticResultCount: semanticCompanyResult.results.length,
+              minimumUsefulPeerCount: MIN_USEFUL_COMPANY_SIMILARITY_RESULTS,
+            },
+          },
+        };
       }
     } catch (searchError) {
       semanticFailure = buildCompanySimilarityFailure(
@@ -1964,7 +1980,26 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       );
     }
     if (fallbackResult.success || !semanticFailure) {
+      if (fallbackResult.success) {
+        fallbackResult = {
+          ...fallbackResult,
+          debug: {
+            searchParams: {
+              ...(fallbackResult.debug?.searchParams ?? {}),
+              semanticSparseFallbackTriggered:
+                sparseSemanticResult?.debug?.searchParams?.semanticSparseFallbackTriggered === true,
+              semanticResultCount:
+                sparseSemanticResult?.debug?.searchParams?.semanticResultCount ?? null,
+              minimumUsefulPeerCount: MIN_USEFUL_COMPANY_SIMILARITY_RESULTS,
+            },
+          },
+        };
+      }
       return fallbackResult;
+    }
+
+    if (sparseSemanticResult) {
+      return sparseSemanticResult;
     }
 
     return {

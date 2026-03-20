@@ -105,7 +105,19 @@ EXPOSE 4000
 ### 6. Deploy
 
 ```bash
-fly deploy
+scripts/ops/deploy-cube.sh
+```
+
+This wrapper pins a known-good `flyctl` version for the Cube service and avoids relying on whichever global CLI version is currently installed.
+
+Environment options:
+
+```bash
+# Use local Docker instead of Fly remote builders
+CUBE_DEPLOY_MODE=local scripts/ops/deploy-cube.sh
+
+# Pass through extra fly deploy flags
+scripts/ops/deploy-cube.sh --build-only
 ```
 
 ## Cube.js Models
@@ -192,6 +204,33 @@ fly machines restart <machine-id> --app publisheriq-cube
 ```
 
 ## Troubleshooting
+
+### Remote builder fails before deploy completes
+
+If `fly deploy` fails before a new release is created and logs show errors like:
+
+- `Failed to start remote builder heartbeat ... invalid port ... extendDeadline`
+- `unable to upgrade to h2c, received 500`
+
+check whether the failure is in the remote builder path rather than the Cube app itself.
+
+Recommended checks:
+
+```bash
+scripts/ops/check-fly-cube.sh
+```
+
+If the live app is healthy but remote builds fail, use the pinned wrapper:
+
+```bash
+scripts/ops/deploy-cube.sh
+```
+
+or switch it to local Docker mode:
+
+```bash
+CUBE_DEPLOY_MODE=local scripts/ops/deploy-cube.sh
+```
 
 ### 502 Gateway Errors
 

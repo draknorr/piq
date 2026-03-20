@@ -5,6 +5,10 @@ import { getServiceSupabase } from '@/lib/supabase-service';
 type Primitive = string | number | boolean;
 type CompanyEntityType = 'publisher' | 'developer';
 type CompanyWindowSegment = 'lastYear' | 'last6Months' | 'last3Months' | 'last30Days';
+type CompanyTimeWindow =
+  | { type: 'year'; year: number }
+  | { type: 'segment'; segment: CompanyWindowSegment }
+  | { type: 'unsupportedTrailingYears'; years: number; label: string };
 type CompanyAnswerMode =
   | 'meaningful_first'
   | 'raw_count'
@@ -296,10 +300,22 @@ function extractYear(prompt: string): number | null {
 
 function detectTimeWindow(
   prompt: string
-): { type: 'year'; year: number } | { type: 'segment'; segment: CompanyWindowSegment } | null {
+): CompanyTimeWindow | null {
   const text = normalizePrompt(prompt);
   const year = extractYear(text);
   const currentYear = new Date().getFullYear();
+  const trailingYearsMatch = text.match(/\b(?:past|last|within the past)\s+(\d+)\s+years?\b/);
+
+  if (trailingYearsMatch) {
+    const trailingYears = Number(trailingYearsMatch[1]);
+    if (Number.isFinite(trailingYears) && trailingYears > 1) {
+      return {
+        type: 'unsupportedTrailingYears',
+        years: trailingYears,
+        label: `past ${trailingYears} years`,
+      };
+    }
+  }
 
   if (/\bthis year\b/.test(text)) {
     return { type: 'year', year: currentYear };
@@ -462,6 +478,14 @@ function wantsRecentPortfolioTitles(prompt: string): boolean {
   return PORTFOLIO_RECENT_MARKERS.some((pattern) => pattern.test(prompt));
 }
 
+function getUnsupportedCompanyTrailingWindow(prompt: string): Extract<
+  CompanyTimeWindow,
+  { type: 'unsupportedTrailingYears' }
+> | null {
+  const timeWindow = detectTimeWindow(prompt);
+  return timeWindow?.type === 'unsupportedTrailingYears' ? timeWindow : null;
+}
+
 function rewriteRelationshipScreen(
   prompt: string,
   args: QueryAnalyticsArgs
@@ -487,6 +511,7 @@ function rewriteRelationshipScreen(
 
   if (/\bindie\b/.test(text)) {
     filters.push({ member: `${cube}.isIndieChat`, operator: 'equals', values: [true] });
+    filters.push({ member: `${cube}.exactGameCount`, operator: 'lte', values: [10] });
   }
 
   if (/\bself[- ]published\b/.test(text)) {
@@ -505,6 +530,9 @@ function rewriteRelationshipScreen(
 
   if (wantsMultipleHitGames(prompt)) {
     order[`${cube}.hitGameCount`] = 'desc';
+    if (/\bindie\b/.test(text)) {
+      order[`${cube}.indieConfidence`] = 'desc';
+    }
     order[`${cube}.meaningfulGameCount`] = 'desc';
   } else if (/\bindie\b/.test(text)) {
     order[`${cube}.indieConfidence`] = 'desc';
@@ -615,6 +643,10 @@ function rewriteTimeWindowRanking(
     };
   }
 
+  if (timeWindow.type !== 'segment') {
+    return null;
+  }
+
   const cube = entityType === 'publisher' ? 'PublisherChatWindowMetrics' : 'DeveloperChatWindowMetrics';
   const rawCountMode = wantsRawCountRanking(prompt);
   const gamesField = buildWindowMetricMember(cube, 'gamesReleased', timeWindow.segment);
@@ -671,7 +703,7 @@ function rewriteConstrainedCompanyScreen(
     return null;
   }
 
-  if (timeWindow.type === 'year') {
+  if (timeWindow.type !== 'segment') {
     return null;
   }
 
@@ -761,6 +793,54 @@ export function normalizeCompanyToolCall(toolCall: ToolCall, userPrompt: string)
   return {
     ...toolCall,
     arguments: rewritten as unknown as Record<string, unknown>,
+  };
+}
+
+export function buildUnsupportedCompanyWindowSkipResult(
+  userPrompt: string,
+  toolCall: ToolCall
+): ({ success: true; unsupported_company_window: true; debug: Record<string, unknown> } & ToolSufficiencyMetadata & Record<string, unknown>) | null {
+  if (toolCall.name !== 'query_analytics') {
+    return null;
+  }
+
+  const args = toolCall.arguments as unknown as QueryAnalyticsArgs;
+  const family = classifyCompanyIntent(userPrompt);
+  const looksLikeCompanyWindowScreen =
+    family === 'time_window_ranking' ||
+    family === 'constrained_company_screen' ||
+    (hasCompanyEntityLanguage(userPrompt) &&
+      isCompanyCube(args.cube) &&
+      (
+        COUNT_THRESHOLD_MARKERS.some((pattern) => pattern.test(userPrompt)) ||
+        TIME_WINDOW_RANKING_MARKERS.some((pattern) => pattern.test(userPrompt)) ||
+        RELEASE_COUNT_MARKERS.some((pattern) => pattern.test(userPrompt)) ||
+        UNIVERSAL_CONSTRAINT_MARKERS.some((pattern) => pattern.test(userPrompt)) ||
+        /\baverag\w*\b/i.test(userPrompt)
+      ));
+
+  if (!looksLikeCompanyWindowScreen) {
+    return null;
+  }
+
+  const unsupportedWindow = getUnsupportedCompanyTrailingWindow(userPrompt);
+  if (!unsupportedWindow) {
+    return null;
+  }
+
+  return {
+    success: true,
+    unsupported_company_window: true,
+    requested_window: unsupportedWindow.label,
+    supported_window: 'past year',
+    sufficient_to_answer: true,
+    sufficiency_reason: `The requested trailing company release window (${unsupportedWindow.label}) is not available. Respond directly that PublisherIQ currently supports company release-window screens only for the past year, and do not infer a ${unsupportedWindow.label} answer from shorter data.`,
+    debug: {
+      unsupportedCompanyWindow: true,
+      requestedTrailingYears: unsupportedWindow.years,
+      supportedTrailingWindow: 'past year',
+      companyIntentFamily: family,
+    },
   };
 }
 
@@ -1437,10 +1517,18 @@ async function enrichSimilarityResultsWithTitles(
 
 function annotateSparseCompanyRows(
   family: CompanyIntentFamily,
+  userPrompt: string,
   rows: Record<string, unknown>[],
   hints?: CompanyAnswerHints
 ): ToolSufficiencyMetadata {
   if (rows.length === 0) {
+    if (family === 'relationship_screen' && /\bindie\b/i.test(userPrompt)) {
+      return {
+        sufficient_to_answer: true,
+        sufficiency_reason: 'No companies matched the current relationship screen. If the prompt used "indie", define indie as mostly self-published studios with small catalogs, say no matches qualified under that screen, and offer the nearest useful alternative such as self-published studios with multiple hit games or small studios with multiple hit games.',
+      };
+    }
+
     return {};
   }
 
@@ -1524,7 +1612,7 @@ export async function applyCompanyToolResultPolicy<
 
   const windowPolicy = normalizeCompanyWindowRows(family, userPrompt, result.data);
   const enrichedRows = await enrichCompanyRowsWithTitles(family, userPrompt, windowPolicy.rows);
-  const sufficiency = annotateSparseCompanyRows(family, enrichedRows, windowPolicy.hints);
+  const sufficiency = annotateSparseCompanyRows(family, userPrompt, enrichedRows, windowPolicy.hints);
   const entityType = family === 'company_count_profile'
     ? inferEntityTypeFromResultRows(enrichedRows)
     : null;
@@ -1606,6 +1694,16 @@ export function extractCompanyAnswerState(
       reason: typeof result.sufficiency_reason === 'string'
         ? result.sufficiency_reason
         : 'Company similarity is terminal for this turn. Respond directly from the peer set or explain that strong peers were not found.',
+    };
+  }
+
+  if (result.unsupported_company_window === true) {
+    return {
+      family,
+      blockFurtherTools: true,
+      reason: typeof result.sufficiency_reason === 'string'
+        ? result.sufficiency_reason
+        : 'The requested trailing company release window is not available. Respond directly instead of broadening the query.',
     };
   }
 

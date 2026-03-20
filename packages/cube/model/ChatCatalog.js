@@ -499,13 +499,24 @@ cube('PublisherChatScreenMetrics', {
         END) AS self_published_game_count,
         COUNT(DISTINCT CASE
           WHEN LOWER(TRIM(afd.publisher_name)) <> LOWER(TRIM(afd.developer_name))
+          THEN a.appid
+        END) AS external_published_game_count,
+        COUNT(DISTINCT CASE
+          WHEN LOWER(TRIM(afd.publisher_name)) <> LOWER(TRIM(afd.developer_name))
           THEN afd.developer_id
         END) AS external_partner_count,
         COALESCE(BOOL_AND(LOWER(TRIM(afd.publisher_name)) = LOWER(TRIM(afd.developer_name))), false) AS is_self_published,
         COALESCE(pf.core_family_game_count, pc.exact_game_count) AS core_family_game_count,
-        pc.has_corporate_suffix
+        pc.has_corporate_suffix,
+        EXISTS (
+          SELECT 1
+          FROM steam_tags st
+          WHERE st.name = 'Indie'
+            AND st.tag_id = ANY(COALESCE(pm.tag_ids, ARRAY[]::integer[]))
+        ) AS has_indie_tag
       FROM publisher_core pc
       LEFT JOIN publisher_family pf ON pf.core_name = pc.core_name
+      LEFT JOIN publisher_metrics pm ON pm.publisher_id = pc.publisher_id
       LEFT JOIN app_filter_data afd ON afd.publisher_id = pc.publisher_id
       LEFT JOIN apps a
         ON a.appid = afd.appid
@@ -518,7 +529,8 @@ cube('PublisherChatScreenMetrics', {
         pc.publisher_name,
         pc.exact_game_count,
         pf.core_family_game_count,
-        pc.has_corporate_suffix
+        pc.has_corporate_suffix,
+        pm.tag_ids
     )
     SELECT
       *,
@@ -536,7 +548,10 @@ cube('PublisherChatScreenMetrics', {
           CASE WHEN has_corporate_suffix = false THEN 0.1 ELSE 0 END
         ) >= 0.8
       ) AS is_indie_chat,
-      (external_partner_count > 0) AS works_with_external_partners
+      (external_partner_count > 0) AS works_with_external_partners,
+      (
+        is_self_published OR external_published_game_count <= 1
+      ) AS mostly_self_published
     FROM publisher_aggregates
   `,
 
@@ -578,6 +593,10 @@ cube('PublisherChatScreenMetrics', {
       sql: `self_published_game_count`,
       type: 'number',
     },
+    externalPublishedGameCount: {
+      sql: `external_published_game_count`,
+      type: 'number',
+    },
     externalPartnerCount: {
       sql: `external_partner_count`,
       type: 'number',
@@ -594,6 +613,10 @@ cube('PublisherChatScreenMetrics', {
       sql: `has_corporate_suffix`,
       type: 'boolean',
     },
+    hasIndieTag: {
+      sql: `has_indie_tag`,
+      type: 'boolean',
+    },
     indieConfidence: {
       sql: `indie_confidence`,
       type: 'number',
@@ -604,6 +627,10 @@ cube('PublisherChatScreenMetrics', {
     },
     worksWithExternalPartners: {
       sql: `works_with_external_partners`,
+      type: 'boolean',
+    },
+    mostlySelfPublished: {
+      sql: `mostly_self_published`,
       type: 'boolean',
     },
   },
@@ -626,13 +653,16 @@ cube('PublisherChatScreenMetrics', {
         totalReviews,
         avgReviewPercentage,
         selfPublishedGameCount,
+        externalPublishedGameCount,
         externalPartnerCount,
         isSelfPublished,
         coreFamilyGameCount,
         hasCorporateSuffix,
+        hasIndieTag,
         indieConfidence,
         isIndieChat,
         worksWithExternalPartners,
+        mostlySelfPublished,
       ],
       refreshKey: {
         every: '6 hours',
@@ -690,13 +720,24 @@ cube('DeveloperChatScreenMetrics', {
         END) AS self_published_game_count,
         COUNT(DISTINCT CASE
           WHEN LOWER(TRIM(afd.publisher_name)) <> LOWER(TRIM(afd.developer_name))
+          THEN a.appid
+        END) AS external_published_game_count,
+        COUNT(DISTINCT CASE
+          WHEN LOWER(TRIM(afd.publisher_name)) <> LOWER(TRIM(afd.developer_name))
           THEN afd.publisher_id
         END) AS external_partner_count,
         COALESCE(BOOL_AND(LOWER(TRIM(afd.publisher_name)) = LOWER(TRIM(afd.developer_name))), false) AS is_self_published,
         COALESCE(df.core_family_game_count, dc.exact_game_count) AS core_family_game_count,
-        dc.has_corporate_suffix
+        dc.has_corporate_suffix,
+        EXISTS (
+          SELECT 1
+          FROM steam_tags st
+          WHERE st.name = 'Indie'
+            AND st.tag_id = ANY(COALESCE(dm.tag_ids, ARRAY[]::integer[]))
+        ) AS has_indie_tag
       FROM developer_core dc
       LEFT JOIN developer_family df ON df.core_name = dc.core_name
+      LEFT JOIN developer_metrics dm ON dm.developer_id = dc.developer_id
       LEFT JOIN app_filter_data afd ON afd.developer_id = dc.developer_id
       LEFT JOIN apps a
         ON a.appid = afd.appid
@@ -709,7 +750,8 @@ cube('DeveloperChatScreenMetrics', {
         dc.developer_name,
         dc.exact_game_count,
         df.core_family_game_count,
-        dc.has_corporate_suffix
+        dc.has_corporate_suffix,
+        dm.tag_ids
     )
     SELECT
       *,
@@ -727,7 +769,10 @@ cube('DeveloperChatScreenMetrics', {
           CASE WHEN has_corporate_suffix = false THEN 0.1 ELSE 0 END
         ) >= 0.8
       ) AS is_indie_chat,
-      (external_partner_count > 0) AS works_with_external_partners
+      (external_partner_count > 0) AS works_with_external_partners,
+      (
+        is_self_published OR external_published_game_count <= 1
+      ) AS mostly_self_published
     FROM developer_aggregates
   `,
 
@@ -769,6 +814,10 @@ cube('DeveloperChatScreenMetrics', {
       sql: `self_published_game_count`,
       type: 'number',
     },
+    externalPublishedGameCount: {
+      sql: `external_published_game_count`,
+      type: 'number',
+    },
     externalPartnerCount: {
       sql: `external_partner_count`,
       type: 'number',
@@ -785,6 +834,10 @@ cube('DeveloperChatScreenMetrics', {
       sql: `has_corporate_suffix`,
       type: 'boolean',
     },
+    hasIndieTag: {
+      sql: `has_indie_tag`,
+      type: 'boolean',
+    },
     indieConfidence: {
       sql: `indie_confidence`,
       type: 'number',
@@ -795,6 +848,10 @@ cube('DeveloperChatScreenMetrics', {
     },
     worksWithExternalPartners: {
       sql: `works_with_external_partners`,
+      type: 'boolean',
+    },
+    mostlySelfPublished: {
+      sql: `mostly_self_published`,
       type: 'boolean',
     },
   },
@@ -817,13 +874,16 @@ cube('DeveloperChatScreenMetrics', {
         totalReviews,
         avgReviewPercentage,
         selfPublishedGameCount,
+        externalPublishedGameCount,
         externalPartnerCount,
         isSelfPublished,
         coreFamilyGameCount,
         hasCorporateSuffix,
+        hasIndieTag,
         indieConfidence,
         isIndieChat,
         worksWithExternalPartners,
+        mostlySelfPublished,
       ],
       refreshKey: {
         every: '6 hours',

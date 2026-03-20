@@ -164,7 +164,7 @@ For company similarity, prefer a smaller precise peer set over padding with weak
 For publisher/developer peer prompts:
 - Call find_similar directly. Do NOT call lookup_publishers or lookup_developers first.
 - If the result includes sufficient_to_answer: true, respond directly from it.
-- If the result is sparse, label it as limited instead of padding with weak peers.
+- If the result is sparse, label it as limited or heuristic instead of padding with weak peers.
 - If the result is empty or failed, stay constrained and say strong comparable peers were not found right now. Do NOT follow with query_analytics or generic company rankings.`,
     parameters: {
       type: 'object',
@@ -397,7 +397,9 @@ export const LOOKUP_TAGS_TOOL: Tool = {
 Use this tool when you need to:
 - Find the correct tag name for a concept (e.g., "rogue" → "Roguelike", "Roguelite")
 - Discover what tags/genres/categories exist
-- Verify a tag exists before using it in search_games`,
+- Verify a tag exists before using it in search_games
+
+When a canonical tag exists, the result may also include adjacent related tags that are useful follow-up filters.`,
     parameters: {
       type: 'object',
       properties: {

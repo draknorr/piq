@@ -137,6 +137,25 @@ LIMIT 20;
 3. Verify cube names match schema (e.g., `Discovery`, not `discovery`)
 4. Check Cube.js logs for detailed error
 
+### Fly remote deploy fails before release
+
+**Cause:** Fly remote builder transport regression or CLI incompatibility, not necessarily a Cube.js runtime failure.
+
+**Symptoms:**
+
+- `Failed to start remote builder heartbeat ... invalid port ... extendDeadline`
+- `unable to upgrade to h2c, received 500`
+- builder log `Handler for POST /grpc returned error: no upgrade proto in request`
+
+**Solution:**
+
+1. Run `scripts/ops/check-fly-cube.sh` to capture app status, checks, builder logs, and live Cube `/meta`.
+2. If runtime checks pass but deploys fail, compare the active `flyctl` version against a known-good pinned version.
+3. Use a pinned working CLI or `fly deploy --local-only` until Fly resolves the builder-path issue.
+4. After deployment, verify live `/meta` exposes the expected cube fields before treating the rollout as complete.
+
+See [docs/reports/fly-cube-deploy-investigation-2026-03-20.md](../reports/fly-cube-deploy-investigation-2026-03-20.md) for the March 20, 2026 incident details.
+
 ### Stale Data in Queries
 
 **Cause:** Materialized views not refreshed.

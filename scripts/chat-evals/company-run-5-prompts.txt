@@ -1,0 +1,15 @@
+89 | Which indie developers have multiple hit games?
+97 | Compare FromSoftware and Team Cherry by reviews
+127 | What publishers are releasing the most games this year?
+130 | Publishers with the most games released in the past 6 months
+140 | Publishers with 5+ games averaging 85%+ reviews in the past 3 years
+151 | Developers with 3+ games, all above 90% reviews, with a release in the past year
+155 | Show me all games by FromSoftware
+156 | top games from FromSoftware
+157 | Which publishers released the most games this year?
+161 | games by FromSoftware
+170 | What publishers are similar to Devolver Digital?
+171 | Show me developers similar to Supergiant Games
+175 | Publishers with releases in every year since 2020
+178 | how many games has Krafton published?
+179 | How many games has Valve published?

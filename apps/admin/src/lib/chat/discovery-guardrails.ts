@@ -61,6 +61,16 @@ const MULTI_SLICE_MARKERS = [
   /\bboth\b/i,
 ];
 
+const BROAD_DISCOVERY_QUALITY_MARKERS = [
+  /\bgood reviews?\b/i,
+  /\bgreat reviews?\b/i,
+  /\bhighly rated\b/i,
+  /\boverwhemingly positive\b/i,
+  /\boverwhelmingly positive\b/i,
+  /\bwell reviewed\b/i,
+  /\bstrong reviews?\b/i,
+];
+
 function stripCubePrefix(value: string): string {
   return value.includes('.') ? value.split('.').pop() ?? value : value;
 }
@@ -175,6 +185,130 @@ function hasExplicitMultiSliceIntent(userPrompt: string): boolean {
   return MULTI_SLICE_MARKERS.some((pattern) => pattern.test(userPrompt));
 }
 
+function hasBroadQualityDiscoveryIntent(userPrompt: string): boolean {
+  return BROAD_DISCOVERY_QUALITY_MARKERS.some((pattern) => pattern.test(userPrompt));
+}
+
+function extractPromptReviewFloor(userPrompt: string): number | null {
+  const matches = [
+    userPrompt.match(/\b(\d+)\s*\+\s*reviews?\b/i),
+    userPrompt.match(/\bat least\s+(\d+)\s+reviews?\b/i),
+    userPrompt.match(/\bminimum of\s+(\d+)\s+reviews?\b/i),
+    userPrompt.match(/\bover\s+(\d+)\s+reviews?\b/i),
+    userPrompt.match(/\bmore than\s+(\d+)\s+reviews?\b/i),
+  ].filter((match): match is RegExpMatchArray => Boolean(match));
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const numericValues = matches
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  return numericValues.length > 0 ? Math.max(...numericValues) : null;
+}
+
+function buildBroadDiscoveryReviewFloor(
+  userPrompt: string,
+  previousState: BroadDiscoveryState | null
+): number | null {
+  if (!hasBroadQualityDiscoveryIntent(userPrompt)) {
+    return null;
+  }
+
+  const explicitFloor = extractPromptReviewFloor(userPrompt);
+  if (explicitFloor !== null) {
+    return explicitFloor;
+  }
+
+  return previousState?.allow_follow_up_relaxation ? 100 : 1000;
+}
+
+function withNormalizedSetFilter(filters: CubeLikeFilter[], member: string): CubeLikeFilter[] {
+  const nextFilters = filters.filter((filter) =>
+    !(stripCubePrefix(filter.member) === stripCubePrefix(member) && filter.operator === 'set')
+  );
+  nextFilters.push({ member, operator: 'set' });
+  return nextFilters;
+}
+
+function withNormalizedReviewFloor(
+  filters: CubeLikeFilter[],
+  member: string,
+  floor: number
+): CubeLikeFilter[] {
+  const nextFilters = filters.filter((filter) => {
+    const sameMember = stripCubePrefix(filter.member) === stripCubePrefix(member);
+    return !(sameMember && ['gt', 'gte'].includes(filter.operator));
+  });
+
+  nextFilters.push({ member, operator: 'gte', values: [floor] });
+  return nextFilters;
+}
+
+function dedupeDimensions(dimensions: string[] = []): string[] {
+  return [...new Set(dimensions)];
+}
+
+export function normalizeBroadDiscoveryToolCall(
+  toolCall: ToolCall,
+  userPrompt: string,
+  previousState: BroadDiscoveryState | null
+): ToolCall {
+  const reviewFloor = buildBroadDiscoveryReviewFloor(userPrompt, previousState);
+
+  if (toolCall.name === 'query_analytics') {
+    const query = toolCall.arguments as unknown as CubeLikeQuery;
+    if (!isRuntimeBroadDiscoveryQuery(query) || !hasBroadQualityDiscoveryIntent(userPrompt)) {
+      return toolCall;
+    }
+
+    const totalReviewsMember = `${query.cube}.totalReviews`;
+    const reviewPercentageMember = `${query.cube}.reviewPercentage`;
+    const releaseDateMember = `${query.cube}.releaseDate`;
+    let filters = [...(query.filters ?? [])];
+
+    if (reviewFloor !== null) {
+      filters = withNormalizedSetFilter(filters, totalReviewsMember);
+      filters = withNormalizedReviewFloor(filters, totalReviewsMember, Math.max(reviewFloor, 100));
+    }
+
+    return {
+      ...toolCall,
+      arguments: {
+        ...toolCall.arguments,
+        dimensions: dedupeDimensions([
+          ...(query.dimensions ?? []),
+          totalReviewsMember,
+          reviewPercentageMember,
+          releaseDateMember,
+        ]),
+        filters,
+        order: {
+          [totalReviewsMember]: 'desc',
+          [reviewPercentageMember]: 'desc',
+          [releaseDateMember]: 'desc',
+        },
+      },
+    };
+  }
+
+  if (toolCall.name === 'search_games' && hasBroadQualityDiscoveryIntent(userPrompt)) {
+    const args = toolCall.arguments as unknown as SearchGamesLikeArgs;
+    return {
+      ...toolCall,
+      arguments: {
+        ...toolCall.arguments,
+        min_reviews: reviewFloor !== null ? Math.max(reviewFloor, 100) : args.min_reviews,
+        order_by: 'reviews',
+      },
+    };
+  }
+
+  return toolCall;
+}
+
 export function classifyQueryAnalyticsResultShape(query: CubeLikeQuery): ToolResultShape {
   if (isRuntimeBroadDiscoveryQuery(query)) {
     return 'broad_discovery';
@@ -222,12 +356,23 @@ export function buildQueryAnalyticsSufficiencyMetadata(
   if (resultShape === 'broad_discovery' && isRuntimeBroadDiscoveryQuery(query)) {
     const reviewFloor = getReviewFloor(query.filters);
     const shouldRelaxHighFloor = reviewFloor !== null && reviewFloor >= 1000 && rowCount > 0 && rowCount < 8;
-    const shouldRelaxLowFloor = reviewFloor !== null && reviewFloor >= 100 && rowCount > 0 && rowCount < 5;
+    const shouldStopAtLowFloor = reviewFloor !== null && reviewFloor >= 100 && rowCount > 0 && rowCount < 5;
     const allowRelaxation = rowCount === 0
-      ? reviewFloor !== null && reviewFloor >= 100
-      : shouldRelaxHighFloor || shouldRelaxLowFloor;
+      ? reviewFloor !== null && reviewFloor >= 1000
+      : shouldRelaxHighFloor;
 
     if (rowCount === 0) {
+      if (reviewFloor !== null && reviewFloor >= 100) {
+        return {
+          result_shape: resultShape,
+          sufficient_to_answer: reviewFloor < 1000,
+          sufficiency_reason: reviewFloor < 1000
+            ? 'No qualifying rows met the current hard constraints at the minimum 100-review floor. Respond directly and say that the qualifying set is empty under these filters.'
+            : 'No qualifying rows returned at the current review-count floor. One relaxation retry is allowed.',
+          allow_follow_up_relaxation: reviewFloor >= 1000 || undefined,
+        };
+      }
+
       return {
         result_shape: resultShape,
         sufficient_to_answer: false,
@@ -247,12 +392,11 @@ export function buildQueryAnalyticsSufficiencyMetadata(
       };
     }
 
-    if (shouldRelaxLowFloor) {
+    if (shouldStopAtLowFloor) {
       return {
         result_shape: resultShape,
-        sufficient_to_answer: false,
-        sufficiency_reason: 'Returned too few rows after the relaxed review-count floor. One final sparse pass without the review floor is allowed.',
-        allow_follow_up_relaxation: true,
+        sufficient_to_answer: true,
+        sufficiency_reason: 'Returned only a small number of high-signal rows after relaxing to the 100-review floor. Respond directly, keep the list sparse, and say the qualifying set is limited under these filters.',
       };
     }
 
@@ -285,9 +429,11 @@ export function buildSearchGamesSufficiencyMetadata(
   if (resultCount === 0) {
     return {
       result_shape: 'broad_discovery',
-      sufficient_to_answer: false,
+      sufficient_to_answer: hasExplicitReviewFloor && args.min_reviews !== undefined && args.min_reviews >= 100,
       sufficiency_reason: hasExplicitReviewFloor
-        ? 'No qualifying rows returned at the current review-count floor.'
+        ? args.min_reviews !== undefined && args.min_reviews >= 100
+          ? 'No qualifying rows met the current hard constraints at the minimum review-count floor. Respond directly and say the qualifying set is empty under these filters.'
+          : 'No qualifying rows returned at the current review-count floor.'
         : 'No qualifying rows returned.',
     };
   }

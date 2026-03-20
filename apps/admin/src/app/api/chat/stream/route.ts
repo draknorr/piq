@@ -24,11 +24,13 @@ import { formatResultWithEntityLinks } from '@/lib/llm/format-entity-links';
 import {
   buildRedundantDiscoverySkipResult,
   extractBroadDiscoveryState,
+  normalizeBroadDiscoveryToolCall,
   type BroadDiscoveryState,
 } from '@/lib/chat/discovery-guardrails';
 import {
   applyCompanyToolResultPolicy,
   buildGenericCompanyLookupSkipResult,
+  buildUnsupportedCompanyWindowSkipResult,
   classifyCompanyIntent,
   buildRedundantCompanySkipResult,
   extractCompanyAnswerState,
@@ -358,8 +360,17 @@ export async function POST(request: NextRequest): Promise<Response> {
           // Execute all tool calls and collect results
           const toolResults: Array<{ toolCall: ToolCall; result: QueryResult | SimilarityResult | Record<string, unknown> }> = [];
           for (const toolCall of completedToolCalls) {
-            const effectiveToolCall = normalizeCompanyToolCall(toolCall, lastUserPrompt);
+            const companyNormalizedToolCall = normalizeCompanyToolCall(toolCall, lastUserPrompt);
+            const effectiveToolCall = normalizeBroadDiscoveryToolCall(
+              companyNormalizedToolCall,
+              lastUserPrompt,
+              lastBroadDiscoveryState
+            );
             const genericCompanyLookupSkipResult = buildGenericCompanyLookupSkipResult(
+              lastUserPrompt,
+              effectiveToolCall
+            );
+            const unsupportedCompanyWindowSkipResult = buildUnsupportedCompanyWindowSkipResult(
               lastUserPrompt,
               effectiveToolCall
             );
@@ -373,7 +384,11 @@ export async function POST(request: NextRequest): Promise<Response> {
               effectiveToolCall,
               lastUserPrompt
             );
-            const skipResult = genericCompanyLookupSkipResult ?? redundantCompanySkipResult ?? redundantSkipResult;
+            const skipResult =
+              genericCompanyLookupSkipResult ??
+              unsupportedCompanyWindowSkipResult ??
+              redundantCompanySkipResult ??
+              redundantSkipResult;
 
             if (skipResult) {
               const toolResultEvent: ToolResultEvent = {

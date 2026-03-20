@@ -367,7 +367,14 @@ export function ChatMessage({
                     // Handle lookup_tags results
                     if (tc.name === 'lookup_tags') {
                       const args = tc.arguments as { query?: string; type?: string };
-                      const result = tc.result as { success: boolean; found?: number; error?: string; debug?: Record<string, unknown> };
+                      const result = tc.result as {
+                        success: boolean;
+                        found?: number;
+                        canonicalMatch?: { type: string; name: string };
+                        adjacentTags?: string[];
+                        error?: string;
+                        debug?: Record<string, unknown>;
+                      };
                       return (
                         <div key={idx} className="space-y-2">
                           <p className="text-body-sm text-text-secondary italic">
@@ -386,6 +393,16 @@ export function ChatMessage({
                               </span>
                             )}
                           </div>
+                          {result.success && result.canonicalMatch && (
+                            <div className="text-xs text-text-secondary">
+                              Canonical {result.canonicalMatch.type}: <span className="font-medium text-text-primary">{result.canonicalMatch.name}</span>
+                            </div>
+                          )}
+                          {result.success && result.adjacentTags && result.adjacentTags.length > 0 && (
+                            <div className="text-xs text-text-secondary">
+                              Adjacent tags: {result.adjacentTags.join(', ')}
+                            </div>
+                          )}
                           {result.debug && (
                             <details className="mt-2">
                               <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
