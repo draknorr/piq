@@ -28,6 +28,7 @@ import {
 } from '@/lib/chat/discovery-guardrails';
 import {
   applyCompanyToolResultPolicy,
+  buildGenericCompanyLookupSkipResult,
   buildRedundantCompanySkipResult,
   extractCompanyAnswerState,
   normalizeCompanyToolCall,
@@ -335,6 +336,10 @@ export async function POST(request: NextRequest): Promise<Response> {
           const toolResults: Array<{ toolCall: ToolCall; result: QueryResult | SimilarityResult | Record<string, unknown> }> = [];
           for (const toolCall of completedToolCalls) {
             const effectiveToolCall = normalizeCompanyToolCall(toolCall, lastUserPrompt);
+            const genericCompanyLookupSkipResult = buildGenericCompanyLookupSkipResult(
+              lastUserPrompt,
+              effectiveToolCall
+            );
             const redundantCompanySkipResult = buildRedundantCompanySkipResult(
               lastCompanyState,
               effectiveToolCall,
@@ -345,7 +350,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               effectiveToolCall,
               lastUserPrompt
             );
-            const skipResult = redundantCompanySkipResult ?? redundantSkipResult;
+            const skipResult = genericCompanyLookupSkipResult ?? redundantCompanySkipResult ?? redundantSkipResult;
 
             if (skipResult) {
               const toolResultEvent: ToolResultEvent = {
@@ -377,7 +382,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             const toolExecutionMs = performance.now() - toolStart;
             totalToolsMs += toolExecutionMs;
             executedToolNames.push(effectiveToolCall.name);
-            const result = applyCompanyToolResultPolicy(
+            const result = await applyCompanyToolResultPolicy(
               lastUserPrompt,
               effectiveToolCall,
               rawResult

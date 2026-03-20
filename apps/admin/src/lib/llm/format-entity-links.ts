@@ -18,11 +18,43 @@ interface ResultWithData {
   [key: string]: unknown;
 }
 
+function formatNestedTitleCollections(row: Record<string, unknown>): Record<string, unknown> {
+  const formatted = { ...row };
+
+  for (const key of ['representativeTitles', 'flagshipTitles']) {
+    const titles = row[key];
+    if (!Array.isArray(titles)) {
+      continue;
+    }
+
+    formatted[key] = titles.map((title) => {
+      if (!title || typeof title !== 'object') {
+        return title;
+      }
+
+      const typedTitle = title as Record<string, unknown>;
+      const appid = typedTitle.appid as number | undefined;
+      const name = typedTitle.name as string | undefined;
+
+      if (appid && name && !name.startsWith('[')) {
+        return {
+          ...typedTitle,
+          name: `[${name}](game:${appid})`,
+        };
+      }
+
+      return typedTitle;
+    });
+  }
+
+  return formatted;
+}
+
 /**
  * Format a single data row with entity links
  */
 function formatRowWithLinks(row: Record<string, unknown>): Record<string, unknown> {
-  const formatted = { ...row };
+  const formatted = formatNestedTitleCollections(row);
 
   // Format game links - check various field name patterns
   const appid = row.appid as number | undefined;
@@ -75,7 +107,7 @@ function formatSimilarityResults(
   results: Record<string, unknown>[]
 ): Record<string, unknown>[] {
   return results.map((item) => {
-    const formatted = { ...item };
+    const formatted = formatNestedTitleCollections(item);
     const id = item.id as number | undefined;
     const name = item.name as string | undefined;
     const type = item.type as string | undefined;

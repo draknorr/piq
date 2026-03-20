@@ -148,7 +148,8 @@ Use this tool for questions like:
 - "Cheaper games similar to [game]"
 
 Returns semantically similar entities based on genres, tags, features, and other characteristics.
-For publishers/developers, the tool may fall back to heuristic portfolio similarity when semantic search is unavailable.`,
+For publishers/developers, the tool may fall back to heuristic portfolio similarity when semantic search is unavailable.
+For company similarity, prefer a smaller precise peer set over padding with weak lexical matches.`,
     parameters: {
       type: 'object',
       properties: {

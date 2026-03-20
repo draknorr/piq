@@ -28,6 +28,7 @@ import {
 } from '@/lib/chat/discovery-guardrails';
 import {
   applyCompanyToolResultPolicy,
+  buildGenericCompanyLookupSkipResult,
   buildRedundantCompanySkipResult,
   extractCompanyAnswerState,
   normalizeCompanyToolCall,
@@ -117,6 +118,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
 
       for (const toolCall of response.toolCalls) {
         const effectiveToolCall = normalizeCompanyToolCall(toolCall, lastUserPrompt);
+        const genericCompanyLookupSkipResult = buildGenericCompanyLookupSkipResult(
+          lastUserPrompt,
+          effectiveToolCall
+        );
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let result: { success: boolean; error?: string; [key: string]: any };
 
@@ -130,7 +135,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           effectiveToolCall,
           lastUserPrompt
         );
-        const skipResult = redundantCompanySkipResult ?? redundantSkipResult;
+        const skipResult = genericCompanyLookupSkipResult ?? redundantCompanySkipResult ?? redundantSkipResult;
 
         let toolExecutionMs = 0;
         if (skipResult) {
@@ -197,7 +202,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
 
           toolExecutionMs = performance.now() - toolStart;
           totalToolsMs += toolExecutionMs;
-          result = applyCompanyToolResultPolicy(
+          result = await applyCompanyToolResultPolicy(
             lastUserPrompt,
             effectiveToolCall,
             result

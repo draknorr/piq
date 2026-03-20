@@ -60,6 +60,29 @@ const MAX_RESULTS = 50;
 const DEFAULT_RESULTS = 10;
 export const QDRANT_SEARCH_TIMEOUT_MS = 10000;
 export const QDRANT_TIMEOUT_ERROR = 'Similarity search timed out. Please try again.';
+const DEFAULT_COMPANY_RESULTS = 6;
+const COMPANY_GENERIC_WORDS = new Set([
+  'game',
+  'games',
+  'studio',
+  'studios',
+  'digital',
+  'interactive',
+  'entertainment',
+  'publishing',
+  'publisher',
+  'publishers',
+  'developer',
+  'developers',
+  'company',
+  'companies',
+  'group',
+  'media',
+  'labs',
+  'lab',
+  'team',
+  'indie',
+]);
 
 function isTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -620,7 +643,10 @@ async function findSimilarCompaniesFallback(
         matchReasons: buildPortfolioMatchReasons(source, candidate, genreOverlap, tagOverlap),
       };
     })
-    .filter((item) => item.score > 0)
+    .filter((item) => (
+      item.score >= 0.35 &&
+      !shouldRejectCompanyCandidate(reference.name, item.candidate.name, item.score, item.score, false)
+    ))
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
 
@@ -701,9 +727,50 @@ function commonPrefixRatio(left: string, right: string): number {
   return maxLength > 0 ? prefixLength / maxLength : 0;
 }
 
+function significantCompanyTokens(name: string): string[] {
+  return normalizeCompanyName(name)
+    .split(' ')
+    .filter((token) => token.length > 1 && !COMPANY_GENERIC_WORDS.has(token));
+}
+
 function isPlaceholderCompanyName(name: string): boolean {
   const normalized = normalizeCompanyName(name);
-  return normalized.length < 2 || normalized === '-' || normalized === 'n a' || normalized === 'na' || normalized === 'unknown';
+  const significantTokens = significantCompanyTokens(name);
+
+  return (
+    normalized.length < 2 ||
+    normalized === '-' ||
+    normalized === 'n a' ||
+    normalized === 'na' ||
+    normalized === 'unknown' ||
+    significantTokens.length === 0
+  );
+}
+
+function hasLexicalBrandContamination(referenceName: string, candidateName: string): boolean {
+  const referenceTokens = significantCompanyTokens(referenceName);
+  const candidateTokens = significantCompanyTokens(candidateName);
+
+  if (referenceTokens.length === 0 || candidateTokens.length === 0) {
+    return false;
+  }
+
+  const referencePrimary = referenceTokens[0];
+  const candidatePrimary = candidateTokens[0];
+  const primaryPrefixRatio = commonPrefixRatio(referencePrimary, candidatePrimary);
+  const sharesShortBrandStem =
+    referencePrimary.length >= 5 &&
+    candidatePrimary.length >= 5 &&
+    referencePrimary.slice(0, 3) === candidatePrimary.slice(0, 3);
+  const containsPrimary =
+    referencePrimary.includes(candidatePrimary) ||
+    candidatePrimary.includes(referencePrimary);
+
+  if (referencePrimary === candidatePrimary || containsPrimary) {
+    return true;
+  }
+
+  return sharesShortBrandStem && candidateTokens.length === 1 && primaryPrefixRatio >= 0.45;
 }
 
 function mergeGameCountFloor(
@@ -833,7 +900,7 @@ function buildCompanySimilarityScore(
     cadenceCloseness * 0.1;
 
   const dualMatchBonus = matchedBothVariants ? 0.1 : 0;
-  const score = Math.min(1, semanticScore * 0.5 + portfolioScore * 0.4 + dualMatchBonus);
+  const score = Math.min(1, semanticScore * 0.35 + portfolioScore * 0.55 + dualMatchBonus);
   const matchReasons = buildPortfolioMatchReasons(source, candidate, genreOverlap, tagOverlap);
 
   if (matchedBothVariants) {
@@ -918,7 +985,8 @@ function shouldRejectCompanyCandidate(
   referenceName: string,
   candidateName: string,
   similarityScore: number,
-  portfolioScore: number
+  portfolioScore: number,
+  matchedBothVariants: boolean
 ): boolean {
   if (isPlaceholderCompanyName(candidateName)) {
     return true;
@@ -935,8 +1003,16 @@ function shouldRejectCompanyCandidate(
     return true;
   }
 
+  if (!matchedBothVariants && portfolioScore < 0.35) {
+    return true;
+  }
+
+  if (!matchedBothVariants && hasLexicalBrandContamination(referenceName, candidateName) && portfolioScore < 0.45) {
+    return true;
+  }
+
   const prefixRatio = commonPrefixRatio(normalizedReference, normalizedCandidate);
-  if (prefixRatio >= 0.92 && portfolioScore < 0.2 && similarityScore < 0.55) {
+  if (prefixRatio >= 0.92 && portfolioScore < 0.3 && similarityScore < 0.55) {
     return true;
   }
 
@@ -1039,7 +1115,8 @@ async function findSimilarCompaniesSemantic(
           reference.name,
           snapshot.name,
           scored.score,
-          scored.portfolioScore
+          scored.portfolioScore,
+          matchedBothVariants
         )
       ) {
         continue;
@@ -1049,7 +1126,7 @@ async function findSimilarCompaniesSemantic(
         ? scored.matchReasons
         : ['Comparable portfolio profile'];
 
-      if (scored.score < 0.28) {
+      if (scored.score < 0.35) {
         continue;
       }
 
@@ -1258,9 +1335,10 @@ function applyScoreBoosts(
  */
 export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarResult> {
   const { entity_type, reference_id, reference_name, filters, limit = DEFAULT_RESULTS } = args;
+  const requestedLimit = entity_type === 'game' ? limit : Math.min(limit, DEFAULT_COMPANY_RESULTS);
   // Request one extra for publishers/developers since we filter client-side
   const extraForFilter = entity_type !== 'game' ? 1 : 0;
-  const actualLimit = Math.min(limit + extraForFilter, MAX_RESULTS);
+  const actualLimit = Math.min(requestedLimit + extraForFilter, MAX_RESULTS);
 
   if (reference_id === undefined && (!reference_name || reference_name.trim().length === 0)) {
     return {
@@ -1333,7 +1411,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
           success: false,
           error: 'Similarity search not configured. QDRANT_URL and QDRANT_API_KEY must be set.',
         }
-      : findSimilarCompaniesFallback(entity_type, entity, filters, limit);
+      : findSimilarCompaniesFallback(entity_type, entity, filters, requestedLimit);
   }
 
   if (entity_type !== 'game') {
@@ -1342,7 +1420,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
         entity_type,
         entity,
         filters,
-        limit,
+        requestedLimit,
         actualLimit
       );
 
@@ -1353,7 +1431,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       console.error('Company similarity search error:', searchError);
     }
 
-    return findSimilarCompaniesFallback(entity_type, entity, filters, limit);
+    return findSimilarCompaniesFallback(entity_type, entity, filters, requestedLimit);
   }
 
   // Get vector and payload for the entity from Qdrant
@@ -1365,7 +1443,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
           success: false,
           error: `${entity.name} hasn't been indexed for similarity search yet. Try another ${entity_type}.`,
         }
-      : findSimilarCompaniesFallback(entity_type, entity, filters, limit);
+      : findSimilarCompaniesFallback(entity_type, entity, filters, requestedLimit);
   }
 
   const { vector, payload: sourcePayload } = qdrantData;
