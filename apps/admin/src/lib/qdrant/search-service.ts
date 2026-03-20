@@ -61,6 +61,10 @@ const DEFAULT_RESULTS = 10;
 export const QDRANT_SEARCH_TIMEOUT_MS = 10000;
 export const QDRANT_TIMEOUT_ERROR = 'Similarity search timed out. Please try again.';
 const DEFAULT_COMPANY_RESULTS = 6;
+const MAX_COMPANY_REFERENCE_TITLES = 4;
+const COMPANY_GAME_EVIDENCE_NEIGHBORS = 10;
+const MIN_COMPANY_GAME_EVIDENCE_SCORE = 0.6;
+const MIN_COMPANY_GAME_EVIDENCE_REVIEWS = 50;
 const COMPANY_GENERIC_WORDS = new Set([
   'game',
   'games',
@@ -359,6 +363,35 @@ interface CompanyMergedCandidate {
   payloads: Partial<Record<'portfolio' | 'identity', Record<string, unknown>>>;
 }
 
+interface CompanyReferenceTitleSeed {
+  appid: number;
+  isFlagship: boolean;
+}
+
+interface CompanyGameEvidenceAccumulator {
+  bestScoresByReference: Map<number, number>;
+  matchedGameIds: Set<number>;
+  flagshipHit: boolean;
+}
+
+interface CompanyGameEvidence {
+  referenceTitleHits: number;
+  matchedGameCount: number;
+  weightedGameEvidenceScore: number;
+  flagshipHit: boolean;
+}
+
+interface CompanySimilaritySupport {
+  genreOverlap: number;
+  tagOverlap: number;
+  reviewCloseness: number;
+  catalogCloseness: number;
+  qualityCloseness: number;
+  cadenceCloseness: number;
+  portfolioScore: number;
+  scaleQualityScore: number;
+}
+
 interface RankedCompanySimilarityResult extends SimilarEntity {
   rawScore: number;
   portfolioScore: number;
@@ -555,6 +588,25 @@ async function findSimilarCompaniesFallback(
     };
   }
 
+  const canUseGameEvidence = isQdrantConfigured();
+  const sourcePayloads: Partial<Record<'portfolio' | 'identity', Record<string, unknown>>> =
+    canUseGameEvidence
+      ? await (async () => {
+          const [portfolioSource, identitySource] = await Promise.all([
+            getEntityVectorAndPayload(entityType, reference.id, 'portfolio'),
+            getEntityVectorAndPayload(entityType, reference.id, 'identity'),
+          ]);
+
+          return {
+            ...(portfolioSource ? { portfolio: portfolioSource.payload as Record<string, unknown> } : {}),
+            ...(identitySource ? { identity: identitySource.payload as Record<string, unknown> } : {}),
+          };
+        })()
+      : {};
+  const gameEvidenceByCompany = canUseGameEvidence
+    ? await buildCompanyGameEvidenceMap(entityType, reference, sourcePayloads)
+    : new Map<number, CompanyGameEvidence>();
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query = (supabase.from(table as any) as any)
     .select(`${idColumn}, ${nameColumn}, game_count, total_reviews, avg_review_score, games_released_last_year, genre_ids, tag_ids`)
@@ -620,34 +672,54 @@ async function findSimilarCompaniesFallback(
         genreIds: normalizeMetricArray(row.genre_ids as number[] | null | undefined),
         tagIds: normalizeMetricArray(row.tag_ids as number[] | null | undefined),
       };
-      const genreOverlap = overlapScore(source.genreIds, candidate.genreIds);
-      const tagOverlap = overlapScore(source.tagIds, candidate.tagIds);
-      const reviewCloseness = closenessScore(source.totalReviews, candidate.totalReviews);
-      const catalogCloseness = closenessScore(source.gameCount, candidate.gameCount);
-      const qualityCloseness =
-        source.avgReviewScore !== null && candidate.avgReviewScore !== null
-          ? Math.max(0, 1 - Math.abs(source.avgReviewScore - candidate.avgReviewScore) / 20)
-          : 0;
-      const cadenceCloseness = closenessScore(source.gamesReleasedLastYear, candidate.gamesReleasedLastYear);
-
-      const score =
-        genreOverlap * 0.35 +
-        tagOverlap * 0.2 +
-        reviewCloseness * 0.2 +
-        catalogCloseness * 0.15 +
-        qualityCloseness * 0.07 +
-        cadenceCloseness * 0.03;
+      const support = buildCompanySimilaritySupport(source, candidate);
+      const gameEvidence = gameEvidenceByCompany.get(candidate.id);
+      const score = canUseGameEvidence
+        ? buildFinalCompanySimilarityScore(
+            gameEvidence?.weightedGameEvidenceScore ?? 0,
+            support.portfolioScore,
+            0,
+            support.scaleQualityScore
+          )
+        : support.portfolioScore;
+      const matchReasons = canUseGameEvidence
+        ? buildCompanySimilarityMatchReasons(source, candidate, support, gameEvidence, false)
+        : buildPortfolioMatchReasons(
+            source,
+            candidate,
+            support.genreOverlap,
+            support.tagOverlap
+          );
 
       return {
         candidate,
         score,
-        matchReasons: buildPortfolioMatchReasons(source, candidate, genreOverlap, tagOverlap),
+        gameEvidence,
+        portfolioScore: support.portfolioScore,
+        matchReasons,
       };
     })
-    .filter((item) => (
-      item.score >= 0.35 &&
-      !shouldRejectCompanyCandidate(reference.name, item.candidate.name, item.score, item.score, false)
-    ))
+    .filter((item) => {
+      if (canUseGameEvidence) {
+        return (
+          item.score >= 0.4 &&
+          !shouldRejectCompanyCandidate(
+            reference.name,
+            item.candidate.name,
+            0,
+            item.portfolioScore,
+            false,
+            item.gameEvidence
+          )
+        );
+      }
+
+      return (
+        item.score >= 0.35 &&
+        !isPlaceholderCompanyName(item.candidate.name) &&
+        normalizeCompanyName(reference.name) !== normalizeCompanyName(item.candidate.name)
+      );
+    })
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
 
@@ -681,6 +753,7 @@ async function findSimilarCompaniesFallback(
         entity_type: entityType,
         reference_id: reference.id,
         fallback: 'heuristic_portfolio',
+        gameEvidenceCandidates: gameEvidenceByCompany.size,
       },
     },
   };
@@ -772,6 +845,272 @@ function hasLexicalBrandContamination(referenceName: string, candidateName: stri
   }
 
   return sharesShortBrandStem && primaryPrefixRatio >= 0.45;
+}
+
+function uniquePositiveNumbers(values: unknown, limit?: number): number[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const seen = new Set<number>();
+  const numbers: number[] = [];
+
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    numbers.push(value);
+
+    if (limit && numbers.length >= limit) {
+      break;
+    }
+  }
+
+  return numbers;
+}
+
+async function fetchCompanyReferenceTitleSeedsFromMetrics(
+  entityType: CompanyEntityType,
+  companyId: number,
+  limit: number
+): Promise<number[]> {
+  const supabase = getServiceSupabase();
+  const table = entityType === 'publisher' ? 'publisher_game_metrics' : 'developer_game_metrics';
+  const idColumn = entityType === 'publisher' ? 'publisher_id' : 'developer_id';
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase.from(table as any) as any)
+    .select('appid, total_reviews, owners')
+    .eq(idColumn, companyId)
+    .order('total_reviews', { ascending: false, nullsFirst: false })
+    .order('owners', { ascending: false, nullsFirst: false })
+    .limit(limit * 3);
+
+  return uniquePositiveNumbers(
+    (data ?? []).map((row: Record<string, unknown>) => Number(row.appid ?? 0)),
+    limit
+  );
+}
+
+async function fetchCompanyReferenceTitleSeeds(
+  entityType: CompanyEntityType,
+  companyId: number,
+  payloads: Partial<Record<'portfolio' | 'identity', Record<string, unknown>>>
+): Promise<CompanyReferenceTitleSeed[]> {
+  const identityPayload = payloads.identity ?? {};
+  const payloadAppids = uniquePositiveNumbers(
+    identityPayload.top_game_appids,
+    MAX_COMPANY_REFERENCE_TITLES
+  );
+  const flagshipAppid = Number(identityPayload.flagship_game_appid ?? 0);
+
+  const orderedAppids: number[] = [];
+  const seen = new Set<number>();
+  const pushAppid = (appid: number): void => {
+    if (!Number.isFinite(appid) || appid <= 0 || seen.has(appid)) {
+      return;
+    }
+    seen.add(appid);
+    orderedAppids.push(appid);
+  };
+
+  if (flagshipAppid > 0) {
+    pushAppid(flagshipAppid);
+  }
+
+  for (const appid of payloadAppids) {
+    pushAppid(appid);
+  }
+
+  if (orderedAppids.length < MAX_COMPANY_REFERENCE_TITLES) {
+    const fallbackAppids = await fetchCompanyReferenceTitleSeedsFromMetrics(
+      entityType,
+      companyId,
+      MAX_COMPANY_REFERENCE_TITLES
+    );
+    for (const appid of fallbackAppids) {
+      pushAppid(appid);
+      if (orderedAppids.length >= MAX_COMPANY_REFERENCE_TITLES) {
+        break;
+      }
+    }
+  }
+
+  return orderedAppids.slice(0, MAX_COMPANY_REFERENCE_TITLES).map((appid, index) => ({
+    appid,
+    isFlagship: appid === flagshipAppid || (flagshipAppid <= 0 && index === 0),
+  }));
+}
+
+function extractCandidateCompanyIdsFromGamePayload(
+  entityType: CompanyEntityType,
+  payload: Record<string, unknown>
+): number[] {
+  return entityType === 'publisher'
+    ? uniquePositiveNumbers(payload.publisher_ids)
+    : uniquePositiveNumbers(payload.developer_ids);
+}
+
+function overlapStringScore(left: string[] | undefined, right: string[] | undefined): number {
+  if (!left?.length || !right?.length) {
+    return 0;
+  }
+
+  const rightSet = new Set(right.map((value) => value.toLowerCase()));
+  const overlap = left.filter((value) => rightSet.has(value.toLowerCase())).length;
+  const union = new Set([
+    ...left.map((value) => value.toLowerCase()),
+    ...right.map((value) => value.toLowerCase()),
+  ]).size;
+
+  return union > 0 ? overlap / union : 0;
+}
+
+function scoreGameNeighborEvidence(
+  sourcePayload: Record<string, unknown>,
+  candidatePayload: Record<string, unknown>,
+  rawScore: number
+): number {
+  const sourceGenres = Array.isArray(sourcePayload.genres)
+    ? sourcePayload.genres.filter((value): value is string => typeof value === 'string')
+    : [];
+  const candidateGenres = Array.isArray(candidatePayload.genres)
+    ? candidatePayload.genres.filter((value): value is string => typeof value === 'string')
+    : [];
+  const sourceTags = Array.isArray(sourcePayload.tags)
+    ? sourcePayload.tags.filter((value): value is string => typeof value === 'string')
+    : [];
+  const candidateTags = Array.isArray(candidatePayload.tags)
+    ? candidatePayload.tags.filter((value): value is string => typeof value === 'string')
+    : [];
+  const genreOverlap = overlapStringScore(sourceGenres, candidateGenres);
+  const tagOverlap = overlapStringScore(sourceTags, candidateTags);
+
+  return Math.min(1, rawScore + genreOverlap * 0.08 + tagOverlap * 0.04);
+}
+
+function normalizeCompanyGameEvidence(
+  accumulators: Map<number, CompanyGameEvidenceAccumulator>
+): Map<number, CompanyGameEvidence> {
+  const evidenceByCompany = new Map<number, CompanyGameEvidence>();
+
+  for (const [companyId, accumulator] of accumulators.entries()) {
+    const referenceScores = [...accumulator.bestScoresByReference.values()];
+    if (referenceScores.length === 0) {
+      continue;
+    }
+
+    const averageScore =
+      referenceScores.reduce((sum, score) => sum + score, 0) / referenceScores.length;
+    const coverageBonus = referenceScores.length >= 2 ? 0.08 : 0;
+    const flagshipBonus = accumulator.flagshipHit ? 0.08 : 0;
+
+    evidenceByCompany.set(companyId, {
+      referenceTitleHits: referenceScores.length,
+      matchedGameCount: accumulator.matchedGameIds.size,
+      weightedGameEvidenceScore: Math.min(1, averageScore + coverageBonus + flagshipBonus),
+      flagshipHit: accumulator.flagshipHit,
+    });
+  }
+
+  return evidenceByCompany;
+}
+
+async function buildCompanyGameEvidenceMap(
+  entityType: CompanyEntityType,
+  reference: { id: number; name: string },
+  payloads: Partial<Record<'portfolio' | 'identity', Record<string, unknown>>>
+): Promise<Map<number, CompanyGameEvidence>> {
+  if (!isQdrantConfigured()) {
+    return new Map();
+  }
+
+  const referenceSeeds = await fetchCompanyReferenceTitleSeeds(entityType, reference.id, payloads);
+  if (referenceSeeds.length === 0) {
+    return new Map();
+  }
+
+  const client = getQdrantClient();
+  const collection = getCollectionName('game');
+
+  const searchGroups = await Promise.all(referenceSeeds.map(async (seed) => {
+    const qdrantData = await getEntityVectorAndPayload('game', seed.appid);
+    if (!qdrantData) {
+      return [];
+    }
+
+    const filter = buildGameFilter({
+      exclude_appids: [seed.appid],
+      exclude_delisted: true,
+      is_released: true,
+      min_reviews: MIN_COMPANY_GAME_EVIDENCE_REVIEWS,
+    });
+
+    const searchResult = await client.search(collection, {
+      vector: qdrantData.vector,
+      filter,
+      limit: COMPANY_GAME_EVIDENCE_NEIGHBORS,
+      with_payload: {
+        include: [
+          'name',
+          'developer_ids',
+          'publisher_ids',
+          'genres',
+          'tags',
+          'review_percentage',
+          'total_reviews',
+        ],
+      },
+    });
+
+    return searchResult
+      .filter((point) => point.id !== seed.appid)
+      .map((point) => ({
+        referenceAppid: seed.appid,
+        isFlagship: seed.isFlagship,
+        appid: point.id as number,
+        score: scoreGameNeighborEvidence(
+          qdrantData.payload as Record<string, unknown>,
+          (point.payload ?? {}) as Record<string, unknown>,
+          point.score
+        ),
+        payload: (point.payload ?? {}) as Record<string, unknown>,
+      }))
+      .filter((point) => point.score >= MIN_COMPANY_GAME_EVIDENCE_SCORE);
+  }));
+
+  const accumulators = new Map<number, CompanyGameEvidenceAccumulator>();
+
+  for (const group of searchGroups) {
+    for (const neighbor of group) {
+      const companyIds = extractCandidateCompanyIdsFromGamePayload(entityType, neighbor.payload)
+        .filter((id) => id !== reference.id);
+
+      for (const companyId of companyIds) {
+        const existing = accumulators.get(companyId) ?? {
+          bestScoresByReference: new Map<number, number>(),
+          matchedGameIds: new Set<number>(),
+          flagshipHit: false,
+        };
+
+        const previousBest = existing.bestScoresByReference.get(neighbor.referenceAppid) ?? 0;
+        if (neighbor.score > previousBest) {
+          existing.bestScoresByReference.set(neighbor.referenceAppid, neighbor.score);
+        }
+
+        existing.matchedGameIds.add(neighbor.appid);
+        if (neighbor.isFlagship) {
+          existing.flagshipHit = true;
+        }
+
+        accumulators.set(companyId, existing);
+      }
+    }
+  }
+
+  return normalizeCompanyGameEvidence(accumulators);
 }
 
 function mergeGameCountFloor(
@@ -876,12 +1215,10 @@ function mergeCompanySearchResults(points: CompanySearchPoint[]): CompanyMergedC
   return [...merged.values()];
 }
 
-function buildCompanySimilarityScore(
+function buildCompanySimilaritySupport(
   source: CompanyMetricsSnapshot,
-  candidate: CompanyMetricsSnapshot,
-  semanticScore: number,
-  matchedBothVariants: boolean
-): { score: number; matchReasons: string[]; portfolioScore: number } {
+  candidate: CompanyMetricsSnapshot
+): CompanySimilaritySupport {
   const genreOverlap = overlapScore(source.genreIds, candidate.genreIds);
   const tagOverlap = overlapScore(source.tagIds, candidate.tagIds);
   const reviewCloseness = closenessScore(source.totalReviews, candidate.totalReviews);
@@ -900,19 +1237,97 @@ function buildCompanySimilarityScore(
     qualityCloseness * 0.1 +
     cadenceCloseness * 0.1;
 
-  const dualMatchBonus = matchedBothVariants ? 0.1 : 0;
-  const score = Math.min(1, semanticScore * 0.25 + portfolioScore * 0.65 + dualMatchBonus);
-  const matchReasons = buildPortfolioMatchReasons(source, candidate, genreOverlap, tagOverlap);
+  return {
+    genreOverlap,
+    tagOverlap,
+    reviewCloseness,
+    catalogCloseness,
+    qualityCloseness,
+    cadenceCloseness,
+    portfolioScore,
+    scaleQualityScore:
+      reviewCloseness * 0.4 +
+      catalogCloseness * 0.25 +
+      qualityCloseness * 0.2 +
+      cadenceCloseness * 0.15,
+  };
+}
 
-  if (matchedBothVariants) {
-    matchReasons.unshift('Matches both notable titles and overall portfolio');
+function buildFinalCompanySimilarityScore(
+  gameEvidenceScore: number,
+  portfolioScore: number,
+  semanticScore: number,
+  scaleQualityScore: number
+): number {
+  return Math.min(
+    1,
+    gameEvidenceScore * 0.55 +
+      portfolioScore * 0.25 +
+      semanticScore * 0.1 +
+      scaleQualityScore * 0.1
+  );
+}
+
+function buildCompanySimilarityMatchReasons(
+  source: CompanyMetricsSnapshot,
+  candidate: CompanyMetricsSnapshot,
+  support: CompanySimilaritySupport,
+  gameEvidence: CompanyGameEvidence | undefined,
+  matchedBothVariants: boolean
+): string[] {
+  const reasons: string[] = [];
+
+  if (gameEvidence) {
+    if (gameEvidence.referenceTitleHits >= 2) {
+      reasons.push('Multiple top titles lead to close game-neighbor matches');
+    } else if (gameEvidence.flagshipHit) {
+      reasons.push('The flagship title has close game-neighbor matches in this portfolio');
+    } else if (gameEvidence.matchedGameCount >= 1) {
+      reasons.push('A top title has close game-neighbor matches in this portfolio');
+    }
   }
 
-  return {
-    score,
-    portfolioScore,
-    matchReasons: matchReasons.slice(0, 3),
-  };
+  const portfolioReasons = buildPortfolioMatchReasons(
+    source,
+    candidate,
+    support.genreOverlap,
+    support.tagOverlap
+  );
+  for (const reason of portfolioReasons) {
+    if (reasons.length >= 3 || reasons.includes(reason)) {
+      continue;
+    }
+    reasons.push(reason);
+  }
+
+  if (support.scaleQualityScore >= 0.55 && reasons.length < 3) {
+    reasons.push('Comparable scale and review profile');
+  }
+
+  if (matchedBothVariants && reasons.length < 3) {
+    reasons.push('Matches both company identity and portfolio signals');
+  }
+
+  return reasons.slice(0, 3);
+}
+
+function hasStrongCompanyGameEvidence(
+  gameEvidence: CompanyGameEvidence | undefined,
+  portfolioScore: number
+): boolean {
+  if (!gameEvidence) {
+    return false;
+  }
+
+  if (gameEvidence.referenceTitleHits >= 2) {
+    return true;
+  }
+
+  return (
+    gameEvidence.referenceTitleHits >= 1 &&
+    gameEvidence.weightedGameEvidenceScore >= 0.7 &&
+    portfolioScore >= 0.45
+  );
 }
 
 function extractCompanyGenres(
@@ -985,9 +1400,10 @@ function passesCompanySimilarityFilters(
 function shouldRejectCompanyCandidate(
   referenceName: string,
   candidateName: string,
-  similarityScore: number,
+  _similarityScore: number,
   portfolioScore: number,
-  matchedBothVariants: boolean
+  matchedBothVariants: boolean,
+  gameEvidence: CompanyGameEvidence | undefined
 ): boolean {
   if (isPlaceholderCompanyName(candidateName)) {
     return true;
@@ -1004,42 +1420,27 @@ function shouldRejectCompanyCandidate(
     return true;
   }
 
-  if (!matchedBothVariants && portfolioScore < 0.35) {
+  if (!gameEvidence) {
     return true;
   }
 
-  if (hasLexicalBrandContamination(referenceName, candidateName) && portfolioScore < (matchedBothVariants ? 0.6 : 0.45)) {
+  if (!hasStrongCompanyGameEvidence(gameEvidence, portfolioScore)) {
+    return true;
+  }
+
+  if (
+    hasLexicalBrandContamination(referenceName, candidateName) &&
+    (!gameEvidence.flagshipHit || gameEvidence.weightedGameEvidenceScore < (matchedBothVariants ? 0.8 : 0.85))
+  ) {
     return true;
   }
 
   const prefixRatio = commonPrefixRatio(normalizedReference, normalizedCandidate);
-  if (prefixRatio >= 0.92 && portfolioScore < 0.3 && similarityScore < 0.55) {
+  if (prefixRatio >= 0.92 && gameEvidence.weightedGameEvidenceScore < 0.85) {
     return true;
   }
 
   return false;
-}
-
-function isStrongCompanySimilarityCandidate(
-  referenceName: string,
-  candidateName: string,
-  similarityScore: number,
-  portfolioScore: number,
-  matchedBothVariants: boolean
-): boolean {
-  const lexicalContamination = hasLexicalBrandContamination(referenceName, candidateName);
-
-  if (lexicalContamination) {
-    return matchedBothVariants
-      ? portfolioScore >= 0.65 && similarityScore >= 0.45
-      : portfolioScore >= 0.7 && similarityScore >= 0.45;
-  }
-
-  if (matchedBothVariants) {
-    return portfolioScore >= 0.35 && similarityScore >= 0.35;
-  }
-
-  return portfolioScore >= 0.45 && similarityScore >= 0.4;
 }
 
 async function findSimilarCompaniesSemantic(
@@ -1062,6 +1463,16 @@ async function findSimilarCompaniesSemantic(
   if (!portfolioSource && !identitySource) {
     return null;
   }
+
+  const sourcePayloads: Partial<Record<'portfolio' | 'identity', Record<string, unknown>>> = {
+    ...(portfolioSource ? { portfolio: portfolioSource.payload as Record<string, unknown> } : {}),
+    ...(identitySource ? { identity: identitySource.payload as Record<string, unknown> } : {}),
+  };
+  const gameEvidenceByCompany = await buildCompanyGameEvidenceMap(
+    entityType,
+    reference,
+    sourcePayloads
+  );
 
   const requestedFloor = filters?.game_count?.gte ?? 0;
   const defaultFloor = Math.max(requestedFloor, 3);
@@ -1106,83 +1517,94 @@ async function findSimilarCompaniesSemantic(
     const mergedCandidates = mergeCompanySearchResults(searchResults.flat()).filter(
       (candidate) => candidate.id !== reference.id
     );
+    const topGameEvidenceCandidateIds = [...gameEvidenceByCompany.entries()]
+      .sort((left, right) => right[1].weightedGameEvidenceScore - left[1].weightedGameEvidenceScore)
+      .slice(0, searchLimit)
+      .map(([candidateId]) => candidateId);
+    const candidateIds = [...new Set([
+      ...mergedCandidates.map((candidate) => candidate.id),
+      ...topGameEvidenceCandidateIds,
+    ])].filter((candidateId) => candidateId !== reference.id);
 
-    if (mergedCandidates.length === 0) {
+    if (candidateIds.length === 0) {
       continue;
     }
+    const mergedCandidateMap = new Map(mergedCandidates.map((candidate) => [candidate.id, candidate]));
 
     const snapshots = await fetchCompanyMetricsSnapshots(
       entityType,
-      mergedCandidates.map((candidate) => candidate.id)
+      candidateIds
     );
 
     const rankedResults: RankedCompanySimilarityResult[] = [];
-    for (const candidate of mergedCandidates) {
-      const snapshot = snapshots.get(candidate.id);
+    for (const candidateId of candidateIds) {
+      const candidate = mergedCandidateMap.get(candidateId);
+      const snapshot = snapshots.get(candidateId);
       if (!snapshot || !passesCompanySimilarityFilters(snapshot, filters)) {
         continue;
       }
 
       const matchedBothVariants =
-        candidate.variantScores.identity !== undefined &&
-        candidate.variantScores.portfolio !== undefined;
-      const scored = buildCompanySimilarityScore(
-        source,
-        snapshot,
-        candidate.semanticScore,
-        matchedBothVariants
+        candidate?.variantScores.identity !== undefined &&
+        candidate?.variantScores.portfolio !== undefined;
+      const support = buildCompanySimilaritySupport(source, snapshot);
+      const semanticScore = candidate?.semanticScore ?? 0;
+      const gameEvidence = gameEvidenceByCompany.get(candidateId);
+      const finalScore = buildFinalCompanySimilarityScore(
+        gameEvidence?.weightedGameEvidenceScore ?? 0,
+        support.portfolioScore,
+        semanticScore,
+        support.scaleQualityScore
       );
 
       if (
         shouldRejectCompanyCandidate(
           reference.name,
           snapshot.name,
-          scored.score,
-          scored.portfolioScore,
-          matchedBothVariants
+          semanticScore,
+          support.portfolioScore,
+          matchedBothVariants,
+          gameEvidence
         )
       ) {
         continue;
       }
 
-      const matchReasons = scored.matchReasons.length > 0
-        ? scored.matchReasons
+      const matchReasons = buildCompanySimilarityMatchReasons(
+        source,
+        snapshot,
+        support,
+        gameEvidence,
+        matchedBothVariants
+      );
+      const finalMatchReasons = matchReasons.length > 0
+        ? matchReasons
         : ['Comparable portfolio profile'];
 
-      if (scored.score < 0.35) {
+      if (finalScore < 0.4) {
         continue;
       }
 
       rankedResults.push({
         id: snapshot.id,
         name: snapshot.name,
-        score: Math.round(scored.score * 100),
-        rawScore: Math.round(candidate.semanticScore * 100),
-        portfolioScore: scored.portfolioScore,
+        score: Math.round(finalScore * 100),
+        rawScore: Math.round(semanticScore * 100),
+        portfolioScore: support.portfolioScore,
         type: entityType,
         game_count: snapshot.gameCount,
-        genres: extractCompanyGenres(candidate.payloads),
-        tags: extractCompanyTags(candidate.payloads),
+        genres: candidate ? extractCompanyGenres(candidate.payloads) : undefined,
+        tags: candidate ? extractCompanyTags(candidate.payloads) : undefined,
         review_percentage: snapshot.avgReviewScore,
         is_major: snapshot.gameCount >= 10,
-        matchReasons,
-        variantScores: candidate.variantScores,
+        matchReasons: finalMatchReasons,
+        variantScores: candidate?.variantScores ?? {},
       });
     }
 
     rankedResults.sort((left, right) => right.score - left.score);
     rankedResults.splice(limit);
-
-    const strongResults = rankedResults.filter((candidate) =>
-      isStrongCompanySimilarityCandidate(
-        reference.name,
-        candidate.name,
-        candidate.rawScore / 100,
-        candidate.portfolioScore,
-        candidate.variantScores.identity !== undefined && candidate.variantScores.portfolio !== undefined
-      )
-    );
-    const finalResults = strongResults;
+    const finalResults = rankedResults;
 
     if (finalResults.length === 0) {
       continue;
@@ -1203,10 +1625,12 @@ async function findSimilarCompaniesSemantic(
         searchParams: {
           entity_type: entityType,
           reference_id: reference.id,
+          referenceTitleAppids: sourcePayloads.identity?.top_game_appids ?? [],
           sourceVariants: {
             portfolio: Boolean(portfolioSource),
             identity: Boolean(identitySource),
           },
+          gameEvidenceCandidates: gameEvidenceByCompany.size,
           searchLimit,
           appliedGameCountFloor: minGameCountFloor,
           filters,
