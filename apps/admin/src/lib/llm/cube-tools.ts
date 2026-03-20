@@ -156,10 +156,17 @@ Use this tool for questions like:
 - "Publishers similar to Devolver Digital"
 - "Better reviewed alternatives to [game]"
 - "Cheaper games similar to [game]"
+- "Games in the same series as Dark Souls"
 
 Returns semantically similar entities based on genres, tags, features, and other characteristics.
 For publishers/developers, the tool may fall back to heuristic portfolio similarity when semantic search is unavailable.
 For company similarity, prefer a smaller precise peer set over padding with weak lexical matches.
+
+For game similarity:
+- Put game-side constraints inside \`filters\`
+- Use \`same_franchise_only: true\` for exact "same series" / "same franchise" prompts
+- Use \`max_reviews\`, \`review_percentage\`, and \`review_comparison\` when the user specifies review-count or review-quality constraints
+- Prefer a smaller high-signal result set over padding with title-word collisions
 
 For publisher/developer peer prompts:
 - Call find_similar directly. Do NOT call lookup_publishers or lookup_developers first.
@@ -224,12 +231,28 @@ For publisher/developer peer prompts:
               type: 'number',
               description: 'Minimum number of reviews',
             },
+            max_reviews: {
+              type: 'number',
+              description: 'Maximum number of reviews',
+            },
+            review_percentage: {
+              type: 'object',
+              properties: {
+                gte: { type: 'number', description: 'Minimum positive review percentage (0-100)' },
+                lte: { type: 'number', description: 'Maximum positive review percentage (0-100)' },
+              },
+              description: 'Absolute review percentage bounds',
+            },
             release_year: {
               type: 'object',
               properties: {
                 gte: { type: 'number', description: 'Released in or after this year' },
                 lte: { type: 'number', description: 'Released in or before this year' },
               },
+            },
+            same_franchise_only: {
+              type: 'boolean',
+              description: 'Require exact same franchise/series membership instead of broader similarity',
             },
             // Entity-specific filters (for publisher/developer searches)
             game_count: {
@@ -495,7 +518,12 @@ Use this tool for concept-based queries WITHOUT a reference game:
 - "fast-paced action games with pixel art"
 
 This searches the game database using semantic understanding of the description.
-For "games like X", use find_similar instead.`,
+For "games like X", use find_similar instead.
+
+Use this for taste and concept prompts, but keep quality high:
+- favor supported, reviewed games over literal title-word collisions
+- use \`min_reviews\` and \`review_percentage\` when the prompt implies curation or taste
+- prefer a smaller strong set over a padded low-signal list.`,
     parameters: {
       type: 'object',
       properties: {
@@ -539,6 +567,10 @@ For "games like X", use find_similar instead.`,
               type: 'number',
               description: 'Minimum number of reviews',
             },
+            max_reviews: {
+              type: 'number',
+              description: 'Maximum number of reviews',
+            },
             release_year: {
               type: 'object',
               properties: {
@@ -550,6 +582,7 @@ For "games like X", use find_similar instead.`,
               type: 'object',
               properties: {
                 gte: { type: 'number', description: 'Minimum positive review percentage (0-100)' },
+                lte: { type: 'number', description: 'Maximum positive review percentage (0-100)' },
               },
             },
           },

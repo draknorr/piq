@@ -1,17 +1,26 @@
 # Chat Prompt Evals Runbook
 
-This runbook covers the critique-suite workflow for the prompts called out in:
+This runbook covers the critique-suite workflows for the prompts called out in:
 
 - `docs/chat-output-user-critique.md` section `1. Game Lookups and Filtered Discovery`
 - `docs/chat-output-user-critique.md` section `2. Publisher, Developer, and Company Answers`
+- `docs/chat-output-user-critique.md` section `3. Similarity and Comp-Finding Answers`
+- `docs/chat-output-user-critique.md` section `4. Concept and Taste-Based Discovery`
 
 ## What This Runner Does
 
-Use `scripts/chat-evals/run-critique-sections-1-2.mjs` when you want a fresh live run against the production chat endpoint without rebuilding the prompt list by hand.
+Use one of the checked-in wrappers when you want a fresh live run against the production chat endpoint without rebuilding the prompt list by hand.
 
-The wrapper:
+### Available Wrappers
 
-- runs the exact 23 section `1` and `2` prompts against `POST /api/chat/stream`
+| Scope | Script | Prompt Count |
+|---|---|---:|
+| Sections `1` and `2` | `scripts/chat-evals/run-critique-sections-1-2.mjs` | 23 |
+| Sections `3` and `4` | `scripts/chat-evals/run-critique-sections-3-4.mjs` | 13 |
+
+Each wrapper:
+
+- runs the exact hard-coded prompt set for its scope against `POST /api/chat/stream`
 - reuses `scripts/chat-evals/run.mjs` for auth, transport, retries, SSE parsing, and raw capture
 - writes a timestamped artifact folder under `/tmp/publisheriq-chat-evals/`
 - generates a draft markdown run entry and a curation template so you can score the answers from the persona viewpoint
@@ -35,6 +44,12 @@ From the repo root:
 node scripts/chat-evals/run-critique-sections-1-2.mjs
 ```
 
+Or for sections `3` and `4`:
+
+```bash
+node scripts/chat-evals/run-critique-sections-3-4.mjs
+```
+
 Optional overrides:
 
 ```bash
@@ -42,6 +57,13 @@ CHAT_EVAL_ORIGIN=https://www.publisheriq.app \
 CHAT_EVAL_CONCURRENCY=1 \
 CHAT_EVAL_DELAY_MS=3000 \
 node scripts/chat-evals/run-critique-sections-1-2.mjs --out-dir /tmp/publisheriq-chat-evals/manual-run
+```
+
+```bash
+CHAT_EVAL_ORIGIN=https://www.publisheriq.app \
+CHAT_EVAL_CONCURRENCY=1 \
+CHAT_EVAL_DELAY_MS=3000 \
+node scripts/chat-evals/run-critique-sections-3-4.mjs --out-dir /tmp/publisheriq-chat-evals/manual-run-3-4
 ```
 
 The wrapper prints the artifact paths when it finishes.
@@ -55,9 +77,14 @@ node scripts/chat-evals/run-critique-sections-1-2.mjs \
   --from-results /tmp/publisheriq-chat-evals/critique-sections-1-2-<timestamp>
 ```
 
+```bash
+node scripts/chat-evals/run-critique-sections-3-4.mjs \
+  --from-results /tmp/publisheriq-chat-evals/critique-sections-3-4-<timestamp>
+```
+
 ## Re-Test Only The Prompts You Changed
 
-Use the generic runner when you want a targeted verification pass instead of the full 23-prompt suite.
+Use the generic runner when you want a targeted verification pass instead of a full wrapper suite.
 
 1. Create a temporary include file in the same `critiqueId | prompt` format:
 
@@ -115,7 +142,7 @@ Each run folder contains:
 - `manifest.json`: the generic runner manifest
 - `results.json`: full structured results, tool calls, timings, and raw assistant text
 - `report.md`: the generic runner's raw markdown report
-- `ledger-run-draft.md`: section-1/2 draft with persona metadata and placeholder curation fields
+- `ledger-run-draft.md`: scope-specific draft with persona metadata and placeholder curation fields
 - `curation-template.json`: blank score/rationale template for manual evaluation
 - `run-summary.json`: condensed metadata and timings for quick inspection
 
@@ -140,12 +167,17 @@ Use local targeted reruns as implementation verification and only promote them i
 
 ## Current Suite Inventory
 
-The wrapper hard-codes these prompt IDs:
+The checked-in wrappers hard-code these prompt IDs:
 
 - Section 1: `2`, `10`, `21`, `138`, `141`, `219`, `242`
 - Section 2: `89`, `97`, `127`, `130`, `140`, `151`, `152`, `155`, `156`, `157`, `161`, `170`, `171`, `175`, `178`, `179`
+- Section 3: `51`, `49`, `132`, `134`, `170`, `171`, `190`
+- Section 4: `18`, `195`, `19`, `186`, `42`, `229`
 
-If the critique doc changes, update the suite array in `scripts/chat-evals/run-critique-sections-1-2.mjs`.
+If the critique doc changes, update the suite array in the corresponding wrapper:
+
+- `scripts/chat-evals/run-critique-sections-1-2.mjs`
+- `scripts/chat-evals/run-critique-sections-3-4.mjs`
 
 ## Current Quality Guardrails
 
@@ -171,6 +203,18 @@ When you re-run the weak prompts, judge them against these product decisions:
   - one peer is not a complete peer set
   - if semantic peers are sparse, prefer a labeled heuristic portfolio fallback
   - if the final peer set is still sparse, say it is limited instead of padding with weak matches
+- game similarity:
+  - hard constraints like `better reviews`, `under 10K reviews`, and `Steam Deck` must be visibly obeyed
+  - add a short per-row fit reason when the answer claims similarity
+  - avoid lexical contamination from title words like `Hades`, `Hollow`, or `Souls`
+- franchise / same-series answers:
+  - stay inside the franchise first
+  - if adjacent `Souls-like` or neighbor titles are added, split them into a clearly labeled secondary section
+  - never blur `same series` into `similar to` without saying so
+- concept and taste discovery:
+  - treat prompts like `beautiful art`, `tactical deck building`, and `investigation horror` as concept interpretation tasks, not keyword matching
+  - prefer quality floors and representative titles over filling the table with low-signal lexical matches
+  - if the semantic set is weak, say that directly instead of padding with `Deck`, `Rogue`, `Pixel`, or `Investigation` title collisions
 
 ## Deployment Notes
 

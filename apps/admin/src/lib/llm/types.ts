@@ -159,8 +159,10 @@ export interface SimilarityResult extends ToolSufficiencyMetadata {
     genres?: string[];
     tags?: string[];
     review_percentage?: number | null;
+    total_reviews?: number | null;
     price_cents?: number | null;
     is_free?: boolean;
+    steam_deck?: 'unknown' | 'unsupported' | 'playable' | 'verified';
     game_count?: number;
     is_major?: boolean;
     matchReasons?: string[];

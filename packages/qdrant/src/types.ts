@@ -253,6 +253,7 @@ export interface GameFilters {
   review_score?: RangeFilter; // 1-9
   review_percentage?: RangeFilter; // 0-100
   min_reviews?: number;
+  max_reviews?: number;
 
   // Popularity filters
   owners_tiers?: OwnersTier[];
@@ -280,6 +281,7 @@ export interface GameFilters {
   exclude_same_publisher?: boolean;
   exclude_same_developer?: boolean;
   exclude_same_franchise?: boolean;
+  same_franchise_only?: boolean;
 
   // Relative comparison (requires source entity context)
   popularity_comparison?: PopularityComparison;

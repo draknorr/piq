@@ -116,6 +116,13 @@ export function buildGameFilter(
     });
   }
 
+  if (filters.max_reviews !== undefined) {
+    must.push({
+      key: 'total_reviews',
+      range: { lte: filters.max_reviews },
+    });
+  }
+
   // Popularity filters
   if (filters.owners_tiers?.length) {
     must.push({
@@ -216,6 +223,13 @@ export function buildGameFilter(
           match: { value: id },
         });
       }
+    }
+
+    if (filters.same_franchise_only && sourceMetrics.franchise_ids?.length) {
+      must.push({
+        key: 'franchise_ids',
+        match: { any: sourceMetrics.franchise_ids },
+      });
     }
 
     // Popularity comparison (uses total_reviews as popularity proxy)

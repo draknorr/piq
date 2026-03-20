@@ -89,6 +89,119 @@ const COMPANY_GENERIC_WORDS = new Set([
   'indie',
 ]);
 
+const GAME_TITLE_GENERIC_WORDS = new Set([
+  'game',
+  'games',
+  'edition',
+  'definitive',
+  'remastered',
+  'remaster',
+  'ultimate',
+  'complete',
+  'deluxe',
+  'version',
+  'chapter',
+  'episode',
+  'demo',
+  'beta',
+  'alpha',
+  'prologue',
+  'soundtrack',
+  'ost',
+  'the',
+  'and',
+  'of',
+  'for',
+  'to',
+  'a',
+  'an',
+  'ii',
+  'iii',
+  'iv',
+  'v',
+  'vi',
+  'vii',
+  'viii',
+  'ix',
+  'x',
+]);
+
+type ConceptFacetDefinition = {
+  label: string;
+  phrases: string[];
+  evidenceTerms: string[];
+  titleTerms: string[];
+};
+
+const CONCEPT_FACETS: ConceptFacetDefinition[] = [
+  {
+    label: 'Tactical strategy',
+    phrases: ['tactical'],
+    evidenceTerms: ['tactical', 'strategy', 'turn based tactics', 'turn based', 'grid based movement'],
+    titleTerms: ['tactic', 'tactics'],
+  },
+  {
+    label: 'Deckbuilding',
+    phrases: ['deck building', 'deckbuilder'],
+    evidenceTerms: ['deckbuilder', 'deck building', 'card battler', 'card game', 'rogue like deckbuilder'],
+    titleTerms: ['deck'],
+  },
+  {
+    label: 'Roguelike structure',
+    phrases: ['roguelike', 'roguelikes', 'roguelite', 'roguelites'],
+    evidenceTerms: ['roguelike', 'roguelite', 'action roguelike', 'rogue like deckbuilder'],
+    titleTerms: ['rogue', 'roguelike', 'roguelite'],
+  },
+  {
+    label: 'Horror',
+    phrases: ['horror'],
+    evidenceTerms: ['horror', 'psychological horror', 'survival horror'],
+    titleTerms: ['horror', 'haunted', 'ghost'],
+  },
+  {
+    label: 'Investigation',
+    phrases: ['investigation', 'investigative', 'detective', 'mystery'],
+    evidenceTerms: ['investigation', 'detective', 'mystery', 'hidden object', 'story rich'],
+    titleTerms: ['investigation', 'detective', 'mystery'],
+  },
+  {
+    label: 'Puzzle',
+    phrases: ['puzzle', 'puzzles'],
+    evidenceTerms: ['puzzle', 'logic'],
+    titleTerms: ['puzzle'],
+  },
+  {
+    label: 'Relaxing tone',
+    phrases: ['relaxing', 'cozy', 'calm'],
+    evidenceTerms: ['relaxing', 'cozy', 'casual', 'atmospheric'],
+    titleTerms: ['relaxing', 'cozy'],
+  },
+  {
+    label: 'Beautiful/stylized art',
+    phrases: ['beautiful art', 'beautiful visuals', 'beautiful', 'stylized', 'gorgeous'],
+    evidenceTerms: ['beautiful', 'stylized', 'hand drawn', 'hand-drawn', 'atmospheric', 'colorful', 'painting', 'nature'],
+    titleTerms: ['beautiful', 'beauty', 'art'],
+  },
+  {
+    label: 'Fast-paced action',
+    phrases: ['fast paced', 'fast-paced'],
+    evidenceTerms: ['fast-paced', 'action', 'arcade', 'bullet hell', 'hack and slash'],
+    titleTerms: ['fast', 'action'],
+  },
+  {
+    label: 'Action',
+    phrases: ['action'],
+    evidenceTerms: ['action', 'arcade', 'hack and slash', 'beat em up'],
+    titleTerms: ['action'],
+  },
+  {
+    label: 'Pixel Graphics',
+    phrases: ['pixel art', 'pixel graphics', 'pixel'],
+    evidenceTerms: ['pixel graphics', 'pixel'],
+    titleTerms: ['pixel'],
+  },
+];
+
 type CompanySimilarityFailureStage =
   | 'game_evidence_search'
   | 'company_collection_search'
@@ -188,7 +301,10 @@ export interface FindSimilarArgs {
     genres?: string[];
     tags?: string[];
     min_reviews?: number;
+    max_reviews?: number;
+    review_percentage?: { gte?: number; lte?: number };
     release_year?: { gte?: number; lte?: number };
+    same_franchise_only?: boolean;
     // Entity-specific filters (publishers/developers)
     game_count?: { gte?: number; lte?: number };
     avg_review_percentage?: { gte?: number; lte?: number };
@@ -212,8 +328,10 @@ export interface SimilarEntity {
   genres?: string[];
   tags?: string[];
   review_percentage?: number | null;
+  total_reviews?: number | null;
   price_cents?: number | null;
   is_free?: boolean;
+  steam_deck?: 'unknown' | 'unsupported' | 'playable' | 'verified';
   // Publisher/Developer fields
   game_count?: number;
   is_major?: boolean;
@@ -465,6 +583,345 @@ function asOptionalNumberArray(value: unknown): number[] | undefined {
   return numbers.length > 0 ? numbers : undefined;
 }
 
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function asOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const strings = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  return strings.length > 0 ? strings : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeTextToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function tokenizeTitle(name: string, genericWords: Set<string>): string[] {
+  const normalized = normalizeTextToken(name);
+  if (!normalized) {
+    return [];
+  }
+
+  return [...new Set(
+    normalized
+      .split(/\s+/)
+      .filter((token) => token.length > 2 && !genericWords.has(token) && !/^\d+$/.test(token))
+  )];
+}
+
+function sharedNormalizedStrings(left: string[] | undefined, right: string[] | undefined): string[] {
+  if (!left?.length || !right?.length) {
+    return [];
+  }
+
+  const rightSet = new Set(right.map((value) => normalizeTextToken(value)));
+  const seen = new Set<string>();
+  const shared: string[] = [];
+
+  for (const value of left) {
+    const normalized = normalizeTextToken(value);
+    if (!normalized || seen.has(normalized) || !rightSet.has(normalized)) {
+      continue;
+    }
+
+    shared.push(value);
+    seen.add(normalized);
+  }
+
+  return shared;
+}
+
+function payloadTextValues(payload: Record<string, unknown>): string[] {
+  return [
+    ...(asOptionalStringArray(payload.tags) ?? []),
+    ...(asOptionalStringArray(payload.genres) ?? []),
+    ...(asOptionalStringArray(payload.categories) ?? []),
+  ];
+}
+
+function payloadHasEvidenceTerm(payload: Record<string, unknown>, evidenceTerms: string[]): boolean {
+  const normalizedValues = payloadTextValues(payload).map((value) => normalizeTextToken(value));
+  return evidenceTerms.some((term) =>
+    normalizedValues.some((value) => value === term || value.includes(term) || term.includes(value))
+  );
+}
+
+function titleContainsEvidenceTerm(name: string, titleTerms: string[]): boolean {
+  const normalized = normalizeTextToken(name);
+  return normalized.length > 0 && titleTerms.some((term) => normalized.includes(term));
+}
+
+function reviewSupportBonus(totalReviews: number | null | undefined, reviewPercentage: number | null | undefined): number {
+  let bonus = 0;
+
+  if (totalReviews !== null && totalReviews !== undefined) {
+    if (totalReviews >= 5000) bonus += 0.05;
+    else if (totalReviews >= 1000) bonus += 0.035;
+    else if (totalReviews >= 100) bonus += 0.02;
+  }
+
+  if (reviewPercentage !== null && reviewPercentage !== undefined) {
+    if (reviewPercentage >= 90) bonus += 0.03;
+    else if (reviewPercentage >= 80) bonus += 0.015;
+  }
+
+  return bonus;
+}
+
+function lowSignalPenalty(totalReviews: number | null | undefined, reviewPercentage: number | null | undefined): number {
+  let penalty = 0;
+
+  if (totalReviews === null || totalReviews === undefined) {
+    penalty += 0.06;
+  } else if (totalReviews < 20) {
+    penalty += 0.1;
+  } else if (totalReviews < 100) {
+    penalty += 0.055;
+  } else if (totalReviews < 500) {
+    penalty += 0.02;
+  }
+
+  if (reviewPercentage === null || reviewPercentage === undefined) {
+    penalty += 0.04;
+  } else if (reviewPercentage < 50) {
+    penalty += 0.09;
+  } else if (reviewPercentage < 60) {
+    penalty += 0.06;
+  } else if (reviewPercentage < 70) {
+    penalty += 0.025;
+  }
+
+  return penalty;
+}
+
+function hasSuspiciousGameTitleOverlap(referenceName: string, candidateName: string): boolean {
+  const referenceTokens = tokenizeTitle(referenceName, GAME_TITLE_GENERIC_WORDS);
+  const candidateTokens = tokenizeTitle(candidateName, GAME_TITLE_GENERIC_WORDS);
+
+  if (referenceTokens.length === 0 || candidateTokens.length === 0) {
+    return false;
+  }
+
+  const candidateSet = new Set(candidateTokens);
+  if (referenceTokens.some((token) => candidateSet.has(token))) {
+    return true;
+  }
+
+  const [referencePrimary] = referenceTokens;
+  const [candidatePrimary] = candidateTokens;
+  if (!referencePrimary || !candidatePrimary) {
+    return false;
+  }
+
+  const prefixRatio = commonPrefixRatio(referencePrimary, candidatePrimary);
+  return referencePrimary.length >= 5 && candidatePrimary.length >= 5 && prefixRatio >= 0.72;
+}
+
+function normalizeFindSimilarArgs(args: FindSimilarArgs): FindSimilarArgs {
+  const rawArgs = args as FindSimilarArgs & Record<string, unknown>;
+  const rawFilters = isPlainObject(rawArgs.filters) ? rawArgs.filters : {};
+  const mergedFilters: Record<string, unknown> = { ...rawFilters };
+
+  for (const key of [
+    'popularity_comparison',
+    'review_comparison',
+    'max_price_cents',
+    'is_free',
+    'platforms',
+    'steam_deck',
+    'genres',
+    'tags',
+    'min_reviews',
+    'max_reviews',
+    'review_percentage',
+    'release_year',
+    'same_franchise_only',
+    'game_count',
+    'avg_review_percentage',
+    'is_major',
+    'is_indie',
+    'top_genres',
+    'top_tags',
+  ] as const) {
+    if (rawArgs[key] !== undefined && mergedFilters[key] === undefined) {
+      mergedFilters[key] = rawArgs[key];
+    }
+  }
+
+  return {
+    ...args,
+    filters: Object.keys(mergedFilters).length > 0
+      ? (mergedFilters as FindSimilarArgs['filters'])
+      : undefined,
+  };
+}
+
+function normalizeSearchByConceptArgs(args: SearchByConceptArgs): SearchByConceptArgs {
+  const rawArgs = args as SearchByConceptArgs & Record<string, unknown>;
+  const rawFilters = isPlainObject(rawArgs.filters) ? rawArgs.filters : {};
+  const mergedFilters: Record<string, unknown> = { ...rawFilters };
+
+  for (const key of [
+    'max_price_cents',
+    'is_free',
+    'platforms',
+    'steam_deck',
+    'genres',
+    'tags',
+    'min_reviews',
+    'max_reviews',
+    'release_year',
+    'review_percentage',
+  ] as const) {
+    if (rawArgs[key] !== undefined && mergedFilters[key] === undefined) {
+      mergedFilters[key] = rawArgs[key];
+    }
+  }
+
+  return {
+    ...args,
+    filters: Object.keys(mergedFilters).length > 0
+      ? (mergedFilters as SearchByConceptArgs['filters'])
+      : undefined,
+  };
+}
+
+function buildSimilarityFilterEvidence(
+  sourcePayload: SourcePayloadForBoost,
+  candidatePayload: ResultPayloadForBoost,
+  filters: FindSimilarArgs['filters'] | undefined
+): { bonus: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let bonus = 0;
+
+  const candidateTags = candidatePayload.tags ?? [];
+  const candidateGenres = candidatePayload.genres ?? [];
+
+  const matchedTags = sharedNormalizedStrings(filters?.tags, candidateTags);
+  if (matchedTags.length > 0) {
+    reasons.push(matchedTags[0]);
+    bonus += 0.04;
+  }
+
+  const matchedGenres = sharedNormalizedStrings(filters?.genres, candidateGenres);
+  if (matchedGenres.length > 0 && !reasons.includes(matchedGenres[0])) {
+    reasons.push(matchedGenres[0]);
+    bonus += 0.03;
+  }
+
+  if (
+    (candidatePayload.steam_deck === 'verified' || candidatePayload.steam_deck === 'playable') &&
+    filters?.steam_deck?.includes(candidatePayload.steam_deck)
+  ) {
+    reasons.push(`Steam Deck ${candidatePayload.steam_deck}`);
+    bonus += 0.03;
+  }
+
+  const sourceReviewPercentage = asOptionalNullableNumber(sourcePayload.review_percentage);
+  const candidateReviewPercentage = asOptionalNullableNumber(candidatePayload.review_percentage);
+  if (
+    filters?.review_comparison &&
+    sourceReviewPercentage !== null &&
+    sourceReviewPercentage !== undefined &&
+    candidateReviewPercentage !== null &&
+    candidateReviewPercentage !== undefined &&
+    candidateReviewPercentage >= sourceReviewPercentage
+  ) {
+    reasons.push('Higher review score');
+    bonus += 0.035;
+  }
+
+  const sourceTotalReviews = asOptionalNullableNumber(sourcePayload.total_reviews);
+  const candidateTotalReviews = asOptionalNullableNumber(candidatePayload.total_reviews);
+  if (
+    filters?.popularity_comparison === 'less_popular' &&
+    sourceTotalReviews !== null &&
+    sourceTotalReviews !== undefined &&
+    candidateTotalReviews !== null &&
+    candidateTotalReviews !== undefined &&
+    candidateTotalReviews < sourceTotalReviews
+  ) {
+    reasons.push('Smaller review footprint');
+    bonus += 0.025;
+  }
+
+  return {
+    bonus: Math.min(bonus, 0.12),
+    reasons,
+  };
+}
+
+function buildConceptEvidence(
+  description: string,
+  payload: Record<string, unknown>
+): { bonus: number; penalty: number; reasons: string[] } {
+  const normalizedDescription = normalizeTextToken(description);
+  const matchedFacets = CONCEPT_FACETS.filter((facet) =>
+    facet.phrases.some((phrase) => normalizedDescription.includes(phrase))
+  );
+  const candidateName = asOptionalString(payload.name) ?? '';
+  const matchedLabels: string[] = [];
+  let bonus = 0;
+  let penalty = 0;
+
+  for (const facet of matchedFacets) {
+    if (payloadHasEvidenceTerm(payload, facet.evidenceTerms)) {
+      matchedLabels.push(facet.label);
+      bonus += 0.05;
+      continue;
+    }
+
+    if (candidateName && titleContainsEvidenceTerm(candidateName, facet.titleTerms)) {
+      penalty += 0.11;
+    }
+  }
+
+  if (matchedFacets.length > 0 && matchedLabels.length === 0) {
+    penalty += 0.1;
+  }
+
+  if (matchedLabels.length >= 2) {
+    bonus += 0.03;
+  }
+
+  const totalReviews = asOptionalNullableNumber(payload.total_reviews);
+  const reviewPercentage = asOptionalNullableNumber(payload.review_percentage);
+  bonus += reviewSupportBonus(totalReviews, reviewPercentage);
+  penalty += lowSignalPenalty(totalReviews, reviewPercentage);
+
+  const reasons: string[] = [];
+  if (matchedLabels.length >= 2) {
+    reasons.push(`${matchedLabels[0]} + ${matchedLabels[1]} fit`);
+  } else if (matchedLabels.length === 1) {
+    reasons.push(`${matchedLabels[0]} fit`);
+  }
+
+  if (
+    totalReviews !== null &&
+    totalReviews !== undefined &&
+    totalReviews >= 100 &&
+    reviewPercentage !== null &&
+    reviewPercentage !== undefined &&
+    reviewPercentage >= 80
+  ) {
+    reasons.push('Well-supported reviews');
+  }
+
+  return { bonus, penalty, reasons };
+}
+
 async function fetchCompanyMetricsSnapshot(
   entityType: CompanyEntityType,
   id: number
@@ -619,6 +1076,12 @@ async function findSimilarCompaniesFallback(
   if (!source) {
     return {
       success: false,
+      entityType,
+      reference: {
+        id: reference.id,
+        name: reference.name,
+        type: entityType,
+      },
       error: `Could not load ${entityType} metrics for "${reference.name}".`,
     };
   }
@@ -701,12 +1164,17 @@ async function findSimilarCompaniesFallback(
   if (error || !Array.isArray(data) || data.length === 0) {
     return {
       success: false,
+      entityType,
+      reference: {
+        id: reference.id,
+        name: reference.name,
+        type: entityType,
+      },
       error: `No comparable ${entityType} portfolios were found for "${reference.name}".`,
     };
   }
 
-  const rankedResults = data
-    .map((row: Record<string, unknown>) => {
+  const scoredCandidates = data.map((row: Record<string, unknown>) => {
       const candidate: CompanyMetricsSnapshot = {
         id: Number(row[idColumn] ?? 0),
         name: String(row[nameColumn] ?? ''),
@@ -743,7 +1211,9 @@ async function findSimilarCompaniesFallback(
         portfolioScore: support.portfolioScore,
         matchReasons,
       };
-    })
+    });
+
+  const rankedResults = scoredCandidates
     .filter((item) => {
       if (canUseGameEvidence) {
         return (
@@ -769,9 +1239,59 @@ async function findSimilarCompaniesFallback(
     .slice(0, limit);
 
   if (rankedResults.length === 0) {
+    const relaxedFallback = canUseGameEvidence
+      ? scoredCandidates
+        .filter((item) => (
+          item.portfolioScore >= 0.5 &&
+          item.matchReasons.length > 0 &&
+          !isPlaceholderCompanyName(item.candidate.name) &&
+          normalizeCompanyName(reference.name) !== normalizeCompanyName(item.candidate.name) &&
+          !hasLexicalBrandContamination(reference.name, item.candidate.name)
+        ))
+        .sort((left, right) => right.portfolioScore - left.portfolioScore)
+        .slice(0, Math.min(limit, 4))
+      : [];
+
+    if (relaxedFallback.length === 0) {
+      return {
+        success: false,
+        entityType,
+        reference: {
+          id: reference.id,
+          name: reference.name,
+          type: entityType,
+        },
+        error: `No comparable ${entityType} portfolios were found for "${reference.name}".`,
+      };
+    }
+
     return {
-      success: false,
-      error: `No comparable ${entityType} portfolios were found for "${reference.name}".`,
+      success: true,
+      mode: 'heuristic_portfolio',
+      reference: {
+        id: reference.id,
+        name: reference.name,
+        type: entityType,
+      },
+      results: relaxedFallback.map(({ candidate, portfolioScore, matchReasons }) => ({
+        id: candidate.id,
+        name: candidate.name,
+        score: Math.round(portfolioScore * 100),
+        type: entityType,
+        game_count: candidate.gameCount,
+        review_percentage: candidate.avgReviewScore,
+        matchReasons: matchReasons.length > 0 ? matchReasons : ['Comparable portfolio profile'],
+      })),
+      total_found: relaxedFallback.length,
+      debug: {
+        searchParams: {
+          entity_type: entityType,
+          reference_id: reference.id,
+          fallback: 'heuristic_portfolio',
+          relaxedPortfolioOnlyFallback: true,
+          gameEvidenceCandidates: gameEvidenceByCompany.size,
+        },
+      },
     };
   }
 
@@ -1724,6 +2244,8 @@ interface SourcePayloadForBoost {
   genres?: string[];
   tags?: string[];
   franchise_names?: string[];
+  review_percentage?: number | null;
+  total_reviews?: number | null;
 }
 
 /**
@@ -1735,12 +2257,15 @@ interface ResultPayloadForBoost {
   publisher_ids?: number[];
   genres?: string[];
   tags?: string[];
+  categories?: string[];
   franchise_names?: string[];
   name?: string;
   type?: string;
   review_percentage?: number | null;
+  total_reviews?: number | null;
   price_cents?: number | null;
   is_free?: boolean;
+  steam_deck?: 'unknown' | 'unsupported' | 'playable' | 'verified';
   top_genres?: string[];
   top_tags?: string[];
   game_count?: number;
@@ -1753,8 +2278,10 @@ interface ResultPayloadForBoost {
  * Returns boosted results sorted by new score with match reasons
  */
 function applyScoreBoosts(
+  referenceName: string,
   sourcePayload: SourcePayloadForBoost,
-  results: Array<{ id: number; score: number; payload: ResultPayloadForBoost }>
+  results: Array<{ id: number; score: number; payload: ResultPayloadForBoost }>,
+  filters: FindSimilarArgs['filters'] | undefined
 ): Array<{ id: number; score: number; rawScore: number; payload: ResultPayloadForBoost; matchReasons: string[] }> {
   return results
     .map((result) => {
@@ -1801,10 +2328,8 @@ function applyScoreBoosts(
       // Genre boost (+2% each, max 3)
       const sourceGenres = sourcePayload.genres || [];
       const resultGenres = result.payload.genres || result.payload.top_genres || [];
+      const sharedGenres = sharedNormalizedStrings(sourceGenres, resultGenres);
       if (sourceGenres.length && resultGenres.length) {
-        const sharedGenres = sourceGenres.filter((g) =>
-          resultGenres.some((rg) => rg.toLowerCase() === g.toLowerCase())
-        );
         const genreBoostCount = Math.min(sharedGenres.length, SCORE_BOOSTS.MAX_GENRE_BOOSTS);
         boost += genreBoostCount * SCORE_BOOSTS.SHARED_GENRE;
         // Add top shared genre to reasons
@@ -1816,10 +2341,8 @@ function applyScoreBoosts(
       // Tag boost (+1% each, max 5)
       const sourceTags = sourcePayload.tags || [];
       const resultTags = result.payload.tags || result.payload.top_tags || [];
+      const sharedTags = sharedNormalizedStrings(sourceTags, resultTags);
       if (sourceTags.length && resultTags.length) {
-        const sharedTags = sourceTags.filter((t) =>
-          resultTags.some((rt) => rt.toLowerCase() === t.toLowerCase())
-        );
         const tagBoostCount = Math.min(sharedTags.length, SCORE_BOOSTS.MAX_TAG_BOOSTS);
         boost += tagBoostCount * SCORE_BOOSTS.SHARED_TAG;
         // Add top shared tag to reasons (if not already covered by genre)
@@ -1828,15 +2351,44 @@ function applyScoreBoosts(
         }
       }
 
+      const filterEvidence = buildSimilarityFilterEvidence(sourcePayload, result.payload, filters);
+      boost += filterEvidence.bonus;
+      for (const reason of filterEvidence.reasons) {
+        if (!reasons.includes(reason)) {
+          reasons.push(reason);
+        }
+      }
+
+      boost += reviewSupportBonus(
+        asOptionalNullableNumber(result.payload.total_reviews),
+        asOptionalNullableNumber(result.payload.review_percentage)
+      );
+
+      const structuralEvidence =
+        reasons.some((reason) => reason === 'Same developer' || reason === 'Same publisher' || reason.endsWith('series')) ||
+        sharedGenres.length > 0 ||
+        sharedTags.length >= 2;
+      const suspiciousTitlePenalty =
+        result.payload.name &&
+        hasSuspiciousGameTitleOverlap(referenceName, result.payload.name) &&
+        !structuralEvidence
+          ? 0.18
+          : 0;
+      const lowSignal = lowSignalPenalty(
+        asOptionalNullableNumber(result.payload.total_reviews),
+        asOptionalNullableNumber(result.payload.review_percentage)
+      );
+
       // Cap total boost
       boost = Math.min(boost, SCORE_BOOSTS.MAX_TOTAL_BOOST);
+      const adjustedScore = Math.max(0, Math.min(result.score + boost - suspiciousTitlePenalty - lowSignal, 1.0));
 
       return {
         id: result.id,
-        score: Math.min(result.score + boost, 1.0),
+        score: adjustedScore,
         rawScore: result.score,
         payload: result.payload,
-        matchReasons: reasons,
+        matchReasons: reasons.slice(0, 4),
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -1846,7 +2398,8 @@ function applyScoreBoosts(
  * Execute similarity search
  */
 export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarResult> {
-  const { entity_type, reference_id, reference_name, filters, limit = DEFAULT_RESULTS } = args;
+  const normalizedArgs = normalizeFindSimilarArgs(args);
+  const { entity_type, reference_id, reference_name, filters, limit = DEFAULT_RESULTS } = normalizedArgs;
   const requestedLimit = entity_type === 'game' ? limit : Math.min(limit, DEFAULT_COMPANY_RESULTS);
   // Request one extra for publishers/developers since we filter client-side
   const extraForFilter = entity_type !== 'game' ? 1 : 0;
@@ -2048,6 +2601,8 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
     if (filters.genres) gameFilters.genres = filters.genres;
     if (filters.tags) gameFilters.tags = filters.tags;
     if (filters.min_reviews) gameFilters.min_reviews = filters.min_reviews;
+    if (filters.max_reviews !== undefined) gameFilters.max_reviews = filters.max_reviews;
+    if (filters.review_percentage) gameFilters.review_percentage = filters.review_percentage;
     if (filters.release_year) gameFilters.release_year = filters.release_year;
     if (filters.review_comparison) gameFilters.review_comparison = filters.review_comparison;
 
@@ -2068,7 +2623,23 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       developer_ids:
         asOptionalNumberArray(sourcePayload.developer_ids) ??
         (entity.metrics as { developer_ids?: number[] })?.developer_ids,
+      franchise_ids: asOptionalNumberArray(sourcePayload.franchise_ids),
     };
+
+    if (filters.same_franchise_only) {
+      if (!sourceMetrics.franchise_ids || sourceMetrics.franchise_ids.length === 0) {
+        return {
+          success: false,
+          reference: {
+            id: entity.id,
+            name: entity.name,
+            type: entity.type || entity_type,
+          },
+          error: `Exact same-series matching is not available for "${entity.name}" because franchise metadata is missing.`,
+        };
+      }
+      gameFilters.same_franchise_only = true;
+    }
 
     // Handle popularity comparison - requires total_reviews data
     if (filters.popularity_comparison && filters.popularity_comparison !== 'any') {
@@ -2101,17 +2672,20 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
   // Include relationship IDs for hybrid scoring boosts
   const payloadFields = entity_type === 'game'
     ? [
-        'name', 'type', 'genres', 'tags', 'review_percentage', 'price_cents', 'is_free',
+        'name', 'type', 'genres', 'tags', 'categories', 'review_percentage', 'total_reviews', 'price_cents', 'is_free', 'steam_deck',
         'franchise_ids', 'franchise_names', 'developer_ids', 'publisher_ids', // For hybrid scoring
       ]
     : ['name', 'game_count', 'top_genres', 'top_tags', 'avg_review_percentage', 'is_major'];
+  const searchLimit = entity_type === 'game'
+    ? Math.min(Math.max(actualLimit * 4, 24), MAX_RESULTS)
+    : actualLimit;
 
   let searchResult;
   try {
     searchResult = await client.search(collection, {
       vector,
       filter: qdrantFilter,
-      limit: actualLimit,
+      limit: searchLimit,
       with_payload: {
         include: payloadFields,
       },
@@ -2142,8 +2716,10 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
 
     // Apply hybrid score boosts for games
     const boostedResults = applyScoreBoosts(
+      entity.name,
       sourcePayload as SourcePayloadForBoost,
-      rawResults
+      rawResults,
+      filters
     );
 
     // Take top results after re-sorting by boosted score
@@ -2156,8 +2732,10 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       genres: (item.payload.genres as string[] | undefined)?.slice(0, 3),
       tags: (item.payload.tags as string[] | undefined)?.slice(0, 5),
       review_percentage: item.payload.review_percentage as number | null | undefined,
+      total_reviews: item.payload.total_reviews as number | null | undefined,
       price_cents: item.payload.price_cents as number | null | undefined,
       is_free: item.payload.is_free as boolean | undefined,
+      steam_deck: item.payload.steam_deck as SimilarEntity['steam_deck'],
       matchReasons: item.matchReasons.length > 0 ? item.matchReasons : undefined,
     }));
   } else {
@@ -2179,8 +2757,9 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
         collection,
         entity_type,
         reference_id: entity.id,
-        filters: args.filters,
-        limit: actualLimit,
+        filters,
+        limit: requestedLimit,
+        searchLimit,
       },
       vectorFilter: qdrantFilter as Record<string, unknown> | undefined,
     },
@@ -2206,8 +2785,9 @@ export interface SearchByConceptArgs {
     genres?: string[];
     tags?: string[];
     min_reviews?: number;
+    max_reviews?: number;
     release_year?: { gte?: number; lte?: number };
-    review_percentage?: { gte?: number };
+    review_percentage?: { gte?: number; lte?: number };
   };
   limit?: number;
 }
@@ -2236,7 +2816,8 @@ export async function searchByConcept(args: SearchByConceptArgs): Promise<Search
     };
   }
 
-  const { description, filters, limit = DEFAULT_RESULTS } = args;
+  const normalizedArgs = normalizeSearchByConceptArgs(args);
+  const { description, filters, limit = DEFAULT_RESULTS } = normalizedArgs;
   const actualLimit = Math.min(limit, MAX_RESULTS);
 
   // Validate description
@@ -2274,18 +2855,20 @@ export async function searchByConcept(args: SearchByConceptArgs): Promise<Search
     if (filters.genres) gameFilters.genres = filters.genres;
     if (filters.tags) gameFilters.tags = filters.tags;
     if (filters.min_reviews) gameFilters.min_reviews = filters.min_reviews;
+    if (filters.max_reviews !== undefined) gameFilters.max_reviews = filters.max_reviews;
     if (filters.release_year) gameFilters.release_year = filters.release_year;
     if (filters.review_percentage) gameFilters.review_percentage = filters.review_percentage;
   }
 
   const qdrantFilter = buildGameFilter(gameFilters);
+  const searchLimit = Math.min(Math.max(actualLimit * 5, 30), MAX_RESULTS);
 
   // Execute search
   const client = getQdrantClient();
   const collection = COLLECTIONS.GAMES;
 
   const payloadFields = [
-    'name', 'type', 'genres', 'tags', 'review_percentage', 'price_cents', 'is_free',
+    'name', 'type', 'genres', 'tags', 'categories', 'review_percentage', 'total_reviews', 'price_cents', 'is_free', 'steam_deck',
   ];
 
   let searchResult;
@@ -2293,7 +2876,7 @@ export async function searchByConcept(args: SearchByConceptArgs): Promise<Search
     searchResult = await client.search(collection, {
       vector: queryVector,
       filter: qdrantFilter,
-      limit: actualLimit,
+      limit: searchLimit,
       with_payload: {
         include: payloadFields,
       },
@@ -2307,20 +2890,41 @@ export async function searchByConcept(args: SearchByConceptArgs): Promise<Search
   }
 
   // Format results (no hybrid scoring for concept search - pure vector similarity)
-  const results: SimilarEntity[] = searchResult.map((point) => {
-    const payload = point.payload as Record<string, unknown>;
-    return {
-      id: point.id as number,
-      name: (payload.name as string) || 'Unknown',
-      score: Math.round(point.score * 100), // Convert to percentage
-      type: payload.type as string | undefined,
-      genres: (payload.genres as string[] | undefined)?.slice(0, 3),
-      tags: (payload.tags as string[] | undefined)?.slice(0, 5),
-      review_percentage: payload.review_percentage as number | null | undefined,
-      price_cents: payload.price_cents as number | null | undefined,
-      is_free: payload.is_free as boolean | undefined,
-    };
-  });
+  const rerankedResults = searchResult
+    .map((point) => {
+      const payload = (point.payload ?? {}) as Record<string, unknown>;
+      const conceptEvidence = buildConceptEvidence(description, payload);
+      const adjustedScore = Math.max(
+        0,
+        Math.min(point.score + conceptEvidence.bonus - conceptEvidence.penalty, 1.0)
+      );
+
+      return {
+        id: point.id as number,
+        score: adjustedScore,
+        rawScore: point.score,
+        payload,
+        matchReasons: conceptEvidence.reasons,
+      };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, actualLimit);
+
+  const results: SimilarEntity[] = rerankedResults.map((item) => ({
+    id: item.id,
+    name: asOptionalString(item.payload.name) || 'Unknown',
+    score: Math.round(item.score * 100),
+    rawScore: Math.round(item.rawScore * 100),
+    type: item.payload.type as string | undefined,
+    genres: (item.payload.genres as string[] | undefined)?.slice(0, 3),
+    tags: (item.payload.tags as string[] | undefined)?.slice(0, 5),
+    review_percentage: item.payload.review_percentage as number | null | undefined,
+    total_reviews: item.payload.total_reviews as number | null | undefined,
+    price_cents: item.payload.price_cents as number | null | undefined,
+    is_free: item.payload.is_free as boolean | undefined,
+    steam_deck: item.payload.steam_deck as SimilarEntity['steam_deck'],
+    matchReasons: item.matchReasons.length > 0 ? item.matchReasons : undefined,
+  }));
 
   return {
     success: true,

@@ -13,6 +13,7 @@ interface ResultWithData {
   candidates?: Record<string, unknown>[];
   app?: Record<string, unknown>;
   detail?: Record<string, unknown>;
+  reference?: Record<string, unknown>;
   entityType?: 'publisher' | 'developer';
   canonicalResult?: Record<string, unknown>;
   [key: string]: unknown;
@@ -145,6 +146,27 @@ function formatEntityResults(
   });
 }
 
+function formatReference(reference: Record<string, unknown>): Record<string, unknown> {
+  const formatted = { ...reference };
+  const id = reference.id as number | undefined;
+  const name = reference.name as string | undefined;
+  const type = reference.type as string | undefined;
+
+  if (!id || !name || !type) {
+    return formatted;
+  }
+
+  if (type === 'game') {
+    formatted.name = `[${name}](game:${id})`;
+  } else if (type === 'publisher') {
+    formatted.name = `[${name}](/publishers/${id})`;
+  } else if (type === 'developer') {
+    formatted.name = `[${name}](/developers/${id})`;
+  }
+
+  return formatted;
+}
+
 /**
  * Format tool result with entity links before sending to LLM
  *
@@ -169,7 +191,16 @@ export function formatResultWithEntityLinks(result: unknown): string {
       (typedResult.entityType === 'publisher' || typedResult.entityType === 'developer')
         ? formatEntityResults(typedResult.entityType, [typedResult.canonicalResult])[0]
         : typedResult.canonicalResult;
-    return JSON.stringify({ ...typedResult, candidates: formattedCandidates, canonicalResult: formattedCanonical });
+    const formattedReference =
+      typedResult.reference && typeof typedResult.reference === 'object'
+        ? formatReference(typedResult.reference)
+        : typedResult.reference;
+    return JSON.stringify({
+      ...typedResult,
+      candidates: formattedCandidates,
+      canonicalResult: formattedCanonical,
+      reference: formattedReference,
+    });
   }
 
   // Handle query_analytics and search_games results (have 'data' array)
@@ -183,12 +214,20 @@ export function formatResultWithEntityLinks(result: unknown): string {
 
   if (typedResult.app && typeof typedResult.app === 'object') {
     const formattedApp = formatRowWithLinks(typedResult.app);
-    return JSON.stringify({ ...typedResult, app: formattedApp });
+    const formattedReference =
+      typedResult.reference && typeof typedResult.reference === 'object'
+        ? formatReference(typedResult.reference)
+        : typedResult.reference;
+    return JSON.stringify({ ...typedResult, app: formattedApp, reference: formattedReference });
   }
 
   if (typedResult.detail && typeof typedResult.detail === 'object') {
     const formattedDetail = formatRowWithLinks(typedResult.detail);
-    return JSON.stringify({ ...typedResult, detail: formattedDetail });
+    const formattedReference =
+      typedResult.reference && typeof typedResult.reference === 'object'
+        ? formatReference(typedResult.reference)
+        : typedResult.reference;
+    return JSON.stringify({ ...typedResult, detail: formattedDetail, reference: formattedReference });
   }
 
   // Handle find_similar results (have 'results' array with 'type' field)
@@ -206,11 +245,26 @@ export function formatResultWithEntityLinks(result: unknown): string {
       (typedResult.entityType === 'publisher' || typedResult.entityType === 'developer')
         ? formatEntityResults(typedResult.entityType, [typedResult.canonicalResult])[0]
         : typedResult.canonicalResult;
-    return JSON.stringify({ ...typedResult, results: formattedResults, canonicalResult: formattedCanonical });
+    const formattedReference =
+      typedResult.reference && typeof typedResult.reference === 'object'
+        ? formatReference(typedResult.reference)
+        : typedResult.reference;
+    return JSON.stringify({
+      ...typedResult,
+      results: formattedResults,
+      canonicalResult: formattedCanonical,
+      reference: formattedReference,
+    });
   }
 
   // Handle unsuccessful results - return as-is
   if (typedResult.success === false) {
+    if (typedResult.reference && typeof typedResult.reference === 'object') {
+      return JSON.stringify({
+        ...typedResult,
+        reference: formatReference(typedResult.reference),
+      });
+    }
     return JSON.stringify(result);
   }
 

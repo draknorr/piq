@@ -69,7 +69,11 @@ const SMOKE_TESTS: SmokeTestGroup[] = [
   },
   {
     tool: 'search_by_concept',
-    queries: ['Tactical roguelikes with deck building'],
+    queries: [
+      'Tactical roguelikes with deck building',
+      'Relaxing puzzle games with beautiful art',
+      'Horror games with investigation and puzzle elements',
+    ],
   },
   {
     tool: 'discover_trending',
@@ -77,7 +81,12 @@ const SMOKE_TESTS: SmokeTestGroup[] = [
   },
   {
     tool: 'find_similar',
-    queries: ['Games similar to Hades but less popular', 'Publishers similar to Devolver Digital'],
+    queries: [
+      'Games similar to Hades but less popular',
+      'Games similar to Hollow Knight with fewer than 10K reviews',
+      'Find games in the same series as Dark Souls',
+      'Publishers similar to Devolver Digital',
+    ],
   },
   {
     tool: 'lookup_games → query_analytics',
