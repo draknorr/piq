@@ -514,6 +514,91 @@ async function lookupEntityById(
   return null;
 }
 
+async function lookupGameReferenceWithFranchiseMetadata(
+  query: string,
+  excludeAppid?: number
+): Promise<
+  | {
+      entity: { id: number; name: string; type?: string; metrics?: object };
+      qdrantData: { vector: number[]; payload: Record<string, unknown> };
+    }
+  | null
+> {
+  const normalizedQuery = normalizeTextToken(query);
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from('apps')
+    .select('appid, name, type, pics_review_percentage, current_price_cents, publisher_ids:app_publishers(publisher_id), developer_ids:app_developers(developer_id)')
+    .ilike('name', `%${query}%`)
+    .eq('type', 'game')
+    .limit(10);
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+
+  const candidates = await Promise.all(
+    data
+      .filter((row) => Number(row.appid) !== excludeAppid)
+      .map(async (row) => {
+        const qdrantData = await getEntityVectorAndPayload('game', Number(row.appid));
+        if (!qdrantData) {
+          return null;
+        }
+
+        const franchiseIds = asOptionalNumberArray(qdrantData.payload.franchise_ids);
+        if (!franchiseIds || franchiseIds.length === 0) {
+          return null;
+        }
+
+        const normalizedName = normalizeTextToken(String(row.name ?? ''));
+        const exactMatch = normalizedName === normalizedQuery;
+        const containsMatch = normalizedName.includes(normalizedQuery);
+
+        return {
+          exactMatch,
+          containsMatch,
+          franchiseCount: franchiseIds.length,
+          entity: {
+            id: Number(row.appid),
+            name: String(row.name ?? ''),
+            type: (row.type as string | null | undefined) ?? undefined,
+            metrics: {
+              review_percentage: row.pics_review_percentage,
+              price_cents: row.current_price_cents,
+              publisher_ids: (row.publisher_ids as { publisher_id: number }[])?.map((publisher) => publisher.publisher_id) || [],
+              developer_ids: (row.developer_ids as { developer_id: number }[])?.map((developer) => developer.developer_id) || [],
+            },
+          },
+          qdrantData,
+        };
+      })
+  );
+
+  const bestCandidate = candidates
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+    .sort((left, right) => {
+      if (left.exactMatch !== right.exactMatch) {
+        return Number(right.exactMatch) - Number(left.exactMatch);
+      }
+      if (left.containsMatch !== right.containsMatch) {
+        return Number(right.containsMatch) - Number(left.containsMatch);
+      }
+      return right.franchiseCount - left.franchiseCount;
+    })[0];
+
+  return bestCandidate
+    ? {
+        entity: bestCandidate.entity,
+        qdrantData: bestCandidate.qdrantData,
+      }
+    : null;
+}
+
 interface CompanyMetricsSnapshot {
   id: number;
   name: string;
@@ -3018,7 +3103,7 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
   }
 
   // Look up the reference entity
-  const entity =
+  let entity =
     typeof reference_id === 'number' && Number.isFinite(reference_id)
       ? await lookupEntityById(entity_type, reference_id)
       : entity_type !== 'game' && companyResolution?.canonicalResult
@@ -3144,7 +3229,27 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
   }
 
   // Get vector and payload for the entity from Qdrant
-  const qdrantData = await getEntityVectorAndPayload(entity_type, entity.id);
+  let qdrantData = await getEntityVectorAndPayload(entity_type, entity.id);
+
+  if (
+    entity_type === 'game' &&
+    filters?.same_franchise_only === true &&
+    qdrantData &&
+    (!asOptionalNumberArray(qdrantData.payload.franchise_ids) ||
+      asOptionalNumberArray(qdrantData.payload.franchise_ids)?.length === 0) &&
+    reference_name &&
+    reference_name.trim().length > 0
+  ) {
+    const franchiseAwareReference = await lookupGameReferenceWithFranchiseMetadata(
+      reference_name,
+      entity.id
+    );
+
+    if (franchiseAwareReference) {
+      entity = franchiseAwareReference.entity;
+      qdrantData = franchiseAwareReference.qdrantData;
+    }
+  }
 
   if (!qdrantData) {
     return entity_type === 'game'
