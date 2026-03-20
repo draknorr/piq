@@ -251,6 +251,7 @@ Segments: lastYear, last6Months, last3Months, last30Days
 **USE THIS** for "past 12 months", "past 3 months", "since [date]" - filter by releaseDate or use segments
 **ORDERING**: Sort by dimensions (owners, totalReviews) - NOT measures (sumOwners, avgReviewScore)
 **IMPORTANT**: \`reviewPercentage\` is the 0-100 positive review percentage. \`reviewScore\` is the Steam 1-9 score band.
+**NOTE**: This cube does not expose developerId or developerName. If you need both publisher and developer context on the same game list, use GameCatalog instead.
 
 ### DeveloperMetrics (standalone - ALL-TIME stats)
 Dimensions: developerId, developerName, gameCount, totalOwners, totalCcu, estimatedWeeklyHours, avgReviewScore, totalReviews, revenueEstimateDollars, isTrending
@@ -271,6 +272,7 @@ Segments: lastYear, last6Months, last3Months, last30Days
 **USE THIS** for "past 12 months", "past 3 months", "since [date]" - filter by releaseDate or use segments
 **ORDERING**: Sort by dimensions (owners, totalReviews) - NOT measures (sumOwners, avgReviewScore)
 **IMPORTANT**: \`reviewPercentage\` is the 0-100 positive review percentage. \`reviewScore\` is the Steam 1-9 score band.
+**NOTE**: This cube does not expose publisherId or publisherName. If you need both developer and publisher context on the same game list, use GameCatalog instead.
 
 ### DailyMetrics (time-series)
 Dimensions: appid, metricDate, ownersMin, ownersMax, ownersMidpoint, ccuPeak, totalReviews, positiveReviews, reviewScore, priceCents
@@ -431,7 +433,7 @@ For exact date/time filtering on releaseDate or lastContentUpdate:
 5. DON'T use SQL operators (>=, >, <=, <, =, !=) - use Cube operators: gte, gt, lte, lt, equals, notEquals
 6. DON'T try to join metrics cubes with other cubes - they are standalone
 7. DON'T use Discovery segments (like "indie") on metrics cubes - each cube has its own segments
-8. DO include publisherId/developerId in dimensions for publisher/developer queries (needed for links)
+8. DO include the chosen cube's own company ID dimension for company queries when it exists (\`publisherId\` on publisher cubes, \`developerId\` on developer cubes). Do NOT invent cross-entity company fields on GameMetrics cubes.
 9. **DON'T use DeveloperMetrics/PublisherMetrics for year-filtered queries** - these show ALL-TIME totals. Use:
    - DeveloperYearMetrics/PublisherYearMetrics for "games released in 2025"
    - DeveloperGameMetrics/PublisherGameMetrics for "past 12 months", "past 3 months"
@@ -549,6 +551,7 @@ For exact date/time filtering on releaseDate or lastContentUpdate:
 - "before [date]" → filter: releaseDate beforeDate [date]
 - use \`reviewPercentage\` for percent-positive questions
 - \`reviewScore\` is the Steam 1-9 score band, not a 0-100 review percentage
+- DeveloperGameMetrics does not have publisher fields; PublisherGameMetrics does not have developer fields. Use GameCatalog when you need both on the same result rows.
 
 **For Discovery (games):**
 Use these only when the query needs Discovery-only segments or fields. If the query can be answered with shared catalog fields, prefer GameCatalog.
@@ -704,6 +707,7 @@ Example: If user asks "show me games from Valve" and query_analytics returns 4 g
 6. Never use external URLs
 7. **If a field contains \`[...](game:...)\` format, use it EXACTLY - do not strip the markdown**
 8. **For "games by developer/publisher"**: Use DeveloperGameMetrics or PublisherGameMetrics (NOT Discovery)
+   - If you also need both developer and publisher context on each game row, use GameCatalog instead of requesting unsupported cross-entity fields from the GameMetrics cubes
 9. **For specific game lookups**: include release date, release state, price, discount if any, review count, review percentage, publisher, developer, and Steam Deck/platform status when available
 10. **For filtered discovery lists**: include price, review count, review percentage, and release date/state; include publisher and developer when relevant and available
 11. **State why the games are included or how they are ranked** when the user asks for "best", "great reviews", "deals", "premium", or similar broad discovery

@@ -44,7 +44,40 @@ interface CompanyCubeConfig {
   idMember: string;
   nameMember: string;
   defaultDimensions: string[];
+  supportedDimensions?: string[];
 }
+
+const PUBLISHER_GAME_METRIC_DIMENSIONS = [
+  'PublisherGameMetrics.publisherId',
+  'PublisherGameMetrics.publisherName',
+  'PublisherGameMetrics.appid',
+  'PublisherGameMetrics.gameName',
+  'PublisherGameMetrics.releaseDate',
+  'PublisherGameMetrics.releaseYear',
+  'PublisherGameMetrics.owners',
+  'PublisherGameMetrics.ccu',
+  'PublisherGameMetrics.totalReviews',
+  'PublisherGameMetrics.positiveReviews',
+  'PublisherGameMetrics.reviewPercentage',
+  'PublisherGameMetrics.reviewScore',
+  'PublisherGameMetrics.revenueEstimateCents',
+];
+
+const DEVELOPER_GAME_METRIC_DIMENSIONS = [
+  'DeveloperGameMetrics.developerId',
+  'DeveloperGameMetrics.developerName',
+  'DeveloperGameMetrics.appid',
+  'DeveloperGameMetrics.gameName',
+  'DeveloperGameMetrics.releaseDate',
+  'DeveloperGameMetrics.releaseYear',
+  'DeveloperGameMetrics.owners',
+  'DeveloperGameMetrics.ccu',
+  'DeveloperGameMetrics.totalReviews',
+  'DeveloperGameMetrics.positiveReviews',
+  'DeveloperGameMetrics.reviewPercentage',
+  'DeveloperGameMetrics.reviewScore',
+  'DeveloperGameMetrics.revenueEstimateCents',
+];
 
 const COMPANY_CUBE_CONFIG: Partial<Record<string, CompanyCubeConfig>> = {
   PublisherMetrics: {
@@ -80,6 +113,7 @@ const COMPANY_CUBE_CONFIG: Partial<Record<string, CompanyCubeConfig>> = {
       'PublisherGameMetrics.publisherId',
       'PublisherGameMetrics.publisherName',
     ],
+    supportedDimensions: PUBLISHER_GAME_METRIC_DIMENSIONS,
   },
   DeveloperMetrics: {
     entityType: 'developer',
@@ -114,6 +148,7 @@ const COMPANY_CUBE_CONFIG: Partial<Record<string, CompanyCubeConfig>> = {
       'DeveloperGameMetrics.developerId',
       'DeveloperGameMetrics.developerName',
     ],
+    supportedDimensions: DEVELOPER_GAME_METRIC_DIMENSIONS,
   },
 };
 
@@ -156,6 +191,44 @@ function enrichCompanyDimensions(query: CompanyQueryShape, config: CompanyCubeCo
   return {
     ...query,
     dimensions: uniqueDimensions(dimensions),
+  };
+}
+
+function sanitizeCompanyMembers(
+  query: CompanyQueryShape,
+  config: CompanyCubeConfig
+): {
+  query: CompanyQueryShape;
+  removedDimensions: string[];
+  removedOrderMembers: string[];
+} {
+  if (!config.supportedDimensions?.length) {
+    return {
+      query,
+      removedDimensions: [],
+      removedOrderMembers: [],
+    };
+  }
+
+  const allowedMembers = new Set(config.supportedDimensions);
+  const originalDimensions = query.dimensions ?? [];
+  const dimensions = originalDimensions.filter((member) => allowedMembers.has(member));
+  const removedDimensions = originalDimensions.filter((member) => !allowedMembers.has(member));
+
+  const originalOrder = query.order ?? {};
+  const order = Object.fromEntries(
+    Object.entries(originalOrder).filter(([member]) => allowedMembers.has(member))
+  ) as Record<string, 'asc' | 'desc'>;
+  const removedOrderMembers = Object.keys(originalOrder).filter((member) => !allowedMembers.has(member));
+
+  return {
+    query: {
+      ...query,
+      dimensions,
+      order: Object.keys(order).length > 0 ? order : undefined,
+    },
+    removedDimensions,
+    removedOrderMembers,
   };
 }
 
@@ -223,6 +296,19 @@ export async function prepareCompanyQuery(
   let query = enrichCompanyDimensions(inputQuery, config);
   const filters = [...(query.filters ?? [])];
   const notes: string[] = [];
+
+  const sanitized = sanitizeCompanyMembers(query, config);
+  query = sanitized.query;
+  if (sanitized.removedDimensions.length > 0) {
+    notes.push(
+      `Removed unsupported ${query.cube} dimensions: ${sanitized.removedDimensions.join(', ')}.`
+    );
+  }
+  if (sanitized.removedOrderMembers.length > 0) {
+    notes.push(
+      `Removed unsupported ${query.cube} order members: ${sanitized.removedOrderMembers.join(', ')}.`
+    );
+  }
 
   if (!hasCompanyIdFilter(query, config)) {
     for (let index = 0; index < filters.length; index++) {
