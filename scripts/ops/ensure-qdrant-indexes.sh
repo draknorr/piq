@@ -22,25 +22,31 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 require_command pnpm
+require_command node
+
+QDRANT_DIST_ENTRY="${ROOT_DIR}/packages/qdrant/dist/index.js"
 
 section "Ensuring Qdrant Indexes"
 (
   set -a
   # shellcheck disable=SC1090
   . "${ENV_FILE}" >/dev/null 2>&1
-  pnpm --filter @publisheriq/ingestion exec tsx --eval '
-    import { getCollectionStats, getQdrantClient, initializeCollections } from "@publisheriq/qdrant";
+  pnpm --filter @publisheriq/qdrant build >/dev/null
+  QDRANT_DIST_ENTRY="${QDRANT_DIST_ENTRY}" node --input-type=module <<'NODE'
+    import { pathToFileURL } from 'node:url';
 
-    async function main(): Promise<void> {
-      const client = getQdrantClient();
-      await initializeCollections(client);
-      const stats = await getCollectionStats(client);
-      console.log(JSON.stringify(stats, null, 2));
+    const entry = process.env.QDRANT_DIST_ENTRY;
+    if (!entry) {
+      throw new Error('QDRANT_DIST_ENTRY is not set');
     }
 
-    main().catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
-  '
+    const { getCollectionStats, getQdrantClient, initializeCollections } = await import(
+      pathToFileURL(entry).href
+    );
+
+    const client = getQdrantClient();
+    await initializeCollections(client);
+    const stats = await getCollectionStats(client);
+    console.log(JSON.stringify(stats, null, 2));
+NODE
 )
