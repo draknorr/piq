@@ -455,7 +455,7 @@ async function resolveMatchingIds(
       throw new Error(`Failed to resolve ${table} for "${term}": ${error.message}`);
     }
 
-    const rows = (data ?? []) as Array<Record<string, number | null>>;
+    const rows = (data ?? []) as unknown as Array<Record<string, number | null>>;
     const matchingIds = rows
       .map((row) => row[idColumn])
       .filter((value): value is number => typeof value === 'number');
