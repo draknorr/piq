@@ -599,6 +599,88 @@ async function lookupGameReferenceWithFranchiseMetadata(
     : null;
 }
 
+async function findSameSeriesByTitleTokens(
+  reference: { id: number; name: string; type?: string; metrics?: object },
+  limit: number
+): Promise<SimilarEntity[]> {
+  const titleTokens = tokenizeTitle(reference.name, GAME_TITLE_GENERIC_WORDS).slice(0, 3);
+  if (titleTokens.length < 2) {
+    return [];
+  }
+
+  const supabase = getSupabase();
+  const ilikePattern = `%${titleTokens.join('%')}%`;
+  const { data } = await supabase
+    .from('apps')
+    .select('appid, name, type')
+    .ilike('name', ilikePattern)
+    .eq('type', 'game')
+    .limit(20);
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return [];
+  }
+
+  const candidates = await Promise.all(
+    data
+      .filter((row) => Number(row.appid) !== reference.id)
+      .map(async (row) => {
+        const candidateName = String(row.name ?? '');
+        const normalizedCandidateName = normalizeTextToken(candidateName);
+        if (!titleTokens.every((token) => normalizedCandidateName.includes(token))) {
+          return null;
+        }
+
+        const qdrantCandidate = await getEntityVectorAndPayload('game', Number(row.appid));
+        if (!qdrantCandidate) {
+          return null;
+        }
+
+        return {
+          id: Number(row.appid),
+          name: candidateName,
+          normalizedName: normalizedCandidateName,
+          payload: qdrantCandidate.payload,
+        };
+      })
+  );
+
+  return candidates
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+    .sort((left, right) => {
+      const leftStartsWithAllTokens = titleTokens.every((token) => left.normalizedName.startsWith(token) || left.normalizedName.includes(`${token} `));
+      const rightStartsWithAllTokens = titleTokens.every((token) => right.normalizedName.startsWith(token) || right.normalizedName.includes(`${token} `));
+      if (leftStartsWithAllTokens !== rightStartsWithAllTokens) {
+        return Number(rightStartsWithAllTokens) - Number(leftStartsWithAllTokens);
+      }
+
+      const leftReviews = asOptionalNullableNumber(left.payload.total_reviews) ?? 0;
+      const rightReviews = asOptionalNullableNumber(right.payload.total_reviews) ?? 0;
+      if (leftReviews !== rightReviews) {
+        return rightReviews - leftReviews;
+      }
+
+      const leftReviewPercentage = asOptionalNullableNumber(left.payload.review_percentage) ?? 0;
+      const rightReviewPercentage = asOptionalNullableNumber(right.payload.review_percentage) ?? 0;
+      return rightReviewPercentage - leftReviewPercentage;
+    })
+    .slice(0, limit)
+    .map((candidate) => ({
+      id: candidate.id,
+      name: candidate.name,
+      score: 100,
+      type: candidate.payload.type as string | undefined,
+      genres: (candidate.payload.genres as string[] | undefined)?.slice(0, 3),
+      tags: (candidate.payload.tags as string[] | undefined)?.slice(0, 5),
+      review_percentage: candidate.payload.review_percentage as number | null | undefined,
+      total_reviews: candidate.payload.total_reviews as number | null | undefined,
+      price_cents: candidate.payload.price_cents as number | null | undefined,
+      is_free: candidate.payload.is_free as boolean | undefined,
+      steam_deck: candidate.payload.steam_deck as SimilarEntity['steam_deck'],
+      matchReasons: ['Same series title match'],
+    }));
+}
+
 interface CompanyMetricsSnapshot {
   id: number;
   name: string;
@@ -3419,6 +3501,10 @@ export async function findSimilar(args: FindSimilarArgs): Promise<FindSimilarRes
       steam_deck: item.payload.steam_deck as SimilarEntity['steam_deck'],
       matchReasons: item.matchReasons.length > 0 ? item.matchReasons : undefined,
     }));
+
+    if (filters?.same_franchise_only === true && results.length === 0) {
+      results = await findSameSeriesByTitleTokens(entity, limit);
+    }
   } else {
     results = [];
   }
