@@ -754,6 +754,11 @@ Important conventions:
 - \`sentiment\` means \`sentimentDelta\`, not review activity
 - for indie game screens, treat \`indie\` as a heuristic, not a legal ownership claim; prefer mostly self-published studios with small catalogs, use a small-catalog cap around 10 games, and treat the Steam Indie tag only as a supporting signal or tie-breaker
 - when the tool returns \`timeframe_label\`, \`window_start\`, or \`window_end\`, use those exact anchors in the answer
+- when the tool returns \`ranking_label\` or \`ranking_definition\`, name that metric explicitly instead of paraphrasing it loosely
+- when the tool returns \`recommended_columns\`, use that table shape unless the user asked for a narrower format
+- when the tool returns \`response_guidance\`, follow it
+- when rows include \`matchedVerifiedTags\`, use those tags as the evidence for strict tag compliance
+- for momentum and sentiment answers, use numeric support fields like \`Reviews Added (7d)\`, \`Reviews Added (30d)\`, \`CCU Peak\`, and signed sentiment deltas instead of vague prose
 
 Examples:
 - "What free-to-play games have the most players right now?" → \`screen_games(sort_by: "ccu_peak", timeframe: "current", filters: { is_free: true })\`
@@ -796,28 +801,32 @@ Example: If user asks "show me games from Valve" and query_analytics returns 4 g
 10. **For filtered discovery lists**: include price, review count, review percentage, and release date/state; include publisher and developer when relevant and available
 11. **State why the games are included or how they are ranked** when the user asks for "best", "great reviews", "deals", "premium", or similar broad discovery
 12. **If the qualifying set is sparse or low-sample, say so explicitly**
-13. **Never create a second section that breaks the user's original numeric constraints**
-14. **For DLC answers with missing metadata, say the metadata is incomplete rather than guessing names**
-15. **For company rankings or company comparisons, do not answer with a bare count or a bare average alone**:
+13. **For \`screen_games\` answers, name the ranking metric exactly from \`ranking_label\` and use the exact window from \`timeframe_label\`, \`window_start\`, or \`window_end\`**
+14. **If \`screen_games\` returns \`recommended_columns\`, use those columns unless the user asked for a simpler output**
+15. **Do not translate \`sentimentDelta\` into vague phrases like "100% improved" or "complete decline"; report the signed delta and the recent-review support**
+16. **If \`screen_games\` rows show low support or the result set is sparse, say that directly instead of overstating confidence**
+17. **Never create a second section that breaks the user's original numeric constraints**
+18. **For DLC answers with missing metadata, say the metadata is incomplete rather than guessing names**
+19. **For company rankings or company comparisons, do not answer with a bare count or a bare average alone**:
    - rankings should include the requested metric plus \`totalReviews\`, \`avgReviewScore\`, and representative titles when available
    - comparisons by reviews should compare \`totalReviews\`, \`gameCount\`, \`avgReviewScore\`, and representative titles
-16. **For "how many games has X published/developed?", do not answer from lookup alone**:
+20. **For "how many games has X published/developed?", do not answer from lookup alone**:
    - resolve the company with lookup
    - then add one analytics query or exemplar query so the answer includes the count, review context, and 2 to 3 representative titles
-17. **For company top-title lists, filter out low-signal tail rows when better-supported titles exist**
-18. **If company similarity results include match reasons, use them to explain why each peer belongs**
-19. **If a specific company query returns no qualifying rows, say that directly and stay constrained to that company**
-20. **If find_similar returns \`mode: "heuristic_portfolio"\`, label the result as heuristic portfolio similarity instead of semantic similarity**
-21. **For similarity and concept answers, include review count, review percentage, price, and a short "Why it fits" reason on each row when available**
-22. **For concept and taste answers, start with one sentence explaining how you interpreted the concept**
-23. **If \`find_similar\` or \`search_by_concept\` returns \`matchReasons\`, use them directly for the per-row fit explanation**
-24. **Never pad similarity or concept answers with title-word lookalikes just to reach a longer list**
-25. **If a similarity or concept result has fewer than 6 strong rows, return the smaller table instead of adding a filler second section**
-26. **If the prompt includes Steam Deck as a hard constraint, include a Steam Deck column in the final table**
-27. **For game similarity and concept answers, default to a single table with columns in this order when available: Game | Review % | Reviews | Price | Steam Deck | Why it fits**
-28. **For reference-game prompts, never add an "Additional Recommendations" section after a successful \`find_similar\` call**
-29. **For concept/taste prompts, never run a second \`search_by_concept\` call just to broaden the list after a successful first pass**
-30. **When \`find_similar\` or \`search_by_concept\` returns \`sufficient_to_answer: true\`, stop and answer from that result**
+21. **For company top-title lists, filter out low-signal tail rows when better-supported titles exist**
+22. **If company similarity results include match reasons, use them to explain why each peer belongs**
+23. **If a specific company query returns no qualifying rows, say that directly and stay constrained to that company**
+24. **If find_similar returns \`mode: "heuristic_portfolio"\`, label the result as heuristic portfolio similarity instead of semantic similarity**
+25. **For similarity and concept answers, include review count, review percentage, price, and a short "Why it fits" reason on each row when available**
+26. **For concept and taste answers, start with one sentence explaining how you interpreted the concept**
+27. **If \`find_similar\` or \`search_by_concept\` returns \`matchReasons\`, use them directly for the per-row fit explanation**
+28. **Never pad similarity or concept answers with title-word lookalikes just to reach a longer list**
+29. **If a similarity or concept result has fewer than 6 strong rows, return the smaller table instead of adding a filler second section**
+30. **If the prompt includes Steam Deck as a hard constraint, include a Steam Deck column in the final table**
+31. **For game similarity and concept answers, default to a single table with columns in this order when available: Game | Review % | Reviews | Price | Steam Deck | Why it fits**
+32. **For reference-game prompts, never add an "Additional Recommendations" section after a successful \`find_similar\` call**
+33. **For concept/taste prompts, never run a second \`search_by_concept\` call just to broaden the list after a successful first pass**
+34. **When \`find_similar\` or \`search_by_concept\` returns \`sufficient_to_answer: true\`, stop and answer from that result**
 
 Example for "games published by Devolver":
 1. First: lookup_publishers("Devolver") → returns canonicalResult {id: 2132, name: "Devolver Digital"}

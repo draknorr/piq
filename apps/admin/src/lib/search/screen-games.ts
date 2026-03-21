@@ -7,10 +7,14 @@ const PREFETCH_MIN = 50;
 const PREFETCH_MAX = 200;
 const SMALL_CATALOG_MAX = 10;
 const INDIE_TAG_TERM = 'Indie';
+const DEFAULT_MOMENTUM_MIN_REVIEWS_ADDED_7D = 3;
+const DEFAULT_SENTIMENT_MIN_REVIEWS_ADDED_30D = 5;
+const SATURATED_SENTIMENT_MIN_REVIEWS_ADDED_30D = 10;
 
 type ServiceSupabase = ReturnType<typeof getServiceSupabase>;
 type IdLookupTable = 'steam_tags' | 'steam_genres' | 'steam_categories';
 type IdLookupColumn = 'tag_id' | 'genre_id' | 'category_id';
+type SupportLevel = 'low' | 'medium' | 'high';
 
 export interface ScreenGamesArgs {
   sort_by:
@@ -30,11 +34,14 @@ export interface ScreenGamesArgs {
     tags?: string[];
     genres?: string[];
     categories?: string[];
+    verified_tags_any?: string[];
     platforms?: ('windows' | 'macos' | 'linux')[];
     steam_deck?: ('verified' | 'playable')[];
     is_free?: boolean;
     min_reviews?: number;
     max_reviews?: number;
+    min_reviews_added_7d?: number;
+    min_reviews_added_30d?: number;
     min_score?: number;
     max_score?: number;
     release_year?: { gte?: number; lte?: number };
@@ -57,6 +64,8 @@ interface RpcAppRow {
   review_score: number | null;
   price_cents: number | null;
   current_discount_percent: number | null;
+  ccu_growth_7d_percent: number | null;
+  ccu_growth_30d_percent: number | null;
   velocity_7d: number | null;
   velocity_30d: number | null;
   velocity_acceleration: number | null;
@@ -78,6 +87,11 @@ interface ReviewVelocityRow {
   last_delta_date: string | null;
 }
 
+interface ExactTagEntry {
+  id: number;
+  name: string;
+}
+
 export interface ScreenedGameResult {
   appid: number;
   name: string;
@@ -87,6 +101,8 @@ export interface ScreenedGameResult {
   reviewPercentage: number | null;
   priceDollars: number | null;
   discountPercent: number | null;
+  ccuGrowth7dPercent: number | null;
+  ccuGrowth30dPercent: number | null;
   velocity7d: number | null;
   velocity30d: number | null;
   velocityAcceleration: number | null;
@@ -104,7 +120,10 @@ export interface ScreenedGameResult {
   developerName: string | null;
   isSelfPublished: boolean;
   hasIndieTag: boolean;
+  matchedVerifiedTags: string[];
   indieSignals: string[];
+  supportLevel: SupportLevel;
+  supportReasons: string[];
 }
 
 export interface ScreenGamesResult extends ToolSufficiencyMetadata {
@@ -114,6 +133,8 @@ export interface ScreenGamesResult extends ToolSufficiencyMetadata {
   ranking_definition: string;
   timeframe: NonNullable<ScreenGamesArgs['timeframe']>;
   timeframe_label: string;
+  recommended_columns?: string[];
+  response_guidance?: string;
   window_start?: string;
   window_end?: string;
   filters_applied: string[];
@@ -213,6 +234,7 @@ function formatFiltersApplied(args: ScreenGamesArgs): string[] {
   const applied: string[] = [];
 
   if (filters.tags?.length) applied.push(`tags: ${filters.tags.join(', ')}`);
+  if (filters.verified_tags_any?.length) applied.push(`verified_tags_any: ${filters.verified_tags_any.join(', ')}`);
   if (filters.genres?.length) applied.push(`genres: ${filters.genres.join(', ')}`);
   if (filters.categories?.length) applied.push(`categories: ${filters.categories.join(', ')}`);
   if (filters.platforms?.length) applied.push(`platforms: ${filters.platforms.join(', ')}`);
@@ -220,6 +242,8 @@ function formatFiltersApplied(args: ScreenGamesArgs): string[] {
   if (typeof filters.is_free === 'boolean') applied.push(`is_free: ${filters.is_free}`);
   if (typeof filters.min_reviews === 'number') applied.push(`min_reviews: ${filters.min_reviews}`);
   if (typeof filters.max_reviews === 'number') applied.push(`max_reviews: ${filters.max_reviews}`);
+  if (typeof filters.min_reviews_added_7d === 'number') applied.push(`min_reviews_added_7d: ${filters.min_reviews_added_7d}`);
+  if (typeof filters.min_reviews_added_30d === 'number') applied.push(`min_reviews_added_30d: ${filters.min_reviews_added_30d}`);
   if (typeof filters.min_score === 'number') applied.push(`min_score: ${filters.min_score}`);
   if (typeof filters.max_score === 'number') applied.push(`max_score: ${filters.max_score}`);
   if (typeof filters.min_ccu === 'number') applied.push(`min_ccu: ${filters.min_ccu}`);
@@ -271,6 +295,36 @@ function getIndieDefinition(): string {
   return `Indie here is a heuristic, not a legal ownership claim: prefer mostly self-published studios with small catalogs, use a small-catalog cap around ${SMALL_CATALOG_MAX} games, and treat the Steam Indie tag only as a supporting signal or tie-breaker.`;
 }
 
+function getRecommendedColumns(sortBy: ScreenGamesArgs['sort_by']): string[] {
+  switch (sortBy) {
+    case 'momentum_score':
+      return ['Game', 'Momentum Score', 'Reviews Added (7d)', 'CCU Peak', 'Review %'];
+    case 'sentiment_delta':
+      return ['Game', 'Sentiment Delta', 'Reviews Added (30d)', 'Review %', 'Reviews'];
+    case 'reviews_added_7d':
+      return ['Game', 'Reviews Added (7d)', 'Total Reviews', 'Review %'];
+    case 'reviews_added_30d':
+      return ['Game', 'Reviews Added (30d)', 'Total Reviews', 'Review %'];
+    case 'velocity_7d':
+      return ['Game', 'Review Velocity (7d)', 'Reviews Added (7d)', 'Review %'];
+    case 'ccu_peak':
+      return ['Game', 'Peak CCU', 'Review %', 'Reviews', 'Price'];
+    default:
+      return ['Game', 'Review %', 'Reviews'];
+  }
+}
+
+function getResponseGuidance(sortBy: ScreenGamesArgs['sort_by']): string {
+  switch (sortBy) {
+    case 'momentum_score':
+      return 'Name the ranking metric as Momentum Score, use the exact timeframe anchor, include Reviews Added (7d) and CCU Peak, and explain rows with numeric support rather than generic momentum prose.';
+    case 'sentiment_delta':
+      return 'Name the ranking metric as Sentiment Delta, use the exact timeframe anchor, include Reviews Added (30d), and do not paraphrase the deltas as generic 100% improvement or complete decline language.';
+    default:
+      return 'Use the exact timeframe anchor and ranking metric from the tool result.';
+  }
+}
+
 function toPriceDollars(priceCents: number | null): number | null {
   if (priceCents === null || priceCents === undefined) {
     return null;
@@ -288,6 +342,15 @@ function parseIsoDate(value: string | null): number {
 
 function formatDateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function formatSignedPercent(value: number | null): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const rounded = Number(value.toFixed(2));
+  return `${rounded > 0 ? '+' : ''}${rounded}%`;
 }
 
 function buildTimeframeMetadata(
@@ -356,6 +419,47 @@ function getSortValue(result: ScreenedGameResult, sortBy: ScreenGamesArgs['sort_
   }
 }
 
+function compareSupportSignals(
+  left: ScreenedGameResult,
+  right: ScreenedGameResult,
+  sortBy: ScreenGamesArgs['sort_by']
+): number {
+  switch (sortBy) {
+    case 'momentum_score': {
+      const reviewComparison = (right.reviewsAdded7d ?? Number.NEGATIVE_INFINITY) - (left.reviewsAdded7d ?? Number.NEGATIVE_INFINITY);
+      if (reviewComparison !== 0) {
+        return reviewComparison;
+      }
+
+      const ccuComparison = (right.ccuPeak ?? Number.NEGATIVE_INFINITY) - (left.ccuPeak ?? Number.NEGATIVE_INFINITY);
+      if (ccuComparison !== 0) {
+        return ccuComparison;
+      }
+
+      return (right.totalReviews ?? Number.NEGATIVE_INFINITY) - (left.totalReviews ?? Number.NEGATIVE_INFINITY);
+    }
+    case 'sentiment_delta': {
+      const reviewComparison = (right.reviewsAdded30d ?? Number.NEGATIVE_INFINITY) - (left.reviewsAdded30d ?? Number.NEGATIVE_INFINITY);
+      if (reviewComparison !== 0) {
+        return reviewComparison;
+      }
+
+      const totalReviewComparison = (right.totalReviews ?? Number.NEGATIVE_INFINITY) - (left.totalReviews ?? Number.NEGATIVE_INFINITY);
+      if (totalReviewComparison !== 0) {
+        return totalReviewComparison;
+      }
+
+      return (right.ccuPeak ?? Number.NEGATIVE_INFINITY) - (left.ccuPeak ?? Number.NEGATIVE_INFINITY);
+    }
+    case 'reviews_added_7d':
+      return (right.totalReviews ?? Number.NEGATIVE_INFINITY) - (left.totalReviews ?? Number.NEGATIVE_INFINITY);
+    case 'reviews_added_30d':
+      return (right.totalReviews ?? Number.NEGATIVE_INFINITY) - (left.totalReviews ?? Number.NEGATIVE_INFINITY);
+    default:
+      return 0;
+  }
+}
+
 function compareResultsByMetric(
   left: ScreenedGameResult,
   right: ScreenedGameResult,
@@ -374,6 +478,11 @@ function compareResultsByMetric(
   const metricComparison = leftMissing || rightMissing ? 0 : (leftMetric - rightMetric);
   if (metricComparison !== 0) {
     return sortOrder === 'asc' ? metricComparison : -metricComparison;
+  }
+
+  const supportComparison = compareSupportSignals(left, right, sortBy);
+  if (supportComparison !== 0) {
+    return supportComparison;
   }
 
   const leftReviews = left.totalReviews ?? Number.NEGATIVE_INFINITY;
@@ -410,6 +519,130 @@ function getIndieSignalWeight(result: ScreenedGameResult): number {
   }
 
   return weight;
+}
+
+function buildSupportMetadata(
+  result: ScreenedGameResult,
+  sortBy: ScreenGamesArgs['sort_by']
+): Pick<ScreenedGameResult, 'supportLevel' | 'supportReasons'> {
+  const reasons: string[] = [];
+  let score = 0;
+
+  if (sortBy === 'momentum_score') {
+    const reviewsAdded7d = result.reviewsAdded7d ?? 0;
+    const ccuPeak = result.ccuPeak ?? 0;
+    if (reviewsAdded7d >= 10) {
+      score += 2;
+      reasons.push(`${reviewsAdded7d} reviews added in the last 7 days`);
+    } else if (reviewsAdded7d >= DEFAULT_MOMENTUM_MIN_REVIEWS_ADDED_7D) {
+      score += 1;
+      reasons.push(`${reviewsAdded7d} reviews added in the last 7 days`);
+    }
+
+    if (ccuPeak >= 100) {
+      score += 2;
+      reasons.push(`Peak CCU ${ccuPeak.toLocaleString()}`);
+    } else if (ccuPeak >= 5) {
+      score += 1;
+      reasons.push(`Peak CCU ${ccuPeak.toLocaleString()}`);
+    }
+
+    const ccuGrowth = formatSignedPercent(result.ccuGrowth7dPercent);
+    if (ccuGrowth) {
+      reasons.push(`CCU growth ${ccuGrowth} over 7 days`);
+    }
+  }
+
+  if (sortBy === 'sentiment_delta') {
+    const reviewsAdded30d = result.reviewsAdded30d ?? 0;
+    const sentimentDelta = formatSignedPercent(result.sentimentDelta);
+    if (reviewsAdded30d >= SATURATED_SENTIMENT_MIN_REVIEWS_ADDED_30D) {
+      score += 2;
+      reasons.push(`${reviewsAdded30d} reviews added in the last 30 days`);
+    } else if (reviewsAdded30d >= DEFAULT_SENTIMENT_MIN_REVIEWS_ADDED_30D) {
+      score += 1;
+      reasons.push(`${reviewsAdded30d} reviews added in the last 30 days`);
+    }
+
+    if (sentimentDelta) {
+      reasons.push(`Sentiment delta ${sentimentDelta}`);
+    }
+  }
+
+  const totalReviews = result.totalReviews ?? 0;
+  if (totalReviews >= 10000) {
+    score += 2;
+    reasons.push(`${totalReviews.toLocaleString()} total reviews`);
+  } else if (totalReviews >= 1000) {
+    score += 1;
+    reasons.push(`${totalReviews.toLocaleString()} total reviews`);
+  }
+
+  if (result.matchedVerifiedTags.length > 0) {
+    reasons.push(`Verified tags: ${result.matchedVerifiedTags.join(', ')}`);
+  }
+
+  let supportLevel: SupportLevel = 'low';
+  if (score >= 4) {
+    supportLevel = 'high';
+  } else if (score >= 2) {
+    supportLevel = 'medium';
+  }
+
+  return {
+    supportLevel,
+    supportReasons: reasons,
+  };
+}
+
+function applySupportFilters(
+  results: ScreenedGameResult[],
+  args: ScreenGamesArgs
+): ScreenedGameResult[] {
+  const filters = args.filters ?? {};
+  const minReviewsAdded7d = typeof filters.min_reviews_added_7d === 'number'
+    ? filters.min_reviews_added_7d
+    : args.sort_by === 'momentum_score'
+      ? DEFAULT_MOMENTUM_MIN_REVIEWS_ADDED_7D
+      : undefined;
+  const minReviewsAdded30d = typeof filters.min_reviews_added_30d === 'number'
+    ? filters.min_reviews_added_30d
+    : args.sort_by === 'sentiment_delta'
+      ? DEFAULT_SENTIMENT_MIN_REVIEWS_ADDED_30D
+      : undefined;
+
+  return results.filter((result) => {
+    if (
+      typeof minReviewsAdded7d === 'number' &&
+      (result.reviewsAdded7d ?? 0) < minReviewsAdded7d
+    ) {
+      return false;
+    }
+
+    if (
+      typeof minReviewsAdded30d === 'number' &&
+      (result.reviewsAdded30d ?? 0) < minReviewsAdded30d
+    ) {
+      return false;
+    }
+
+    if (
+      filters.verified_tags_any?.length &&
+      result.matchedVerifiedTags.length === 0
+    ) {
+      return false;
+    }
+
+    if (
+      args.sort_by === 'sentiment_delta' &&
+      Math.abs(result.sentimentDelta ?? 0) === 100 &&
+      (result.reviewsAdded30d ?? 0) < SATURATED_SENTIMENT_MIN_REVIEWS_ADDED_30D
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 function applyIndieHeuristic(
@@ -472,41 +705,44 @@ async function resolveMatchingIds(
   return [...resolvedIds];
 }
 
-async function resolveExactTagIds(
+async function resolveExactTagEntries(
   supabase: ServiceSupabase,
   tagNames: string[]
-): Promise<number[] | undefined> {
+): Promise<ExactTagEntry[] | undefined> {
   if (tagNames.length === 0) {
     return undefined;
   }
 
-  const resolvedIds = new Set<number>();
+  const resolvedEntries = new Map<number, string>();
 
   for (const tagName of tagNames) {
     const { data, error } = await supabase
       .from('steam_tags')
-      .select('tag_id')
+      .select('tag_id, name')
       .ilike('name', tagName);
 
     if (error) {
       throw new Error(`Failed to resolve exact Steam tag "${tagName}": ${error.message}`);
     }
 
-    const rows = (data ?? []) as Array<{ tag_id: number | null }>;
-    const matchingIds = rows
-      .map((row) => row.tag_id)
-      .filter((value): value is number => typeof value === 'number');
+    const rows = (data ?? []) as Array<{ tag_id: number | null; name: string | null }>;
+    const matchingEntries = rows
+      .filter((row): row is { tag_id: number; name: string } =>
+        typeof row.tag_id === 'number' &&
+        typeof row.name === 'string' &&
+        row.name.length > 0
+      );
 
-    if (matchingIds.length === 0) {
+    if (matchingEntries.length === 0) {
       return [];
     }
 
-    for (const id of matchingIds) {
-      resolvedIds.add(id);
+    for (const entry of matchingEntries) {
+      resolvedEntries.set(entry.tag_id, entry.name);
     }
   }
 
-  return [...resolvedIds];
+  return [...resolvedEntries.entries()].map(([id, name]) => ({ id, name }));
 }
 
 async function fetchVelocityRows(
@@ -534,16 +770,19 @@ async function fetchVelocityRows(
 async function fetchTagMembership(
   supabase: ServiceSupabase,
   appids: number[],
-  tagIds: number[]
-): Promise<Set<number>> {
-  if (appids.length === 0 || tagIds.length === 0) {
-    return new Set();
+  tagEntries: ExactTagEntry[]
+): Promise<Map<number, string[]>> {
+  if (appids.length === 0 || tagEntries.length === 0) {
+    return new Map();
   }
+
+  const tagIds = tagEntries.map((entry) => entry.id);
+  const tagNamesById = new Map(tagEntries.map((entry) => [entry.id, entry.name]));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from('app_steam_tags')
-    .select('appid')
+    .select('appid, tag_id')
     .in('appid', appids)
     .in('tag_id', tagIds);
 
@@ -551,12 +790,27 @@ async function fetchTagMembership(
     throw new Error(`Failed to fetch app tag membership: ${error.message}`);
   }
 
-  const rows = (data ?? []) as Array<{ appid: number | null }>;
-  return new Set(
-    rows
-      .map((row) => row.appid)
-      .filter((appid): appid is number => typeof appid === 'number')
-  );
+  const rows = (data ?? []) as Array<{ appid: number | null; tag_id: number | null }>;
+  const membership = new Map<number, string[]>();
+
+  for (const row of rows) {
+    if (typeof row.appid !== 'number' || typeof row.tag_id !== 'number') {
+      continue;
+    }
+
+    const tagName = tagNamesById.get(row.tag_id);
+    if (!tagName) {
+      continue;
+    }
+
+    const existingTags = membership.get(row.appid) ?? [];
+    if (!existingTags.includes(tagName)) {
+      existingTags.push(tagName);
+      membership.set(row.appid, existingTags);
+    }
+  }
+
+  return membership;
 }
 
 async function fetchScreenedApps(
@@ -668,6 +922,8 @@ function mapScreenedResult(row: RpcAppRow, velocityRow?: ReviewVelocityRow): Scr
     reviewPercentage: row.positive_percentage ?? row.review_score,
     priceDollars: toPriceDollars(row.price_cents),
     discountPercent: row.current_discount_percent,
+    ccuGrowth7dPercent: row.ccu_growth_7d_percent,
+    ccuGrowth30dPercent: row.ccu_growth_30d_percent,
     velocity7d: row.velocity_7d,
     velocity30d: row.velocity_30d,
     velocityAcceleration: row.velocity_acceleration,
@@ -685,7 +941,10 @@ function mapScreenedResult(row: RpcAppRow, velocityRow?: ReviewVelocityRow): Scr
     developerName: row.developer_name,
     isSelfPublished,
     hasIndieTag: false,
+    matchedVerifiedTags: [],
     indieSignals: buildIndieSignals(row.publisher_game_count, isSelfPublished, false),
+    supportLevel: 'low',
+    supportReasons: [],
   };
 }
 
@@ -718,15 +977,32 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
   const timeframe = args.timeframe ?? '7d';
   const sortOrder = args.sort_order ?? 'desc';
   const filtersApplied = formatFiltersApplied(args);
+  const recommendedColumns = getRecommendedColumns(args.sort_by);
+  const responseGuidance = getResponseGuidance(args.sort_by);
 
   try {
-    const [resolvedTagIds, resolvedGenreIds, resolvedCategoryIds] = await Promise.all([
+    const [
+      resolvedTagIds,
+      resolvedGenreIds,
+      resolvedCategoryIds,
+      resolvedVerifiedTagEntries,
+      resolvedIndieTagEntries,
+    ] = await Promise.all([
       resolveMatchingIds(supabase, 'steam_tags', 'tag_id', args.filters?.tags),
       resolveMatchingIds(supabase, 'steam_genres', 'genre_id', args.filters?.genres),
       resolveMatchingIds(supabase, 'steam_categories', 'category_id', args.filters?.categories),
+      resolveExactTagEntries(supabase, args.filters?.verified_tags_any ?? []),
+      args.indie_heuristic
+        ? resolveExactTagEntries(supabase, [INDIE_TAG_TERM])
+        : Promise.resolve(undefined),
     ]);
 
-    if (resolvedTagIds?.length === 0 || resolvedGenreIds?.length === 0 || resolvedCategoryIds?.length === 0) {
+    if (
+      resolvedTagIds?.length === 0 ||
+      resolvedGenreIds?.length === 0 ||
+      resolvedCategoryIds?.length === 0 ||
+      resolvedVerifiedTagEntries?.length === 0
+    ) {
       const emptyResults: ScreenedGameResult[] = [];
       return {
         success: true,
@@ -735,6 +1011,8 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
         ranking_definition: getRankingDefinition(args.sort_by),
         timeframe,
         timeframe_label: timeframe === 'current' ? 'latest available metrics snapshot' : `${timeframe} rolling window`,
+        recommended_columns: recommendedColumns,
+        response_guidance: responseGuidance,
         filters_applied: filtersApplied,
         indie_definition: args.indie_heuristic
           ? getIndieDefinition()
@@ -783,20 +1061,26 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
       );
     }
 
-    const velocityRows = await fetchVelocityRows(supabase, appRows.map((row) => row.appid));
-    const indieTagIds = args.indie_heuristic
-      ? await resolveExactTagIds(supabase, [INDIE_TAG_TERM])
-      : undefined;
-    const indieTaggedAppids = args.indie_heuristic && indieTagIds?.length
-      ? await fetchTagMembership(supabase, appRows.map((row) => row.appid), indieTagIds)
-      : new Set<number>();
+    const appids = appRows.map((row) => row.appid);
+    const [velocityRows, verifiedTagMembership, indieTagMembership] = await Promise.all([
+      fetchVelocityRows(supabase, appids),
+      resolvedVerifiedTagEntries?.length
+        ? fetchTagMembership(supabase, appids, resolvedVerifiedTagEntries)
+        : Promise.resolve(new Map<number, string[]>()),
+      args.indie_heuristic && resolvedIndieTagEntries?.length
+        ? fetchTagMembership(supabase, appids, resolvedIndieTagEntries)
+        : Promise.resolve(new Map<number, string[]>()),
+    ]);
+
     const mappedResults = appRows.map((row) => {
       const baseResult = mapScreenedResult(row, velocityRows.get(row.appid));
-      const hasIndieTag = indieTaggedAppids.has(row.appid);
+      const matchedVerifiedTags = verifiedTagMembership.get(row.appid) ?? [];
+      const hasIndieTag = (indieTagMembership.get(row.appid)?.length ?? 0) > 0;
 
       return {
         ...baseResult,
         hasIndieTag,
+        matchedVerifiedTags,
         indieSignals: buildIndieSignals(
           row.publisher_game_count,
           baseResult.isSelfPublished,
@@ -804,9 +1088,13 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
         ),
       };
     });
+    const supportedResults = applySupportFilters(mappedResults, args).map((result) => ({
+      ...result,
+      ...buildSupportMetadata(result, args.sort_by),
+    }));
     const rankedResults = args.indie_heuristic
-      ? applyIndieHeuristic(mappedResults, args.sort_by, sortOrder)
-      : sortResults(mappedResults, args.sort_by, sortOrder);
+      ? applyIndieHeuristic(supportedResults, args.sort_by, sortOrder)
+      : sortResults(supportedResults, args.sort_by, sortOrder);
     const sortedResults = rankedResults.slice(0, clampLimit(args.limit));
     const timeframeMetadata = buildTimeframeMetadata(timeframe, sortedResults);
 
@@ -819,12 +1107,14 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
       timeframe_label: timeframeMetadata.timeframe_label,
       window_start: timeframeMetadata.window_start,
       window_end: timeframeMetadata.window_end,
+      recommended_columns: recommendedColumns,
+      response_guidance: responseGuidance,
       filters_applied: filtersApplied,
       indie_definition: args.indie_heuristic
         ? getIndieDefinition()
         : undefined,
       results: sortedResults,
-      total_found: sortedResults.length,
+      total_found: rankedResults.length,
       ...buildSufficiency(sortedResults),
     };
   } catch (error) {
@@ -835,6 +1125,8 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
       ranking_definition: getRankingDefinition(args.sort_by),
       timeframe,
       timeframe_label: timeframe === 'current' ? 'latest available metrics snapshot' : `${timeframe} rolling window`,
+      recommended_columns: recommendedColumns,
+      response_guidance: responseGuidance,
       filters_applied: filtersApplied,
       indie_definition: args.indie_heuristic
         ? getIndieDefinition()

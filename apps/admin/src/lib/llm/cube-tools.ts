@@ -755,6 +755,11 @@ Use this instead of discover_trending when the prompt depends on:
               items: { type: 'string' },
               description: 'Steam feature categories',
             },
+            verified_tags_any: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Require exact verified Steam tag membership for at least one listed tag; use this when tag trust matters',
+            },
             platforms: {
               type: 'array',
               items: { type: 'string', enum: ['windows', 'macos', 'linux'] },
@@ -776,6 +781,14 @@ Use this instead of discover_trending when the prompt depends on:
             max_reviews: {
               type: 'number',
               description: 'Maximum total Steam reviews',
+            },
+            min_reviews_added_7d: {
+              type: 'number',
+              description: 'Minimum new reviews added in the last 7 days; use this to avoid low-signal momentum rows',
+            },
+            min_reviews_added_30d: {
+              type: 'number',
+              description: 'Minimum new reviews added in the last 30 days; use this to avoid low-signal sentiment rows',
             },
             min_score: {
               type: 'number',
