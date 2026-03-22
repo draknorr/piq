@@ -435,6 +435,9 @@ function normalizeLoadedState(state) {
     promptResults: Array.isArray(state.promptResults)
       ? state.promptResults.map((entry) => ({
         ...entry,
+        leadAttemptStreak: Number.isFinite(Number(entry?.leadAttemptStreak))
+          ? Number(entry.leadAttemptStreak)
+          : 0,
         targetScore: Number.isFinite(Number(entry?.targetScore))
           ? Number(entry.targetScore)
           : getPromptTarget(entry, state.campaignBudget?.goldenGoal),

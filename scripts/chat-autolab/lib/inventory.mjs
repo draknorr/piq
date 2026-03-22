@@ -161,15 +161,29 @@ export async function discoverPromptCandidates({
 
 export function chooseNextPrompt(state) {
   const manualReviewIds = new Set(state.manualReview.map((entry) => entry.id));
+  const maxLeadAttempts = Number(state.campaignBudget?.maxPivotsPerPrompt || 0) + 1;
   const candidates = [...state.promptResults]
     .filter((entry) => !manualReviewIds.has(entry.id))
     .filter((entry) => {
       const score = Number(entry.score || 0);
       const hasBlockingFlags = (entry.blockingFlags?.length || 0) > 0;
       return score < getPromptTarget(entry, state.campaignBudget.goldenGoal) || hasBlockingFlags;
+    });
+
+  const retryCandidates = candidates
+    .filter((entry) => {
+      const attempts = Number(entry.leadAttemptStreak || 0);
+      return attempts > 0 && attempts < maxLeadAttempts;
     })
-    .sort((left, right) => comparePromptPriority(left, right, state.campaignBudget.goldenGoal));
-  return candidates[0] || null;
+    .sort((left, right) => compareRetryPriority(left, right, state.campaignBudget.goldenGoal));
+  if (retryCandidates.length > 0) {
+    return retryCandidates[0];
+  }
+
+  const freshCandidates = candidates.sort((left, right) =>
+    compareFreshPriority(left, right, state.campaignBudget.goldenGoal, maxLeadAttempts)
+  );
+  return freshCandidates[0] || null;
 }
 
 export function selectCanaryPrompts({
@@ -222,6 +236,23 @@ function comparePromptPriority(left, right, defaultGoal) {
     return (left.score ?? 0) - (right.score ?? 0);
   }
   return left.prompt.localeCompare(right.prompt);
+}
+
+function compareRetryPriority(left, right, defaultGoal) {
+  const streakDelta = Number(right.leadAttemptStreak || 0) - Number(left.leadAttemptStreak || 0);
+  if (streakDelta !== 0) {
+    return streakDelta;
+  }
+  return comparePromptPriority(left, right, defaultGoal);
+}
+
+function compareFreshPriority(left, right, defaultGoal, maxLeadAttempts) {
+  const leftExhausted = Number(left.leadAttemptStreak || 0) >= maxLeadAttempts;
+  const rightExhausted = Number(right.leadAttemptStreak || 0) >= maxLeadAttempts;
+  if (leftExhausted !== rightExhausted) {
+    return Number(leftExhausted) - Number(rightExhausted);
+  }
+  return comparePromptPriority(left, right, defaultGoal);
 }
 
 function compareCanaryPriority(left, right, impact, defaultGoal) {

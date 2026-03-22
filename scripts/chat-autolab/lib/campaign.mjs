@@ -266,9 +266,14 @@ export async function runCampaign({
         state.iterations.total += 1;
         state.iterations.discarded += 1;
         nextPrompt.discardCount = Number(nextPrompt.discardCount || 0) + 1;
+        recordLeadFailureAttempt(state, nextPrompt);
         await appendEvent(state, {
           type: 'discard',
-          message: `Discarded ${nextPrompt.prompt} because Codex did not change the worktree.`,
+          message: buildLeadFailureMessage(
+            state,
+            nextPrompt,
+            `Discarded ${nextPrompt.prompt} because Codex did not change the worktree.`
+          ),
         });
         markManualReviewIfNeeded(state, nextPrompt);
         state.latest = {
@@ -289,9 +294,14 @@ export async function runCampaign({
         state.iterations.total += 1;
         state.iterations.discarded += 1;
         nextPrompt.discardCount = Number(nextPrompt.discardCount || 0) + 1;
+        recordLeadFailureAttempt(state, nextPrompt);
         await appendEvent(state, {
           type: 'discard',
-          message: `Discarded ${nextPrompt.prompt} because the code guard failed.`,
+          message: buildLeadFailureMessage(
+            state,
+            nextPrompt,
+            `Discarded ${nextPrompt.prompt} because the code guard failed.`
+          ),
         });
         markManualReviewIfNeeded(state, nextPrompt);
         state.latest = {
@@ -651,6 +661,7 @@ async function continueVerificationCheckpoint({
         candidateSnapshot: refreshedCheckpoint.candidateSnapshot,
         onStateChange,
         score: leadResult.score,
+        incrementLeadAttempt: !leadImproved,
         reason: hasCanaryRegression ? 'Canary regression detected.' : 'Lead prompt did not improve.',
         message: `Discarded ${leadPrompt.prompt} because it failed the targeted or canary gate.`,
       });
@@ -726,6 +737,7 @@ async function continueVerificationCheckpoint({
         candidateSnapshot: refreshedCheckpoint.candidateSnapshot,
         onStateChange,
         score: leadResult.score,
+        incrementLeadAttempt: false,
         reason: 'Golden regression detected.',
         message: `Discarded ${leadPrompt.prompt} because it failed the final golden sweep.`,
       });
@@ -911,6 +923,7 @@ async function acceptVerifiedCandidate({
     message: `chat-autolab: improve ${promptEntry.area} for ${promptEntry.id}`,
   });
 
+  resetLeadAttemptState(promptEntry);
   state.iterations.total += 1;
   state.iterations.accepted += 1;
   state.best.score = computeCampaignScore(state);
@@ -937,6 +950,7 @@ async function discardAfterVerificationFailure({
   candidateSnapshot,
   onStateChange,
   score,
+  incrementLeadAttempt = false,
   reason,
   message,
 }) {
@@ -945,9 +959,14 @@ async function discardAfterVerificationFailure({
   state.iterations.total += 1;
   state.iterations.discarded += 1;
   promptEntry.discardCount = Number(promptEntry.discardCount || 0) + 1;
+  if (incrementLeadAttempt) {
+    recordLeadFailureAttempt(state, promptEntry);
+  } else {
+    resetLeadAttemptState(promptEntry);
+  }
   await appendEvent(state, {
     type: 'discard',
-    message,
+    message: incrementLeadAttempt ? buildLeadFailureMessage(state, promptEntry, message) : message,
   });
   markManualReviewIfNeeded(state, promptEntry);
   state.latest = {
@@ -1396,6 +1415,30 @@ function markManualReviewIfNeeded(state, promptEntry) {
       recordedAt: new Date().toISOString(),
     });
   }
+}
+
+function recordLeadFailureAttempt(state, promptEntry) {
+  promptEntry.leadAttemptStreak = Number(promptEntry.leadAttemptStreak || 0) + 1;
+  if (promptEntry.leadAttemptStreak < getMaxLeadAttempts(state)) {
+    state.iterations.pivots += 1;
+  }
+}
+
+function resetLeadAttemptState(promptEntry) {
+  promptEntry.leadAttemptStreak = 0;
+}
+
+function getMaxLeadAttempts(state) {
+  return Number(state.campaignBudget?.maxPivotsPerPrompt || 0) + 1;
+}
+
+function buildLeadFailureMessage(state, promptEntry, baseMessage) {
+  const attempts = Number(promptEntry.leadAttemptStreak || 0);
+  const maxAttempts = getMaxLeadAttempts(state);
+  if (attempts < maxAttempts) {
+    return `${baseMessage} Retrying ${promptEntry.prompt} (${attempts + 1}/${maxAttempts}) before moving on.`;
+  }
+  return `${baseMessage} Reached ${attempts}/${maxAttempts} lead attempts, so autolab will move to the next prompt.`;
 }
 
 function truncate(value, limit) {
