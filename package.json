@@ -7,7 +7,12 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo check-types"
+    "check-types": "turbo check-types",
+    "chat-evals:cycle": "node scripts/chat-evals/run-cycle.mjs",
+    "chat-evals:resume": "node scripts/chat-evals/resume-loop.mjs",
+    "chat-autolab:start": "node scripts/chat-autolab/start.mjs",
+    "chat-autolab:status": "node scripts/chat-autolab/status.mjs",
+    "chat-autolab:resume": "node scripts/chat-autolab/resume.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

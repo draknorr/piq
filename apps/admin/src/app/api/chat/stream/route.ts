@@ -73,6 +73,7 @@ import type {
 
 const CREDITS_ENABLED = process.env.CREDITS_ENABLED === 'true';
 const MAX_TOOL_ITERATIONS = 5;
+const CHAT_EVAL_SECRET = process.env.CHAT_EVAL_SECRET;
 
 interface QueryAnalyticsArgs {
   cube: string;
@@ -152,8 +153,27 @@ function formatSSE(event: StreamEvent): string {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  return handleChatStreamRequest(request, { requireEvalSecret: false });
+}
+
+export async function handleChatStreamRequest(
+  request: NextRequest,
+  { requireEvalSecret }: { requireEvalSecret: boolean }
+): Promise<Response> {
   const requestStart = performance.now();
   const encoder = new TextEncoder();
+  const isEvalRequest =
+    Boolean(CHAT_EVAL_SECRET) &&
+    request.headers.get('x-chat-eval-secret') === CHAT_EVAL_SECRET;
+
+  if (requireEvalSecret && !isEvalRequest) {
+    return new Response(
+      JSON.stringify({ error: 'forbidden', message: 'Missing or invalid chat eval secret' }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  const creditsEnabled = CREDITS_ENABLED && !isEvalRequest;
 
   // Auth check (always required)
   const supabase = await createServerClient();
@@ -170,7 +190,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   let reservationId: string | null = null;
 
   // Check credits if enabled
-  if (CREDITS_ENABLED) {
+  if (creditsEnabled) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: profile } = await (supabase.from('user_profiles') as any)
       .select('credit_balance')
@@ -494,7 +514,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
 
         // Calculate credits if enabled
-        if (CREDITS_ENABLED && reservationId) {
+        if (creditsEnabled && reservationId) {
           creditsCharged = calculateTotalCredits(
             executedToolNames,
             totalInputTokens,
@@ -518,7 +538,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         // Log the chat query to database (do this BEFORE sending message_end)
         // Wrap in try-catch to ensure logging failures don't affect the response
         const lastUserMessage = body.messages.filter((m) => m.role === 'user').pop();
-        if (lastUserMessage) {
+        if (lastUserMessage && !isEvalRequest) {
           try {
             await logChatQuery({
               query_text: lastUserMessage.content.slice(0, 2000),
@@ -533,8 +553,8 @@ export async function POST(request: NextRequest): Promise<Response> {
               user_id: userId ?? undefined,
               input_tokens: totalInputTokens > 0 ? totalInputTokens : undefined,
               output_tokens: totalOutputTokens > 0 ? totalOutputTokens : undefined,
-              tool_credits_used: CREDITS_ENABLED ? getCreditBreakdown(executedToolNames, 0, 0).toolCredits : undefined,
-              total_credits_charged: CREDITS_ENABLED ? creditsCharged : undefined,
+              tool_credits_used: creditsEnabled ? getCreditBreakdown(executedToolNames, 0, 0).toolCredits : undefined,
+              total_credits_charged: creditsEnabled ? creditsCharged : undefined,
             });
           } catch (logError) {
             // Log to console but don't fail the request
@@ -555,7 +575,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
           },
-          creditsCharged: CREDITS_ENABLED ? creditsCharged : undefined,
+          creditsCharged: creditsEnabled ? creditsCharged : undefined,
         };
         controller.enqueue(encoder.encode(formatSSE(endEvent)));
 
@@ -566,7 +586,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         controller.enqueue(encoder.encode(formatSSE(errorEvent)));
 
         // Refund credits on server error
-        if (CREDITS_ENABLED && reservationId) {
+        if (creditsEnabled && reservationId) {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await (supabase.rpc as any)('refund_reservation', { p_reservation_id: reservationId });
