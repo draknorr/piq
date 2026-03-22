@@ -122,11 +122,13 @@ export async function runCampaign({
     const baselineQueueState = await ensureBaselineQueue({
       state,
       databaseUrl: env.DATABASE_URL,
+      baselineLimit: parseOptionalInt(env.CHAT_AUTOLAB_BASELINE_LIMIT),
+      discoveredLimit: parseOptionalInt(env.CHAT_AUTOLAB_DISCOVERED_LIMIT),
     });
     if (baselineQueueState.initialized) {
       await appendEvent(state, {
         type: 'inventory_loaded',
-        message: `Loaded ${baselineQueueState.seedCount} seed prompts and ${baselineQueueState.discoveredCount} discovered prompts.`,
+        message: `Loaded ${baselineQueueState.seedCount} seed prompts and ${baselineQueueState.discoveredCount} discovered prompts; baselining ${baselineQueueState.queueCount}.`,
       });
       await updateState(state, onStateChange);
     }
@@ -480,12 +482,13 @@ function dedupePromptEntries(entries) {
   });
 }
 
-async function ensureBaselineQueue({ state, databaseUrl }) {
+async function ensureBaselineQueue({ state, databaseUrl, baselineLimit = null, discoveredLimit = null }) {
   if (state.baselineQueue.length > 0) {
     return {
       initialized: false,
       seedCount: countPromptsBySource(state.baselineQueue, 'seed'),
       discoveredCount: countPromptsBySource(state.baselineQueue, 'chat_query_logs'),
+      queueCount: state.baselineQueue.length,
     };
   }
 
@@ -495,15 +498,20 @@ async function ensureBaselineQueue({ state, databaseUrl }) {
   if (discoveredPrompts.length === 0 && state.promptResults.length === 0) {
     discoveredPrompts = await discoverPromptCandidates({
       databaseUrl,
+      limit: discoveredLimit ?? undefined,
     });
   }
 
   state.discoveredPrompts = discoveredPrompts;
   state.baselineQueue = dedupePromptEntries([...inventory, ...discoveredPrompts]);
+  if (baselineLimit !== null) {
+    state.baselineQueue = state.baselineQueue.slice(0, baselineLimit);
+  }
   return {
     initialized: true,
     seedCount: inventory.length,
     discoveredCount: discoveredPrompts.length,
+    queueCount: state.baselineQueue.length,
   };
 }
 
@@ -513,6 +521,14 @@ function getPendingBaselinePrompts(state) {
 
 function countPromptsBySource(entries, source) {
   return entries.filter((entry) => entry.source === source).length;
+}
+
+function parseOptionalInt(value) {
+  const parsed = Number.parseInt(String(value || '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
 }
 
 async function evaluateAndJudgePrompt({

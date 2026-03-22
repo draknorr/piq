@@ -592,6 +592,11 @@ For exact date/time filtering on releaseDate or lastContentUpdate:
 - \`reviewScore\` is the Steam 1-9 score band, not a 0-100 review percentage
 - DeveloperGameMetrics does not have publisher fields; PublisherGameMetrics does not have developer fields. Use GameCatalog when you need both on the same result rows.
 - "same series" / "same franchise" → use \`find_similar\` with \`filters: { same_franchise_only: true }\`; if franchise metadata is missing, say exact series matching is unavailable
+- For exact "same series" / "same franchise" prompts about a named game:
+  1. FIRST call \`lookup_games\` to anchor the canonical reference game and use that exact resolved title as the answer anchor
+  2. THEN call \`find_similar\` with \`filters: { same_franchise_only: true }\`
+  3. If \`find_similar\` returns zero rows or \`success: false\`, say exact same-series matches could not be confirmed from current franchise metadata
+  4. Never synthesize series members from prior knowledge, title-word matches, or commercial memory when the exact-series tool result is empty
 
 **For Discovery (games):**
 Use these only when the query needs Discovery-only segments or fields. If the query can be answered with shared catalog fields, prefer GameCatalog.

@@ -3,6 +3,9 @@ import path from 'node:path';
 import { AUTOLAB_DIR, PERSONAS, ROOT } from './constants.mjs';
 import { runCodexPrompt } from './codex-runner.mjs';
 
+const ABSOLUTE_JUDGE_TIMEOUT_MS = 120000;
+const PAIRWISE_JUDGE_TIMEOUT_MS = 90000;
+
 export async function judgePrompt({
   promptEntry,
   currentResult,
@@ -76,65 +79,85 @@ function runHardChecks(prompt, result) {
 
 async function runAbsoluteJudge({ promptEntry, currentResult, hardChecks }) {
   const persona = PERSONAS[promptEntry.persona] || PERSONAS.publishing_strategy_lead;
-  const response = await runCodexPrompt({
-    cwd: ROOT,
-    lastMessagePath: path.join(AUTOLAB_DIR, 'judge-absolute-last-message.txt'),
-    sandbox: 'read-only',
-    prompt: [
-      'Judge the quality of a product chat answer for PublisherIQ.',
-      'Return strict JSON only. No markdown, no prose before or after the JSON.',
-      'If the answer is polished but wrong, score it down.',
-      '',
-      `Persona: ${persona.label}`,
-      `Persona description: ${persona.description}`,
-      `Prompt: ${promptEntry.prompt}`,
-      `Answer: ${currentResult.answer}`,
-      `Tool calls: ${JSON.stringify(currentResult.toolCalls)}`,
-      `Hard checks: ${JSON.stringify(hardChecks.blockingFlags)}`,
-      'Rubric: directness, completeness, relevance, trustworthiness, decision_value, grace_under_ambiguity.',
-      'Respond with JSON in this shape:',
-      '{"score": number, "subscores": {"directness": number, "completeness": number, "relevance": number, "trustworthiness": number, "decision_value": number, "grace_under_ambiguity": number}, "blockingFlags": string[], "rationale": string}',
-    ].join('\n'),
-  });
-  const parsed = parseJudgeJson(response, 'absolute');
+  try {
+    const response = await runCodexPrompt({
+      cwd: ROOT,
+      lastMessagePath: path.join(AUTOLAB_DIR, 'judge-absolute-last-message.txt'),
+      sandbox: 'read-only',
+      timeoutMs: ABSOLUTE_JUDGE_TIMEOUT_MS,
+      prompt: [
+        'Judge the quality of a product chat answer for PublisherIQ.',
+        'Return strict JSON only. No markdown, no prose before or after the JSON.',
+        'If the answer is polished but wrong, score it down.',
+        '',
+        `Persona: ${persona.label}`,
+        `Persona description: ${persona.description}`,
+        `Prompt: ${promptEntry.prompt}`,
+        `Answer: ${currentResult.answer}`,
+        `Tool calls: ${JSON.stringify(currentResult.toolCalls)}`,
+        `Hard checks: ${JSON.stringify(hardChecks.blockingFlags)}`,
+        'Rubric: directness, completeness, relevance, trustworthiness, decision_value, grace_under_ambiguity.',
+        'Respond with JSON in this shape:',
+        '{"score": number, "subscores": {"directness": number, "completeness": number, "relevance": number, "trustworthiness": number, "decision_value": number, "grace_under_ambiguity": number}, "blockingFlags": string[], "rationale": string}',
+      ].join('\n'),
+    });
+    const parsed = parseJudgeJson(response, 'absolute');
 
-  return {
-    score: clampNumber(parsed.score, 0, 10),
-    subscores: parsed.subscores || {},
-    blockingFlags: Array.isArray(parsed.blockingFlags) ? parsed.blockingFlags : [],
-    rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'No rationale provided.',
-    usage: response.usage,
-  };
+    return {
+      score: clampNumber(parsed.score, 0, 10),
+      subscores: parsed.subscores || {},
+      blockingFlags: Array.isArray(parsed.blockingFlags) ? parsed.blockingFlags : [],
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'No rationale provided.',
+      usage: response.usage,
+    };
+  } catch (error) {
+    return {
+      score: 0,
+      subscores: {},
+      blockingFlags: ['absolute_judge_unavailable'],
+      rationale: `Absolute judge unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      usage: emptyUsage(),
+    };
+  }
 }
 
 async function runPairwiseJudge({ promptEntry, currentResult, baselineResult, hardChecks }) {
   const persona = PERSONAS[promptEntry.persona] || PERSONAS.publishing_strategy_lead;
-  const response = await runCodexPrompt({
-    cwd: ROOT,
-    lastMessagePath: path.join(AUTOLAB_DIR, 'judge-pairwise-last-message.txt'),
-    sandbox: 'read-only',
-    prompt: [
-      'Compare a candidate answer against a baseline answer for PublisherIQ chat quality.',
-      'Return strict JSON only. No markdown, no prose before or after the JSON.',
-      'Choose one verdict: better, same, or worse.',
-      '',
-      `Persona: ${persona.label}`,
-      `Persona description: ${persona.description}`,
-      `Prompt: ${promptEntry.prompt}`,
-      `Baseline answer: ${baselineResult.answer}`,
-      `Candidate answer: ${currentResult.answer}`,
-      `Candidate hard checks: ${JSON.stringify(hardChecks.blockingFlags)}`,
-      'Respond with JSON in this shape:',
-      '{"verdict": "better" | "same" | "worse", "reason": string}',
-    ].join('\n'),
-  });
-  const parsed = parseJudgeJson(response, 'pairwise');
+  try {
+    const response = await runCodexPrompt({
+      cwd: ROOT,
+      lastMessagePath: path.join(AUTOLAB_DIR, 'judge-pairwise-last-message.txt'),
+      sandbox: 'read-only',
+      timeoutMs: PAIRWISE_JUDGE_TIMEOUT_MS,
+      prompt: [
+        'Compare a candidate answer against a baseline answer for PublisherIQ chat quality.',
+        'Return strict JSON only. No markdown, no prose before or after the JSON.',
+        'Choose one verdict: better, same, or worse.',
+        '',
+        `Persona: ${persona.label}`,
+        `Persona description: ${persona.description}`,
+        `Prompt: ${promptEntry.prompt}`,
+        `Baseline answer: ${baselineResult.answer}`,
+        `Candidate answer: ${currentResult.answer}`,
+        `Candidate hard checks: ${JSON.stringify(hardChecks.blockingFlags)}`,
+        'Respond with JSON in this shape:',
+        '{"verdict": "better" | "same" | "worse", "reason": string}',
+      ].join('\n'),
+    });
+    const parsed = parseJudgeJson(response, 'pairwise');
 
-  return {
-    verdict: ['better', 'same', 'worse'].includes(parsed.verdict) ? parsed.verdict : 'same',
-    reason: typeof parsed.reason === 'string' ? parsed.reason : 'No reason provided.',
-    usage: response.usage,
-  };
+    return {
+      verdict: ['better', 'same', 'worse'].includes(parsed.verdict) ? parsed.verdict : 'same',
+      reason: typeof parsed.reason === 'string' ? parsed.reason : 'No reason provided.',
+      usage: response.usage,
+    };
+  } catch (error) {
+    return {
+      verdict: 'same',
+      reason: `Pairwise judge unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      usage: emptyUsage(),
+    };
+  }
 }
 
 function mergeUsage(left, right) {

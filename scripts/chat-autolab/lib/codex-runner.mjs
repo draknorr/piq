@@ -25,6 +25,7 @@ export async function runCodexPrompt({
   fullAuto = false,
   model = null,
   onEvent = null,
+  timeoutMs = null,
 }) {
   await fs.writeFile(lastMessagePath, '');
 
@@ -43,6 +44,18 @@ export async function runCodexPrompt({
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
+    const timeout =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill('SIGTERM');
+            setTimeout(() => {
+              if (child.exitCode === null) {
+                child.kill('SIGKILL');
+              }
+            }, 1000).unref();
+            reject(new Error(`codex exec timed out after ${timeoutMs}ms`));
+          }, timeoutMs)
+        : null;
 
     let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     let stderr = '';
@@ -83,6 +96,9 @@ export async function runCodexPrompt({
 
     child.on('error', reject);
     child.on('exit', async (code) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       if (code !== 0) {
         reject(new Error(`codex exec failed with code ${code}: ${stderr.trim()}`));
         return;
