@@ -11,6 +11,7 @@ import {
   DEFAULT_PORT,
   ROOT,
 } from './constants.mjs';
+import { getPromptTarget } from './judge-config.mjs';
 
 export async function ensureAutolabDir() {
   await fs.mkdir(AUTOLAB_DIR, { recursive: true });
@@ -32,6 +33,7 @@ export function buildRunPaths(runId) {
     lastMessagePath: path.join(runDir, 'last-agent-message.txt'),
     codexPromptPath: path.join(runDir, 'codex-prompt.md'),
     serverLogPath: path.join(runDir, 'server.log'),
+    artifactsDir: path.join(runDir, 'artifacts'),
   };
 }
 
@@ -39,6 +41,7 @@ export async function initRunStorage(runId) {
   await ensureAutolabDir();
   const paths = buildRunPaths(runId);
   await fs.mkdir(paths.runDir, { recursive: true });
+  await fs.mkdir(paths.artifactsDir, { recursive: true });
   await fs.writeFile(CURRENT_RUN_PATH, `${runId}\n`);
   return paths;
 }
@@ -84,7 +87,7 @@ export function createInitialState({
 }) {
   const now = new Date().toISOString();
   return {
-    version: 2,
+    version: 3,
     runId,
     status: 'booting',
     startedAt: now,
@@ -121,6 +124,7 @@ export function createInitialState({
       area: null,
       family: null,
       persona: null,
+      targetScore: null,
       hypothesis: null,
       touchedFiles: [],
       nextAction: 'Boot the campaign.',
@@ -218,6 +222,18 @@ export async function appendEvent(state, event) {
   return row;
 }
 
+export async function writeEvaluationArtifact({ runId, promptId, stage, payload }) {
+  const paths = buildRunPaths(runId);
+  await fs.mkdir(paths.artifactsDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = path.join(
+    paths.artifactsDir,
+    `${timestamp}-${safeFilePart(stage)}-${safeFilePart(promptId)}.json`
+  );
+  await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+  return filePath;
+}
+
 export function setCurrentPhase(state, phase, nextAction) {
   state.status = phase;
   state.current.phase = phase;
@@ -241,6 +257,7 @@ export function getPromptResult(state, promptId) {
 
 export function renderStatusMarkdown(state) {
   const lines = [];
+  const currentTarget = state.current.targetScore;
   lines.push('# Chat Autolab Status');
   lines.push('');
   lines.push(`- Run ID: \`${state.runId}\``);
@@ -255,9 +272,10 @@ export function renderStatusMarkdown(state) {
   lines.push(`- Origin: ${state.evalOrigin || 'not started yet'}`);
   lines.push(`- Current prompt: ${state.current.prompt || 'none'}`);
   lines.push(`- Current persona: ${state.current.persona || 'none'}`);
+  lines.push(`- Current target: ${typeof currentTarget === 'number' ? currentTarget.toFixed(1) : 'none'}`);
   lines.push(`- Current phase: \`${state.current.phase}\``);
   lines.push(`- Next action: ${state.current.nextAction || 'n/a'}`);
-  lines.push(`- Golden progress: ${state.baseline.goldenAtGoal}/${state.baseline.totalGoldens} at or above ${state.campaignBudget.goldenGoal.toFixed(1)}`);
+  lines.push(`- Golden progress: ${state.baseline.goldenAtGoal}/${state.baseline.totalGoldens} at target`);
   lines.push(`- Campaign score: ${formatMaybeNumber(state.best.score)}`);
   lines.push(`- Latest prompt score: ${formatMaybeNumber(state.latest.score)}`);
   lines.push(`- Iterations: ${state.iterations.total} total, ${state.iterations.accepted} kept, ${state.iterations.discarded} discarded`);
@@ -287,6 +305,7 @@ export function renderStatusMarkdown(state) {
 
 export function renderDashboard(state) {
   const lines = [];
+  const currentTarget = state.current.targetScore;
   lines.push('Chat Autolab');
   lines.push(`Run: ${state.runId}`);
   lines.push(`Status: ${state.status}`);
@@ -296,9 +315,10 @@ export function renderDashboard(state) {
   lines.push(`Phase: ${state.current.phase}`);
   lines.push(`Prompt: ${state.current.prompt || '-'}`);
   lines.push(`Area / Persona: ${state.current.area || '-'} / ${state.current.persona || '-'}`);
+  lines.push(`Target: ${typeof currentTarget === 'number' ? currentTarget.toFixed(1) : '-'}`);
   lines.push(`Next: ${state.current.nextAction || '-'}`);
   lines.push('');
-  lines.push(`Golden >= ${state.campaignBudget.goldenGoal.toFixed(1)}: ${state.baseline.goldenAtGoal}/${state.baseline.totalGoldens}`);
+  lines.push(`Goldens at target: ${state.baseline.goldenAtGoal}/${state.baseline.totalGoldens}`);
   lines.push(`Campaign score: ${formatMaybeNumber(state.best.score)} | Latest prompt score: ${formatMaybeNumber(state.latest.score)} | Manual review: ${state.manualReview.length}`);
   lines.push(`Iterations: kept ${state.iterations.accepted} | discarded ${state.iterations.discarded} | total ${state.iterations.total}`);
   lines.push('');
@@ -339,15 +359,33 @@ function formatMaybeNumber(value) {
 function normalizeLoadedState(state) {
   return {
     ...state,
-    version: Math.max(Number(state.version || 1), 2),
+    version: Math.max(Number(state.version || 1), 3),
     startSha: state.startSha || state.best?.sha || null,
     workspaceDir: state.workspaceDir || state.worktreeDir || ROOT,
     workspaceMode: state.workspaceMode || (state.worktreeDir ? 'legacy-worktree' : 'current-branch'),
     pushMode: state.pushMode || (state.remote ? 'legacy-remote' : 'local-only'),
     baselineQueue: Array.isArray(state.baselineQueue) ? state.baselineQueue : [],
+    current: {
+      ...(state.current || {}),
+      targetScore: Number.isFinite(Number(state.current?.targetScore))
+        ? Number(state.current.targetScore)
+        : null,
+    },
+    promptResults: Array.isArray(state.promptResults)
+      ? state.promptResults.map((entry) => ({
+        ...entry,
+        targetScore: Number.isFinite(Number(entry?.targetScore))
+          ? Number(entry.targetScore)
+          : getPromptTarget(entry, state.campaignBudget?.goldenGoal),
+      }))
+      : [],
   };
 }
 
 function shortSha(value) {
   return value ? value.slice(0, 7) : '-';
+}
+
+function safeFilePart(value) {
+  return String(value || 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '-');
 }

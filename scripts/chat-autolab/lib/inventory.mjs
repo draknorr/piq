@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 
 import { ACTIVE_FULL_PACK_KEYS, loadPackDefinition } from '../../chat-evals/lib/prompt-packs.mjs';
 import { DEFAULT_MAX_DISCOVERED_PROMPTS, GOLDEN_PACK_KEYS, PERSONA_ALIASES } from './constants.mjs';
+import { getPromptTarget } from './judge-config.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,11 @@ export async function buildPromptInventory() {
       if (existing) {
         existing.packKeys = [...new Set([...existing.packKeys, pack.packKey])];
         existing.isGolden = existing.isGolden || pack.packType === 'golden';
+        existing.targetScore = entry.targetScore ?? existing.targetScore ?? null;
+        existing.targetVerdict = entry.targetVerdict ?? existing.targetVerdict ?? null;
+        existing.referenceScore = entry.referenceScore ?? existing.referenceScore ?? null;
+        existing.referenceVerdict = entry.referenceVerdict ?? existing.referenceVerdict ?? null;
+        existing.judgeNotes = entry.judgeNotes ?? existing.judgeNotes ?? null;
         continue;
       }
       entries.set(key, {
@@ -30,6 +36,11 @@ export async function buildPromptInventory() {
         packKeys: [pack.packKey],
         isGolden: pack.packType === 'golden',
         source: 'seed',
+        targetScore: entry.targetScore ?? null,
+        targetVerdict: entry.targetVerdict ?? null,
+        referenceScore: entry.referenceScore ?? null,
+        referenceVerdict: entry.referenceVerdict ?? null,
+        judgeNotes: entry.judgeNotes ?? null,
       });
     }
   }
@@ -90,6 +101,11 @@ export async function discoverPromptCandidates({
           packKeys: [],
           isGolden: false,
           source: 'chat_query_logs',
+          targetScore: null,
+          targetVerdict: null,
+          referenceScore: null,
+          referenceVerdict: null,
+          judgeNotes: null,
           stats: {
             runCount: Number(runCount || 0),
             maxIterations: Number(maxIterations || 0),
@@ -112,18 +128,23 @@ export function chooseNextPrompt(state) {
     .filter((entry) => {
       const score = Number(entry.score || 0);
       const hasBlockingFlags = (entry.blockingFlags?.length || 0) > 0;
-      return score < state.campaignBudget.goldenGoal || hasBlockingFlags;
+      return score < getPromptTarget(entry, state.campaignBudget.goldenGoal) || hasBlockingFlags;
     })
-    .sort(comparePromptPriority);
+    .sort((left, right) => comparePromptPriority(left, right, state.campaignBudget.goldenGoal));
   return candidates[0] || null;
 }
 
-function comparePromptPriority(left, right) {
+function comparePromptPriority(left, right, defaultGoal) {
   if (left.isGolden !== right.isGolden) {
     return Number(right.isGolden) - Number(left.isGolden);
   }
   if ((right.blockingFlags?.length || 0) !== (left.blockingFlags?.length || 0)) {
     return (right.blockingFlags?.length || 0) - (left.blockingFlags?.length || 0);
+  }
+  const leftGap = getPromptTarget(left, defaultGoal) - Number(left.score || 0);
+  const rightGap = getPromptTarget(right, defaultGoal) - Number(right.score || 0);
+  if (leftGap !== rightGap) {
+    return rightGap - leftGap;
   }
   if ((left.score ?? 0) !== (right.score ?? 0)) {
     return (left.score ?? 0) - (right.score ?? 0);
@@ -141,7 +162,11 @@ function buildPromptId(prompt) {
 
 function normalizePersona(value) {
   if (!value) return 'publishing_strategy_lead';
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, '_');
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
   return PERSONA_ALIASES[normalized] || normalized;
 }
 

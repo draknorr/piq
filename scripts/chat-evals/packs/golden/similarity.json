@@ -17,6 +17,11 @@
       "family": "game_similarity",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Steam Deck games like Hades II",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 6.6,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Every row should be a believable Hades II comp with Steam Deck proof. Penalize broad action-RPG neighborhood drift.",
       "packTags": ["tier:golden", "area:similarity"]
     },
     {
@@ -26,6 +31,11 @@
       "family": "game_similarity",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Games similar to Hollow Knight with better reviews",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 5.0,
+      "referenceVerdict": "Weak",
+      "judgeNotes": "Honor the review constraint and produce an actually believable Hollow Knight comp set, not a broad metroidvania dump.",
       "packTags": ["tier:golden", "area:similarity"]
     },
     {
@@ -35,6 +45,11 @@
       "family": "developer_similarity",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Show me developers similar to Supergiant Games",
+      "targetScore": 7.5,
+      "targetVerdict": "Good",
+      "referenceScore": 7.5,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Peer set should feel credible and include flagship context plus why-it-matches reasoning.",
       "packTags": ["tier:golden", "area:similarity"]
     },
     {
@@ -44,6 +59,11 @@
       "family": "franchise_lookup",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Find games in the same series as Dark Souls",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 6.5,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Exact-series lookup is zero-tolerance. One off-franchise row is enough to break trust materially.",
       "packTags": ["tier:golden", "area:similarity"]
     },
     {
@@ -53,6 +73,11 @@
       "family": "concept_search",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "horror games with investigation elements",
+      "targetScore": 7.2,
+      "targetVerdict": "Good",
+      "referenceScore": 7.2,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Mostly credible concept board with only light stretch in the tail. Reward believable investigation angle over keyword collisions.",
       "packTags": ["tier:golden", "area:similarity"]
     },
     {
@@ -62,6 +87,11 @@
       "family": "concept_search",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Relaxing puzzle games with beautiful art",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 6.9,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "The board should feel curated and aesthetically aligned, not like a pile of casual keyword matches.",
       "packTags": ["tier:golden", "area:similarity"]
     }
   ]

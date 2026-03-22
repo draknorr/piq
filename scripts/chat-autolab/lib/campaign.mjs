@@ -20,6 +20,7 @@ import {
   getWorkingTreeSnapshot,
 } from './git.mjs';
 import { buildPromptInventory, chooseNextPrompt, discoverPromptCandidates } from './inventory.mjs';
+import { getPromptTarget, isPromptAtTarget } from './judge-config.mjs';
 import { judgePrompt } from './judge.mjs';
 import { ensureLocalServer, stopServerProcess } from './server.mjs';
 import {
@@ -34,6 +35,7 @@ import {
   saveState,
   setCurrentPhase,
   upsertPromptResult,
+  writeEvaluationArtifact,
 } from './state.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -144,17 +146,20 @@ export async function runCampaign({
         state.current.area = promptEntry.area;
         state.current.family = promptEntry.family;
         state.current.persona = promptEntry.persona;
+        state.current.targetScore = getPromptTarget(promptEntry, state.campaignBudget.goldenGoal);
         state.current.hypothesis = null;
         state.current.touchedFiles = [];
         state.current.nextAction = `Baseline "${promptEntry.prompt}".`;
         await updateState(state, onStateChange);
 
         const result = await evaluateAndJudgePrompt({
+          state,
           origin: state.evalOrigin,
           evalSecret: state.evalSecret,
           auth,
           promptEntry,
           baselineResult: null,
+          stage: 'baseline',
         });
         applyUsageToState(state, 'answer', result.answerUsage);
         applyUsageToState(state, 'judge', result.judgeUsage);
@@ -185,7 +190,7 @@ export async function runCampaign({
         break;
       }
 
-      if (nextPrompt.isGolden && nextPrompt.score >= state.campaignBudget.goldenGoal) {
+      if (nextPrompt.isGolden && isPromptAtTarget(nextPrompt, state.campaignBudget.goldenGoal)) {
         break;
       }
 
@@ -194,6 +199,7 @@ export async function runCampaign({
       state.current.area = nextPrompt.area;
       state.current.family = nextPrompt.family;
       state.current.persona = nextPrompt.persona;
+      state.current.targetScore = getPromptTarget(nextPrompt, state.campaignBudget.goldenGoal);
       state.current.touchedFiles = [];
       state.current.hypothesis = nextPrompt.rationale || 'Target the narrowest code path that fixes the current lead prompt.';
       setCurrentPhase(state, 'editing', `Run one Codex iteration for "${nextPrompt.prompt}".`);
@@ -265,11 +271,13 @@ export async function runCampaign({
 
       const leadBaseline = getPromptResult(state, nextPrompt.id);
       const leadResult = await evaluateAndJudgePrompt({
+        state,
         origin: state.evalOrigin,
         evalSecret: state.evalSecret,
         auth,
         promptEntry: nextPrompt,
         baselineResult: leadBaseline,
+        stage: 'targeted',
       });
       applyUsageToState(state, 'answer', leadResult.answerUsage);
       applyUsageToState(state, 'judge', leadResult.judgeUsage);
@@ -287,6 +295,7 @@ export async function runCampaign({
           (result.blockingFlags?.length || 0) > 0
       );
       const leadImproved =
+        leadResult.pairwiseVerdict === 'better' ||
         leadResult.score > Number(leadBaseline?.score || 0) ||
         (leadBaseline?.blockingFlags?.length || 0) > (leadResult.blockingFlags?.length || 0);
 
@@ -532,11 +541,13 @@ function parseOptionalInt(value) {
 }
 
 async function evaluateAndJudgePrompt({
+  state,
   origin,
   evalSecret,
   auth,
   promptEntry,
   baselineResult,
+  stage,
 }) {
   const evalResult = await evaluatePrompt({
     origin,
@@ -550,6 +561,46 @@ async function evaluateAndJudgePrompt({
     baselineResult,
   });
 
+  await writeEvaluationArtifact({
+    runId: state.runId,
+    promptId: promptEntry.id,
+    stage,
+    payload: {
+      prompt: promptEntry.prompt,
+      family: promptEntry.family,
+      persona: promptEntry.persona,
+      targetScore: getPromptTarget(promptEntry, state.campaignBudget.goldenGoal),
+      referenceScore: promptEntry.referenceScore ?? null,
+      referenceVerdict: promptEntry.referenceVerdict ?? null,
+      judgeNotes: promptEntry.judgeNotes ?? null,
+      baselineScore: baselineResult?.score ?? null,
+      baselineVerdict: baselineResult?.pairwiseVerdict ?? null,
+      eval: {
+        status: evalResult.status,
+        errorMessage: evalResult.errorMessage || null,
+        answer: evalResult.answer,
+        toolCalls: evalResult.toolCalls,
+        iterations: evalResult.iterations,
+        timing: evalResult.timing,
+        usage: evalResult.usage,
+      },
+      judge: {
+        score: judgeResult.score,
+        subscores: judgeResult.subscores,
+        blockingFlags: judgeResult.blockingFlags,
+        rationale: judgeResult.rationale,
+        pairwiseVerdict: judgeResult.pairwiseVerdict,
+        pairwiseReason: judgeResult.pairwiseReason,
+        hardChecks: judgeResult.hardChecks,
+        evidenceDigest: judgeResult.evidenceDigest,
+        calibration: judgeResult.calibration,
+        absoluteJudge: judgeResult.absoluteJudge,
+        pairwiseJudge: judgeResult.pairwiseJudge,
+        usage: judgeResult.usage,
+      },
+    },
+  });
+
   return {
     id: promptEntry.id,
     prompt: promptEntry.prompt,
@@ -559,9 +610,14 @@ async function evaluateAndJudgePrompt({
     critiqueRef: promptEntry.critiqueRef,
     isGolden: promptEntry.isGolden,
     source: promptEntry.source,
+    targetScore: getPromptTarget(promptEntry, state.campaignBudget.goldenGoal),
+    targetVerdict: promptEntry.targetVerdict || null,
+    referenceScore: promptEntry.referenceScore ?? null,
+    referenceVerdict: promptEntry.referenceVerdict ?? null,
+    judgeNotes: promptEntry.judgeNotes ?? null,
     status: evalResult.status,
     answer: evalResult.answer,
-    toolCalls: evalResult.toolCalls,
+    toolCalls: summarizeToolCallsForState(evalResult.toolCalls),
     iterations: evalResult.iterations,
     timing: evalResult.timing,
     score: judgeResult.score,
@@ -570,6 +626,8 @@ async function evaluateAndJudgePrompt({
     rationale: judgeResult.rationale,
     pairwiseVerdict: judgeResult.pairwiseVerdict,
     pairwiseReason: judgeResult.pairwiseReason,
+    evidenceDigest: judgeResult.evidenceDigest,
+    calibration: judgeResult.calibration,
     answerUsage: evalResult.usage || zeroUsage(),
     judgeUsage: judgeResult.usage || zeroUsage(),
   };
@@ -582,11 +640,13 @@ async function evaluateGoldenPack({ origin, evalSecret, auth, state }) {
 
   for (const golden of goldens) {
     const result = await evaluateAndJudgePrompt({
+      state,
       origin,
       evalSecret,
       auth,
       promptEntry: golden,
       baselineResult: golden,
+      stage: 'golden',
     });
     applyUsageToState(state, 'answer', result.answerUsage);
     applyUsageToState(state, 'judge', result.judgeUsage);
@@ -602,11 +662,13 @@ async function evaluateFrontier({ origin, evalSecret, auth, state }) {
   const results = [];
   for (const promptEntry of frontier) {
     const result = await evaluateAndJudgePrompt({
+      state,
       origin,
       evalSecret,
       auth,
       promptEntry,
       baselineResult: promptEntry,
+      stage: 'frontier',
     });
     applyUsageToState(state, 'answer', result.answerUsage);
     applyUsageToState(state, 'judge', result.judgeUsage);
@@ -647,18 +709,17 @@ function buildBaselineSummary(state) {
   return {
     score: computeCampaignScore(state),
     totalGoldens: goldens.length,
-    goldenAtGoal: goldens.filter((entry) => entry.score >= state.campaignBudget.goldenGoal).length,
+    goldenAtGoal: goldens.filter((entry) => isPromptAtTarget(entry, state.campaignBudget.goldenGoal)).length,
     blockingCount: goldens.filter((entry) => (entry.blockingFlags?.length || 0) > 0).length,
   };
 }
 
 function computeCampaignScore(state) {
-  const goal = state.campaignBudget.goldenGoal;
   const goldens = state.promptResults.filter((entry) => entry.isGolden);
   const frontier = state.promptResults.filter((entry) => !entry.isGolden);
   const regressionViolations = goldens.filter((entry) => entry.pairwiseVerdict === 'worse' || (entry.blockingFlags?.length || 0) > 0).length;
-  const goldenBelowGoal = goldens.filter((entry) => entry.score < goal).length;
-  const frontierBelowGoal = frontier.filter((entry) => entry.score < goal).length;
+  const goldenBelowGoal = goldens.filter((entry) => !isPromptAtTarget(entry, state.campaignBudget.goldenGoal)).length;
+  const frontierBelowGoal = frontier.filter((entry) => !isPromptAtTarget(entry, state.campaignBudget.goldenGoal)).length;
   const goldenScoreSum = goldens.reduce((sum, entry) => sum + Number(entry.score || 0), 0);
   const frontierScoreSum = frontier.reduce((sum, entry) => sum + Number(entry.score || 0), 0);
 
@@ -707,12 +768,15 @@ function shouldRunFullVerify(touchedFiles, acceptedCount) {
 }
 
 function buildCodexPrompt(promptEntry, state) {
+  const targetScore = getPromptTarget(promptEntry, state.campaignBudget.goldenGoal);
   return [
     'You are running one bounded chat-autolab iteration inside PublisherIQ.',
     `Lead prompt: ${promptEntry.prompt}`,
     `Area: ${promptEntry.area}`,
     `Persona: ${promptEntry.persona}`,
     `Current score: ${Number(promptEntry.score || 0).toFixed(1)}`,
+    `Target score: ${targetScore.toFixed(1)}`,
+    `Reference score: ${promptEntry.referenceScore ?? 'none'}`,
     `Known blocking flags: ${(promptEntry.blockingFlags || []).join(', ') || 'none'}`,
     '',
     'Task:',
@@ -724,6 +788,7 @@ function buildCodexPrompt(promptEntry, state) {
     '',
     `Current campaign note: ${state.note || 'none'}`,
     `Latest rationale: ${promptEntry.rationale || 'none'}`,
+    `Judge notes: ${promptEntry.judgeNotes || 'none'}`,
   ].join('\n');
 }
 
@@ -739,6 +804,7 @@ function markManualReviewIfNeeded(state, promptEntry) {
       prompt: promptEntry.prompt,
       area: promptEntry.area,
       score: promptEntry.score,
+      targetScore: getPromptTarget(promptEntry, state.campaignBudget.goldenGoal),
       discardCount,
       recordedAt: new Date().toISOString(),
     });
@@ -748,6 +814,18 @@ function markManualReviewIfNeeded(state, promptEntry) {
 function truncate(value, limit) {
   if (value.length <= limit) return value;
   return `${value.slice(0, limit - 1)}…`;
+}
+
+function summarizeToolCallsForState(toolCalls) {
+  return Array.isArray(toolCalls)
+    ? toolCalls.map((toolCall) => ({
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+      executionMs: toolCall.executionMs ?? null,
+      success: toolCall.success !== false,
+      summary: toolCall.summary ?? null,
+    }))
+    : [];
 }
 
 function zeroUsage() {

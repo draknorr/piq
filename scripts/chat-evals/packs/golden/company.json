@@ -17,6 +17,11 @@
       "family": "game_lookup",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "tell me about Hades II",
+      "targetScore": 8.6,
+      "targetVerdict": "Strong",
+      "referenceScore": 8.6,
+      "referenceVerdict": "Strong",
+      "judgeNotes": "Direct, decision-ready lookup with release state, price, review volume, and platform status. Judge only against PublisherIQ tool evidence.",
       "packTags": ["tier:golden", "area:company"]
     },
     {
@@ -26,6 +31,11 @@
       "family": "filtered_discovery",
       "primaryPersona": "Publishing Strategy Lead",
       "prompt": "Highly rated games under $10 released in the past year",
+      "targetScore": 8.0,
+      "targetVerdict": "Good",
+      "referenceScore": 8.0,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Credible affordable shortlist with visible review volume. Keep hard price and release filters intact across the whole answer.",
       "packTags": ["tier:golden", "area:company"]
     },
     {
@@ -35,6 +45,11 @@
       "family": "company_ranking",
       "primaryPersona": "Publishing Strategy Lead",
       "prompt": "Which indie developers have multiple hit games?",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 6.7,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Top rows should feel like real indie studios with multiple hits. Penalize obvious non-indie or weak-hit tail rows.",
       "packTags": ["tier:golden", "area:company"]
     },
     {
@@ -44,6 +59,11 @@
       "family": "developer_lookup",
       "primaryPersona": "Developer Studio Lead or Product Lead",
       "prompt": "Show me all games by FromSoftware",
+      "targetScore": 7.6,
+      "targetVerdict": "Good",
+      "referenceScore": 7.6,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Useful catalog output, but flagship relevance matters more than a noisy recency sort. Do not miss obvious in-database FromSoftware titles.",
       "packTags": ["tier:golden", "area:company"]
     },
     {
@@ -53,6 +73,11 @@
       "family": "company_similarity",
       "primaryPersona": "Publishing Strategy Lead",
       "prompt": "What publishers are similar to Devolver Digital?",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 5.3,
+      "referenceVerdict": "Weak",
+      "judgeNotes": "Peer set should stay close to Devolver's indie or AA posture. Penalize scale-blind peers like giant platform holders or mega-publishers.",
       "packTags": ["tier:golden", "area:company"]
     },
     {
@@ -62,6 +87,11 @@
       "family": "company_ranking",
       "primaryPersona": "Investor / Portfolio Analyst",
       "prompt": "Publishers with releases in every year since 2020",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 2.6,
+      "referenceVerdict": "Failure",
+      "judgeNotes": "Return a real continuity screen with supporting evidence. A no-answer or internal failure is unacceptable.",
       "packTags": ["tier:golden", "area:company"]
     }
   ]

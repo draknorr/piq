@@ -156,5 +156,10 @@ function normalizePackEntry(entry, packKey) {
     primaryPersona: entry.primaryPersona,
     prompt: entry.prompt,
     packTags: Array.isArray(entry.packTags) ? entry.packTags : [],
+    targetScore: entry.targetScore ?? null,
+    targetVerdict: entry.targetVerdict ?? null,
+    referenceScore: entry.referenceScore ?? null,
+    referenceVerdict: entry.referenceVerdict ?? null,
+    judgeNotes: entry.judgeNotes ?? null,
   };
 }

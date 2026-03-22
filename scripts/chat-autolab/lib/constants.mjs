@@ -47,6 +47,7 @@ export const PERSONA_ALIASES = {
   competitive: 'competitive_market_intelligence_analyst',
   developer: 'developer_studio_lead',
   studio: 'developer_studio_lead',
+  developer_studio_lead_or_product_lead: 'developer_studio_lead',
   agency: 'agency_business_development_prospector',
   prospector: 'agency_business_development_prospector',
   business: 'agency_business_development_prospector',

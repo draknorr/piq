@@ -17,6 +17,11 @@
       "family": "trend_comparison",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "Compare top 5 roguelites by review velocity and CCU",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 5.6,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Must include the requested CCU comparison and an exact 7-day anchor. Sparse is acceptable, omitting requested columns is not.",
       "packTags": ["tier:golden", "area:trend"]
     },
     {
@@ -26,6 +31,11 @@
       "family": "trend_leaderboard",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "What free-to-play games have the most players right now?",
+      "targetScore": 8.2,
+      "targetVerdict": "Good",
+      "referenceScore": 8.2,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Actionable CCU leaderboard with a clear freshness anchor. Judge only from surfaced CCU and supporting evidence.",
       "packTags": ["tier:golden", "area:trend"]
     },
     {
@@ -35,6 +45,11 @@
       "family": "trend_filtered",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "What horror games are gaining momentum?",
+      "targetScore": 7.2,
+      "targetVerdict": "Good",
+      "referenceScore": 7.2,
+      "referenceVerdict": "Good",
+      "judgeNotes": "A strict empty result is better than a contaminated horror list. Preserve filter integrity over recall.",
       "packTags": ["tier:golden", "area:trend"]
     },
     {
@@ -44,6 +59,11 @@
       "family": "trend_breakout",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "What’s breaking out right now?",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 5.8,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Breakout claims need evidence and scale framing. Penalize noisy low-support boards that over-claim.",
       "packTags": ["tier:golden", "area:trend"]
     },
     {
@@ -53,6 +73,11 @@
       "family": "trend_velocity",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "Which games have the most reviews added this week?",
+      "targetScore": 8.0,
+      "targetVerdict": "Good",
+      "referenceScore": 8.0,
+      "referenceVerdict": "Good",
+      "judgeNotes": "Clear weekly review-volume leaderboard with exact window anchoring. Metric naming must stay exact.",
       "packTags": ["tier:golden", "area:trend"]
     },
     {
@@ -62,6 +87,11 @@
       "family": "trend_sentiment",
       "primaryPersona": "Competitive / Market Intelligence Analyst",
       "prompt": "Show me games with improving sentiment",
+      "targetScore": 7.0,
+      "targetVerdict": "Good",
+      "referenceScore": 5.8,
+      "referenceVerdict": "Mixed",
+      "judgeNotes": "Use signed sentiment deltas and enough support to trust the list. Penalize tiny-sample tail rows.",
       "packTags": ["tier:golden", "area:trend"]
     }
   ]

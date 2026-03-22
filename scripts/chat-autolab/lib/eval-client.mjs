@@ -70,6 +70,7 @@ function parseSse(rawSse) {
         arguments: event.arguments || {},
         executionMs: event.timing?.executionMs ?? null,
         success: event.result?.success !== false,
+        result: event.result || null,
         summary: summarizeToolResult(event.result),
       });
       continue;
