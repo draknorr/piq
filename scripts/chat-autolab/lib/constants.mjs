@@ -9,6 +9,9 @@ export const DEFAULT_MAX_DISCARDS_PER_PROMPT = 5;
 export const DEFAULT_MAX_PIVOTS_PER_PROMPT = 2;
 export const DEFAULT_GOLDEN_GOAL = 8.0;
 export const DEFAULT_MAX_DISCOVERED_PROMPTS = 10;
+export const DEFAULT_CANARY_LIMIT = 4;
+export const DEFAULT_HIGH_RISK_CANARY_LIMIT = 6;
+export const DEFAULT_FULL_SWEEP_INTERVAL = 0;
 export const GOLDEN_PACK_KEYS = ['golden.company', 'golden.similarity', 'golden.trend'];
 
 export const PERSONAS = {

@@ -7,6 +7,44 @@ import { DEFAULT_MAX_DISCOVERED_PROMPTS, GOLDEN_PACK_KEYS, PERSONA_ALIASES } fro
 import { getPromptTarget } from './judge-config.mjs';
 
 const execFileAsync = promisify(execFile);
+const ALL_AREAS = ['company', 'similarity', 'trend'];
+const PATH_IMPACT_RULES = [
+  {
+    prefix: 'apps/admin/src/lib/chat/company-',
+    areas: ['company'],
+    highRisk: false,
+  },
+  {
+    prefix: 'apps/admin/src/lib/chat/similarity-',
+    areas: ['similarity'],
+    highRisk: false,
+  },
+  {
+    prefix: 'apps/admin/src/lib/chat/trend-',
+    areas: ['trend'],
+    highRisk: false,
+  },
+  {
+    prefix: 'apps/admin/src/lib/chat/company-answer-policy',
+    areas: ['company'],
+    highRisk: false,
+  },
+  {
+    prefix: 'apps/admin/src/lib/chat/',
+    areas: ALL_AREAS,
+    highRisk: true,
+  },
+  {
+    prefix: 'apps/admin/src/lib/llm/',
+    areas: ALL_AREAS,
+    highRisk: true,
+  },
+  {
+    prefix: 'apps/admin/src/app/api/chat/',
+    areas: ALL_AREAS,
+    highRisk: true,
+  },
+];
 
 export async function buildPromptInventory() {
   const entries = new Map();
@@ -134,6 +172,40 @@ export function chooseNextPrompt(state) {
   return candidates[0] || null;
 }
 
+export function selectCanaryPrompts({
+  state,
+  leadPrompt,
+  touchedFiles,
+  baseLimit = 4,
+  highRiskLimit = 6,
+}) {
+  const impact = inferImpactFromTouchedFiles(touchedFiles, leadPrompt);
+  const limit = impact.highRisk ? highRiskLimit : baseLimit;
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return [];
+  }
+
+  const candidates = state.promptResults
+    .filter((entry) => entry.isGolden)
+    .filter((entry) => entry.id !== leadPrompt.id)
+    .sort((left, right) => compareCanaryPriority(left, right, impact, state.campaignBudget.goldenGoal));
+  const selected = [];
+  const selectedIds = new Set();
+
+  const sameFamily = candidates.filter((entry) => entry.family === leadPrompt.family);
+  const sameArea = candidates.filter((entry) => entry.area === impact.primaryArea);
+  const crossAreaSentinels = impact.areas
+    .map((area) => candidates.find((entry) => entry.area === area))
+    .filter(Boolean);
+
+  addCanaries(selected, selectedIds, sameFamily, Math.min(limit, impact.highRisk ? 2 : 1));
+  addCanaries(selected, selectedIds, sameArea, Math.min(limit - selected.length, impact.highRisk ? 2 : 1));
+  addCanaries(selected, selectedIds, crossAreaSentinels, Math.min(limit - selected.length, 1));
+  addCanaries(selected, selectedIds, candidates, limit - selected.length);
+
+  return selected.slice(0, limit);
+}
+
 function comparePromptPriority(left, right, defaultGoal) {
   if (left.isGolden !== right.isGolden) {
     return Number(right.isGolden) - Number(left.isGolden);
@@ -148,6 +220,27 @@ function comparePromptPriority(left, right, defaultGoal) {
   }
   if ((left.score ?? 0) !== (right.score ?? 0)) {
     return (left.score ?? 0) - (right.score ?? 0);
+  }
+  return left.prompt.localeCompare(right.prompt);
+}
+
+function compareCanaryPriority(left, right, impact, defaultGoal) {
+  const areaDelta = compareBoolean(right.area === impact.primaryArea, left.area === impact.primaryArea);
+  if (areaDelta !== 0) {
+    return areaDelta;
+  }
+  const familyDelta = compareBoolean(right.family === impact.primaryFamily, left.family === impact.primaryFamily);
+  if (familyDelta !== 0) {
+    return familyDelta;
+  }
+  const blockingDelta = (right.blockingFlags?.length || 0) - (left.blockingFlags?.length || 0);
+  if (blockingDelta !== 0) {
+    return blockingDelta;
+  }
+  const rightGap = getPromptTarget(right, defaultGoal) - Number(right.score || 0);
+  const leftGap = getPromptTarget(left, defaultGoal) - Number(left.score || 0);
+  if (rightGap !== leftGap) {
+    return rightGap - leftGap;
   }
   return left.prompt.localeCompare(right.prompt);
 }
@@ -208,4 +301,58 @@ async function resolvePsqlBinary() {
     }
   }
   return null;
+}
+
+function inferImpactFromTouchedFiles(touchedFiles, leadPrompt) {
+  const matchedAreas = new Set();
+  let highRisk = false;
+
+  for (const file of touchedFiles || []) {
+    for (const rule of PATH_IMPACT_RULES) {
+      if (!file.startsWith(rule.prefix)) {
+        continue;
+      }
+      highRisk = highRisk || rule.highRisk;
+      for (const area of rule.areas) {
+        matchedAreas.add(area);
+      }
+    }
+  }
+
+  if (matchedAreas.size === 0) {
+    matchedAreas.add(leadPrompt.area || 'company');
+  }
+
+  const primaryArea = matchedAreas.has(leadPrompt.area) ? leadPrompt.area : [...matchedAreas][0];
+  const areas = ALL_AREAS.filter((area) => area !== primaryArea);
+  return {
+    highRisk,
+    primaryArea,
+    primaryFamily: leadPrompt.family,
+    areas,
+  };
+}
+
+function addCanaries(target, selectedIds, entries, count) {
+  if (count <= 0) {
+    return;
+  }
+  const targetSize = target.length + count;
+  for (const entry of entries) {
+    if (target.length >= targetSize) {
+      return;
+    }
+    if (!entry || selectedIds.has(entry.id)) {
+      continue;
+    }
+    selectedIds.add(entry.id);
+    target.push(entry);
+    if (target.length >= targetSize) {
+      return;
+    }
+  }
+}
+
+function compareBoolean(left, right) {
+  return Number(left) - Number(right);
 }

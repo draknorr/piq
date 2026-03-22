@@ -4,7 +4,10 @@ import readline from 'node:readline/promises';
 import { promisify } from 'node:util';
 
 import {
+  DEFAULT_CANARY_LIMIT,
   DEFAULT_GOLDEN_GOAL,
+  DEFAULT_FULL_SWEEP_INTERVAL,
+  DEFAULT_HIGH_RISK_CANARY_LIMIT,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_PORT,
   ROOT,
@@ -20,7 +23,12 @@ import {
   getWorkingTreeFingerprint,
   getWorkingTreeSnapshot,
 } from './git.mjs';
-import { buildPromptInventory, chooseNextPrompt, discoverPromptCandidates } from './inventory.mjs';
+import {
+  buildPromptInventory,
+  chooseNextPrompt,
+  discoverPromptCandidates,
+  selectCanaryPrompts,
+} from './inventory.mjs';
 import { getPromptTarget, isPromptAtTarget } from './judge-config.mjs';
 import { judgePrompt } from './judge.mjs';
 import { ensureLocalServer, stopServerProcess } from './server.mjs';
@@ -55,6 +63,13 @@ export async function runCampaign({
 }) {
   const env = await loadAutolabEnv();
   validateAutolabEnv(env);
+  const verificationPolicy = {
+    canaryLimit: parsePositiveInt(env.CHAT_AUTOLAB_CANARY_LIMIT) ?? DEFAULT_CANARY_LIMIT,
+    highRiskCanaryLimit:
+      parsePositiveInt(env.CHAT_AUTOLAB_HIGH_RISK_CANARY_LIMIT) ?? DEFAULT_HIGH_RISK_CANARY_LIMIT,
+    fullSweepInterval:
+      parseNonNegativeInt(env.CHAT_AUTOLAB_FULL_SWEEP_INTERVAL) ?? DEFAULT_FULL_SWEEP_INTERVAL,
+  };
 
   const activeRunId = runId || buildRunId();
   const paths = await initRunStorage(activeRunId);
@@ -154,6 +169,8 @@ export async function runCampaign({
         state.current.persona = promptEntry.persona;
         state.current.targetScore = getPromptTarget(promptEntry, state.campaignBudget.goldenGoal);
         state.current.hypothesis = null;
+        state.current.canaryPromptIds = [];
+        state.current.canaryPrompts = [];
         state.current.touchedFiles = [];
         state.current.nextAction = `Baseline "${promptEntry.prompt}".`;
         await updateState(state, onStateChange);
@@ -197,6 +214,7 @@ export async function runCampaign({
         evalSecret: state.evalSecret,
         auth,
         onStateChange,
+        verificationPolicy,
       })) {
         if (state.status === 'stopped') {
           return state;
@@ -220,6 +238,8 @@ export async function runCampaign({
       state.current.family = nextPrompt.family;
       state.current.persona = nextPrompt.persona;
       state.current.targetScore = getPromptTarget(nextPrompt, state.campaignBudget.goldenGoal);
+      state.current.canaryPromptIds = [];
+      state.current.canaryPrompts = [];
       state.current.touchedFiles = [];
       state.current.hypothesis = nextPrompt.rationale || 'Target the narrowest code path that fixes the current lead prompt.';
       setCurrentPhase(state, 'editing', `Run one Codex iteration for "${nextPrompt.prompt}".`);
@@ -290,6 +310,15 @@ export async function runCampaign({
       }
 
       const candidateFingerprint = await getWorkingTreeFingerprint(candidateSnapshot, state.workspaceDir);
+      const canaryPrompts = selectCanaryPrompts({
+        state,
+        leadPrompt: nextPrompt,
+        touchedFiles: candidateSnapshot.allFiles,
+        baseLimit: verificationPolicy.canaryLimit,
+        highRiskLimit: verificationPolicy.highRiskCanaryLimit,
+      });
+      state.current.canaryPromptIds = canaryPrompts.map((entry) => entry.id);
+      state.current.canaryPrompts = canaryPrompts.map((entry) => entry.prompt);
       startVerificationCheckpoint(state, {
         mode: 'candidate_gate',
         phase: 'targeted_verify',
@@ -298,14 +327,12 @@ export async function runCampaign({
         candidateSnapshot,
         pendingTaskIds: [
           buildVerificationTaskId('targeted', nextPrompt.id),
-          ...state.promptResults
-            .filter((entry) => entry.isGolden)
-            .map((entry) => buildVerificationTaskId('golden', entry.id)),
+          ...canaryPrompts.map((entry) => buildVerificationTaskId('canary', entry.id)),
         ],
       });
       await appendEvent(state, {
         type: 'verification_started',
-        message: `Checkpointed targeted and golden verification for ${nextPrompt.prompt}.`,
+        message: `Checkpointed targeted and canary verification for ${nextPrompt.prompt} with ${canaryPrompts.length} live canaries.`,
       });
       await updateState(state, onStateChange);
       await continueVerificationCheckpoint({
@@ -314,6 +341,7 @@ export async function runCampaign({
         evalSecret: state.evalSecret,
         auth,
         onStateChange,
+        verificationPolicy,
       });
       if (state.status === 'stopped') {
         return state;
@@ -593,6 +621,7 @@ async function continueVerificationCheckpoint({
   evalSecret,
   auth,
   onStateChange,
+  verificationPolicy,
 }) {
   const checkpoint = state.verificationCheckpoint;
   if (!checkpoint) {
@@ -608,7 +637,7 @@ async function continueVerificationCheckpoint({
       evalSecret,
       auth,
       onStateChange,
-      stageFilter: new Set(['targeted', 'golden']),
+      stageFilter: new Set(['targeted', 'canary']),
     });
 
     const refreshedCheckpoint = state.verificationCheckpoint;
@@ -618,12 +647,12 @@ async function continueVerificationCheckpoint({
     const leadPrompt = findPromptEntry(state, refreshedCheckpoint.leadPromptId);
     const leadBaseline = getPromptResult(state, refreshedCheckpoint.leadPromptId);
     const leadResult = getCheckpointResult(refreshedCheckpoint, 'targeted', refreshedCheckpoint.leadPromptId);
-    const goldenResults = getCheckpointResultsByStage(refreshedCheckpoint, 'golden');
+    const canaryResults = getCheckpointResultsByStage(refreshedCheckpoint, 'canary');
     if (!leadPrompt || !leadBaseline || !leadResult) {
       throw new Error('chat-autolab verification checkpoint is missing the lead prompt result.');
     }
 
-    const hasGoldenRegression = goldenResults.some(
+    const hasCanaryRegression = canaryResults.some(
       (result) => result.pairwiseVerdict === 'worse' || (result.blockingFlags?.length || 0) > 0
     );
     const leadImproved =
@@ -631,20 +660,82 @@ async function continueVerificationCheckpoint({
       leadResult.score > Number(leadBaseline?.score || 0) ||
       (leadBaseline?.blockingFlags?.length || 0) > (leadResult.blockingFlags?.length || 0);
 
-    if (!leadImproved || hasGoldenRegression) {
+    if (!leadImproved || hasCanaryRegression) {
       await discardAfterVerificationFailure({
         state,
         promptEntry: leadPrompt,
         candidateSnapshot: refreshedCheckpoint.candidateSnapshot,
         onStateChange,
         score: leadResult.score,
-        reason: hasGoldenRegression ? 'Golden regression detected.' : 'Lead prompt did not improve.',
-        message: `Discarded ${leadPrompt.prompt} because it failed the targeted or golden gate.`,
+        reason: hasCanaryRegression ? 'Canary regression detected.' : 'Lead prompt did not improve.',
+        message: `Discarded ${leadPrompt.prompt} because it failed the targeted or canary gate.`,
       });
       return true;
     }
 
-    if (shouldRunFullVerify(refreshedCheckpoint.candidateSnapshot.allFiles, state.iterations.accepted)) {
+    startVerificationCheckpoint(state, {
+      mode: 'golden_gate',
+      phase: 'golden_verify',
+      leadPromptId: refreshedCheckpoint.leadPromptId,
+      candidateFingerprint: refreshedCheckpoint.candidateFingerprint,
+      candidateSnapshot: refreshedCheckpoint.candidateSnapshot,
+      completedResults: refreshedCheckpoint.completedResults,
+      pendingTaskIds: getGoldenVerificationTaskIds(state, refreshedCheckpoint),
+    });
+    setCurrentPhase(state, 'golden_verify', 'Run the final live golden sweep before keeping this candidate.');
+    await appendEvent(state, {
+      type: 'verification_started',
+      message: `Canaries passed for ${leadPrompt.prompt}; running the final live golden sweep before keep.`,
+    });
+    await updateState(state, onStateChange);
+    return await continueVerificationCheckpoint({
+      state,
+      origin,
+      evalSecret,
+      auth,
+      onStateChange,
+      verificationPolicy,
+    });
+  }
+
+  if (checkpoint.mode === 'golden_gate') {
+    await runVerificationTasks({
+      state,
+      origin,
+      evalSecret,
+      auth,
+      onStateChange,
+      stageFilter: new Set(['golden']),
+    });
+
+    const refreshedCheckpoint = state.verificationCheckpoint;
+    if (!refreshedCheckpoint) {
+      return true;
+    }
+    const leadPrompt = findPromptEntry(state, refreshedCheckpoint.leadPromptId);
+    const leadResult = getCheckpointResult(refreshedCheckpoint, 'targeted', refreshedCheckpoint.leadPromptId);
+    const goldenResults = getAllGoldenGateResults(state, refreshedCheckpoint);
+    if (!leadPrompt || !leadResult) {
+      throw new Error('chat-autolab golden verification checkpoint is missing the lead prompt result.');
+    }
+
+    const hasGoldenRegression = goldenResults.some(
+      (result) => result.pairwiseVerdict === 'worse' || (result.blockingFlags?.length || 0) > 0
+    );
+    if (hasGoldenRegression) {
+      await discardAfterVerificationFailure({
+        state,
+        promptEntry: leadPrompt,
+        candidateSnapshot: refreshedCheckpoint.candidateSnapshot,
+        onStateChange,
+        score: leadResult.score,
+        reason: 'Golden regression detected.',
+        message: `Discarded ${leadPrompt.prompt} because it failed the final golden sweep.`,
+      });
+      return true;
+    }
+
+    if (shouldRunFullVerify(verificationPolicy.fullSweepInterval, state.iterations.accepted)) {
       startVerificationCheckpoint(state, {
         mode: 'full_verify',
         phase: 'full_verify',
@@ -668,6 +759,7 @@ async function continueVerificationCheckpoint({
         evalSecret,
         auth,
         onStateChange,
+        verificationPolicy,
       });
     }
 
@@ -760,7 +852,10 @@ async function runVerificationTasks({
 
     if (task.stage === 'golden') {
       updateVerificationCheckpointPhase(state, 'golden_verify');
-      setCurrentPhase(state, 'golden_verify', `Run the golden verification pack for "${state.current.prompt}".`);
+      setCurrentPhase(state, 'golden_verify', 'Run the final live golden sweep before keeping this candidate.');
+    } else if (task.stage === 'canary') {
+      updateVerificationCheckpointPhase(state, 'canary_verify');
+      setCurrentPhase(state, 'canary_verify', `Run live canary verification for "${state.current.prompt}".`);
     } else if (task.stage === 'frontier') {
       updateVerificationCheckpointPhase(state, 'full_verify');
       setCurrentPhase(state, 'full_verify', 'Run the broader sections 1-5 verification pass.');
@@ -805,8 +900,8 @@ async function runVerificationTasks({
       result,
       recordedAt: new Date().toISOString(),
     });
-    if (task.stage === 'golden') {
-      state.lastGuard.golden = !getCheckpointResultsByStage(state.verificationCheckpoint, 'golden').some(
+    if (task.stage === 'golden' || task.stage === 'canary') {
+      state.lastGuard.golden = !getAllGoldenGateResults(state, state.verificationCheckpoint).some(
         (row) => row.pairwiseVerdict === 'worse'
       );
     }
@@ -857,6 +952,8 @@ async function acceptVerifiedCandidate({
     verdict: 'keep',
     reason: `Accepted ${promptEntry.prompt} after passing the golden gate.`,
   };
+  state.current.canaryPromptIds = [];
+  state.current.canaryPrompts = [];
   clearVerificationCheckpoint(state);
   await appendEvent(state, {
     type: 'keep',
@@ -889,6 +986,8 @@ async function discardAfterVerificationFailure({
     verdict: 'discard',
     reason,
   };
+  state.current.canaryPromptIds = [];
+  state.current.canaryPrompts = [];
   await updateState(state, onStateChange);
 }
 
@@ -917,6 +1016,7 @@ async function recoverVerificationCheckpointFromArtifacts({ state, onStateChange
 
   const expectedTaskIds = [
     buildVerificationTaskId('targeted', state.current.promptId),
+    ...state.current.canaryPromptIds.map((promptId) => buildVerificationTaskId('canary', promptId)),
     ...state.promptResults
       .filter((entry) => entry.isGolden)
       .map((entry) => buildVerificationTaskId('golden', entry.id)),
@@ -948,7 +1048,7 @@ async function recoverVerificationCheckpointFromArtifacts({ state, onStateChange
   }
 
   startVerificationCheckpoint(state, {
-    mode: state.current.phase === 'full_verify' ? 'full_verify' : 'candidate_gate',
+    mode: inferRecoveryMode(state.current.phase, completedResults),
     phase: state.current.phase,
     leadPromptId: state.current.promptId,
     candidateFingerprint: await getWorkingTreeFingerprint(candidateSnapshot, state.workspaceDir),
@@ -1001,6 +1101,16 @@ async function assertMatchingVerificationCheckpoint(state, onStateChange) {
   }
 
   state.current.touchedFiles = checkpoint.candidateSnapshot?.allFiles || currentSnapshot.allFiles;
+  const canaryPromptIds = new Set([
+    ...(state.current.canaryPromptIds || []),
+    ...Object.values(checkpoint.completedResults || {})
+      .filter((entry) => entry.stage === 'canary')
+      .map((entry) => entry.promptId),
+  ]);
+  state.current.canaryPromptIds = [...canaryPromptIds];
+  state.current.canaryPrompts = state.current.canaryPromptIds
+    .map((promptId) => findPromptEntry(state, promptId)?.prompt || null)
+    .filter(Boolean);
 }
 
 async function loadVerificationArtifacts(runId) {
@@ -1014,7 +1124,7 @@ async function loadVerificationArtifacts(runId) {
 
   const artifacts = [];
   for (const filename of filenames.sort()) {
-    const match = filename.match(/^(.+?)-(targeted|golden|frontier)-([^.]+)\.json$/);
+    const match = filename.match(/^(.+?)-(targeted|canary|golden|frontier)-([^.]+)\.json$/);
     if (!match) {
       continue;
     }
@@ -1071,13 +1181,27 @@ function hydratePromptResultFromArtifact(artifact) {
 }
 
 function getRelevantRecoveryStages(phase) {
-  if (phase === 'targeted_verify' || phase === 'golden_verify') {
-    return ['targeted', 'golden'];
+  if (phase === 'targeted_verify' || phase === 'canary_verify') {
+    return ['targeted', 'canary'];
+  }
+  if (phase === 'golden_verify') {
+    return ['targeted', 'canary', 'golden'];
   }
   if (phase === 'full_verify') {
-    return ['targeted', 'golden', 'frontier'];
+    return ['targeted', 'canary', 'golden', 'frontier'];
   }
   return [];
+}
+
+function inferRecoveryMode(phase, completedResults) {
+  if (phase === 'full_verify') {
+    return 'full_verify';
+  }
+  const completedStages = new Set(Object.values(completedResults || {}).map((entry) => entry.stage));
+  if (completedStages.has('golden') || phase === 'golden_verify') {
+    return 'golden_gate';
+  }
+  return 'candidate_gate';
 }
 
 function findPromptEntry(state, promptId) {
@@ -1111,6 +1235,29 @@ function getCheckpointResultsByStage(checkpoint, stage) {
     .map((entry) => entry.result);
 }
 
+function getGoldenVerificationTaskIds(state, checkpoint) {
+  const coveredGoldenIds = new Set(getCheckpointResultsByStage(checkpoint, 'canary').map((entry) => entry.id));
+  if (findPromptEntry(state, checkpoint.leadPromptId)?.isGolden) {
+    coveredGoldenIds.add(checkpoint.leadPromptId);
+  }
+  return state.promptResults
+    .filter((entry) => entry.isGolden)
+    .filter((entry) => !coveredGoldenIds.has(entry.id))
+    .map((entry) => buildVerificationTaskId('golden', entry.id));
+}
+
+function getAllGoldenGateResults(state, checkpoint) {
+  const results = [];
+  const leadPrompt = findPromptEntry(state, checkpoint?.leadPromptId);
+  const leadResult = getCheckpointResult(checkpoint, 'targeted', checkpoint?.leadPromptId);
+  if (leadPrompt?.isGolden && leadResult) {
+    results.push(leadResult);
+  }
+  results.push(...getCheckpointResultsByStage(checkpoint, 'canary'));
+  results.push(...getCheckpointResultsByStage(checkpoint, 'golden'));
+  return results;
+}
+
 function formatJudgeStatusMessage(prompt, stage, status) {
   const elapsed = Number(status?.elapsedMs || 0);
   const seconds = elapsed > 0 ? `${Math.round(elapsed / 1000)}s` : null;
@@ -1137,7 +1284,7 @@ function formatJudgeStatusMessage(prompt, stage, status) {
 }
 
 function isVerificationPhase(phase) {
-  return ['targeted_verify', 'golden_verify', 'full_verify'].includes(phase);
+  return ['targeted_verify', 'canary_verify', 'golden_verify', 'full_verify'].includes(phase);
 }
 
 async function discardCandidateSnapshot(state, candidateSnapshot, onStateChange) {
@@ -1221,13 +1368,9 @@ async function runCodeGuard(cwd, touchedFiles) {
   }
 }
 
-function shouldRunFullVerify(touchedFiles, acceptedCount) {
-  const sharedChange = touchedFiles.some((file) =>
-    file.startsWith('apps/admin/src/app/api/chat/') ||
-    file.startsWith('apps/admin/src/lib/llm/') ||
-    file.startsWith('apps/admin/src/lib/chat/')
-  );
-  return sharedChange || (acceptedCount > 0 && acceptedCount % 3 === 0);
+function shouldRunFullVerify(interval, acceptedCount) {
+  const nextAcceptedCount = acceptedCount + 1;
+  return Number.isFinite(interval) && interval > 0 && nextAcceptedCount % interval === 0;
 }
 
 function buildCodexPrompt(promptEntry, state) {
@@ -1297,6 +1440,22 @@ function zeroUsage() {
     outputTokens: 0,
     totalTokens: 0,
   };
+}
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(String(value || '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseNonNegativeInt(value) {
+  const parsed = Number.parseInt(String(value || '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
 }
 
 export async function promptForCampaignNote() {

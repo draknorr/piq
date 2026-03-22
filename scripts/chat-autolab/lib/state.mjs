@@ -126,6 +126,8 @@ export function createInitialState({
       persona: null,
       targetScore: null,
       hypothesis: null,
+      canaryPromptIds: [],
+      canaryPrompts: [],
       touchedFiles: [],
       nextAction: 'Boot the campaign.',
     },
@@ -369,6 +371,9 @@ export function renderDashboard(state) {
   lines.push(`Prompt: ${state.current.prompt || '-'}`);
   lines.push(`Area / Persona: ${state.current.area || '-'} / ${state.current.persona || '-'}`);
   lines.push(`Target: ${typeof currentTarget === 'number' ? currentTarget.toFixed(1) : '-'}`);
+  if (state.current.canaryPrompts?.length) {
+    lines.push(`Canaries: ${state.current.canaryPrompts.join(' | ')}`);
+  }
   lines.push(`Next: ${state.current.nextAction || '-'}`);
   lines.push('');
   lines.push(`Goldens at target: ${state.baseline.goldenAtGoal}/${state.baseline.totalGoldens}`);
@@ -420,6 +425,8 @@ function normalizeLoadedState(state) {
     baselineQueue: Array.isArray(state.baselineQueue) ? state.baselineQueue : [],
     current: {
       ...(state.current || {}),
+      canaryPromptIds: Array.isArray(state.current?.canaryPromptIds) ? state.current.canaryPromptIds : [],
+      canaryPrompts: Array.isArray(state.current?.canaryPrompts) ? state.current.canaryPrompts : [],
       targetScore: Number.isFinite(Number(state.current?.targetScore))
         ? Number(state.current.targetScore)
         : null,
