@@ -6,14 +6,16 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const PROD_ORIGIN = process.env.CHAT_EVAL_ORIGIN || 'https://www.publisheriq.app';
+const MODE = process.env.CHAT_EVAL_MODE || 'full';
+const SCENARIOS_FILE = process.env.CHAT_EVAL_SCENARIOS_FILE || '';
 const OUT_DIR =
   process.env.CHAT_EVAL_OUT_DIR ||
   path.join('/tmp', 'publisheriq-chat-evals', new Date().toISOString().replace(/[:.]/g, '-'));
-const DOC_PATH = process.env.CHAT_EVAL_DOC_PATH || path.join(ROOT, 'docs/chat-prompt-evals.md');
+const DOC_PATH =
+  process.env.CHAT_EVAL_DOC_PATH ||
+  (SCENARIOS_FILE ? path.join(OUT_DIR, 'report.md') : path.join(ROOT, 'docs/chat-prompt-evals.md'));
 const MANIFEST_PATH = path.join(OUT_DIR, 'manifest.json');
 const RESULTS_PATH = path.join(OUT_DIR, 'results.json');
-const MODE = process.env.CHAT_EVAL_MODE || 'full';
-const SCENARIOS_FILE = process.env.CHAT_EVAL_SCENARIOS_FILE || '';
 const BASELINE_OUT_DIR = process.env.CHAT_EVAL_BASELINE_OUT_DIR || '';
 const INCLUDE_PROMPTS_FILE = process.env.CHAT_EVAL_INCLUDE_PROMPTS_FILE || '';
 const MAX_CONCURRENCY = Number(process.env.CHAT_EVAL_CONCURRENCY || '1');
@@ -920,7 +922,7 @@ function inferExpectedTools(family, promptText) {
         ? ['lookup_games', 'get_game_change_timeline']
         : ['get_game_change_timeline'];
     case 'change_before_after':
-      return ['compare_change_before_after'];
+      return ['compare_change_before_after', 'get_game_change_timeline'];
     case 'change_pattern':
       return ['find_change_patterns'];
     case 'similarity':
@@ -1530,6 +1532,10 @@ function parseSse(rawSse) {
         arguments: event.arguments || {},
         executionMs: event.timing?.executionMs ?? null,
         success: event.result?.success !== false,
+        unavailable: event.result?.unavailable === true,
+        failure_kind:
+          typeof event.result?.failure_kind === 'string' ? event.result.failure_kind : null,
+        error_message: typeof event.result?.error === 'string' ? event.result.error : null,
         result_summary: summarizeToolResult(event.result),
       });
       continue;
@@ -1593,6 +1599,18 @@ function summarizeScenarioSessionContext(sessionContext) {
 
 function summarizeToolResult(result) {
   if (!result || typeof result !== 'object') return null;
+  if (result.success === false) {
+    const failureKind =
+      typeof result.failure_kind === 'string' ? result.failure_kind : null;
+    const errorMessage =
+      typeof result.error === 'string'
+        ? truncate(result.error.replace(/\s+/g, ' ').trim(), 180)
+        : null;
+    if (failureKind && errorMessage) return `${failureKind}: ${errorMessage}`;
+    if (errorMessage) return errorMessage;
+    if (failureKind) return failureKind;
+    return 'tool failed';
+  }
   if (typeof result.total_found === 'number') return `${result.total_found} results`;
   if (typeof result.rowCount === 'number') return `${result.rowCount} rows`;
   if (Array.isArray(result.results)) return `${result.results.length} results`;
@@ -1601,12 +1619,46 @@ function summarizeToolResult(result) {
   return null;
 }
 
+function summarizeToolExecution(promptRow, result) {
+  const toolCalls = Array.isArray(result.tool_calls) ? result.tool_calls : [];
+  const expectedTools = Array.isArray(promptRow.expected_tools) ? promptRow.expected_tools : [];
+  const matchedExpectedTools = expectedTools.filter((toolName) =>
+    toolCalls.some((tool) => tool.name === toolName)
+  );
+  const successfulExpectedTools = matchedExpectedTools.filter((toolName) =>
+    toolCalls.some((tool) => tool.name === toolName && tool.success !== false)
+  );
+  const failedExpectedTools = matchedExpectedTools.filter(
+    (toolName) =>
+      toolCalls.some((tool) => tool.name === toolName && tool.success === false) &&
+      !toolCalls.some((tool) => tool.name === toolName && tool.success !== false)
+  );
+  const toolFailureKinds = [
+    ...new Set(
+      toolCalls
+        .filter((tool) => tool.success === false)
+        .map((tool) => tool.failure_kind || 'tool_failure')
+    ),
+  ];
+
+  return {
+    primary_tool_succeeded:
+      expectedTools.length > 0 ? successfulExpectedTools.length > 0 : null,
+    matched_expected_tool_count: matchedExpectedTools.length,
+    successful_expected_tool_count: successfulExpectedTools.length,
+    failed_expected_tool_count: failedExpectedTools.length,
+    tool_failure_count: toolCalls.filter((tool) => tool.success === false).length,
+    tool_failure_kinds: toolFailureKinds,
+  };
+}
+
 function finalizeResult(promptRow, result) {
   return {
     ...promptRow,
     environment: PROD_ORIGIN,
     run_started_at: new Date().toISOString(),
     ...result,
+    ...summarizeToolExecution(promptRow, result),
   };
 }
 
@@ -1791,6 +1843,9 @@ function build429Assessment(result, retryStatus) {
 }
 
 function shouldRerunCheckpointRow(row) {
+  if (row?.primary_tool_succeeded === false) {
+    return true;
+  }
   return row?.status === 'error' && isRetryableErrorMessage(row.error_message, row.http_status);
 }
 
@@ -1822,24 +1877,38 @@ function scoreResult(result) {
   const notes = [];
   const issue_tags = [];
   const runtimeFailure = result.status === 'error';
+  const primaryToolFailure = result.primary_tool_succeeded === false;
 
-  if (result.status === 'success') {
+  if (!runtimeFailure && !primaryToolFailure) {
     score += 3;
   } else {
-    issue_tags.push('error');
-    issue_tags.push(result.failure_kind || 'runtime_failure');
-    notes.push(
-      `Runtime failure (${result.failure_kind || 'unknown'}): ${truncate(result.error_message || 'Unknown error', 180)}`
-    );
+    if (runtimeFailure) {
+      issue_tags.push('error');
+      issue_tags.push(result.failure_kind || 'runtime_failure');
+      notes.push(
+        `Runtime failure (${result.failure_kind || 'unknown'}): ${truncate(result.error_message || 'Unknown error', 180)}`
+      );
+    }
+    if (primaryToolFailure) {
+      issue_tags.push('tool_failure');
+      issue_tags.push(...(result.tool_failure_kinds || []));
+      notes.push(
+        `Primary expected tool failed (${(result.tool_failure_kinds || ['unknown']).join(', ')}). ${
+          result.status === 'success'
+            ? 'The chat stream still completed, but only with fallback prose.'
+            : 'The request did not complete cleanly.'
+        }`
+      );
+    }
   }
 
-  if (runtimeFailure) {
+  if (runtimeFailure || primaryToolFailure) {
     return {
       ...result,
-      score,
+      score: 0,
       issue_tags,
       notes,
-      verdict: verdictFromScore(score, result.status),
+      verdict: verdictFromScore(0, 'error'),
     };
   }
 
@@ -1864,6 +1933,13 @@ function scoreResult(result) {
   } else if (result.expected_tools.length > 0 && result.status === 'success') {
     issue_tags.push('tool_mismatch');
     notes.push(`Expected ${result.expected_tools.join(', ')}, got ${actualTools.join(', ') || 'none'}.`);
+  }
+
+  if (result.tool_failure_count > 0) {
+    issue_tags.push('non_primary_tool_failure');
+    notes.push(
+      `A non-primary tool failed (${(result.tool_failure_kinds || ['unknown']).join(', ')}), but an expected tool still completed.`
+    );
   }
 
   if (hasMarkdownEntityLinks(result.assistant_output_raw)) {
@@ -2017,10 +2093,23 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   const speculativeRows = manifest.filter((row) => row.support_tier === 'speculative_reference');
   const openAi429Rows = results.filter((row) => isOpenAi429ErrorRow(row));
   const runtimeFailures = results.filter((row) => row.status === 'error');
+  const toolFailures = results.filter((row) => row.primary_tool_succeeded === false);
   const runtimeFailureCounts = Array.from(
     runtimeFailures.reduce((map, row) => {
       const key = row.failure_kind || 'unknown';
       map.set(key, (map.get(key) || 0) + 1);
+      return map;
+    }, new Map())
+  ).sort((left, right) => right[1] - left[1]);
+  const toolFailureCounts = Array.from(
+    toolFailures.reduce((map, row) => {
+      const kinds =
+        Array.isArray(row.tool_failure_kinds) && row.tool_failure_kinds.length > 0
+          ? row.tool_failure_kinds
+          : ['unknown'];
+      for (const kind of kinds) {
+        map.set(kind, (map.get(kind) || 0) + 1);
+      }
       return map;
     }, new Map())
   ).sort((left, right) => right[1] - left[1]);
@@ -2054,6 +2143,7 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   lines.push(`- Speculative reference rows: ${speculativeRows.length}`);
   lines.push(`- Current OpenAI 429 rows: ${openAi429Rows.length}`);
   lines.push(`- Runtime failure rows: ${runtimeFailures.length}`);
+  lines.push(`- Primary expected tool failure rows: ${toolFailures.length}`);
   if (metadata.mode === 'retry_429_only') {
     lines.push(`- Retry baseline: ${metadata.baselineOutDir}`);
     lines.push(`- Retry filter: ${metadata.retryFilter}`);
@@ -2079,6 +2169,16 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     lines.push('| Failure Kind | Count |');
     lines.push('|---|---:|');
     for (const [failureKind, count] of runtimeFailureCounts) {
+      lines.push(`| ${escapeTable(failureKind)} | ${count} |`);
+    }
+    lines.push('');
+  }
+  if (toolFailureCounts.length > 0) {
+    lines.push('## Tool Failures');
+    lines.push('');
+    lines.push('| Failure Kind | Count |');
+    lines.push('|---|---:|');
+    for (const [failureKind, count] of toolFailureCounts) {
       lines.push(`| ${escapeTable(failureKind)} | ${count} |`);
     }
     lines.push('');
@@ -2115,6 +2215,9 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     lines.push(`- Failure kind: ${row.failure_kind || '-'}`);
     lines.push(`- Transport OK: ${row.transport_ok === true ? 'yes' : row.transport_ok === false ? 'no' : '-'}`);
     lines.push(`- message_end received: ${row.message_end_received === true ? 'yes' : row.message_end_received === false ? 'no' : '-'}`);
+    lines.push(`- Primary expected tool succeeded: ${row.primary_tool_succeeded === true ? 'yes' : row.primary_tool_succeeded === false ? 'no' : '-'}`);
+    lines.push(`- Tool failure count: ${row.tool_failure_count ?? 0}`);
+    lines.push(`- Tool failure kinds: ${(row.tool_failure_kinds || []).join(', ') || '-'}`);
     lines.push(`- Sources: ${row.source_locations.join(', ')}`);
     lines.push(`- Expected tools: ${row.expected_tools.join(', ') || '-'}`);
     lines.push(`- Actual tools: ${row.tool_calls.map((tool) => tool.name).join(', ') || '-'}`);
@@ -2149,6 +2252,9 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
           name: tool.name,
           executionMs: tool.executionMs,
           success: tool.success,
+          unavailable: tool.unavailable,
+          failure_kind: tool.failure_kind,
+          error_message: tool.error_message,
           result_summary: tool.result_summary,
         })),
         null,

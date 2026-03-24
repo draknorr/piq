@@ -137,6 +137,20 @@ export const SUITE_ROWS = [
     primaryPersona: 'Agency / Business Development Prospector',
     prompt: 'Rank possible marketing-agency leads by need, timing, and evidence quality.',
   },
+  {
+    critiqueId: 'M1',
+    section: '6. Change Intelligence and Strategic / Prospecting Answers',
+    family: 'change_pattern',
+    primaryPersona: 'Agency / Business Development Prospector',
+    prompt: 'Which titles look like they started a new marketing push this month?',
+  },
+  {
+    critiqueId: 'M2',
+    section: '6. Change Intelligence and Strategic / Prospecting Answers',
+    family: 'change_pattern',
+    primaryPersona: 'Agency / Business Development Prospector',
+    prompt: 'Which games look like they started a new marketing push recently?',
+  },
 ];
 
 async function main() {
@@ -233,7 +247,8 @@ async function renderDraftArtifacts(outDir) {
   const suiteResults = orderSuiteResults(results);
   const timingSummary = summarizeTimings(suiteResults);
   const familySummary = summarizeFamilies(suiteResults);
-  const failureSummary = summarizeFailures(suiteResults);
+  const runtimeFailureSummary = summarizeRuntimeFailures(suiteResults);
+  const toolFailureSummary = summarizeToolFailures(suiteResults);
   const curationTemplate = buildCurationTemplate(suiteResults);
   const draftRunPath = path.join(outDir, 'ledger-run-draft.md');
   const curationTemplatePath = path.join(outDir, 'curation-template.json');
@@ -245,7 +260,8 @@ async function renderDraftArtifacts(outDir) {
     suiteResults,
     timingSummary,
     familySummary,
-    failureSummary,
+    runtimeFailureSummary,
+    toolFailureSummary,
   });
 
   await fs.writeFile(draftRunPath, draftRunMarkdown);
@@ -259,7 +275,8 @@ async function renderDraftArtifacts(outDir) {
         promptCount: suiteResults.length,
         timingSummary,
         familySummary,
-        failureSummary,
+        runtimeFailureSummary,
+        toolFailureSummary,
         results: suiteResults.map((row) => ({
           critiqueId: row.suite.critiqueId,
           prompt: row.prompt_text,
@@ -270,6 +287,10 @@ async function renderDraftArtifacts(outDir) {
           tools: row.tool_calls.map((tool) => tool.name),
           status: row.status,
           failureKind: row.failure_kind ?? null,
+          primaryToolSucceeded: row.primary_tool_succeeded ?? null,
+          toolFailureCount: row.tool_failure_count ?? 0,
+          toolFailureKinds: row.tool_failure_kinds ?? [],
+          workingStatus: isWorkingRow(row) ? 'working' : row.status === 'error' ? 'runtime_failure' : 'tool_failure',
         })),
       },
       null,
@@ -336,14 +357,22 @@ function summarizeFamilies(results) {
     const existing = summary.get(family) || {
       family,
       promptCount: 0,
-      successCount: 0,
+      workingCount: 0,
+      transportSuccessCount: 0,
+      toolFailureCount: 0,
       runtimeFailureCount: 0,
     };
 
     existing.promptCount += 1;
     if (row.status === 'success') {
-      existing.successCount += 1;
-    } else {
+      existing.transportSuccessCount += 1;
+    }
+    if (isWorkingRow(row)) {
+      existing.workingCount += 1;
+    } else if (row.primary_tool_succeeded === false) {
+      existing.toolFailureCount += 1;
+    }
+    if (row.status === 'error') {
       existing.runtimeFailureCount += 1;
     }
 
@@ -353,7 +382,7 @@ function summarizeFamilies(results) {
   return Array.from(summary.values()).sort((left, right) => left.family.localeCompare(right.family));
 }
 
-function summarizeFailures(results) {
+function summarizeRuntimeFailures(results) {
   const summary = new Map();
 
   for (const row of results) {
@@ -368,6 +397,32 @@ function summarizeFailures(results) {
   return Array.from(summary.entries())
     .map(([failureKind, count]) => ({ failureKind, count }))
     .sort((left, right) => right.count - left.count);
+}
+
+function summarizeToolFailures(results) {
+  const summary = new Map();
+
+  for (const row of results) {
+    if (row.primary_tool_succeeded !== false) {
+      continue;
+    }
+
+    const kinds =
+      Array.isArray(row.tool_failure_kinds) && row.tool_failure_kinds.length > 0
+        ? row.tool_failure_kinds
+        : ['unknown'];
+    for (const kind of kinds) {
+      summary.set(kind, (summary.get(kind) || 0) + 1);
+    }
+  }
+
+  return Array.from(summary.entries())
+    .map(([failureKind, count]) => ({ failureKind, count }))
+    .sort((left, right) => right.count - left.count);
+}
+
+function isWorkingRow(row) {
+  return row.status === 'success' && row.primary_tool_succeeded !== false;
 }
 
 function buildCurationTemplate(results) {
@@ -398,7 +453,8 @@ function renderDraftRunMarkdown({
   suiteResults,
   timingSummary,
   familySummary,
-  failureSummary,
+  runtimeFailureSummary,
+  toolFailureSummary,
 }) {
   const lines = [];
   lines.push('# Critique Sections 5+6 Draft Run');
@@ -423,20 +479,30 @@ function renderDraftRunMarkdown({
   lines.push('');
   lines.push('## Family Summary');
   lines.push('');
-  lines.push('| Family | Prompts | Success | Runtime Failures |');
-  lines.push('|---|---:|---:|---:|');
+  lines.push('| Family | Prompts | Working | Transport Success | Tool Failures | Runtime Failures |');
+  lines.push('|---|---:|---:|---:|---:|---:|');
   for (const row of familySummary) {
     lines.push(
-      `| ${escapeTable(row.family)} | ${row.promptCount} | ${row.successCount} | ${row.runtimeFailureCount} |`
+      `| ${escapeTable(row.family)} | ${row.promptCount} | ${row.workingCount} | ${row.transportSuccessCount} | ${row.toolFailureCount} | ${row.runtimeFailureCount} |`
     );
   }
   lines.push('');
-  if (failureSummary.length > 0) {
+  if (runtimeFailureSummary.length > 0) {
     lines.push('## Runtime Failures');
     lines.push('');
     lines.push('| Failure Kind | Count |');
     lines.push('|---|---:|');
-    for (const row of failureSummary) {
+    for (const row of runtimeFailureSummary) {
+      lines.push(`| ${escapeTable(row.failureKind)} | ${row.count} |`);
+    }
+    lines.push('');
+  }
+  if (toolFailureSummary.length > 0) {
+    lines.push('## Tool Failures');
+    lines.push('');
+    lines.push('| Failure Kind | Count |');
+    lines.push('|---|---:|');
+    for (const row of toolFailureSummary) {
       lines.push(`| ${escapeTable(row.failureKind)} | ${row.count} |`);
     }
     lines.push('');
@@ -453,11 +519,11 @@ function renderDraftRunMarkdown({
   lines.push('');
   lines.push('## Results');
   lines.push('');
-  lines.push('| Critique ID | Prompt | Total Time | Tools | Status | Failure Kind |');
-  lines.push('|---:|---|---:|---|---|---|');
+  lines.push('| Critique ID | Prompt | Total Time | Tools | Status | Primary Tool | Failure Kind | Tool Failure Kinds |');
+  lines.push('|---:|---|---:|---|---|---|---|---|');
   for (const row of suiteResults) {
     lines.push(
-      `| ${row.suite.critiqueId} | ${escapeTable(row.prompt_text)} | ${row.timing?.totalMs ?? '-'} | ${escapeTable(row.tool_calls.map((tool) => tool.name).join(', ') || '-')} | ${row.status} | ${escapeTable(row.failure_kind || '-')} |`
+      `| ${row.suite.critiqueId} | ${escapeTable(row.prompt_text)} | ${row.timing?.totalMs ?? '-'} | ${escapeTable(row.tool_calls.map((tool) => tool.name).join(', ') || '-')} | ${row.status} | ${row.primary_tool_succeeded === true ? 'ok' : row.primary_tool_succeeded === false ? 'failed' : '-'} | ${escapeTable(row.failure_kind || '-')} | ${escapeTable((row.tool_failure_kinds || []).join(', ') || '-')} |`
     );
   }
   lines.push('');
@@ -478,6 +544,10 @@ function renderDraftRunMarkdown({
       `- Timing: total ${row.timing?.totalMs ?? '-'}ms | llm ${row.timing?.llmMs ?? '-'}ms | tools ${row.timing?.toolsMs ?? '-'}ms | iterations ${row.iterations ?? '-'}`
     );
     lines.push(`- Tools: ${row.tool_calls.map((tool) => tool.name).join(', ') || '-'}`);
+    lines.push(`- Working: ${isWorkingRow(row) ? 'yes' : 'no'}`);
+    lines.push(`- Primary expected tool succeeded: ${row.primary_tool_succeeded === true ? 'yes' : row.primary_tool_succeeded === false ? 'no' : '-'}`);
+    lines.push(`- Tool failure count: ${row.tool_failure_count ?? 0}`);
+    lines.push(`- Tool failure kinds: ${(row.tool_failure_kinds || []).join(', ') || '-'}`);
     lines.push(`- Failure kind: ${row.failure_kind || '-'}`);
     lines.push('');
     lines.push('<details>');

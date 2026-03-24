@@ -490,6 +490,27 @@ export async function refreshChangeActivityBurstsForApp(
   return Number(data ?? 0);
 }
 
+export async function refreshChangePatternActivityDaysForApp(
+  supabase: TypedSupabaseClient,
+  appid: number,
+  lookbackDays = 180
+): Promise<number> {
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'refresh_change_pattern_activity_days_for_app',
+    () =>
+      getDb(supabase).rpc('refresh_change_pattern_activity_days_for_app', {
+        p_appid: appid,
+        p_lookback_days: lookbackDays,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to refresh change_pattern_activity_days: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
 export async function listRecentChangeActivityAppIds(
   supabase: TypedSupabaseClient,
   lookbackDays = 180,

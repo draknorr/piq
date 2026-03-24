@@ -22,6 +22,7 @@ export type ChatQualityFlag =
   | 'clarification_required'
   | 'no_match'
   | 'sparse_result'
+  | 'temporary_unavailable'
   | 'fallback_allowed'
   | 'fallback_used'
   | 'duplicate_tool_blocked'
@@ -79,6 +80,8 @@ export interface ToolAnswerContractSummary {
   needsClarification: boolean;
   noMatch: boolean;
   sparse: boolean;
+  unavailable?: boolean;
+  failureKind?: string;
   fallbackAllowed: boolean;
   fallbackAction: Phase1FallbackAction;
   requiredAnswerFields: string[];

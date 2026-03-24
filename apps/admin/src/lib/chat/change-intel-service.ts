@@ -37,6 +37,7 @@ const MAX_TIMELINE_LIMIT = 50;
 const DEFAULT_PATTERN_LIMIT = 10;
 const MAX_PATTERN_LIMIT = 10;
 const INTERNAL_PATTERN_ACTIVITY_LIMIT = 60;
+const DEFAULT_PATTERN_APP_TYPES: AppType[] = ['game'];
 const HIGH_CONFIDENCE_SIMILARITY = 0.72;
 const MINIMUM_CONFIDENCE_SIMILARITY = 0.45;
 const CLEAR_CONFIDENCE_MARGIN = 0.08;
@@ -1356,12 +1357,15 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
   const days = clamp(args.days, DEFAULT_ACTIVITY_DAYS, 1, MAX_ACTIVITY_DAYS);
   const limit = clamp(args.limit, DEFAULT_PATTERN_LIMIT, 1, MAX_PATTERN_LIMIT);
   const search = normalizeSearch(args.search);
+  const appTypes = args.app_types && args.app_types.length > 0
+    ? args.app_types
+    : DEFAULT_PATTERN_APP_TYPES;
   let rawCandidates: ChatChangePatternCandidateRow[];
   try {
     rawCandidates = await fetchChatChangePatternCandidates({
       pattern: args.pattern,
       days,
-      appTypes: args.app_types ?? null,
+      appTypes,
       search,
       limit: INTERNAL_PATTERN_ACTIVITY_LIMIT,
     });
@@ -1375,6 +1379,8 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
       error: `Unable to load change-pattern candidates right now. ${classification.userMessage}`,
       sufficient_to_answer: false,
       fallback_allowed: false,
+      response_guidance:
+        'Say the change-pattern surface is temporarily unavailable and suggest a narrower follow-up such as a specific title, recent store-page changes, or release-timing changes.',
     };
   }
   const fallbackMetrics = await fetchAppMetrics(rawCandidates.map((candidate) => candidate.appid));

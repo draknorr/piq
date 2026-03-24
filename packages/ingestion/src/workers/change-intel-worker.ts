@@ -17,6 +17,7 @@ import {
   completeCaptureQueueItems,
   createSyncJobRecord,
   refreshChangeActivityBurstsForApp,
+  refreshChangePatternActivityDaysForApp,
   requeueStaleCaptureClaims,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
@@ -69,6 +70,7 @@ async function processStorefrontJob(supabase: SupabaseClient, appid: number, tri
 
 async function processProjectionRefreshJob(supabase: SupabaseClient, appid: number): Promise<void> {
   await refreshChangeActivityBurstsForApp(supabase, appid);
+  await refreshChangePatternActivityDaysForApp(supabase, appid);
 }
 
 async function processJob(

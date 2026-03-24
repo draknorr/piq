@@ -175,6 +175,16 @@ function getSupportingEvidence(toolCall: ToolCall, result: Record<string, unknow
 }
 
 function getAnswerScaffold(toolCall: ToolCall, result: Record<string, unknown>, family: string): string | undefined {
+  if (result.success === false) {
+    if (result.unavailable === true) {
+      return 'Explain that this surface is temporarily unavailable right now. Do not pretend there were zero matches. Suggest a narrower follow-up such as a specific title, a store-refresh slice, or a release-timing query.';
+    }
+
+    return typeof result.error === 'string'
+      ? `Explain the tool failure directly: ${result.error}`
+      : 'Explain that the requested data could not be loaded and avoid inventing ranked results.';
+  }
+
   if (family === 'trend') {
     return typeof result.response_guidance === 'string'
       ? result.response_guidance
@@ -204,10 +214,23 @@ function buildSummary(params: {
   needsClarification: boolean;
   noMatch: boolean;
   sparse: boolean;
+  unavailable: boolean;
   fallbackAction: Phase1FallbackAction;
   result: Record<string, unknown>;
 }): string {
-  const { family, rowCount, needsClarification, noMatch, sparse, fallbackAction, result } = params;
+  const { family, rowCount, needsClarification, noMatch, sparse, unavailable, fallbackAction, result } = params;
+
+  if (result.success === false) {
+    if (unavailable) {
+      return typeof result.error === 'string'
+        ? result.error
+        : `The ${family} surface is temporarily unavailable. Respond directly without inventing empty results.`;
+    }
+
+    return typeof result.error === 'string'
+      ? result.error
+      : `The ${family} tool failed before returning usable results.`;
+  }
 
   if (needsClarification) {
     return typeof result.error === 'string'
@@ -262,10 +285,13 @@ export function buildToolAnswerContractSummary(
 ): ToolAnswerContractSummary {
   const family = familyForTool(toolCall, result);
   const rowCount = getRowCount(result);
+  const unavailable = result.success === false && result.unavailable === true;
+  const failureKind = typeof result.failure_kind === 'string' ? result.failure_kind : undefined;
   const needsClarification =
     result.needsDisambiguation === true ||
     (result.success === false && Array.isArray(result.candidates) && result.candidates.length > 0);
   const noMatch =
+    !unavailable &&
     !needsClarification &&
     rowCount === 0 &&
     (result.success === true || typeof result.sufficiency_reason === 'string');
@@ -308,6 +334,9 @@ export function buildToolAnswerContractSummary(
   if (sparse) {
     attachFlag(qualityFlags, 'sparse_result');
   }
+  if (unavailable) {
+    attachFlag(qualityFlags, 'temporary_unavailable');
+  }
   if (fallbackAllowed) {
     attachFlag(qualityFlags, 'fallback_allowed');
   }
@@ -327,6 +356,8 @@ export function buildToolAnswerContractSummary(
     needsClarification,
     noMatch,
     sparse,
+    unavailable,
+    failureKind,
     fallbackAllowed,
     fallbackAction,
     requiredAnswerFields: getRequiredAnswerFields(toolCall, result, family),
@@ -338,6 +369,7 @@ export function buildToolAnswerContractSummary(
       needsClarification,
       noMatch,
       sparse,
+      unavailable,
       fallbackAction,
       result,
     }),
@@ -357,6 +389,8 @@ export function attachPhase1MetadataToResult(
       needs_clarification: contract.needsClarification,
       no_match: contract.noMatch,
       sparse: contract.sparse,
+      unavailable: contract.unavailable === true,
+      failure_kind: contract.failureKind,
       fallback_action: contract.fallbackAction,
       required_answer_fields: contract.requiredAnswerFields,
       supporting_evidence: contract.supportingEvidence,
