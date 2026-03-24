@@ -31,6 +31,19 @@ const STEAM_NEWS_MAX_LENGTH = 20_000;
 const DEFAULT_NEWS_STALE_HOURS = 24;
 const DEFAULT_INCREMENTAL_NEWS_COUNT = 25;
 const DEFAULT_CATCHUP_MAX_PAGES = 5;
+const PROJECTION_REFRESH_CURSOR = 'recent';
+
+async function enqueueProjectionRefresh(supabase: TypedSupabaseClient, appid: number, triggerReason: string): Promise<void> {
+  await enqueueCaptureJobs(supabase, [
+    {
+      appid,
+      source: 'projection_refresh',
+      triggerReason,
+      triggerCursor: PROJECTION_REFRESH_CURSOR,
+      priority: 80,
+    },
+  ]);
+}
 
 export type NewsCaptureMode = 'incremental' | 'catchup';
 
@@ -126,6 +139,10 @@ export async function captureStorefrontState(
     triggerCursor: trigger.triggerCursor,
   });
 
+  if (changeEvents.length > 0) {
+    await enqueueProjectionRefresh(supabase, appid, 'storefront_change_event');
+  }
+
   await updateSyncStatusFields(supabase, appid, {
     last_storefront_sync: observedAt,
     last_media_sync: observedAt,
@@ -197,6 +214,7 @@ export async function captureNewsForApp(
   let processedCount = 0;
   let endDateUnix: number | undefined;
   let stopPagination = false;
+  let projectionRefreshNeeded = false;
 
   for (let page = 0; page < maxPages && !stopPagination; page += 1) {
     const batch = await fetchAppNews(appid, {
@@ -229,6 +247,8 @@ export async function captureNewsForApp(
         triggerCursor: options.triggerCursor,
       });
 
+      projectionRefreshNeeded = projectionRefreshNeeded || events.length > 0;
+
       if (previousVersion && !version.inserted && events.length === 0) {
         stopPagination = true;
         break;
@@ -245,6 +265,10 @@ export async function captureNewsForApp(
     }
 
     endDateUnix = oldestTimestamp - 1;
+  }
+
+  if (projectionRefreshNeeded) {
+    await enqueueProjectionRefresh(supabase, appid, 'news_change_event');
   }
 
   await updateSyncStatusFields(supabase, appid, { last_news_sync: observedAt });

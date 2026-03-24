@@ -232,6 +232,8 @@ async function renderDraftArtifacts(outDir) {
   const metadata = extractMetadata(reportMarkdown);
   const suiteResults = orderSuiteResults(results);
   const timingSummary = summarizeTimings(suiteResults);
+  const familySummary = summarizeFamilies(suiteResults);
+  const failureSummary = summarizeFailures(suiteResults);
   const curationTemplate = buildCurationTemplate(suiteResults);
   const draftRunPath = path.join(outDir, 'ledger-run-draft.md');
   const curationTemplatePath = path.join(outDir, 'curation-template.json');
@@ -242,6 +244,8 @@ async function renderDraftArtifacts(outDir) {
     metadata,
     suiteResults,
     timingSummary,
+    familySummary,
+    failureSummary,
   });
 
   await fs.writeFile(draftRunPath, draftRunMarkdown);
@@ -254,6 +258,8 @@ async function renderDraftArtifacts(outDir) {
         outDir,
         promptCount: suiteResults.length,
         timingSummary,
+        familySummary,
+        failureSummary,
         results: suiteResults.map((row) => ({
           critiqueId: row.suite.critiqueId,
           prompt: row.prompt_text,
@@ -263,6 +269,7 @@ async function renderDraftArtifacts(outDir) {
           totalMs: row.timing?.totalMs ?? null,
           tools: row.tool_calls.map((tool) => tool.name),
           status: row.status,
+          failureKind: row.failure_kind ?? null,
         })),
       },
       null,
@@ -321,6 +328,48 @@ function summarizeTimings(results) {
   };
 }
 
+function summarizeFamilies(results) {
+  const summary = new Map();
+
+  for (const row of results) {
+    const family = row.suite.family;
+    const existing = summary.get(family) || {
+      family,
+      promptCount: 0,
+      successCount: 0,
+      runtimeFailureCount: 0,
+    };
+
+    existing.promptCount += 1;
+    if (row.status === 'success') {
+      existing.successCount += 1;
+    } else {
+      existing.runtimeFailureCount += 1;
+    }
+
+    summary.set(family, existing);
+  }
+
+  return Array.from(summary.values()).sort((left, right) => left.family.localeCompare(right.family));
+}
+
+function summarizeFailures(results) {
+  const summary = new Map();
+
+  for (const row of results) {
+    if (row.status !== 'error') {
+      continue;
+    }
+
+    const failureKind = row.failure_kind || 'unknown';
+    summary.set(failureKind, (summary.get(failureKind) || 0) + 1);
+  }
+
+  return Array.from(summary.entries())
+    .map(([failureKind, count]) => ({ failureKind, count }))
+    .sort((left, right) => right.count - left.count);
+}
+
 function buildCurationTemplate(results) {
   return results.map((row) => ({
     critiqueId: row.suite.critiqueId,
@@ -343,7 +392,14 @@ function buildCurationTemplate(results) {
   }));
 }
 
-function renderDraftRunMarkdown({ outDir, metadata, suiteResults, timingSummary }) {
+function renderDraftRunMarkdown({
+  outDir,
+  metadata,
+  suiteResults,
+  timingSummary,
+  familySummary,
+  failureSummary,
+}) {
   const lines = [];
   lines.push('# Critique Sections 5+6 Draft Run');
   lines.push('');
@@ -365,6 +421,26 @@ function renderDraftRunMarkdown({ outDir, metadata, suiteResults, timingSummary 
     `| ${formatMs(timingSummary.averageMs)} | ${formatMs(timingSummary.medianMs)} | ${formatMs(timingSummary.p95Ms)} | ${formatMs(timingSummary.fastestMs)} | ${formatMs(timingSummary.slowestMs)} |`
   );
   lines.push('');
+  lines.push('## Family Summary');
+  lines.push('');
+  lines.push('| Family | Prompts | Success | Runtime Failures |');
+  lines.push('|---|---:|---:|---:|');
+  for (const row of familySummary) {
+    lines.push(
+      `| ${escapeTable(row.family)} | ${row.promptCount} | ${row.successCount} | ${row.runtimeFailureCount} |`
+    );
+  }
+  lines.push('');
+  if (failureSummary.length > 0) {
+    lines.push('## Runtime Failures');
+    lines.push('');
+    lines.push('| Failure Kind | Count |');
+    lines.push('|---|---:|');
+    for (const row of failureSummary) {
+      lines.push(`| ${escapeTable(row.failureKind)} | ${row.count} |`);
+    }
+    lines.push('');
+  }
   lines.push('## Prompt Inventory');
   lines.push('');
   lines.push('| Critique ID | Section | Family | Primary Persona | Prompt |');
@@ -377,11 +453,11 @@ function renderDraftRunMarkdown({ outDir, metadata, suiteResults, timingSummary 
   lines.push('');
   lines.push('## Results');
   lines.push('');
-  lines.push('| Critique ID | Prompt | Total Time | Tools | Status |');
-  lines.push('|---:|---|---:|---|---|');
+  lines.push('| Critique ID | Prompt | Total Time | Tools | Status | Failure Kind |');
+  lines.push('|---:|---|---:|---|---|---|');
   for (const row of suiteResults) {
     lines.push(
-      `| ${row.suite.critiqueId} | ${escapeTable(row.prompt_text)} | ${row.timing?.totalMs ?? '-'} | ${escapeTable(row.tool_calls.map((tool) => tool.name).join(', ') || '-')} | ${row.status} |`
+      `| ${row.suite.critiqueId} | ${escapeTable(row.prompt_text)} | ${row.timing?.totalMs ?? '-'} | ${escapeTable(row.tool_calls.map((tool) => tool.name).join(', ') || '-')} | ${row.status} | ${escapeTable(row.failure_kind || '-')} |`
     );
   }
   lines.push('');
@@ -402,6 +478,7 @@ function renderDraftRunMarkdown({ outDir, metadata, suiteResults, timingSummary 
       `- Timing: total ${row.timing?.totalMs ?? '-'}ms | llm ${row.timing?.llmMs ?? '-'}ms | tools ${row.timing?.toolsMs ?? '-'}ms | iterations ${row.iterations ?? '-'}`
     );
     lines.push(`- Tools: ${row.tool_calls.map((tool) => tool.name).join(', ') || '-'}`);
+    lines.push(`- Failure kind: ${row.failure_kind || '-'}`);
     lines.push('');
     lines.push('<details>');
     lines.push('<summary>Exact Output</summary>');

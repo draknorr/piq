@@ -4235,7 +4235,7 @@ export type Database = {
         | "price_change"
         | "new_release"
         | "milestone"
-      app_capture_source: "storefront" | "news" | "hero_asset"
+      app_capture_source: "storefront" | "news" | "hero_asset" | "projection_refresh"
       app_capture_status:
         | "queued"
         | "claimed"
@@ -4451,7 +4451,7 @@ export const Constants = {
         "new_release",
         "milestone",
       ],
-      app_capture_source: ["storefront", "news", "hero_asset"],
+      app_capture_source: ["storefront", "news", "hero_asset", "projection_refresh"],
       app_capture_status: [
         "queued",
         "claimed",

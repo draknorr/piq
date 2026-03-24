@@ -4,19 +4,23 @@ import type { Database } from '@publisheriq/database';
 import {
   buildDiffPreview,
   fetchChangeFeedActivityDetail,
-  fetchChangeFeedActivityResponse,
   fetchChangeFeedBurstDetail,
+  fetchChatChangeActivityResponse,
+  fetchChatChangePatternCandidates,
   formatChangeLabel,
   parseActivityId,
+  type ChatChangePatternCandidateRow,
   type ChangeActivityDetail,
   type ChangeActivityMode,
   type ChangeActivityRow,
   type ChangeActivitySignalFamily,
   type ChangeActivitySort,
   type ChangeActivityView,
+  type ChangeActivityStoryKind,
   type ChangeDetailEvent,
   type JsonValue,
 } from '@/app/(main)/changes/lib';
+import type { ToolCall } from '@/lib/llm/types';
 import { lookupGames } from '@/lib/search/game-lookup';
 import { getServiceSupabase } from '@/lib/supabase-service';
 
@@ -32,7 +36,7 @@ const DEFAULT_TIMELINE_LIMIT = 20;
 const MAX_TIMELINE_LIMIT = 50;
 const DEFAULT_PATTERN_LIMIT = 10;
 const MAX_PATTERN_LIMIT = 10;
-const INTERNAL_PATTERN_ACTIVITY_LIMIT = 100;
+const INTERNAL_PATTERN_ACTIVITY_LIMIT = 60;
 const HIGH_CONFIDENCE_SIMILARITY = 0.72;
 const MINIMUM_CONFIDENCE_SIMILARITY = 0.45;
 const CLEAR_CONFIDENCE_MARGIN = 0.08;
@@ -141,6 +145,17 @@ interface PatternCandidate {
   storyKinds: string[];
   activityIds: string[];
   metrics: AppMetrics | null;
+}
+
+interface PatternAggregate {
+  appid: number;
+  name: string;
+  latestOccurredAt: string;
+  activityIds: string[];
+  signalFamilies: Set<ChangeActivitySignalFamily>;
+  storyKinds: Set<ChangeActivityStoryKind>;
+  announcementCount: number;
+  changeCount: number;
 }
 
 interface RawAppChangeFeedRow {
@@ -413,6 +428,144 @@ async function resolveAppReference(args: {
   };
 }
 
+function isExactSingleTitleChangeSearch(
+  search: string,
+  app: ResolvedApp | null
+): app is ResolvedApp {
+  if (!app) {
+    return false;
+  }
+
+  const normalizedSearch = normalizeEntityKey(search);
+  const normalizedAppName = normalizeEntityKey(app.name);
+
+  if (!normalizedSearch || !normalizedAppName) {
+    return false;
+  }
+
+  return (
+    app.isExactMatch === true ||
+    normalizedSearch === normalizedAppName ||
+    (app.similarityScore ?? 0) >= HIGH_CONFIDENCE_SIMILARITY
+  );
+}
+
+function normalizeTimelineSignalFamilies(
+  signalFamilies: ChangeActivitySignalFamily[] | undefined
+): ChangeActivitySignalFamily[] | undefined {
+  const normalized = signalFamilies?.filter((family) => family !== 'announcement');
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function supportsSingleTitleTimeline(args: QueryChangeActivityArgs): boolean {
+  if (args.mode === 'announcements') {
+    return false;
+  }
+
+  if (args.signal_families?.includes('announcement')) {
+    return false;
+  }
+
+  return true;
+}
+
+function extractSingleTitleChangeSearch(userPrompt: string | undefined): string | null {
+  const prompt = normalizeSearch(userPrompt);
+  if (!prompt) {
+    return null;
+  }
+
+  const patterns = [
+    /\b(?:steam(?:\s+store-page)? changes?|steam[- ]page refresh(?:es)?|store-page changes?)\s+for\s+(.+?)(?:\s+in the last|\s+over the last|\s+before and after|\s+lately|\s+recently|[?.!]|$)/i,
+    /\brecent steam changes for\s+(.+?)(?:\s+in the last|\s+over the last|[?.!]|$)/i,
+    /\bwhat changed on the steam page for\s+(.+?)(?:\s+before and after|\s+in the last|\s+over the last|[?.!]|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    const candidate = normalizeSearch(match?.[1]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function resolveSingleTitleTimelineArgs(
+  args: QueryChangeActivityArgs,
+  userPrompt?: string
+): Promise<GetGameChangeTimelineArgs | null> {
+  if (!supportsSingleTitleTimeline(args)) {
+    return null;
+  }
+
+  const search = normalizeSearch(args.search) ?? extractSingleTitleChangeSearch(userPrompt);
+  if (!search) {
+    return null;
+  }
+
+  const resolved = await resolveAppReference({ app_name: search });
+  if (!isExactSingleTitleChangeSearch(search, resolved.app)) {
+    return null;
+  }
+
+  return {
+    appid: resolved.app.appid,
+    app_name: resolved.app.name,
+    days: args.days,
+    limit: args.limit,
+    signal_families: normalizeTimelineSignalFamilies(args.signal_families),
+  };
+}
+
+function classifyChangeIntelError(error: unknown): {
+  failureKind: string;
+  userMessage: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/statement timeout|canceling statement due to statement timeout/i.test(message)) {
+    return {
+      failureKind: 'db_statement_timeout',
+      userMessage: 'The change-intel projection query timed out before it could finish.',
+    };
+  }
+
+  if (/not available yet|pending migration|projection/i.test(message)) {
+    return {
+      failureKind: 'projection_unavailable',
+      userMessage: 'The change-intel projection is not available yet.',
+    };
+  }
+
+  return {
+    failureKind: 'change_intel_unavailable',
+    userMessage: 'The change-intel surface is temporarily unavailable.',
+  };
+}
+
+export async function normalizeChangeIntelToolCall(
+  toolCall: ToolCall,
+  userPrompt?: string
+): Promise<ToolCall> {
+  if (toolCall.name !== 'query_change_activity') {
+    return toolCall;
+  }
+
+  const args = toolCall.arguments as QueryChangeActivityArgs;
+  const timelineArgs = await resolveSingleTitleTimelineArgs(args, userPrompt);
+  if (!timelineArgs) {
+    return toolCall;
+  }
+
+  return {
+    ...toolCall,
+    name: 'get_game_change_timeline',
+    arguments: timelineArgs as unknown as Record<string, unknown>,
+  };
+}
+
 async function fetchWindowMetrics(
   appid: number,
   start: string,
@@ -499,6 +652,53 @@ async function fetchAppMetrics(appIds: number[]): Promise<Map<number, AppMetrics
   return metricsByApp;
 }
 
+function hydratePatternMetrics(
+  candidates: ChatChangePatternCandidateRow[],
+  fallbackMetrics: Map<number, AppMetrics>
+): Array<ChatChangePatternCandidateRow & { metrics: AppMetrics | null }> {
+  return candidates.map((candidate) => {
+    const existingMetrics =
+      candidate.positivePercentage != null ||
+      candidate.totalReviews != null ||
+      candidate.reviewVelocity30d != null ||
+      candidate.reviewVelocity7d != null ||
+      candidate.ccuTrend7dPct != null
+        ? {
+            appid: candidate.appid,
+            positivePercentage: candidate.positivePercentage,
+            totalReviews: candidate.totalReviews,
+            ccuPeak: candidate.ccuPeak,
+            priceCents: candidate.priceCents,
+            discountPercent: candidate.discountPercent,
+            reviewVelocity7d: candidate.reviewVelocity7d,
+            reviewVelocity30d: candidate.reviewVelocity30d,
+            trend30dDirection: candidate.trend30dDirection,
+            ccuTrend7dPct: candidate.ccuTrend7dPct,
+          }
+        : null;
+
+    return {
+      ...candidate,
+      metrics: existingMetrics ?? fallbackMetrics.get(candidate.appid) ?? null,
+    };
+  });
+}
+
+function buildPatternAggregates(
+  candidates: Array<ChatChangePatternCandidateRow & { metrics: AppMetrics | null }>
+): PatternAggregate[] {
+  return candidates.map((candidate) => ({
+    appid: candidate.appid,
+    name: candidate.appName,
+    latestOccurredAt: candidate.latestOccurredAt,
+    activityIds: candidate.activityIds.slice(0, 3),
+    signalFamilies: new Set(candidate.signalFamilies),
+    storyKinds: new Set(candidate.storyKinds),
+    announcementCount: candidate.announcementCount,
+    changeCount: candidate.changeCount,
+  }));
+}
+
 function mapActivityRow(row: ChangeActivityRow) {
   return {
     activityId: row.activityId,
@@ -524,28 +724,75 @@ export async function queryChangeActivity(args: QueryChangeActivityArgs) {
   const days = clamp(args.days, DEFAULT_ACTIVITY_DAYS, 1, MAX_ACTIVITY_DAYS);
   const limit = clamp(args.limit, DEFAULT_ACTIVITY_LIMIT, 1, MAX_ACTIVITY_LIMIT);
 
-  const response = await fetchChangeFeedActivityResponse({
-    days,
-    view: args.view ?? 'overview',
-    mode: args.mode ?? 'all',
-    sort: args.sort ?? 'relevant',
-    appTypes: args.app_types ?? null,
-    signalFamilies: args.signal_families ?? null,
-    search: normalizeSearch(args.search),
-    cursor: null,
-    limit,
-  });
+  const timelineArgs = await resolveSingleTitleTimelineArgs(
+    {
+      ...args,
+      days,
+      limit,
+    },
+    undefined
+  );
 
-  return {
-    success: true,
-    results: response.items.map(mapActivityRow),
-    total_found: response.items.length,
-    sufficient_to_answer: false,
-    sufficiency_reason: 'A ranked change-activity set is available. Fetch one supporting detail only if the answer needs a concrete proof example.',
-    required_answer_fields: ['what changed', 'when it changed', 'why it matters', 'evidence quality'],
-    response_guidance: 'For each row, name the concrete change signal, when it happened, and why it matters. Do not summarize with generic repeated change labels.',
-    meta: response.meta,
-  };
+  if (timelineArgs) {
+    return getGameChangeTimeline(timelineArgs);
+  }
+
+  try {
+    const response = await fetchChatChangeActivityResponse({
+      days,
+      view: args.view ?? 'overview',
+      mode: args.mode ?? 'all',
+      sort: args.sort ?? 'relevant',
+      appTypes: args.app_types ?? null,
+      signalFamilies: args.signal_families ?? null,
+      search: normalizeSearch(args.search),
+      cursor: null,
+      limit,
+    });
+
+    if (response.items.length === 0) {
+      return {
+        success: true,
+        results: [],
+        total_found: 0,
+        selected_change_surface: 'projection',
+        no_match: true,
+        sufficient_to_answer: true,
+        sufficiency_reason: 'No cross-game change activity matched the requested constraints and time window.',
+        required_answer_fields: ['what was checked', 'time window', 'why there was no qualifying match'],
+        response_guidance: 'State the checked window and constraints explicitly. Do not invent a ranked list when nothing matched.',
+        meta: response.meta,
+      };
+    }
+
+    return {
+      success: true,
+      results: response.items.map(mapActivityRow),
+      total_found: response.items.length,
+      selected_change_surface: 'projection',
+      sparse_result: response.items.length < Math.min(limit, 3),
+      sufficient_to_answer: response.items.length < 3,
+      sufficiency_reason:
+        response.items.length < 3
+          ? 'Returned a small but directly answerable change-activity set. Keep the answer constrained and say the set is limited.'
+          : 'A ranked change-activity set is available. Fetch one supporting detail only if the answer needs a concrete proof example.',
+      required_answer_fields: ['what changed', 'when it changed', 'why it matters', 'evidence quality'],
+      response_guidance: 'For each row, name the concrete change signal, when it happened, and why it matters. Do not summarize with generic repeated change labels.',
+      meta: response.meta,
+    };
+  } catch (error) {
+    const classification = classifyChangeIntelError(error);
+    return {
+      success: false,
+      unavailable: true,
+      selected_change_surface: 'projection',
+      failure_kind: classification.failureKind,
+      error: `Unable to load cross-game Steam change activity right now. ${classification.userMessage}`,
+      sufficient_to_answer: false,
+      no_match: false,
+      fallback_allowed: false,
+    };
+  }
 }
 
 export async function getGameChangeTimeline(args: GetGameChangeTimelineArgs) {
@@ -619,10 +866,31 @@ export async function getGameChangeTimeline(args: GetGameChangeTimelineArgs) {
       return args.signal_families.includes(event.signalFamily);
     });
 
+  if (events.length === 0) {
+    return {
+      success: true,
+      app,
+      total_found: 0,
+      selected_change_surface: 'per_app_timeline',
+      no_match: true,
+      sufficient_to_answer: true,
+      sufficiency_reason: 'No title-specific change events were found in the requested window.',
+      required_answer_fields: ['what window was checked', 'why no qualifying title-specific changes were found'],
+      response_guidance: 'State the checked title and time window. Do not imply changes happened when no events were found.',
+      events: [],
+      meta: {
+        days,
+        limit,
+        signalFamilies: args.signal_families ?? null,
+      },
+    };
+  }
+
   return {
     success: true,
     app,
     total_found: events.length,
+    selected_change_surface: 'per_app_timeline',
     sufficient_to_answer: true,
     sufficiency_reason: 'The timeline events are sufficient to answer directly when you stay grounded in concrete changes and dates.',
     required_answer_fields: ['dates', 'concrete changes', 'before/after values when available'],
@@ -648,6 +916,7 @@ export async function getChangeActivityDetail(args: GetChangeActivityDetailArgs)
 
   return {
     success: true,
+    selected_change_surface: 'burst_detail',
     sufficient_to_answer: true,
     sufficiency_reason: 'The change detail includes enough evidence to answer directly from the structured before/after facts.',
     required_answer_fields: ['headline', 'concrete diffs', 'why it matters'],
@@ -737,7 +1006,7 @@ async function resolveComparisonBurst(
     };
   }
 
-  const response = await fetchChangeFeedActivityResponse({
+  const response = await fetchChatChangeActivityResponse({
     days: clamp(args.days, DEFAULT_TIMELINE_DAYS, 1, MAX_TIMELINE_DAYS),
     view: 'all-activity',
     mode: 'changes',
@@ -819,6 +1088,7 @@ export async function compareChangeBeforeAfter(args: CompareChangeBeforeAfterArg
     success: true,
     app: resolved.app,
     activityId: resolved.activityId,
+    selected_change_surface: 'before_after',
     sufficient_to_answer: true,
     sufficiency_reason: 'The before/after comparison is sufficient to answer directly when you structure the response around before state, after state, and impact.',
     required_answer_fields: ['what changed', 'before state', 'after state', 'why it matters', 'confidence'],
@@ -842,13 +1112,11 @@ export async function compareChangeBeforeAfter(args: CompareChangeBeforeAfterArg
   };
 }
 
-function buildReasons(pattern: ChangePattern, aggregate: {
-  activities: ReturnType<typeof mapActivityRow>[];
-  signalFamilies: Set<ChangeActivitySignalFamily>;
-  storyKinds: Set<string>;
-  announcementCount: number;
-  changeCount: number;
-}, metrics: AppMetrics | null): { confidence: 'high' | 'medium'; reasons: string[] } | null {
+function buildReasons(
+  pattern: ChangePattern,
+  aggregate: Pick<PatternAggregate, 'signalFamilies' | 'storyKinds' | 'announcementCount' | 'changeCount'>,
+  metrics: AppMetrics | null
+): { confidence: 'high' | 'medium'; reasons: string[] } | null {
   const reasons: string[] = [];
 
   switch (pattern) {
@@ -964,23 +1232,38 @@ function buildReasons(pattern: ChangePattern, aggregate: {
 export async function findChangePatterns(args: FindChangePatternsArgs) {
   const days = clamp(args.days, DEFAULT_ACTIVITY_DAYS, 1, MAX_ACTIVITY_DAYS);
   const limit = clamp(args.limit, DEFAULT_PATTERN_LIMIT, 1, MAX_PATTERN_LIMIT);
+  const search = normalizeSearch(args.search);
+  let rawCandidates: ChatChangePatternCandidateRow[];
+  try {
+    rawCandidates = await fetchChatChangePatternCandidates({
+      pattern: args.pattern,
+      days,
+      appTypes: args.app_types ?? null,
+      search,
+      limit: INTERNAL_PATTERN_ACTIVITY_LIMIT,
+    });
+  } catch (error) {
+    const classification = classifyChangeIntelError(error);
+    return {
+      success: false,
+      unavailable: true,
+      selected_change_surface: 'projection_pattern',
+      failure_kind: classification.failureKind,
+      error: `Unable to load change-pattern candidates right now. ${classification.userMessage}`,
+      sufficient_to_answer: false,
+      fallback_allowed: false,
+    };
+  }
+  const fallbackMetrics = await fetchAppMetrics(rawCandidates.map((candidate) => candidate.appid));
+  const hydratedCandidates = hydratePatternMetrics(rawCandidates, fallbackMetrics);
 
   if (args.pattern === 'sustained_response') {
-    const response = await fetchChangeFeedActivityResponse({
-      days,
-      view: 'all-activity',
-      mode: 'changes',
-      sort: 'relevant',
-      appTypes: args.app_types ?? null,
-      signalFamilies: null,
-      search: normalizeSearch(args.search),
-      cursor: null,
-      limit: Math.min(INTERNAL_PATTERN_ACTIVITY_LIMIT, 30),
-    });
-
     const details = await Promise.all(
-      response.items.slice(0, 12).map(async (item) => {
-        const detail = await fetchChangeFeedActivityDetail(item.activityId);
+      hydratedCandidates
+        .flatMap((candidate) => candidate.activityIds.slice(0, 1))
+        .slice(0, 12)
+        .map(async (activityId) => {
+        const detail = await fetchChangeFeedActivityDetail(activityId);
         if (!detail?.aftermath) {
           return null;
         }
@@ -1022,74 +1305,42 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
 
     const results = details.filter((item): item is NonNullable<typeof item> => Boolean(item)).slice(0, limit);
 
+    if (results.length === 0) {
+      return {
+        success: true,
+        pattern: args.pattern,
+        results: [],
+        total_found: 0,
+        selected_change_surface: 'projection_pattern',
+        no_match: true,
+        sufficient_to_answer: true,
+        sufficiency_reason: 'No sustained-response candidates met the evidence threshold in the requested window.',
+        required_answer_fields: ['what was checked', 'why the evidence was insufficient'],
+        response_guidance: 'Explain the checked response threshold and say no candidates cleared it.',
+        meta: { days, limit, search },
+      };
+    }
+
     return {
       success: true,
       pattern: args.pattern,
       results,
       total_found: results.length,
+      selected_change_surface: 'projection_pattern',
       sufficient_to_answer: false,
       sufficiency_reason: 'A ranked sustained-response set is available. Fetch one supporting detail only if the answer needs a proof example.',
       required_answer_fields: ['ranked candidates', 'evidence', 'timing', 'why it qualifies'],
       response_guidance: 'For each row, cite the concrete response signal and the post-change window. Avoid canned repeated reasons.',
-      meta: { days, limit, search: normalizeSearch(args.search) },
+      meta: { days, limit, search },
     };
   }
 
-  const activityResponse = await fetchChangeFeedActivityResponse({
-    days,
-    view: 'all-activity',
-    mode: 'all',
-    sort: 'relevant',
-    appTypes: args.app_types ?? null,
-    signalFamilies: null,
-    search: normalizeSearch(args.search),
-    cursor: null,
-    limit: INTERNAL_PATTERN_ACTIVITY_LIMIT,
-  });
-
-  const grouped = new Map<number, {
-    appid: number;
-    name: string;
-    latestOccurredAt: string;
-    activities: ReturnType<typeof mapActivityRow>[];
-    signalFamilies: Set<ChangeActivitySignalFamily>;
-    storyKinds: Set<string>;
-    announcementCount: number;
-    changeCount: number;
-  }>();
-
-  for (const item of activityResponse.items) {
-    const mapped = mapActivityRow(item);
-    const existing = grouped.get(item.appid) ?? {
-      appid: item.appid,
-      name: item.appName,
-      latestOccurredAt: item.occurredAt,
-      activities: [],
-      signalFamilies: new Set<ChangeActivitySignalFamily>(),
-      storyKinds: new Set<string>(),
-      announcementCount: 0,
-      changeCount: 0,
-    };
-
-    existing.latestOccurredAt =
-      existing.latestOccurredAt > item.occurredAt ? existing.latestOccurredAt : item.occurredAt;
-    existing.activities.push(mapped);
-    existing.storyKinds.add(item.storyKind);
-    item.signalFamilies.forEach((family) => existing.signalFamilies.add(family));
-    if (item.activityKind === 'announcement') {
-      existing.announcementCount += 1;
-    } else {
-      existing.changeCount += 1;
-    }
-
-    grouped.set(item.appid, existing);
-  }
-
-  const metricsByApp = await fetchAppMetrics(Array.from(grouped.keys()));
+  const aggregates = buildPatternAggregates(hydratedCandidates);
   const candidates: PatternCandidate[] = [];
 
-  for (const aggregate of grouped.values()) {
-    const metrics = metricsByApp.get(aggregate.appid) ?? null;
+  for (const aggregate of aggregates) {
+    const metrics =
+      hydratedCandidates.find((candidate) => candidate.appid === aggregate.appid)?.metrics ?? null;
     const decision = buildReasons(args.pattern, aggregate, metrics);
 
     if (!decision) {
@@ -1104,7 +1355,7 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
       reasons: decision.reasons,
       signalFamilies: Array.from(aggregate.signalFamilies),
       storyKinds: Array.from(aggregate.storyKinds),
-      activityIds: aggregate.activities.slice(0, 3).map((item) => item.activityId),
+      activityIds: aggregate.activityIds,
       metrics,
     });
   }
@@ -1125,15 +1376,33 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
 
   const results = candidates.slice(0, limit);
 
+  if (results.length === 0) {
+    return {
+      success: true,
+      pattern: args.pattern,
+      results: [],
+      total_found: 0,
+      selected_change_surface: 'projection_pattern',
+      no_match: true,
+      sufficient_to_answer: true,
+      sufficiency_reason: 'No change-pattern candidates matched the requested evidence threshold.',
+      required_answer_fields: ['what was checked', 'time window', 'why no candidate qualified'],
+      response_guidance: 'State the requested pattern and why no candidate cleared the evidence threshold.',
+      meta: { days, limit, search },
+    };
+  }
+
   return {
     success: true,
     pattern: args.pattern,
     results,
     total_found: results.length,
+    selected_change_surface: 'projection_pattern',
+    sparse_result: results.length < Math.min(limit, 3),
     sufficient_to_answer: false,
     sufficiency_reason: 'A ranked pattern set is available. Fetch one supporting detail only if the answer needs a proof example.',
     required_answer_fields: ['ranked candidates', 'evidence', 'timing', 'why it qualifies'],
     response_guidance: 'For each row, state the exact evidence behind the pattern and why it matters. Do not reuse identical canned reasons.',
-    meta: { days, limit, search: normalizeSearch(args.search) },
+    meta: { days, limit, search },
   };
 }

@@ -34,6 +34,7 @@ import {
   findChangePatterns,
   getChangeActivityDetail,
   getGameChangeTimeline,
+  normalizeChangeIntelToolCall,
   queryChangeActivity,
   type CompareChangeBeforeAfterArgs,
   type FindChangePatternsArgs,
@@ -109,7 +110,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
 
       // Process each tool call
       for (const rawToolCall of response.toolCalls) {
-        const toolCall = normalizeTrendToolCall(rawToolCall, lastUserPrompt);
+        const trendToolCall = normalizeTrendToolCall(rawToolCall, lastUserPrompt);
+        const toolCall = await normalizeChangeIntelToolCall(trendToolCall, lastUserPrompt);
 
         if (toolCall.name === 'query_analytics') {
           const args = toolCall.arguments as unknown as QueryAnalyticsArgs;

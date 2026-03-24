@@ -928,7 +928,7 @@ function inferExpectedTools(family, promptText) {
     case 'concept_search':
       return ['search_by_concept'];
     case 'trending':
-      return ['discover_trending'];
+      return ['discover_trending', 'screen_games'];
     case 'lookup_game':
       return ['lookup_games', 'query_analytics'];
     case 'lookup_tags':
@@ -948,6 +948,12 @@ function inferFamily(promptText, isTemplate = false) {
   if (
     text.includes('marketing push') ||
     text.includes('relaunch pattern') ||
+    text.includes('teasing a big update') ||
+    text.includes('major steam announcement') ||
+    text.includes('agency prospects') ||
+    text.includes('agency leads') ||
+    text.includes('marketing-agency leads') ||
+    text.includes('live-service or frequently updated') ||
     text.includes('update tease') ||
     text.includes('signable') ||
     text.includes('rescue candidate') ||
@@ -964,6 +970,8 @@ function inferFamily(promptText, isTemplate = false) {
   }
 
   if (
+    text.includes('steam store-page changes for ') ||
+    text.includes('steam-page refresh for ') ||
     text.includes('recent steam changes for') ||
     text.includes('recent steam page changes for') ||
     text.startsWith('what changed on ')
@@ -975,6 +983,7 @@ function inferFamily(promptText, isTemplate = false) {
     text.includes('store-page changes') ||
     text.includes('steam page refreshes') ||
     text.includes('release timing') ||
+    text.includes('changed tags or genres materially') ||
     text.includes('screenshots or trailers') ||
     text.includes('capsule art') ||
     text.includes('upcoming games changed')
@@ -992,6 +1001,10 @@ function inferFamily(promptText, isTemplate = false) {
   }
 
   if (
+    text.includes('breaking out') ||
+    text.includes('most players right now') ||
+    text.includes('gaining momentum') ||
+    text.includes('review velocity and ccu') ||
     text.includes("what's breaking out") ||
     text.includes('gaining traction') ||
     text.includes('declining') ||
@@ -1411,45 +1424,73 @@ async function evaluateChatRequest(requestBody, auth) {
 
     if (!response.ok) {
       const raw = await response.text();
+      const error_message = raw || `HTTP ${response.status}`;
       return {
         status: 'error',
         http_status: response.status,
-        error_message: raw,
+        error_message,
         assistant_output_raw: '',
         tool_calls: [],
         timing: null,
         iterations: null,
         quality: null,
         sessionContext: null,
+        transport_ok: false,
+        message_end_received: false,
+        failure_kind: classifyFailure({
+          httpStatus: response.status,
+          errorMessage: error_message,
+          transportOk: false,
+          messageEndReceived: false,
+        }),
         raw_sse: raw,
       };
     }
 
     const raw_sse = await response.text();
     const parsed = parseSse(raw_sse);
+    const error_message =
+      parsed.error_message || (parsed.message_end_received ? null : 'Missing message_end SSE event');
     return {
-      status: parsed.error_message ? 'error' : 'success',
+      status: error_message ? 'error' : 'success',
       http_status: response.status,
-      error_message: parsed.error_message,
+      error_message,
       assistant_output_raw: parsed.assistant_output_raw,
       tool_calls: parsed.tool_calls,
       timing: parsed.timing,
       iterations: parsed.iterations,
       quality: parsed.quality,
       sessionContext: parsed.sessionContext,
+      transport_ok: true,
+      message_end_received: parsed.message_end_received,
+      failure_kind: classifyFailure({
+        httpStatus: response.status,
+        errorMessage: error_message,
+        transportOk: true,
+        messageEndReceived: parsed.message_end_received,
+      }),
       raw_sse,
     };
   } catch (error) {
+    const error_message = error instanceof Error ? error.message : String(error);
     return {
       status: 'error',
       http_status: null,
-      error_message: error instanceof Error ? error.message : String(error),
+      error_message,
       assistant_output_raw: '',
       tool_calls: [],
       timing: null,
       iterations: null,
       quality: null,
       sessionContext: null,
+      transport_ok: false,
+      message_end_received: false,
+      failure_kind: classifyFailure({
+        httpStatus: null,
+        errorMessage: error_message,
+        transportOk: false,
+        messageEndReceived: false,
+      }),
       raw_sse: '',
     };
   }
@@ -1463,6 +1504,7 @@ function parseSse(rawSse) {
   let error_message = null;
   let quality = null;
   let sessionContext = null;
+  let message_end_received = false;
 
   for (const block of rawSse.split('\n\n')) {
     const line = block
@@ -1498,6 +1540,7 @@ function parseSse(rawSse) {
       iterations = event.debug?.iterations ?? null;
       quality = event.quality || null;
       sessionContext = event.sessionContext || null;
+      message_end_received = true;
       continue;
     }
 
@@ -1514,6 +1557,7 @@ function parseSse(rawSse) {
     error_message,
     quality,
     sessionContext,
+    message_end_received,
   };
 }
 
@@ -1674,6 +1718,37 @@ function summarizeError(errorMessage) {
   return truncate(String(errorMessage || '').replace(/\s+/g, ' ').trim(), 240);
 }
 
+function classifyFailure({ httpStatus, errorMessage, transportOk, messageEndReceived }) {
+  if (!errorMessage) {
+    return null;
+  }
+
+  const message = String(errorMessage || '').toLowerCase();
+
+  if (message.includes('statement timeout')) {
+    return 'db_statement_timeout';
+  }
+  if (isOpenAi429ErrorMessage(errorMessage, httpStatus)) {
+    return 'openai_429';
+  }
+  if (message.includes('missing message_end')) {
+    return 'missing_message_end';
+  }
+  if (!transportOk && httpStatus) {
+    return 'http_error';
+  }
+  if (!transportOk && (message.includes('timed out') || message.includes('timeout'))) {
+    return 'request_timeout';
+  }
+  if (!transportOk) {
+    return 'network_error';
+  }
+  if (transportOk && !messageEndReceived) {
+    return 'missing_message_end';
+  }
+  return 'sse_error';
+}
+
 function build429Assessment(result, retryStatus) {
   if (retryStatus === 'resolved') {
     return 'Resolved on isolated single-thread retry; prior failure was consistent with transient org TPM saturation during the broader batch run.';
@@ -1746,12 +1821,26 @@ function scoreResult(result) {
   let score = 0;
   const notes = [];
   const issue_tags = [];
+  const runtimeFailure = result.status === 'error';
 
   if (result.status === 'success') {
     score += 3;
   } else {
     issue_tags.push('error');
-    notes.push(`Request failed: ${truncate(result.error_message || 'Unknown error', 180)}`);
+    issue_tags.push(result.failure_kind || 'runtime_failure');
+    notes.push(
+      `Runtime failure (${result.failure_kind || 'unknown'}): ${truncate(result.error_message || 'Unknown error', 180)}`
+    );
+  }
+
+  if (runtimeFailure) {
+    return {
+      ...result,
+      score,
+      issue_tags,
+      notes,
+      verdict: verdictFromScore(score, result.status),
+    };
   }
 
   if (result.assistant_output_raw.length >= 80) {
@@ -1927,6 +2016,14 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   const templateRows = manifest.filter((row) => row.is_template);
   const speculativeRows = manifest.filter((row) => row.support_tier === 'speculative_reference');
   const openAi429Rows = results.filter((row) => isOpenAi429ErrorRow(row));
+  const runtimeFailures = results.filter((row) => row.status === 'error');
+  const runtimeFailureCounts = Array.from(
+    runtimeFailures.reduce((map, row) => {
+      const key = row.failure_kind || 'unknown';
+      map.set(key, (map.get(key) || 0) + 1);
+      return map;
+    }, new Map())
+  ).sort((left, right) => right[1] - left[1]);
 
   const lines = [];
   lines.push('# /chat Prompt Evaluations');
@@ -1956,6 +2053,7 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   lines.push(`- Template catalog rows: ${templateRows.length}`);
   lines.push(`- Speculative reference rows: ${speculativeRows.length}`);
   lines.push(`- Current OpenAI 429 rows: ${openAi429Rows.length}`);
+  lines.push(`- Runtime failure rows: ${runtimeFailures.length}`);
   if (metadata.mode === 'retry_429_only') {
     lines.push(`- Retry baseline: ${metadata.baselineOutDir}`);
     lines.push(`- Retry filter: ${metadata.retryFilter}`);
@@ -1975,6 +2073,16 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   lines.push(`| Template rows | ${templateRows.length} | Cataloged separately from seeded concrete prompts |`);
   lines.push(`| Speculative reference rows | ${speculativeRows.length} | Prompt shapes from the change-intelligence research doc |`);
   lines.push('');
+  if (runtimeFailureCounts.length > 0) {
+    lines.push('## Runtime Failures');
+    lines.push('');
+    lines.push('| Failure Kind | Count |');
+    lines.push('|---|---:|');
+    for (const [failureKind, count] of runtimeFailureCounts) {
+      lines.push(`| ${escapeTable(failureKind)} | ${count} |`);
+    }
+    lines.push('');
+  }
   lines.push('<details>');
   lines.push('<summary>Runtime Template Catalog</summary>');
   lines.push('');
@@ -2004,6 +2112,9 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     lines.push(`- Verdict: ${row.verdict}`);
     lines.push(`- Family: ${row.family}`);
     lines.push(`- Support tier: ${row.support_tier}`);
+    lines.push(`- Failure kind: ${row.failure_kind || '-'}`);
+    lines.push(`- Transport OK: ${row.transport_ok === true ? 'yes' : row.transport_ok === false ? 'no' : '-'}`);
+    lines.push(`- message_end received: ${row.message_end_received === true ? 'yes' : row.message_end_received === false ? 'no' : '-'}`);
     lines.push(`- Sources: ${row.source_locations.join(', ')}`);
     lines.push(`- Expected tools: ${row.expected_tools.join(', ') || '-'}`);
     lines.push(`- Actual tools: ${row.tool_calls.map((tool) => tool.name).join(', ') || '-'}`);

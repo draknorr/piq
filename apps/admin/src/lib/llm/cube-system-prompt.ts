@@ -131,6 +131,7 @@ Use these rules for natural-language change questions:
 3. Cross-game recent change discovery:
 - Use **query_change_activity**.
 - This covers prompts about recent release-date changes, asset refreshes, announcements, merchandising changes, and biggest recent Steam activity.
+- If the prompt clearly names one specific game title, do NOT use **query_change_activity** just because it asks for "biggest" or "recent" changes. Treat it as a single-game query and use **get_game_change_timeline** instead.
 
 4. Higher-level pattern prompts:
 - Use **find_change_patterns** for marketing push, relaunch pattern, update tease, under-marketed, signable, rescue candidate, and sustained-response requests.

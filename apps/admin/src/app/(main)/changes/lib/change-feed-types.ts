@@ -189,6 +189,29 @@ export interface ChangeFeedActivityResponse {
   };
 }
 
+export interface ChatChangePatternCandidateRow {
+  appid: number;
+  appName: string;
+  appType: AppType | null;
+  isReleased: boolean | null;
+  releaseDate: string | null;
+  latestOccurredAt: string;
+  activityIds: string[];
+  signalFamilies: ChangeActivitySignalFamily[];
+  storyKinds: ChangeActivityStoryKind[];
+  announcementCount: number;
+  changeCount: number;
+  positivePercentage: number | null;
+  totalReviews: number | null;
+  ccuPeak: number | null;
+  priceCents: number | null;
+  discountPercent: number | null;
+  reviewVelocity7d: number | null;
+  reviewVelocity30d: number | null;
+  trend30dDirection: string | null;
+  ccuTrend7dPct: number | null;
+}
+
 export interface ChangeFeedActivityDetailResponse {
   item: ChangeActivityDetail;
 }
@@ -279,6 +302,9 @@ export interface ChangeFeedStatus {
   oldestQueuedAt: string | null;
   latestStorefrontEventAt: string | null;
   latestNewsEventAt: string | null;
+  projectionQueuedJobs?: number;
+  oldestProjectionQueuedAt?: string | null;
+  latestProjectionRefreshAt?: string | null;
   reasons: string[];
 }
 
@@ -347,6 +373,35 @@ export interface RawChangeBurstRow {
   change_type_count: number;
   has_related_news: boolean;
   related_news_count: number;
+}
+
+export interface RawChatChangeActivityCandidateRow extends RawChangeBurstRow {
+  signal_families: unknown;
+  story_kind: ChangeActivityStoryKind;
+  sort_score: number | null;
+}
+
+export interface RawChatChangePatternCandidateRow {
+  appid: number;
+  app_name: string;
+  app_type: AppType | null;
+  is_released: boolean | null;
+  release_date: string | null;
+  latest_occurred_at: string;
+  activity_ids: unknown;
+  signal_families: unknown;
+  story_kinds: unknown;
+  announcement_count: number;
+  change_count: number;
+  positive_percentage: number | null;
+  total_reviews: number | null;
+  ccu_peak: number | null;
+  price_cents: number | null;
+  discount_percent: number | null;
+  review_velocity_7d: number | null;
+  review_velocity_30d: number | null;
+  trend_30d_direction: string | null;
+  ccu_trend_7d_pct: number | null;
 }
 
 export interface RawChangeBurstDetailEvent {

@@ -1,7 +1,11 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 import { getServiceSupabase } from '@/lib/supabase-service';
 import type {
+  AppType,
+  ChatChangePatternCandidateRow,
   ChangeActivityDetail,
+  ChangeActivitySignalFamily,
+  ChangeActivityStoryKind,
   ChangeActivityRow,
   ChangeBurstDetail,
   ChangeBurstImpact,
@@ -9,12 +13,18 @@ import type {
   ChangeFeedActivityResponse,
   ChangeFeedBurstsResponse,
   ChangeFeedNewsResponse,
+  ChangeFeedPreset,
   ChangeFeedSource,
   ChangeNewsRow,
   JsonValue,
-  RawChangeActivityRow,
   RawChangeBurstRow,
+  RawChatChangeActivityCandidateRow,
+  RawChatChangePatternCandidateRow,
   RawChangeNewsRow,
+} from './change-feed-types';
+import {
+  CHANGE_ACTIVITY_SIGNAL_FAMILIES,
+  CHANGE_ACTIVITY_STORY_KINDS,
 } from './change-feed-types';
 import {
   buildAnnouncementActivityDetail,
@@ -34,11 +44,8 @@ import type {
 import {
   buildNextCursor,
   decodeActivityCursor,
-  decodeActivityScoreCursor,
   encodeActivityCursor,
-  encodeActivityScoreCursor,
   isMissingChangeFeedRpcError,
-  mapChangeActivityRow,
   mapChangeBurstRow,
   mapChangeNewsRow,
   toSqlChangeFeedPreset,
@@ -68,6 +75,9 @@ let defaultActivityCache:
       cachedAt: number;
     }
   | null = null;
+
+const SIGNAL_FAMILY_SET = new Set<ChangeActivitySignalFamily>(CHANGE_ACTIVITY_SIGNAL_FAMILIES);
+const STORY_KIND_SET = new Set<ChangeActivityStoryKind>(CHANGE_ACTIVITY_STORY_KINDS);
 
 export class ChangeFeedUnavailableError extends Error {
   constructor(message: string) {
@@ -174,6 +184,28 @@ function parseBurstId(value: string): ParsedBurstId | null {
 
 function uniqueSortedStrings(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function toSafeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function toSafeSignalFamilies(value: unknown): ChangeActivitySignalFamily[] {
+  return toSafeStringArray(value).filter(
+    (entry): entry is ChangeActivitySignalFamily =>
+      SIGNAL_FAMILY_SET.has(entry as ChangeActivitySignalFamily)
+  );
+}
+
+function toSafeStoryKinds(value: unknown): ChangeActivityStoryKind[] {
+  return toSafeStringArray(value).filter(
+    (entry): entry is ChangeActivityStoryKind =>
+      STORY_KIND_SET.has(entry as ChangeActivityStoryKind)
+  );
 }
 
 function subtractDuration(value: string, durationMs: number): string {
@@ -418,6 +450,199 @@ async function executeChangeFeedRpc<T>(
   return data as T;
 }
 
+function normalizeChatActivitySort(
+  params: Pick<ChangeFeedActivityParams, 'view' | 'sort'>
+): ChangeFeedActivityParams['sort'] {
+  return params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort;
+}
+
+function getChatBurstPreset(
+  params: Pick<ChangeFeedActivityParams, 'view' | 'signalFamilies' | 'search'>
+): ChangeFeedPreset {
+  if (params.view === 'launch-watch') {
+    return 'upcoming-radar';
+  }
+
+  if (
+    params.search ||
+    params.signalFamilies ||
+    params.view === 'commercial-moves' ||
+    params.view === 'store-refreshes' ||
+    params.view === 'all-activity'
+  ) {
+    return 'all-changes';
+  }
+
+  return 'high-signal';
+}
+
+function buildActivityMeta(params: ChangeFeedActivityParams): ChangeFeedActivityResponse['meta'] {
+  return {
+    days: params.days,
+    view: params.view,
+    mode: params.mode,
+    sort: normalizeChatActivitySort(params),
+    limit: params.limit,
+    appTypes: params.appTypes,
+    signalFamilies: params.signalFamilies,
+    search: params.search,
+  };
+}
+
+function mapChatChangeActivityCandidateRow(row: RawChatChangeActivityCandidateRow): ChangeActivityRow {
+  const burstRow = mapChangeBurstRow(row);
+  const signalFamilies = toSafeSignalFamilies(row.signal_families);
+  const built = buildChangeActivityRow(burstRow);
+
+  return {
+    ...built,
+    signalFamilies: signalFamilies.length > 0 ? signalFamilies : built.signalFamilies,
+    storyKind: STORY_KIND_SET.has(row.story_kind) ? row.story_kind : built.storyKind,
+  };
+}
+
+function mapChatChangePatternCandidateRow(
+  row: RawChatChangePatternCandidateRow
+): ChatChangePatternCandidateRow {
+  const activityIds = toSafeStringArray(row.activity_ids).map((activityId) =>
+    activityId.startsWith('change:') ? activityId : `change:${encodeURIComponent(activityId)}`
+  );
+
+  return {
+    appid: row.appid,
+    appName: row.app_name,
+    appType: row.app_type,
+    isReleased: row.is_released,
+    releaseDate: row.release_date,
+    latestOccurredAt: row.latest_occurred_at,
+    activityIds,
+    signalFamilies: toSafeSignalFamilies(row.signal_families),
+    storyKinds: toSafeStoryKinds(row.story_kinds),
+    announcementCount: row.announcement_count,
+    changeCount: row.change_count,
+    positivePercentage: row.positive_percentage,
+    totalReviews: row.total_reviews,
+    ccuPeak: row.ccu_peak,
+    priceCents: row.price_cents,
+    discountPercent: row.discount_percent,
+    reviewVelocity7d: row.review_velocity_7d,
+    reviewVelocity30d: row.review_velocity_30d,
+    trend30dDirection: row.trend_30d_direction,
+    ccuTrend7dPct: row.ccu_trend_7d_pct,
+  };
+}
+
+async function fetchChatChangeRows(params: ChangeFeedActivityParams): Promise<ChangeActivityRow[]> {
+  const sort = normalizeChatActivitySort(params);
+
+  const data = await executeChangeFeedRpc<RawChatChangeActivityCandidateRow[]>(
+    'get_chat_change_activity_candidates',
+    {
+      p_days: params.days,
+      p_view: params.view,
+      p_sort: sort,
+      p_app_types: params.appTypes,
+      p_signal_families: params.signalFamilies,
+      p_search: params.search,
+      p_limit: Math.min(Math.max(params.limit + 10, 25), 100),
+    }
+  );
+
+  let items = (data ?? []).map(mapChatChangeActivityCandidateRow);
+  items = filterActivitiesBySignalFamilies(items, params.signalFamilies);
+  items = filterActivitiesForView(items, params.view);
+  items = sortActivities(items, sort);
+  return items.slice(0, params.limit);
+}
+
+export async function fetchChatChangeActivityResponse(
+  params: ChangeFeedActivityParams
+): Promise<ChangeFeedActivityResponse> {
+  const sort = normalizeChatActivitySort(params);
+
+  if (params.mode === 'announcements') {
+    const newsResponse = await fetchChangeFeedNewsResponse({
+      days: params.days,
+      appTypes: params.appTypes,
+      search: params.search,
+      cursorTime: null,
+      cursorKey: null,
+      limit: Math.min(Math.max(params.limit + 25, 50), 100),
+    });
+
+    let items = newsResponse.items.map(buildAnnouncementActivityRow);
+    items = filterActivitiesBySignalFamilies(items, params.signalFamilies);
+    items = filterActivitiesForView(items, params.view);
+    items = sortActivities(items, sort);
+
+    return {
+      items: items.slice(0, params.limit),
+      nextCursor: null,
+      meta: buildActivityMeta(params),
+    };
+  }
+
+  const changeItems = await fetchChatChangeRows(params);
+
+  if (
+    params.mode === 'changes' ||
+    params.view === 'launch-watch' ||
+    params.view === 'commercial-moves' ||
+    params.view === 'store-refreshes' ||
+    (params.signalFamilies && !params.signalFamilies.includes('announcement'))
+  ) {
+    return {
+      items: changeItems,
+      nextCursor: null,
+      meta: buildActivityMeta(params),
+    };
+  }
+
+  const newsResponse = await fetchChangeFeedNewsResponse({
+    days: params.days,
+    appTypes: params.appTypes,
+    search: params.search,
+    cursorTime: null,
+    cursorKey: null,
+    limit: Math.min(Math.max(params.limit + 25, 50), 100),
+  });
+
+  let items: ChangeActivityRow[] = [
+    ...changeItems,
+    ...(newsResponse.items ?? []).map(buildAnnouncementActivityRow),
+  ];
+  items = filterActivitiesBySignalFamilies(items, params.signalFamilies);
+  items = filterActivitiesForView(items, params.view);
+  items = sortActivities(items, sort);
+
+  return {
+    items: items.slice(0, params.limit),
+    nextCursor: null,
+    meta: buildActivityMeta(params),
+  };
+}
+
+export async function fetchChatChangePatternCandidates(params: {
+  pattern: string;
+  days: number;
+  appTypes: AppType[] | null;
+  search: string | null;
+  limit: number;
+}): Promise<ChatChangePatternCandidateRow[]> {
+  const data = await executeChangeFeedRpc<RawChatChangePatternCandidateRow[]>(
+    'get_chat_change_pattern_candidates',
+    {
+      p_pattern: params.pattern,
+      p_days: params.days,
+      p_app_types: params.appTypes,
+      p_search: params.search,
+      p_limit: params.limit,
+    }
+  );
+
+  return (data ?? []).map(mapChatChangePatternCandidateRow);
+}
+
 export async function fetchChangeFeedBurstsResponse(
   params: ChangeFeedBurstParams
 ): Promise<ChangeFeedBurstsResponse> {
@@ -510,29 +735,6 @@ export async function fetchChangeFeedNewsResponse(
   return response;
 }
 
-function getLegacyPresetForView(view: ChangeFeedActivityParams['view']): ChangeFeedBurstParams['preset'] {
-  switch (view) {
-    case 'launch-watch':
-      return 'upcoming-radar';
-    case 'all-activity':
-      return 'all-changes';
-    default:
-      return 'high-signal';
-  }
-}
-
-function shouldUseComposedActivityFastPath(params: ChangeFeedActivityParams): boolean {
-  if (params.mode === 'changes') {
-    return false;
-  }
-
-  if (params.signalFamilies && !params.signalFamilies.includes('announcement')) {
-    return false;
-  }
-
-  return true;
-}
-
 async function fetchComposedChangeFeedActivityResponse(
   params: ChangeFeedActivityParams
 ): Promise<ChangeFeedActivityResponse> {
@@ -544,22 +746,30 @@ async function fetchComposedChangeFeedActivityResponse(
     params.mode === 'announcements'
       ? Promise.resolve<ChangeActivityRow[]>([])
       : (async () => {
-          const data = await executeChangeFeedRpc<ActivityRpcRow[]>('get_change_feed_activity', {
-            p_days: params.days,
-            p_view: params.view,
-            p_mode: 'changes',
-            p_app_types: params.appTypes,
-            p_search: params.search,
-            p_signal_families: changeSignalFamilies,
-            p_sort:
-              params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
-            p_cursor_score: null,
-            p_cursor_time: null,
-            p_cursor_activity_id: null,
-            p_limit: internalLimit,
+          const burstsResponse = await fetchChangeFeedBurstsResponse({
+            days: params.days,
+            preset: getChatBurstPreset({
+              view: params.view,
+              signalFamilies: changeSignalFamilies,
+              search: params.search,
+            }),
+            appTypes: params.appTypes,
+            search: params.search,
+            sourceFilter: null,
+            cursorTime: null,
+            cursorKey: null,
+            limit: internalLimit,
           });
 
-          return (data ?? []).map(mapChangeActivityRow);
+          let items = burstsResponse.items.map(buildChangeActivityRow);
+          items = filterActivitiesBySignalFamilies(items, changeSignalFamilies);
+          items = filterActivitiesForView(items, params.view);
+          items = sortActivities(
+            items,
+            params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort
+          );
+
+          return items;
         })(),
     fetchChangeFeedNewsResponse({
       days: params.days,
@@ -603,71 +813,6 @@ async function fetchComposedChangeFeedActivityResponse(
   };
 }
 
-async function fetchLegacyChangeFeedActivityResponse(
-  params: ChangeFeedActivityParams
-): Promise<ChangeFeedActivityResponse> {
-  const { offset } = decodeActivityCursor(params.cursor);
-  const internalLimit = Math.min(Math.max(offset + params.limit + 25, 75), 100);
-
-  const [burstsResponse, newsResponse] = await Promise.all([
-    params.mode === 'announcements'
-      ? Promise.resolve<ChangeFeedBurstsResponse | null>(null)
-      : fetchChangeFeedBurstsResponse({
-          days: params.days,
-          preset: getLegacyPresetForView(params.view),
-          appTypes: params.appTypes,
-          search: params.search,
-          sourceFilter: null,
-          cursorTime: null,
-          cursorKey: null,
-          limit: internalLimit,
-        }),
-    params.mode === 'changes'
-      ? Promise.resolve<ChangeFeedNewsResponse | null>(null)
-      : fetchChangeFeedNewsResponse({
-          days: params.days,
-          appTypes: params.appTypes,
-          search: params.search,
-          cursorTime: null,
-          cursorKey: null,
-          limit: internalLimit,
-        }),
-  ]);
-
-  let items: ChangeActivityRow[] = [
-    ...(burstsResponse?.items ?? []).map(buildChangeActivityRow),
-    ...(newsResponse?.items ?? []).map(buildAnnouncementActivityRow),
-  ];
-
-  items = filterActivitiesForView(items, params.view);
-  items = filterActivitiesBySignalFamilies(items, params.signalFamilies);
-  items = sortActivities(
-    items,
-    params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort
-  );
-
-  const pageItems = items.slice(offset, offset + params.limit);
-  const nextCursor =
-    items.length > offset + params.limit ? encodeActivityCursor({ offset: offset + params.limit }) : null;
-
-  return {
-    items: pageItems,
-    nextCursor,
-    meta: {
-      days: params.days,
-      view: params.view,
-      mode: params.mode,
-      sort: params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
-      limit: params.limit,
-      appTypes: params.appTypes,
-      signalFamilies: params.signalFamilies,
-      search: params.search,
-    },
-  };
-}
-
-type ActivityRpcRow = RawChangeActivityRow & { sort_score: number | null };
-
 export async function fetchChangeFeedActivityResponse(
   params: ChangeFeedActivityParams
 ): Promise<ChangeFeedActivityResponse> {
@@ -681,85 +826,16 @@ export async function fetchChangeFeedActivityResponse(
     return defaultActivityCache.data;
   }
 
-  if (shouldUseComposedActivityFastPath(params)) {
-    const response = await fetchComposedChangeFeedActivityResponse(params);
+  const response = await fetchComposedChangeFeedActivityResponse(params);
 
-    if (isDefaultRequest) {
-      defaultActivityCache = {
-        data: response,
-        cachedAt: Date.now(),
-      };
-    }
-
-    return response;
-  }
-
-  const rpcCursor = decodeActivityScoreCursor(params.cursor);
-
-  try {
-    const data = await executeChangeFeedRpc<ActivityRpcRow[]>('get_change_feed_activity', {
-      p_days: params.days,
-      p_view: params.view,
-      p_mode: params.mode,
-      p_app_types: params.appTypes,
-      p_search: params.search,
-      p_signal_families: params.signalFamilies,
-      p_sort: params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
-      p_cursor_score: rpcCursor?.score ?? null,
-      p_cursor_time: rpcCursor?.time ?? null,
-      p_cursor_activity_id: rpcCursor?.id ?? null,
-      p_limit: params.limit,
-    });
-
-    const items = (data ?? []).map(mapChangeActivityRow);
-    const lastRow = data?.[data.length - 1] ?? null;
-
-    const response: ChangeFeedActivityResponse = {
-      items,
-      nextCursor:
-        data && data.length >= params.limit && lastRow
-          ? encodeActivityScoreCursor({
-              score: lastRow.sort_score ?? 0,
-              time: lastRow.occurred_at,
-              id: lastRow.activity_id,
-            })
-          : null,
-      meta: {
-        days: params.days,
-        view: params.view,
-        mode: params.mode,
-        sort: params.view === 'all-activity' && params.sort === 'relevant' ? 'newest' : params.sort,
-        limit: params.limit,
-        appTypes: params.appTypes,
-        signalFamilies: params.signalFamilies,
-        search: params.search,
-      },
+  if (isDefaultRequest) {
+    defaultActivityCache = {
+      data: response,
+      cachedAt: Date.now(),
     };
-
-    if (isDefaultRequest) {
-      defaultActivityCache = {
-        data: response,
-        cachedAt: Date.now(),
-      };
-    }
-
-    return response;
-  } catch (error) {
-    if (error instanceof ChangeFeedUnavailableError) {
-      const fallback = await fetchLegacyChangeFeedActivityResponse(params);
-
-      if (isDefaultRequest) {
-        defaultActivityCache = {
-          data: fallback,
-          cachedAt: Date.now(),
-        };
-      }
-
-      return fallback;
-    }
-
-    throw error;
   }
+
+  return response;
 }
 
 function toNewsExcerpt(value: string | null): string | null {

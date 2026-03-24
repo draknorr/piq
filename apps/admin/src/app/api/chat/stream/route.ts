@@ -47,6 +47,7 @@ import {
   findChangePatterns,
   getChangeActivityDetail,
   getGameChangeTimeline,
+  normalizeChangeIntelToolCall,
   queryChangeActivity,
   type CompareChangeBeforeAfterArgs,
   type FindChangePatternsArgs,
@@ -169,6 +170,53 @@ function formatSSE(event: StreamEvent): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function classifyStreamFailureKind(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/statement timeout|canceling statement due to statement timeout/i.test(message)) {
+    return 'db_statement_timeout';
+  }
+
+  if (/429|rate limit/i.test(message)) {
+    return 'openai_429';
+  }
+
+  if (/missing message_end/i.test(message)) {
+    return 'missing_message_end';
+  }
+
+  return 'runtime_error';
+}
+
+function buildSessionLogSummary(
+  context: SessionChatContext | null | undefined,
+  toolCalls: ChatToolCall[],
+  failureKind?: string
+): Record<string, unknown> | null {
+  const summary = summarizeSessionContextForLog(context) ?? {};
+  const selectedChangeSurfaces = Array.from(
+    new Set(
+      toolCalls
+        .map((toolCall) =>
+          isRecord(toolCall.result) && typeof toolCall.result.selected_change_surface === 'string'
+            ? toolCall.result.selected_change_surface
+            : null
+        )
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+
+  if (selectedChangeSurfaces.length > 0) {
+    summary.selectedChangeSurfaces = selectedChangeSurfaces;
+  }
+
+  if (failureKind) {
+    summary.failureKind = failureKind;
+  }
+
+  return Object.keys(summary).length > 0 ? summary : null;
 }
 
 function buildSystemPrompt(sessionContext: SessionChatContext | null): string {
@@ -297,9 +345,25 @@ export async function handleChatStreamRequest(
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
       let creditsCharged = 0;
+      let body: ChatRequest | null = null;
+      let lastUserMessageContent: string | null = null;
+      const executedToolNames: string[] = [];
+      const executedToolCalls: ChatToolCall[] = [];
+      const allToolCalls: ChatToolCall[] = [];
+      let phase1Quality: ChatTurnQualityInfo | undefined;
+      let updatedSessionContext: SessionChatContext | null = null;
+      let totalLlmMs = 0;
+      let totalToolsMs = 0;
+      const debugStats: StreamDebugInfo = {
+        iterations: 0,
+        textDeltaCount: 0,
+        totalChars: 0,
+        toolCallCount: 0,
+        lastIterationHadText: false,
+      };
 
       try {
-        const body = (await request.json()) as ChatRequest;
+        body = (await request.json()) as ChatRequest;
 
         if (!body.messages || !Array.isArray(body.messages)) {
           const errorEvent: ErrorEvent = { type: 'error', message: 'Invalid request: messages array required' };
@@ -331,29 +395,15 @@ export async function handleChatStreamRequest(
         const messages: Message[] = [{ role: 'system', content: systemPrompt }, ...body.messages];
 
         let iterations = 0;
-        let totalLlmMs = 0;
-        let totalToolsMs = 0;
-        const executedToolNames: string[] = []; // Track only executed tools for logging + credits
-        const executedToolCalls: ChatToolCall[] = [];
-        const allToolCalls: ChatToolCall[] = [];
         let lastBroadDiscoveryState: BroadDiscoveryState | null = null;
         let lastCompanyState: CompanyAnswerState | null = null;
         const lastUserPrompt = body.messages.filter((message) => message.role === 'user').pop()?.content ?? '';
+        lastUserMessageContent = lastUserPrompt || null;
         const shouldBufferCompanyResponse = Boolean(classifyCompanyIntent(lastUserPrompt));
         const phase1State = CHAT_PHASE1_QUALITY_ENABLED
           ? createPhase1GuardrailState(Boolean(sessionContext))
           : null;
-        let phase1Quality: ChatTurnQualityInfo | undefined;
-        let updatedSessionContext: SessionChatContext | null = sessionContext;
-
-        // Debug stats - zero additional cost, just counters
-        const debugStats: StreamDebugInfo = {
-          iterations: 0,
-          textDeltaCount: 0,
-          totalChars: 0,
-          toolCallCount: 0,
-          lastIterationHadText: false,
-        };
+        updatedSessionContext = sessionContext;
 
         while (iterations < MAX_TOOL_ITERATIONS) {
           iterations++;
@@ -443,22 +493,26 @@ export async function handleChatStreamRequest(
               lastUserPrompt,
               lastBroadDiscoveryState
             );
+            const routedToolCall = await normalizeChangeIntelToolCall(
+              effectiveToolCall,
+              lastUserPrompt
+            );
             const genericCompanyLookupSkipResult = buildGenericCompanyLookupSkipResult(
               lastUserPrompt,
-              effectiveToolCall
+              routedToolCall
             );
             const unsupportedCompanyWindowSkipResult = buildUnsupportedCompanyWindowSkipResult(
               lastUserPrompt,
-              effectiveToolCall
+              routedToolCall
             );
             const redundantCompanySkipResult = buildRedundantCompanySkipResult(
               lastCompanyState,
-              effectiveToolCall,
+              routedToolCall,
               lastUserPrompt
             );
             const redundantSkipResult = buildRedundantDiscoverySkipResult(
               lastBroadDiscoveryState,
-              effectiveToolCall,
+              routedToolCall,
               lastUserPrompt
             );
             const skipResult =
@@ -469,145 +523,145 @@ export async function handleChatStreamRequest(
 
             if (skipResult) {
               const contract = phase1State
-                ? buildToolAnswerContractSummary(effectiveToolCall, skipResult)
+                ? buildToolAnswerContractSummary(routedToolCall, skipResult)
                 : null;
               const phase1Result = contract
                 ? attachPhase1MetadataToResult(skipResult, contract)
                 : skipResult;
 
               if (phase1State && contract) {
-                observeExecutedToolCall(phase1State, effectiveToolCall, contract);
+                observeExecutedToolCall(phase1State, routedToolCall, contract);
               }
 
               const toolResultEvent: ToolResultEvent = {
                 type: 'tool_result',
-                toolCallId: effectiveToolCall.id,
-                name: effectiveToolCall.name,
-                arguments: effectiveToolCall.arguments,
+                toolCallId: routedToolCall.id,
+                name: routedToolCall.name,
+                arguments: routedToolCall.arguments,
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
               controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
 
-              toolResults.push({ toolCall: effectiveToolCall, result: phase1Result });
+              toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
-                name: effectiveToolCall.name,
-                arguments: effectiveToolCall.arguments,
+                name: routedToolCall.name,
+                arguments: routedToolCall.arguments,
                 result: phase1Result,
                 timing: { executionMs: 0 },
               });
               lastBroadDiscoveryState = extractBroadDiscoveryState(
-                effectiveToolCall.name,
-                effectiveToolCall.arguments,
+                routedToolCall.name,
+                routedToolCall.arguments,
                 phase1Result
               ) ?? lastBroadDiscoveryState;
               lastCompanyState = extractCompanyAnswerState(
                 lastUserPrompt,
-                effectiveToolCall,
+                routedToolCall,
                 phase1Result
               ) ?? lastCompanyState;
               continue;
             }
 
             const phase1SkipResult = phase1State
-              ? maybeBlockPhase1ToolCall(phase1State, effectiveToolCall)
+              ? maybeBlockPhase1ToolCall(phase1State, routedToolCall)
               : null;
 
             if (phase1SkipResult) {
               const contract = phase1State
-                ? buildToolAnswerContractSummary(effectiveToolCall, phase1SkipResult)
+                ? buildToolAnswerContractSummary(routedToolCall, phase1SkipResult)
                 : null;
               const phase1Result = contract
                 ? attachPhase1MetadataToResult(phase1SkipResult, contract)
                 : phase1SkipResult;
 
               if (phase1State && contract) {
-                observeExecutedToolCall(phase1State, effectiveToolCall, contract);
+                observeExecutedToolCall(phase1State, routedToolCall, contract);
               }
 
               const toolResultEvent: ToolResultEvent = {
                 type: 'tool_result',
-                toolCallId: effectiveToolCall.id,
-                name: effectiveToolCall.name,
-                arguments: effectiveToolCall.arguments,
+                toolCallId: routedToolCall.id,
+                name: routedToolCall.name,
+                arguments: routedToolCall.arguments,
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
               controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
 
-              toolResults.push({ toolCall: effectiveToolCall, result: phase1Result });
+              toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
-                name: effectiveToolCall.name,
-                arguments: effectiveToolCall.arguments,
+                name: routedToolCall.name,
+                arguments: routedToolCall.arguments,
                 result: phase1Result,
                 timing: { executionMs: 0 },
               });
               lastBroadDiscoveryState = extractBroadDiscoveryState(
-                effectiveToolCall.name,
-                effectiveToolCall.arguments,
+                routedToolCall.name,
+                routedToolCall.arguments,
                 phase1Result
               ) ?? lastBroadDiscoveryState;
               lastCompanyState = extractCompanyAnswerState(
                 lastUserPrompt,
-                effectiveToolCall,
+                routedToolCall,
                 phase1Result
               ) ?? lastCompanyState;
               continue;
             }
 
             const toolStart = performance.now();
-            const rawResult = await executeTool(effectiveToolCall);
+            const rawResult = await executeTool(routedToolCall);
             const toolExecutionMs = performance.now() - toolStart;
             totalToolsMs += toolExecutionMs;
-            executedToolNames.push(effectiveToolCall.name);
+            executedToolNames.push(routedToolCall.name);
             const policyResult = await applyCompanyToolResultPolicy(
               lastUserPrompt,
-              effectiveToolCall,
+              routedToolCall,
               rawResult
             );
             const contract =
               phase1State && isRecord(policyResult)
-                ? buildToolAnswerContractSummary(effectiveToolCall, policyResult)
+                ? buildToolAnswerContractSummary(routedToolCall, policyResult)
                 : null;
             const result = contract && isRecord(policyResult)
               ? attachPhase1MetadataToResult(policyResult, contract)
               : policyResult;
 
             if (phase1State && contract) {
-              observeExecutedToolCall(phase1State, effectiveToolCall, contract);
+              observeExecutedToolCall(phase1State, routedToolCall, contract);
             }
 
             const toolResultEvent: ToolResultEvent = {
               type: 'tool_result',
-              toolCallId: effectiveToolCall.id,
-              name: effectiveToolCall.name,
-              arguments: effectiveToolCall.arguments,
+              toolCallId: routedToolCall.id,
+              name: routedToolCall.name,
+              arguments: routedToolCall.arguments,
               result,
               timing: { executionMs: Math.round(toolExecutionMs) },
             };
             controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
 
-            toolResults.push({ toolCall: effectiveToolCall, result });
+            toolResults.push({ toolCall: routedToolCall, result });
             executedToolCalls.push({
-              name: effectiveToolCall.name,
-              arguments: effectiveToolCall.arguments,
+              name: routedToolCall.name,
+              arguments: routedToolCall.arguments,
               result,
               timing: { executionMs: Math.round(toolExecutionMs) },
             });
             allToolCalls.push({
-              name: effectiveToolCall.name,
-              arguments: effectiveToolCall.arguments,
+              name: routedToolCall.name,
+              arguments: routedToolCall.arguments,
               result,
               timing: { executionMs: Math.round(toolExecutionMs) },
             });
             lastBroadDiscoveryState = extractBroadDiscoveryState(
-              effectiveToolCall.name,
-              effectiveToolCall.arguments,
+              routedToolCall.name,
+              routedToolCall.arguments,
               result
             ) ?? lastBroadDiscoveryState;
             lastCompanyState = extractCompanyAnswerState(
               lastUserPrompt,
-              effectiveToolCall,
+              routedToolCall,
               result
             ) ?? lastCompanyState;
           }
@@ -686,11 +740,10 @@ export async function handleChatStreamRequest(
 
         // Log the chat query to database (do this BEFORE sending message_end)
         // Wrap in try-catch to ensure logging failures don't affect the response
-        const lastUserMessage = body.messages.filter((m) => m.role === 'user').pop();
-        if (lastUserMessage && !isEvalRequest) {
+        if (lastUserMessageContent && !isEvalRequest) {
           try {
             await logChatQuery({
-              query_text: lastUserMessage.content.slice(0, 2000),
+              query_text: lastUserMessageContent.slice(0, 2000),
               tool_names: [...new Set(executedToolNames)],
               tool_count: debugStats.toolCallCount,
               iteration_count: debugStats.iterations,
@@ -706,7 +759,7 @@ export async function handleChatStreamRequest(
               total_credits_charged: creditsEnabled ? creditsCharged : undefined,
               chat_family: phase1Quality?.family,
               quality_flags: phase1Quality?.qualityFlags,
-              session_context_summary: summarizeSessionContextForLog(updatedSessionContext),
+              session_context_summary: buildSessionLogSummary(updatedSessionContext, allToolCalls),
               guardrail_trace: phase1Quality?.guardrailTrace,
               answer_contract_summary: phase1Quality?.terminalContract ?? null,
             });
@@ -738,6 +791,40 @@ export async function handleChatStreamRequest(
       } catch (error) {
         console.error('Streaming chat error:', error);
         const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+        const failureKind = classifyStreamFailureKind(error);
+
+        if (lastUserMessageContent && !isEvalRequest) {
+          try {
+            await logChatQuery({
+              query_text: lastUserMessageContent.slice(0, 2000),
+              tool_names: [...new Set(executedToolNames)],
+              tool_count: debugStats.toolCallCount,
+              iteration_count: debugStats.iterations,
+              response_length: debugStats.totalChars,
+              timing_llm_ms: totalLlmMs > 0 ? Math.round(totalLlmMs) : null,
+              timing_tools_ms: totalToolsMs > 0 ? Math.round(totalToolsMs) : null,
+              timing_total_ms: Math.round(performance.now() - requestStart),
+              user_id: userId ?? undefined,
+              input_tokens: totalInputTokens > 0 ? totalInputTokens : undefined,
+              output_tokens: totalOutputTokens > 0 ? totalOutputTokens : undefined,
+              tool_credits_used: creditsEnabled ? getCreditBreakdown(executedToolNames, 0, 0).toolCredits : undefined,
+              chat_family: phase1Quality?.family,
+              quality_flags: [
+                ...new Set([
+                  ...(phase1Quality?.qualityFlags ?? []),
+                  'runtime_failure',
+                  failureKind,
+                ]),
+              ],
+              session_context_summary: buildSessionLogSummary(updatedSessionContext, allToolCalls, failureKind),
+              guardrail_trace: phase1Quality?.guardrailTrace,
+              answer_contract_summary: phase1Quality?.terminalContract ?? null,
+            });
+          } catch (logError) {
+            console.error('Failed to log errored chat query:', logError);
+          }
+        }
+
         const errorEvent: ErrorEvent = { type: 'error', message: errorMessage };
         controller.enqueue(encoder.encode(formatSSE(errorEvent)));
 

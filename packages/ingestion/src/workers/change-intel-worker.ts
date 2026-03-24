@@ -16,6 +16,7 @@ import {
   claimCaptureQueue,
   completeCaptureQueueItems,
   createSyncJobRecord,
+  refreshChangeActivityBurstsForApp,
   requeueStaleCaptureClaims,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
@@ -32,7 +33,7 @@ const log = logger.child({ worker: 'change-intel' });
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 
-const DEFAULT_SOURCES = ['storefront', 'news', 'hero_asset'] as const;
+const DEFAULT_SOURCES = ['storefront', 'news', 'projection_refresh', 'hero_asset'] as const;
 
 type QueueSource = (typeof DEFAULT_SOURCES)[number];
 
@@ -66,6 +67,10 @@ async function processStorefrontJob(supabase: SupabaseClient, appid: number, tri
   await upsertLatestStorefrontState(supabase, appid, result.data);
 }
 
+async function processProjectionRefreshJob(supabase: SupabaseClient, appid: number): Promise<void> {
+  await refreshChangeActivityBurstsForApp(supabase, appid);
+}
+
 async function processJob(
   supabase: SupabaseClient,
   source: QueueSource,
@@ -82,6 +87,9 @@ async function processJob(
         mode: resolveNewsCaptureMode(triggerReason),
         triggerCursor,
       });
+      break;
+    case 'projection_refresh':
+      await processProjectionRefreshJob(supabase, appid);
       break;
     case 'hero_asset':
       await archiveHeroAssetsForApp(supabase, appid);

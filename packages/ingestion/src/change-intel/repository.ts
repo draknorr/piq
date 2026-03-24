@@ -469,6 +469,52 @@ export async function enqueueCaptureJobs(
   return Number(data ?? 0);
 }
 
+export async function refreshChangeActivityBurstsForApp(
+  supabase: TypedSupabaseClient,
+  appid: number,
+  lookbackDays = 180
+): Promise<number> {
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'refresh_change_activity_bursts_for_app',
+    () =>
+      getDb(supabase).rpc('refresh_change_activity_bursts_for_app', {
+        p_appid: appid,
+        p_lookback_days: lookbackDays,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to refresh change_activity_bursts: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
+export async function listRecentChangeActivityAppIds(
+  supabase: TypedSupabaseClient,
+  lookbackDays = 180,
+  afterAppid = 0,
+  limit = 1000
+): Promise<number[]> {
+  const { data, error } = await runSupabaseOperation<Array<{ appid: number }> | null>(
+    'list_recent_change_activity_appids',
+    () =>
+      getDb(supabase).rpc('list_recent_change_activity_appids', {
+        p_lookback_days: lookbackDays,
+        p_after_appid: afterAppid,
+        p_limit: limit,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to list recent change activity appids: ${error.message}`);
+  }
+
+  return (data ?? [])
+    .map((row) => Number(row.appid))
+    .filter((appid) => Number.isInteger(appid) && appid > 0);
+}
+
 export async function claimCaptureQueue(
   supabase: TypedSupabaseClient,
   sources: AppCaptureSource[],

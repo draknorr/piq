@@ -1,4 +1,4 @@
-export type AppCaptureSource = 'storefront' | 'news' | 'hero_asset';
+export type AppCaptureSource = 'storefront' | 'news' | 'hero_asset' | 'projection_refresh';
 
 export type AppSnapshotSource = 'storefront' | 'pics';
 
