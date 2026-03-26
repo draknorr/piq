@@ -8,6 +8,10 @@
  */
 
 import { getServiceClient } from '@publisheriq/database';
+import {
+  refreshReviewVelocityStats,
+  updateReviewVelocityTiers,
+} from '@publisheriq/database/ingestion';
 import { logger } from '@publisheriq/shared';
 
 const log = logger.child({ worker: 'velocity-calc' });
@@ -63,28 +67,18 @@ async function main(): Promise<void> {
   try {
     // 1. Refresh the materialized view
     log.info('Refreshing review_velocity_stats materialized view');
-    const { error: refreshError } = await supabase.rpc('refresh_materialized_view', {
-      view_name: 'review_velocity_stats',
-    });
+    const refreshStartedAt = Date.now();
+    await refreshReviewVelocityStats();
+    const refreshDurationMs = Date.now() - refreshStartedAt;
 
-    if (refreshError) {
-      throw new Error(`Failed to refresh velocity stats: ${formatUnknownError(refreshError)}`);
-    }
-
-    log.info('Materialized view refreshed successfully');
+    log.info('Materialized view refreshed successfully', { refreshDurationMs });
 
     // 2. Update sync_status with new velocity data
     log.info('Updating sync_status with velocity tiers');
-    const { data: updateResult, error: updateError } = await supabase.rpc(
-      'update_review_velocity_tiers'
-    );
-
-    if (updateError) {
-      throw new Error(`Failed to update velocity tiers: ${formatUnknownError(updateError)}`);
-    }
-
-    const updatedCount = updateResult?.[0]?.count ?? 0;
-    log.info('Velocity tiers updated', { updatedCount });
+    const tierUpdateStartedAt = Date.now();
+    const updatedCount = await updateReviewVelocityTiers();
+    const tierUpdateDurationMs = Date.now() - tierUpdateStartedAt;
+    log.info('Velocity tiers updated', { updatedCount, tierUpdateDurationMs });
 
     // 3. Get tier distribution for logging
     const { data: tierStats } = await supabase

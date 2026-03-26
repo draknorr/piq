@@ -460,6 +460,33 @@ function getCoverageStatus(args: {
   return ageDays > args.staleAfterDays ? 'stale' : 'ok';
 }
 
+function shouldPreferLatestReviewMetrics(
+  appSummary: AppSummary | null,
+  latestMetrics: DailyMetric | null,
+  lastReviewsSync: string | null | undefined
+): boolean {
+  if (!latestMetrics) {
+    return false;
+  }
+
+  const latestMetricDateMs = Date.parse(latestMetrics.metric_date);
+  const appMetricDateMs = appSummary?.metric_date ? Date.parse(appSummary.metric_date) : Number.NaN;
+
+  if (!Number.isNaN(latestMetricDateMs) && (Number.isNaN(appMetricDateMs) || latestMetricDateMs > appMetricDateMs)) {
+    return true;
+  }
+
+  const lastReviewsSyncMs = lastReviewsSync ? Date.parse(lastReviewsSync) : Number.NaN;
+  const appReviewsMissingOrZero =
+    appSummary === null || appSummary.total_reviews === 0 || appSummary.positive_reviews === 0;
+
+  return (
+    appReviewsMissingOrZero &&
+    !Number.isNaN(lastReviewsSyncMs) &&
+    (Number.isNaN(appMetricDateMs) || lastReviewsSyncMs > appMetricDateMs)
+  );
+}
+
 export default async function AppDetailPage({
   params,
 }: {
@@ -534,11 +561,20 @@ export default async function AppDetailPage({
   }
 
   const latestMetrics = metrics[0] ?? null;
+  const preferLatestReviewMetrics = shouldPreferLatestReviewMetrics(
+    appSummary,
+    latestMetrics,
+    syncStatus?.last_reviews_sync
+  );
   const isFree = appSummary?.is_free ?? app.is_free;
   const discountPercent = appSummary?.current_discount_percent ?? app.current_discount_percent ?? 0;
   const priceCents = appSummary?.price_cents ?? app.current_price_cents;
-  const totalReviews = appSummary?.total_reviews ?? latestMetrics?.total_reviews ?? null;
-  const positiveReviews = appSummary?.positive_reviews ?? latestMetrics?.positive_reviews ?? null;
+  const totalReviews = preferLatestReviewMetrics
+    ? latestMetrics?.total_reviews ?? appSummary?.total_reviews ?? null
+    : appSummary?.total_reviews ?? latestMetrics?.total_reviews ?? null;
+  const positiveReviews = preferLatestReviewMetrics
+    ? latestMetrics?.positive_reviews ?? appSummary?.positive_reviews ?? null
+    : appSummary?.positive_reviews ?? latestMetrics?.positive_reviews ?? null;
   const negativeReviews =
     latestMetrics?.negative_reviews ??
     (totalReviews !== null && positiveReviews !== null ? Math.max(totalReviews - positiveReviews, 0) : null);

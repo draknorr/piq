@@ -7,13 +7,18 @@ on:
   workflow_dispatch:
 
 env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+concurrency:
+  group: velocity-calculation
+  cancel-in-progress: false
 
 jobs:
   calculate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4

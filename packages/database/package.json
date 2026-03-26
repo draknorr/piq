@@ -9,20 +9,26 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./ingestion": {
+      "import": "./dist/ingestion.js",
+      "types": "./dist/ingestion.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
-    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "build": "tsup src/index.ts src/ingestion.ts --format esm --dts",
+    "dev": "tsup src/index.ts src/ingestion.ts --format esm --dts --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint src/",
     "generate-types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > src/types.ts"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.47.10"
+    "@supabase/supabase-js": "^2.47.10",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.15.6",
     "eslint": "^9.39.2",
     "supabase": "^1.225.3",
     "tsup": "^8.3.5",

@@ -4,7 +4,7 @@ import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/layout';
 import { AppsPageClient } from './components/AppsPageClient';
-import { getApps, getAggregateStats, getAppsByIds } from './lib/apps-queries';
+import { getApps, getAggregateStats, getAppsByIdsWithFreshReviews } from './lib/apps-queries';
 import { parseCompareParam } from './lib/apps-compare-utils';
 import type {
   App,
@@ -164,7 +164,7 @@ export default async function AppsPage({
     // M6a: Fetch compare apps if valid (2-5 IDs)
     if (compareAppIds.length >= 2 && compareAppIds.length <= 5) {
       try {
-        compareApps = await getAppsByIds(compareAppIds);
+        compareApps = await getAppsByIdsWithFreshReviews(compareAppIds);
       } catch (compareError) {
         console.error('Failed to fetch compare apps (non-blocking):', compareError);
         // Modal won't show if compareApps is empty

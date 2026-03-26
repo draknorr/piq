@@ -10,6 +10,13 @@
 
 import { randomUUID } from 'node:crypto';
 import { getServiceClient } from '@publisheriq/database';
+import {
+  acquireApiRateToken as acquireSharedApiRateToken,
+  claimAppsForReviewsSync as claimReviewApps,
+  releaseReviewClaims as releaseClaimedReviewApps,
+  type ClaimedReviewApp,
+  type ReviewLane,
+} from '@publisheriq/database/ingestion';
 import { logger, BATCH_SIZES } from '@publisheriq/shared';
 import pLimit from 'p-limit';
 import { fetchReviewSummary } from '../apis/reviews.js';
@@ -24,12 +31,6 @@ const DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD = 3;
 const DEFAULT_IDLE_DELAY_MS = 1500;
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
-type ReviewLane =
-  | 'launch_critical'
-  | 'change_critical'
-  | 'active_reviews'
-  | 'important_backfill'
-  | 'unknown_sweep';
 
 interface SyncStats {
   appsProcessed: number;
@@ -42,6 +43,9 @@ interface SyncStats {
   emptyClaims: number;
   rateTokenSleeps: number;
   tokenWaitMs: number;
+  claimLatencyMsTotal: number;
+  claimLatencySamples: number;
+  lastClaimLatencyMs: number;
   laneClaims: Record<ReviewLane, number>;
 }
 
@@ -50,16 +54,6 @@ interface PreviousSyncData {
   positiveReviews: number;
   lastSync: Date | null;
   consecutiveErrors: number;
-}
-
-interface ClaimedReviewApp {
-  appid: number;
-  lane: ReviewLane;
-  priority_score: number;
-  velocity_tier: string;
-  hours_overdue: number;
-  last_known_total_reviews: number | null;
-  last_reviews_sync: string | null;
 }
 
 interface VelocityTierResult {
@@ -133,27 +127,7 @@ function recordLaneClaims(stats: SyncStats, claimedApps: ClaimedReviewApp[]): Re
   return laneCounts;
 }
 
-async function claimAppsForReviewsSync(
-  supabase: SupabaseClient,
-  workerId: string,
-  limit: number,
-  claimTtlMinutes: number
-): Promise<ClaimedReviewApp[]> {
-  const { data, error } = await getDb(supabase).rpc('claim_apps_for_reviews_sync', {
-    p_worker_id: workerId,
-    p_limit: limit,
-    p_claim_ttl_minutes: claimTtlMinutes,
-  });
-
-  if (error) {
-    throw new Error(`Failed to claim apps for reviews sync: ${error.message}`);
-  }
-
-  return (data ?? []) as ClaimedReviewApp[];
-}
-
 async function releaseReviewClaims(
-  supabase: SupabaseClient,
   appids: number[],
   workerId: string
 ): Promise<void> {
@@ -161,46 +135,32 @@ async function releaseReviewClaims(
     return;
   }
 
-  const { error } = await getDb(supabase)
-    .from('sync_status')
-    .update({
-      reviews_claimed_by: null,
-      reviews_claimed_at: null,
-      reviews_claim_expires_at: null,
-    })
-    .in('appid', appids)
-    .eq('reviews_claimed_by', workerId);
-
-  if (error) {
+  try {
+    await releaseClaimedReviewApps({ appids, workerId });
+  } catch (error) {
     log.warn('Failed to release stale review claims', {
       workerId,
       claimCount: appids.length,
-      error: error.message,
+      error: formatUnknownError(error),
     });
   }
 }
 
 async function waitForReviewRateToken(
-  supabase: SupabaseClient,
   workerId: string,
   stats: SyncStats
 ): Promise<void> {
   while (true) {
-    const { data, error } = await getDb(supabase).rpc('acquire_api_rate_token', {
-      p_source: 'reviews',
-      p_worker_id: workerId,
+    const result = await acquireSharedApiRateToken({
+      source: 'reviews',
+      workerId,
     });
 
-    if (error) {
-      throw new Error(`Failed to acquire shared review API token: ${error.message}`);
-    }
-
-    const result = Array.isArray(data) ? data[0] : data;
-    if (result?.granted) {
+    if (result.granted) {
       return;
     }
 
-    const waitMs = Math.max(1, Number(result?.wait_ms ?? 1000));
+    const waitMs = Math.max(1, result.waitMs || 1000);
     stats.rateTokenSleeps += 1;
     stats.tokenWaitMs += waitMs;
     await sleep(waitMs);
@@ -312,7 +272,7 @@ async function processApp(
   stats.appsProcessed += 1;
 
   try {
-    await waitForReviewRateToken(supabase, workerId, stats);
+    await waitForReviewRateToken(workerId, stats);
 
     const summary = await fetchReviewSummary(appid);
     if (!summary) {
@@ -489,6 +449,9 @@ async function main(): Promise<void> {
     emptyClaims: 0,
     rateTokenSleeps: 0,
     tokenWaitMs: 0,
+    claimLatencyMsTotal: 0,
+    claimLatencySamples: 0,
+    lastClaimLatencyMs: 0,
     laneClaims: createEmptyLaneCounts(),
   };
 
@@ -516,12 +479,17 @@ async function main(): Promise<void> {
       stats.claimRounds += 1;
       stats.claimsRequested += requestLimit;
 
-      const claimedApps = await claimAppsForReviewsSync(
-        supabase,
+      const claimStartedAt = Date.now();
+      const claimedApps = await claimReviewApps({
         workerId,
-        requestLimit,
-        claimTtlMinutes
-      );
+        limit: requestLimit,
+        claimTtlMinutes,
+      });
+      const claimLatencyMs = Date.now() - claimStartedAt;
+
+      stats.claimLatencyMsTotal += claimLatencyMs;
+      stats.claimLatencySamples += 1;
+      stats.lastClaimLatencyMs = claimLatencyMs;
 
       activeClaimedAppids = claimedApps.map((app) => app.appid);
 
@@ -548,6 +516,7 @@ async function main(): Promise<void> {
       log.info('Claimed reviews batch', {
         requested: requestLimit,
         claimed: claimedApps.length,
+        claimLatencyMs,
         laneCounts,
       });
 
@@ -577,7 +546,7 @@ async function main(): Promise<void> {
         )
       );
 
-      await releaseReviewClaims(supabase, activeClaimedAppids, workerId);
+      await releaseReviewClaims(activeClaimedAppids, workerId);
       activeClaimedAppids = [];
     }
 
@@ -599,13 +568,17 @@ async function main(): Promise<void> {
     log.info('Reviews sync completed', {
       ...stats,
       durationMinutes: Number(((Date.now() - startTime) / 1000 / 60).toFixed(2)),
+      avgClaimLatencyMs:
+        stats.claimLatencySamples > 0
+          ? Number((stats.claimLatencyMsTotal / stats.claimLatencySamples).toFixed(1))
+          : 0,
       tokenWaitSeconds: Number((stats.tokenWaitMs / 1000).toFixed(1)),
     });
   } catch (error) {
     const errorMessage = formatUnknownError(error);
     log.error('Reviews sync failed', { error: errorMessage });
 
-    await releaseReviewClaims(supabase, activeClaimedAppids, workerId);
+    await releaseReviewClaims(activeClaimedAppids, workerId);
 
     if (job) {
       await supabase

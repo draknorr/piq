@@ -17,6 +17,27 @@ interface AggregateStatsRow {
   avg_value_score: number | null;
 }
 
+interface LatestReviewMetricRow {
+  appid: number;
+  metric_date: string;
+  total_reviews: number | null;
+  positive_reviews: number | null;
+  review_score: number | null;
+}
+
+interface ReviewSyncStatusRow {
+  appid: number;
+  last_reviews_sync: string | null;
+}
+
+interface FreshReviewOverlay {
+  metricDate: string;
+  totalReviews: number | null;
+  positiveReviews: number | null;
+  reviewScore: number | null;
+  lastReviewsSync: string | null;
+}
+
 /**
  * Fetch apps from the database using the unified RPC
  * Note: Uses type assertion until database types are regenerated after migration
@@ -448,4 +469,126 @@ export async function getAppsByIds(appids: number[]): Promise<App[]> {
 
   // Return in original order
   return appids.map((id) => appsMap.get(id)).filter((app): app is App => !!app);
+}
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function shouldOverlayFreshReviews(app: App, overlay: FreshReviewOverlay | undefined): boolean {
+  if (!overlay) {
+    return false;
+  }
+
+  const overlayMetricDateMs = parseTimestamp(overlay.metricDate);
+  const appMetricDateMs = parseTimestamp(app.metric_date);
+
+  if (overlayMetricDateMs !== null && (appMetricDateMs === null || overlayMetricDateMs > appMetricDateMs)) {
+    return true;
+  }
+
+  const appReviewsMissingOrZero = app.total_reviews === 0 || app.positive_reviews === 0;
+  const lastReviewsSyncMs = parseTimestamp(overlay.lastReviewsSync);
+
+  return Boolean(
+    appReviewsMissingOrZero &&
+      lastReviewsSyncMs !== null &&
+      (appMetricDateMs === null || lastReviewsSyncMs > appMetricDateMs)
+  );
+}
+
+function applyFreshReviewOverlay(app: App, overlay: FreshReviewOverlay | undefined): App {
+  if (!shouldOverlayFreshReviews(app, overlay) || !overlay) {
+    return app;
+  }
+
+  const totalReviews = overlay.totalReviews ?? app.total_reviews;
+  const positiveReviews = overlay.positiveReviews ?? app.positive_reviews;
+  const positivePercentage =
+    totalReviews !== null && positiveReviews !== null && totalReviews > 0
+      ? Number(((positiveReviews / totalReviews) * 100).toFixed(2))
+      : null;
+
+  return {
+    ...app,
+    total_reviews: totalReviews ?? 0,
+    positive_reviews: positiveReviews ?? 0,
+    review_score: overlay.reviewScore ?? app.review_score,
+    positive_percentage: positivePercentage,
+    metric_date: overlay.metricDate,
+  };
+}
+
+async function loadFreshReviewOverlays(appids: number[]): Promise<Map<number, FreshReviewOverlay>> {
+  if (appids.length === 0) {
+    return new Map();
+  }
+
+  const supabase = getServiceSupabase();
+
+  const [{ data: metricRows, error: metricsError }, { data: syncRows, error: syncError }] =
+    await Promise.all([
+      supabase
+        .from('daily_metrics')
+        .select('appid, metric_date, total_reviews, positive_reviews, review_score')
+        .in('appid', appids)
+        .order('metric_date', { ascending: false }),
+      supabase
+        .from('sync_status')
+        .select('appid, last_reviews_sync')
+        .in('appid', appids),
+    ]);
+
+  if (metricsError) {
+    throw new Error(`Failed to fetch latest review metrics: ${metricsError.message}`);
+  }
+
+  if (syncError) {
+    throw new Error(`Failed to fetch review sync status: ${syncError.message}`);
+  }
+
+  const latestMetricByAppid = new Map<number, LatestReviewMetricRow>();
+  for (const row of (metricRows ?? []) as LatestReviewMetricRow[]) {
+    if (!latestMetricByAppid.has(row.appid)) {
+      latestMetricByAppid.set(row.appid, row);
+    }
+  }
+
+  const syncByAppid = new Map<number, ReviewSyncStatusRow>();
+  for (const row of (syncRows ?? []) as ReviewSyncStatusRow[]) {
+    syncByAppid.set(row.appid, row);
+  }
+
+  const overlays = new Map<number, FreshReviewOverlay>();
+  for (const appid of appids) {
+    const metric = latestMetricByAppid.get(appid);
+    if (!metric) {
+      continue;
+    }
+
+    overlays.set(appid, {
+      metricDate: metric.metric_date,
+      totalReviews: metric.total_reviews,
+      positiveReviews: metric.positive_reviews,
+      reviewScore: metric.review_score,
+      lastReviewsSync: syncByAppid.get(appid)?.last_reviews_sync ?? null,
+    });
+  }
+
+  return overlays;
+}
+
+export async function getAppsByIdsWithFreshReviews(appids: number[]): Promise<App[]> {
+  const apps = await getAppsByIds(appids);
+  if (apps.length === 0) {
+    return apps;
+  }
+
+  const overlays = await loadFreshReviewOverlays(appids);
+  return apps.map((app) => applyFreshReviewOverlay(app, overlays.get(app.appid)));
 }
