@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { arraysEqual, hashNormalizedContent, normalizeStringArray, normalizeText, stableStringify } from './hashing.js';
+import {
+  arraysEqual,
+  canonicalizeUrlForComparison,
+  hashNormalizedContent,
+  normalizeStringArray,
+  normalizeText,
+  stableStringify,
+} from './hashing.js';
 
 test('stableStringify sorts object keys deterministically', () => {
   const left = stableStringify({ b: 2, a: { d: 4, c: 3 } });
@@ -12,6 +19,10 @@ test('stableStringify sorts object keys deterministically', () => {
 
 test('normalize helpers collapse whitespace and dedupe arrays', () => {
   assert.equal(normalizeText('  Hello   world  '), 'Hello world');
+  assert.equal(
+    canonicalizeUrlForComparison('https://shared.akamai.steamstatic.com/foo.jpg?t=123#hero'),
+    'https://shared.akamai.steamstatic.com/foo.jpg'
+  );
   assert.deepEqual(
     normalizeStringArray(['Action', ' action ', 'RPG', null, '']),
     ['action', 'rpg']

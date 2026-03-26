@@ -1,5 +1,12 @@
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
-import { arraysEqual, normalizeStringArray, normalizeText, normalizeUrl, stableStringify } from './hashing.js';
+import {
+  arraysEqual,
+  canonicalizeUrlForComparison,
+  normalizeStringArray,
+  normalizeText,
+  normalizeUrl,
+  stableStringify,
+} from './hashing.js';
 import type {
   AppChangeEventDraft,
   HeroAssetDescriptor,
@@ -8,6 +15,13 @@ import type {
   StorefrontMovie,
   StorefrontScreenshot,
 } from './types.js';
+
+type VerifiedHeroAssetKind = 'header' | 'capsule';
+
+interface VerifiedHeroDiffOptions {
+  getPreviousContentHash: (kind: VerifiedHeroAssetKind) => Promise<string | null>;
+  getCurrentContentHash: (kind: VerifiedHeroAssetKind, url: string) => Promise<string | null>;
+}
 
 function normalizeCategories(
   values: Array<{ id: number; description: string }>
@@ -63,6 +77,68 @@ function normalizeMovies(values: ParsedStorefrontApp['movies']): StorefrontMovie
       order: index,
     }))
     .filter((entry) => entry.mp4Url || entry.webmUrl || entry.thumbnailUrl);
+}
+
+function canonicalizeScreenshot(entry: StorefrontScreenshot): StorefrontScreenshot {
+  return {
+    ...entry,
+    fullUrl: canonicalizeUrlForComparison(entry.fullUrl) ?? '',
+    thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl),
+  };
+}
+
+function canonicalizeMovie(entry: StorefrontMovie): StorefrontMovie {
+  return {
+    ...entry,
+    thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl),
+    mp4Url: canonicalizeUrlForComparison(entry.mp4Url),
+    webmUrl: canonicalizeUrlForComparison(entry.webmUrl),
+  };
+}
+
+function canonicalHeroUrl(value: string | null): string | null {
+  return canonicalizeUrlForComparison(value);
+}
+
+function screenshotComparisonKeys(values: StorefrontScreenshot[]): string[] {
+  return values.map((entry) => canonicalizeUrlForComparison(entry.fullUrl) ?? '');
+}
+
+function movieComparisonKey(entry: StorefrontMovie): string {
+  return (
+    canonicalizeUrlForComparison(entry.mp4Url) ??
+    canonicalizeUrlForComparison(entry.webmUrl) ??
+    `movie:${entry.id ?? 'unknown'}`
+  );
+}
+
+export function toComparableStorefrontSnapshot(
+  snapshot: NormalizedStorefrontSnapshot
+): NormalizedStorefrontSnapshot {
+  return {
+    ...snapshot,
+    heroImages: {
+      header: canonicalHeroUrl(snapshot.heroImages.header),
+      capsule: canonicalHeroUrl(snapshot.heroImages.capsule),
+      background: canonicalHeroUrl(snapshot.heroImages.background),
+    },
+    screenshots: snapshot.screenshots.map(canonicalizeScreenshot),
+    movies: snapshot.movies.map(canonicalizeMovie),
+  };
+}
+
+export function toComparableMediaVersion(
+  mediaVersion: NormalizedMediaVersion
+): NormalizedMediaVersion {
+  return {
+    heroImages: {
+      header: canonicalHeroUrl(mediaVersion.heroImages.header),
+      capsule: canonicalHeroUrl(mediaVersion.heroImages.capsule),
+      background: canonicalHeroUrl(mediaVersion.heroImages.background),
+    },
+    screenshots: mediaVersion.screenshots.map(canonicalizeScreenshot),
+    movies: mediaVersion.movies.map(canonicalizeMovie),
+  };
 }
 
 function collectAdded<T>(nextValues: T[], previousValues: T[]): T[] {
@@ -304,37 +380,24 @@ export function diffStorefrontMedia(
 
   const events: AppChangeEventDraft[] = [];
 
-  if (previousMedia.heroImages.header !== nextMedia.heroImages.header) {
-    events.push({
-      eventType: 'header_url_changed',
-      source: 'media',
-      beforeValue: previousMedia.heroImages.header,
-      afterValue: nextMedia.heroImages.header,
-    });
-  }
-
-  if (previousMedia.heroImages.capsule !== nextMedia.heroImages.capsule) {
-    events.push({
-      eventType: 'capsule_url_changed',
-      source: 'media',
-      beforeValue: previousMedia.heroImages.capsule,
-      afterValue: nextMedia.heroImages.capsule,
-    });
-  }
-
-  if (previousMedia.heroImages.background !== nextMedia.heroImages.background) {
-    events.push({
-      eventType: 'background_url_changed',
-      source: 'media',
-      beforeValue: previousMedia.heroImages.background,
-      afterValue: nextMedia.heroImages.background,
-    });
-  }
-
   const previousScreenshotUrls = previousMedia.screenshots.map((entry) => entry.fullUrl);
   const nextScreenshotUrls = nextMedia.screenshots.map((entry) => entry.fullUrl);
-  const addedScreenshots = collectAdded(nextScreenshotUrls, previousScreenshotUrls);
-  const removedScreenshots = collectRemoved(previousScreenshotUrls, nextScreenshotUrls);
+  const previousScreenshotKeys = screenshotComparisonKeys(previousMedia.screenshots);
+  const nextScreenshotKeys = screenshotComparisonKeys(nextMedia.screenshots);
+  const nextScreenshotUrlByKey = new Map(
+    nextMedia.screenshots.map((entry) => [canonicalizeUrlForComparison(entry.fullUrl) ?? '', entry.fullUrl])
+  );
+  const previousScreenshotUrlByKey = new Map(
+    previousMedia.screenshots.map((entry) => [canonicalizeUrlForComparison(entry.fullUrl) ?? '', entry.fullUrl])
+  );
+  const addedScreenshotKeys = collectAdded(nextScreenshotKeys, previousScreenshotKeys);
+  const removedScreenshotKeys = collectRemoved(previousScreenshotKeys, nextScreenshotKeys);
+  const addedScreenshots = addedScreenshotKeys
+    .map((key) => nextScreenshotUrlByKey.get(key))
+    .filter((value): value is string => Boolean(value));
+  const removedScreenshots = removedScreenshotKeys
+    .map((key) => previousScreenshotUrlByKey.get(key))
+    .filter((value): value is string => Boolean(value));
 
   if (addedScreenshots.length > 0) {
     events.push({
@@ -352,7 +415,11 @@ export function diffStorefrontMedia(
     });
   }
 
-  if (addedScreenshots.length === 0 && removedScreenshots.length === 0 && !arraysEqual(previousScreenshotUrls, nextScreenshotUrls)) {
+  if (
+    addedScreenshots.length === 0 &&
+    removedScreenshots.length === 0 &&
+    !arraysEqual(previousScreenshotKeys, nextScreenshotKeys)
+  ) {
     events.push({
       eventType: 'screenshot_reordered',
       source: 'media',
@@ -361,8 +428,8 @@ export function diffStorefrontMedia(
     });
   }
 
-  const previousMovieKeys = previousMedia.movies.map((entry) => entry.mp4Url ?? entry.webmUrl ?? `movie:${entry.id ?? 'unknown'}`);
-  const nextMovieKeys = nextMedia.movies.map((entry) => entry.mp4Url ?? entry.webmUrl ?? `movie:${entry.id ?? 'unknown'}`);
+  const previousMovieKeys = previousMedia.movies.map(movieComparisonKey);
+  const nextMovieKeys = nextMedia.movies.map(movieComparisonKey);
   const addedMovies = collectAdded(nextMovieKeys, previousMovieKeys);
   const removedMovies = collectRemoved(previousMovieKeys, nextMovieKeys);
 
@@ -401,7 +468,10 @@ export function diffStorefrontMedia(
     }
 
     const previousThumbnailUrl = previousMovieThumbnails.get(movie.id) ?? null;
-    if (previousThumbnailUrl !== movie.thumbnailUrl) {
+    if (
+      canonicalizeUrlForComparison(previousThumbnailUrl) !==
+      canonicalizeUrlForComparison(movie.thumbnailUrl)
+    ) {
       events.push({
         eventType: 'trailer_thumbnail_changed',
         source: 'media',
@@ -413,6 +483,69 @@ export function diffStorefrontMedia(
   }
 
   return events;
+}
+
+export async function diffVerifiedHeroMedia(
+  previousMedia: NormalizedMediaVersion | null,
+  nextMedia: NormalizedMediaVersion,
+  options: VerifiedHeroDiffOptions
+): Promise<{ events: AppChangeEventDraft[]; changedAssets: HeroAssetDescriptor[] }> {
+  if (!previousMedia) {
+    return { events: [], changedAssets: [] };
+  }
+
+  const events: AppChangeEventDraft[] = [];
+  const changedAssets: HeroAssetDescriptor[] = [];
+
+  for (const kind of ['header', 'capsule'] as const) {
+    const previousUrl = previousMedia.heroImages[kind];
+    const nextUrl = nextMedia.heroImages[kind];
+
+    if (previousUrl === nextUrl) {
+      continue;
+    }
+
+    const previousComparableUrl = canonicalHeroUrl(previousUrl);
+    const nextComparableUrl = canonicalHeroUrl(nextUrl);
+
+    if (previousComparableUrl !== nextComparableUrl) {
+      events.push({
+        eventType: kind === 'header' ? 'header_url_changed' : 'capsule_url_changed',
+        source: 'media',
+        beforeValue: previousUrl,
+        afterValue: nextUrl,
+      });
+
+      if (nextUrl) {
+        changedAssets.push({ kind, url: nextUrl });
+      }
+      continue;
+    }
+
+    if (!previousUrl || !nextUrl) {
+      continue;
+    }
+
+    const previousContentHash = await options.getPreviousContentHash(kind);
+    if (!previousContentHash) {
+      continue;
+    }
+
+    const currentContentHash = await options.getCurrentContentHash(kind, nextUrl);
+    if (!currentContentHash || currentContentHash === previousContentHash) {
+      continue;
+    }
+
+    events.push({
+      eventType: kind === 'header' ? 'header_url_changed' : 'capsule_url_changed',
+      source: 'media',
+      beforeValue: previousUrl,
+      afterValue: nextUrl,
+    });
+    changedAssets.push({ kind, url: nextUrl });
+  }
+
+  return { events, changedAssets };
 }
 
 export function collectChangedHeroAssets(

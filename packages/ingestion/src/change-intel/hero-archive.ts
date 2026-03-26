@@ -36,6 +36,18 @@ function getExtension(url: string, mimeType: string | null): string {
   return 'bin';
 }
 
+export async function getRemoteAssetContentHash(url: string): Promise<string | null> {
+  await downloadLimiter.acquire();
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return createHash('sha256').update(Buffer.from(arrayBuffer)).digest('hex');
+}
+
 function parsePng(buffer: Buffer): ImageMeta {
   if (buffer.length < 24) {
     return { width: null, height: null, mimeType: 'image/png' };

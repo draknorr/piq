@@ -1,10 +1,15 @@
 import type { TypedSupabaseClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { hashNormalizedContent } from './hashing.js';
+import {
+  toComparableMediaVersion,
+  toComparableStorefrontSnapshot,
+} from './storefront.js';
 import type {
   AppCaptureSource,
   AppChangeEventDraft,
   CaptureQueueJob,
+  HeroAssetKind,
   NormalizedMediaVersion,
   NormalizedNewsVersion,
   NormalizedStorefrontSnapshot,
@@ -223,7 +228,7 @@ export async function writeStorefrontSnapshot(
   observedAt = new Date().toISOString()
 ): Promise<VersionWriteResult> {
   const previousSnapshot = await getLatestStorefrontSnapshotRow(supabase, appid);
-  const contentHash = hashNormalizedContent(snapshot);
+  const contentHash = hashNormalizedContent(toComparableStorefrontSnapshot(snapshot));
 
   if (previousSnapshot && previousSnapshot.content_hash === contentHash) {
     await touchRow(supabase, 'app_source_snapshots', previousSnapshot.id, {
@@ -276,7 +281,7 @@ export async function writeMediaVersion(
   observedAt = new Date().toISOString()
 ): Promise<VersionWriteResult> {
   const previousVersion = await getLatestMediaVersionRow(supabase, appid);
-  const contentHash = hashNormalizedContent(mediaVersion);
+  const contentHash = hashNormalizedContent(toComparableMediaVersion(mediaVersion));
 
   if (previousVersion && previousVersion.content_hash === contentHash) {
     await touchRow(supabase, 'app_media_versions', previousVersion.id, {
@@ -797,6 +802,27 @@ export async function getLatestNewsVersion(
 ): Promise<NormalizedNewsVersion | null> {
   const row = await getLatestNewsVersionRow(supabase, gid);
   return row ? castRecord<NormalizedNewsVersion>(row.normalized_payload) : null;
+}
+
+export async function getLatestHeroAssetContentHash(
+  supabase: TypedSupabaseClient,
+  appid: number,
+  assetKind: HeroAssetKind
+): Promise<string | null> {
+  const { data, error } = await getDb(supabase)
+    .from('app_hero_asset_versions')
+    .select('content_hash')
+    .eq('appid', appid)
+    .eq('asset_kind', assetKind)
+    .order('last_seen_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to fetch latest ${assetKind} hero asset hash: ${error.message}`);
+  }
+
+  return typeof data?.content_hash === 'string' ? data.content_hash : null;
 }
 
 export async function getArchiveEligibility(

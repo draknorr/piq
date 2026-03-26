@@ -4,6 +4,7 @@ import { diffNewsVersions, normalizeNewsVersion } from './news.js';
 import {
   collectChangedHeroAssets,
   diffStorefrontMedia,
+  diffVerifiedHeroMedia,
   diffStorefrontSnapshots,
   normalizeStorefrontMediaVersion,
   normalizeStorefrontSnapshot,
@@ -89,21 +90,15 @@ test('storefront snapshot diff ignores platform key-order churn from stored json
   assert.equal(events.some((event) => event.eventType === 'platforms_changed'), false);
 });
 
-test('storefront media diff detects hero, screenshot, and trailer changes', () => {
+test('storefront media diff suppresses query-only screenshot churn and still detects trailer changes', () => {
   const previousMedia = normalizeStorefrontMediaVersion(baseSnapshot);
   const nextMedia = {
     ...previousMedia,
-    heroImages: {
-      ...previousMedia.heroImages,
-      header: 'https://cdn.example.com/header-v2.jpg',
-    },
     screenshots: [
-      previousMedia.screenshots[0],
       {
-        id: 2,
-        fullUrl: 'https://cdn.example.com/shot-2.jpg',
-        thumbnailUrl: 'https://cdn.example.com/shot-2-thumb.jpg',
-        order: 1,
+        ...previousMedia.screenshots[0],
+        fullUrl: 'https://cdn.example.com/shot.jpg?t=200',
+        thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg?t=200',
       },
     ],
     movies: [
@@ -117,9 +112,47 @@ test('storefront media diff detects hero, screenshot, and trailer changes', () =
   const events = diffStorefrontMedia(previousMedia, nextMedia);
   const types = events.map((event) => event.eventType);
 
-  assert.ok(types.includes('header_url_changed'));
-  assert.ok(types.includes('screenshot_added'));
+  assert.equal(types.includes('screenshot_added'), false);
+  assert.equal(types.includes('screenshot_removed'), false);
   assert.ok(types.includes('trailer_thumbnail_changed'));
+});
+
+test('verified hero media diff suppresses query-only churn but keeps real changes', async () => {
+  const previousMedia = normalizeStorefrontMediaVersion(baseSnapshot);
+
+  const unchangedHeader = {
+    ...previousMedia,
+    heroImages: {
+      ...previousMedia.heroImages,
+      header: 'https://cdn.example.com/header.jpg?t=200',
+    },
+  };
+
+  const unchangedResult = await diffVerifiedHeroMedia(previousMedia, unchangedHeader, {
+    getPreviousContentHash: async (kind) => (kind === 'header' ? 'same-hash' : null),
+    getCurrentContentHash: async () => 'same-hash',
+  });
+
+  assert.deepEqual(unchangedResult.events, []);
+  assert.deepEqual(unchangedResult.changedAssets, []);
+
+  const changedHeader = {
+    ...previousMedia,
+    heroImages: {
+      ...previousMedia.heroImages,
+      header: 'https://cdn.example.com/header.jpg?t=300',
+    },
+  };
+
+  const changedResult = await diffVerifiedHeroMedia(previousMedia, changedHeader, {
+    getPreviousContentHash: async (kind) => (kind === 'header' ? 'old-hash' : null),
+    getCurrentContentHash: async () => 'new-hash',
+  });
+
+  assert.deepEqual(changedResult.events.map((event) => event.eventType), ['header_url_changed']);
+  assert.deepEqual(changedResult.changedAssets, [
+    { kind: 'header', url: 'https://cdn.example.com/header.jpg?t=300' },
+  ]);
 });
 
 test('collectChangedHeroAssets ignores background-only changes', () => {

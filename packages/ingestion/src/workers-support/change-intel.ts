@@ -2,12 +2,16 @@ import type { TypedSupabaseClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchAppNews } from '../apis/steam-web.js';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
-import { HeroAssetArchiver } from '../change-intel/hero-archive.js';
+import {
+  getRemoteAssetContentHash,
+  HeroAssetArchiver,
+} from '../change-intel/hero-archive.js';
 import { diffNewsVersions, normalizeNewsVersion } from '../change-intel/news.js';
 import {
   completeCaptureQueueItems,
   enqueueCaptureJobs,
   getLastNewsSyncAt,
+  getLatestHeroAssetContentHash,
   getLatestMediaVersion,
   getLatestNewsVersion,
   getLatestStorefrontSnapshot,
@@ -22,6 +26,7 @@ import {
   collectChangedHeroAssets,
   diffStorefrontMedia,
   diffStorefrontSnapshots,
+  diffVerifiedHeroMedia,
   normalizeStorefrontMediaVersion,
   normalizeStorefrontSnapshot,
 } from '../change-intel/storefront.js';
@@ -131,9 +136,15 @@ export async function captureStorefrontState(
     observedAt
   );
 
+  const verifiedHeroChanges = await diffVerifiedHeroMedia(previousMedia, normalizedMedia, {
+    getPreviousContentHash: (kind) => getLatestHeroAssetContentHash(supabase, appid, kind),
+    getCurrentContentHash: async (_kind, url) => getRemoteAssetContentHash(url),
+  });
+
   const changeEvents = [
     ...diffStorefrontSnapshots(previousSnapshot, normalizedSnapshot),
     ...diffStorefrontMedia(previousMedia, normalizedMedia),
+    ...verifiedHeroChanges.events,
   ];
 
   await insertChangeEvents(supabase, appid, changeEvents, {
@@ -156,7 +167,10 @@ export async function captureStorefrontState(
     last_error_at: null,
   });
 
-  const changedHeroAssets = collectChangedHeroAssets(previousMedia, normalizedMedia);
+  const changedHeroAssets =
+    previousMedia === null
+      ? collectChangedHeroAssets(previousMedia, normalizedMedia)
+      : verifiedHeroChanges.changedAssets;
   if (changedHeroAssets.length > 0) {
     await enqueueCaptureJobs(supabase, [
       {
@@ -194,7 +208,7 @@ export async function captureStorefrontState(
   const shouldPromoteChangeCritical =
     isGame &&
     trigger.triggerReason !== 'storefront_safety_sweep' &&
-    (snapshotVersion.inserted || mediaVersion.inserted);
+    (snapshotVersion.inserted || changeEvents.length > 0);
 
   if (isGame && inLaunchWindow) {
     await promoteReviewsSync(supabase, {

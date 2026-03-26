@@ -46,6 +46,24 @@ export function normalizeUrl(value: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+export function canonicalizeUrlForComparison(value: string | null | undefined): string | null {
+  const normalized = normalizeUrl(value);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    const [withoutHash] = normalized.split('#', 1);
+    const [withoutQuery] = withoutHash.split('?', 1);
+    return withoutQuery.trim() || null;
+  }
+}
+
 export function normalizeStringArray(values: Array<string | null | undefined>): string[] {
   return Array.from(
     new Set(
