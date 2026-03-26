@@ -2,14 +2,18 @@ name: Reviews Sync
 
 on:
   schedule:
-    # Run every 2 hours for velocity-based sync scheduling
-    - cron: '15 */2 * * *'
+    # Run hourly so launch/change promotions land within the next claim window.
+    - cron: '15 * * * *'
   workflow_dispatch:
     inputs:
       batch_size:
         description: 'Number of apps to process'
         required: false
         default: '2500'
+
+concurrency:
+  group: reviews-sync
+  cancel-in-progress: false
 
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -18,7 +22,7 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
 
     steps:
       - uses: actions/checkout@v4
@@ -41,3 +45,6 @@ jobs:
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           BATCH_SIZE: ${{ github.event.inputs.batch_size || '2500' }}
+          MAX_RUNTIME_MINUTES: '50'
+          CLAIM_BATCH_SIZE: '100'
+          CLAIM_TTL_MINUTES: '15'

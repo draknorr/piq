@@ -9,6 +9,7 @@
 import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamAppList } from '../apis/steam-web.js';
+import { promoteReviewsSyncBatch } from '../workers-support/reviews-sync.js';
 
 const log = logger.child({ worker: 'applist-sync' });
 
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   let newApps = 0;
   let updatedApps = 0;
   let errors = 0;
+  let reviewPromotions = 0;
 
   try {
     // Fetch full app list from Steam
@@ -102,10 +104,31 @@ async function main(): Promise<void> {
             newInBatch.map((app) => ({
               appid: app.appid,
               priority_score: 0,
-              needs_page_creation_scrape: true,
             })),
             { onConflict: 'appid' }
           );
+
+          try {
+            reviewPromotions += await promoteReviewsSyncBatch(
+              supabase,
+              newInBatch.map((app) => ({
+                appid: app.appid,
+                bucket: 'important_backfill',
+                score: 25,
+                reason: 'new_steam_app_discovered',
+                until: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+              }))
+            );
+          } catch (promotionError) {
+            log.warn('Failed to promote new apps for reviews sync', {
+              batchStart: i,
+              newAppsInBatch: newInBatch.length,
+              error:
+                promotionError instanceof Error
+                  ? promotionError.message
+                  : String(promotionError),
+            });
+          }
         }
       }
 
@@ -135,6 +158,7 @@ async function main(): Promise<void> {
       newApps,
       updatedApps,
       errors,
+      reviewPromotions,
       durationSeconds: duration,
     });
   } catch (error) {

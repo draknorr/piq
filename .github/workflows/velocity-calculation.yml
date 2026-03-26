@@ -2,8 +2,8 @@ name: Velocity Calculation
 
 on:
   schedule:
-    # Run 3 times daily after review sync windows
-    - cron: '0 8,16,0 * * *'
+    # Run hourly so review lane decisions track recent review and launch signals.
+    - cron: '50 * * * *'
   workflow_dispatch:
 
 env:

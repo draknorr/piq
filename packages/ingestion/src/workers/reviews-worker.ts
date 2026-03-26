@@ -2,11 +2,13 @@
  * Reviews Sync Worker
  *
  * Fetches review summaries from Steam Reviews API for apps due for sync.
- * Uses velocity-based scheduling to prioritize high-activity games.
+ * Uses Postgres-coordinated claiming plus a shared review API token budget
+ * so multiple workers can scale safely without overshooting Steam limits.
  *
  * Run with: pnpm --filter @publisheriq/ingestion reviews-sync
  */
 
+import { randomUUID } from 'node:crypto';
 import { getServiceClient } from '@publisheriq/database';
 import { logger, BATCH_SIZES } from '@publisheriq/shared';
 import pLimit from 'p-limit';
@@ -14,21 +16,50 @@ import { fetchReviewSummary } from '../apis/reviews.js';
 
 const log = logger.child({ worker: 'reviews-sync' });
 
-// Process this many apps concurrently
-// Rate limiter handles API throttling, this controls DB operation parallelism
 const CONCURRENCY = 8;
+const DEFAULT_CLAIM_BATCH_SIZE = 100;
+const DEFAULT_CLAIM_TTL_MINUTES = 15;
+const DEFAULT_MAX_RUNTIME_MINUTES = 45;
+const DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD = 3;
+const DEFAULT_IDLE_DELAY_MS = 1500;
+
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type ReviewLane =
+  | 'launch_critical'
+  | 'change_critical'
+  | 'active_reviews'
+  | 'important_backfill'
+  | 'unknown_sweep';
 
 interface SyncStats {
   appsProcessed: number;
-  appsCreated: number; // First-time enrichment
-  appsUpdated: number; // Refresh of existing data
+  appsCreated: number;
+  appsUpdated: number;
   appsFailed: number;
+  claimRounds: number;
+  claimsRequested: number;
+  claimedApps: number;
+  emptyClaims: number;
+  rateTokenSleeps: number;
+  tokenWaitMs: number;
+  laneClaims: Record<ReviewLane, number>;
 }
 
 interface PreviousSyncData {
   totalReviews: number;
   positiveReviews: number;
   lastSync: Date | null;
+  consecutiveErrors: number;
+}
+
+interface ClaimedReviewApp {
+  appid: number;
+  lane: ReviewLane;
+  priority_score: number;
+  velocity_tier: string;
+  hours_overdue: number;
+  last_known_total_reviews: number | null;
+  last_reviews_sync: string | null;
 }
 
 interface VelocityTierResult {
@@ -36,43 +67,256 @@ interface VelocityTierResult {
   intervalHours: number;
 }
 
-type SupabaseClient = ReturnType<typeof getServiceClient>;
+function getDb(supabase: SupabaseClient): any {
+  return supabase as any;
+}
 
-/**
- * Calculate velocity tier based on daily review rate
- */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return String(error);
+}
+
 function calculateVelocityTier(dailyVelocity: number): VelocityTierResult {
   if (dailyVelocity >= 5) {
-    return { tier: 'high', intervalHours: 4 }; // ~5+ reviews/day: sync every 4 hours
-  } else if (dailyVelocity >= 1) {
-    return { tier: 'medium', intervalHours: 12 }; // 1-5 reviews/day: sync every 12 hours
-  } else if (dailyVelocity >= 0.1) {
-    return { tier: 'low', intervalHours: 24 }; // 0.1-1 reviews/day: sync daily
-  } else {
-    return { tier: 'dormant', intervalHours: 72 }; // <0.1 reviews/day: sync every 3 days
+    return { tier: 'high', intervalHours: 4 };
+  }
+
+  if (dailyVelocity >= 1) {
+    return { tier: 'medium', intervalHours: 12 };
+  }
+
+  if (dailyVelocity >= 0.1) {
+    return { tier: 'low', intervalHours: 24 };
+  }
+
+  return { tier: 'dormant', intervalHours: 72 };
+}
+
+function calculateFailureBackoffMinutes(consecutiveErrors: number): number {
+  const cappedErrors = Math.max(1, Math.min(consecutiveErrors, 6));
+  return Math.min(15 * 2 ** (cappedErrors - 1), 360);
+}
+
+function createEmptyLaneCounts(): Record<ReviewLane, number> {
+  return {
+    launch_critical: 0,
+    change_critical: 0,
+    active_reviews: 0,
+    important_backfill: 0,
+    unknown_sweep: 0,
+  };
+}
+
+function recordLaneClaims(stats: SyncStats, claimedApps: ClaimedReviewApp[]): Record<ReviewLane, number> {
+  const laneCounts = createEmptyLaneCounts();
+
+  for (const app of claimedApps) {
+    laneCounts[app.lane] += 1;
+    stats.laneClaims[app.lane] += 1;
+  }
+
+  return laneCounts;
+}
+
+async function claimAppsForReviewsSync(
+  supabase: SupabaseClient,
+  workerId: string,
+  limit: number,
+  claimTtlMinutes: number
+): Promise<ClaimedReviewApp[]> {
+  const { data, error } = await getDb(supabase).rpc('claim_apps_for_reviews_sync', {
+    p_worker_id: workerId,
+    p_limit: limit,
+    p_claim_ttl_minutes: claimTtlMinutes,
+  });
+
+  if (error) {
+    throw new Error(`Failed to claim apps for reviews sync: ${error.message}`);
+  }
+
+  return (data ?? []) as ClaimedReviewApp[];
+}
+
+async function releaseReviewClaims(
+  supabase: SupabaseClient,
+  appids: number[],
+  workerId: string
+): Promise<void> {
+  if (appids.length === 0) {
+    return;
+  }
+
+  const { error } = await getDb(supabase)
+    .from('sync_status')
+    .update({
+      reviews_claimed_by: null,
+      reviews_claimed_at: null,
+      reviews_claim_expires_at: null,
+    })
+    .in('appid', appids)
+    .eq('reviews_claimed_by', workerId);
+
+  if (error) {
+    log.warn('Failed to release stale review claims', {
+      workerId,
+      claimCount: appids.length,
+      error: error.message,
+    });
   }
 }
 
-/**
- * Process a single app - fetch review summary, track delta, update database
- */
-async function processApp(
+async function waitForReviewRateToken(
+  supabase: SupabaseClient,
+  workerId: string,
+  stats: SyncStats
+): Promise<void> {
+  while (true) {
+    const { data, error } = await getDb(supabase).rpc('acquire_api_rate_token', {
+      p_source: 'reviews',
+      p_worker_id: workerId,
+    });
+
+    if (error) {
+      throw new Error(`Failed to acquire shared review API token: ${error.message}`);
+    }
+
+    const result = Array.isArray(data) ? data[0] : data;
+    if (result?.granted) {
+      return;
+    }
+
+    const waitMs = Math.max(1, Number(result?.wait_ms ?? 1000));
+    stats.rateTokenSleeps += 1;
+    stats.tokenWaitMs += waitMs;
+    await sleep(waitMs);
+  }
+}
+
+async function loadPreviousSyncData(
+  supabase: SupabaseClient,
+  appIds: number[]
+): Promise<{ previousSyncData: Map<number, PreviousSyncData>; neverSyncedSet: Set<number> }> {
+  const { data: syncStatuses, error: syncError } = await getDb(supabase)
+    .from('sync_status')
+    .select('appid, last_reviews_sync, last_known_total_reviews, consecutive_errors')
+    .in('appid', appIds);
+
+  if (syncError) {
+    throw new Error(`Failed to load sync status rows: ${syncError.message}`);
+  }
+
+  const { data: previousMetrics, error: metricsError } = await getDb(supabase)
+    .from('daily_metrics')
+    .select('appid, total_reviews, positive_reviews')
+    .in('appid', appIds)
+    .order('metric_date', { ascending: false });
+
+  if (metricsError) {
+    throw new Error(`Failed to load previous daily metrics: ${metricsError.message}`);
+  }
+
+  const previousSyncData = new Map<number, PreviousSyncData>();
+
+  for (const status of syncStatuses ?? []) {
+    previousSyncData.set(status.appid, {
+      totalReviews: status.last_known_total_reviews ?? 0,
+      positiveReviews: 0,
+      lastSync: status.last_reviews_sync ? new Date(status.last_reviews_sync) : null,
+      consecutiveErrors: status.consecutive_errors ?? 0,
+    });
+  }
+
+  for (const metric of previousMetrics ?? []) {
+    const existing = previousSyncData.get(metric.appid);
+    if (!existing) {
+      continue;
+    }
+
+    if (existing.positiveReviews === 0) {
+      existing.positiveReviews = metric.positive_reviews ?? 0;
+      if (existing.totalReviews === 0) {
+        existing.totalReviews = metric.total_reviews ?? 0;
+      }
+    }
+  }
+
+  const neverSyncedAppids: number[] = [];
+  for (const status of syncStatuses ?? []) {
+    if (status.last_reviews_sync === null) {
+      neverSyncedAppids.push(status.appid);
+    }
+  }
+  const neverSyncedSet = new Set<number>(neverSyncedAppids);
+
+  return { previousSyncData, neverSyncedSet };
+}
+
+async function markAppFailure(
   appid: number,
   supabase: SupabaseClient,
+  previous: PreviousSyncData | undefined,
+  errorMessage: string
+): Promise<void> {
+  const nextErrorCount = (previous?.consecutiveErrors ?? 0) + 1;
+  const nextRetryAt = new Date(
+    Date.now() + calculateFailureBackoffMinutes(nextErrorCount) * 60 * 1000
+  ).toISOString();
+
+  const { error } = await getDb(supabase)
+    .from('sync_status')
+    .update({
+      consecutive_errors: nextErrorCount,
+      last_error_source: 'reviews',
+      last_error_message: errorMessage,
+      last_error_at: new Date().toISOString(),
+      next_reviews_sync: nextRetryAt,
+      reviews_claimed_by: null,
+      reviews_claimed_at: null,
+      reviews_claim_expires_at: null,
+    })
+    .eq('appid', appid);
+
+  if (error) {
+    log.warn('Failed to persist reviews failure state', {
+      appid,
+      error: error.message,
+    });
+  }
+}
+
+async function processApp(
+  app: ClaimedReviewApp,
+  supabase: SupabaseClient,
+  workerId: string,
   today: string,
   previousSyncData: Map<number, PreviousSyncData>,
   neverSyncedSet: Set<number>,
   stats: SyncStats
 ): Promise<void> {
-  // Increment processed count synchronously (before any await) to avoid race conditions
-  stats.appsProcessed++;
+  const appid = app.appid;
+  stats.appsProcessed += 1;
 
   try {
-    const summary = await fetchReviewSummary(appid);
+    await waitForReviewRateToken(supabase, workerId, stats);
 
+    const summary = await fetchReviewSummary(appid);
     if (!summary) {
-      stats.appsFailed++;
-      return;
+      throw new Error('Steam did not return a reviews summary');
     }
 
     const previous = previousSyncData.get(appid);
@@ -80,31 +324,24 @@ async function processApp(
     const previousPositive = previous?.positiveReviews ?? 0;
     const lastSyncTime = previous?.lastSync;
 
-    // Calculate deltas
     const reviewsAdded = Math.max(0, summary.totalReviews - previousTotal);
     const positiveAdded = Math.max(0, summary.positiveReviews - previousPositive);
     const negativeAdded = Math.max(0, reviewsAdded - positiveAdded);
 
-    // Calculate hours since last sync
     const hoursSinceLastSync = lastSyncTime
       ? (Date.now() - lastSyncTime.getTime()) / (1000 * 60 * 60)
       : null;
 
-    // Calculate daily velocity (normalized to 24h)
     const dailyVelocity =
       hoursSinceLastSync && hoursSinceLastSync > 0
         ? (reviewsAdded * 24) / hoursSinceLastSync
         : 0;
 
-    // Determine velocity tier and next sync interval
     const { tier, intervalHours } = calculateVelocityTier(dailyVelocity);
     const nextSync = new Date(Date.now() + intervalHours * 60 * 60 * 1000);
+    const nowIso = new Date().toISOString();
 
-    // Check if app has new reviews (indicates activity)
-    const hasNewReviews = reviewsAdded > 0;
-
-    // 1. Insert into review_deltas table (new tracking)
-    await supabase.from('review_deltas').upsert(
+    const { error: deltaError } = await getDb(supabase).from('review_deltas').upsert(
       {
         appid,
         delta_date: today,
@@ -121,8 +358,11 @@ async function processApp(
       { onConflict: 'appid,delta_date' }
     );
 
-    // 2. Update daily_metrics (existing behavior for backward compatibility)
-    await supabase.from('daily_metrics').upsert(
+    if (deltaError) {
+      throw new Error(`Failed to upsert review_deltas row: ${deltaError.message}`);
+    }
+
+    const { error: metricsError } = await getDb(supabase).from('daily_metrics').upsert(
       {
         appid,
         metric_date: today,
@@ -135,51 +375,105 @@ async function processApp(
       { onConflict: 'appid,metric_date' }
     );
 
-    // 3. Update sync_status with velocity info and next sync time
+    if (metricsError) {
+      throw new Error(`Failed to upsert daily_metrics row: ${metricsError.message}`);
+    }
+
     const syncUpdate: Record<string, unknown> = {
-      last_reviews_sync: new Date().toISOString(),
+      last_reviews_sync: nowIso,
       next_reviews_sync: nextSync.toISOString(),
       reviews_interval_hours: intervalHours,
       review_velocity_tier: tier,
       last_known_total_reviews: summary.totalReviews,
       consecutive_errors: 0,
+      last_error_source: null,
+      last_error_message: null,
+      last_error_at: null,
+      reviews_claimed_by: null,
+      reviews_claimed_at: null,
+      reviews_claim_expires_at: null,
+      reviews_priority_override_bucket: null,
+      reviews_priority_override_score: null,
+      reviews_priority_override_reason: null,
+      reviews_priority_override_until: null,
     };
 
-    if (hasNewReviews) {
-      syncUpdate.last_activity_at = new Date().toISOString();
+    if (reviewsAdded > 0) {
+      syncUpdate.last_activity_at = nowIso;
     }
 
-    await supabase.from('sync_status').update(syncUpdate).eq('appid', appid);
+    const { error: syncError } = await getDb(supabase)
+      .from('sync_status')
+      .update(syncUpdate)
+      .eq('appid', appid);
 
-    // Track as first-time enrichment or refresh (synchronous to avoid race)
+    if (syncError) {
+      throw new Error(`Failed to update sync_status row: ${syncError.message}`);
+    }
+
     if (neverSyncedSet.has(appid)) {
-      stats.appsCreated++;
+      stats.appsCreated += 1;
     } else {
-      stats.appsUpdated++;
+      stats.appsUpdated += 1;
     }
   } catch (error) {
-    log.error('Error processing app', { appid, error });
-    stats.appsFailed++;
+    const errorMessage = formatUnknownError(error);
+    log.error('Error processing reviews app', {
+      appid,
+      lane: app.lane,
+      error: errorMessage,
+    });
+
+    stats.appsFailed += 1;
+    await markAppFailure(appid, supabase, previousSyncData.get(appid), errorMessage);
   }
 }
 
 async function main(): Promise<void> {
   const startTime = Date.now();
   const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.BATCH_SIZE || String(BATCH_SIZES.REVIEWS_BATCH), 10);
+  const workerId = process.env.WORKER_ID || `reviews-${randomUUID()}`;
+  const maxAppsToProcess = parseInt(
+    process.env.BATCH_SIZE || String(BATCH_SIZES.REVIEWS_BATCH),
+    10
+  );
+  const claimBatchSize = parseInt(
+    process.env.CLAIM_BATCH_SIZE || `${DEFAULT_CLAIM_BATCH_SIZE}`,
+    10
+  );
+  const claimTtlMinutes = parseInt(
+    process.env.CLAIM_TTL_MINUTES || `${DEFAULT_CLAIM_TTL_MINUTES}`,
+    10
+  );
+  const maxRuntimeMinutes = parseInt(
+    process.env.MAX_RUNTIME_MINUTES || `${DEFAULT_MAX_RUNTIME_MINUTES}`,
+    10
+  );
+  const emptyClaimExitThreshold = parseInt(
+    process.env.EMPTY_CLAIM_EXIT_THRESHOLD || `${DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD}`,
+    10
+  );
+  const idleDelayMs = parseInt(process.env.IDLE_DELAY_MS || `${DEFAULT_IDLE_DELAY_MS}`, 10);
+  const deadline = startTime + maxRuntimeMinutes * 60 * 1000;
 
-  log.info('Starting Reviews sync', { githubRunId, batchSize });
+  log.info('Starting Reviews sync', {
+    githubRunId,
+    workerId,
+    maxAppsToProcess,
+    claimBatchSize,
+    claimTtlMinutes,
+    maxRuntimeMinutes,
+  });
 
   const supabase = getServiceClient();
 
-  // Create sync job record
   const { data: job } = await supabase
     .from('sync_jobs')
     .insert({
       job_type: 'reviews',
       github_run_id: githubRunId,
       status: 'running',
-      batch_size: batchSize,
+      batch_size: maxAppsToProcess,
     })
     .select()
     .single();
@@ -189,125 +483,102 @@ async function main(): Promise<void> {
     appsCreated: 0,
     appsUpdated: 0,
     appsFailed: 0,
+    claimRounds: 0,
+    claimsRequested: 0,
+    claimedApps: 0,
+    emptyClaims: 0,
+    rateTokenSleeps: 0,
+    tokenWaitMs: 0,
+    laneClaims: createEmptyLaneCounts(),
   };
 
-  try {
-    // Get apps due for sync using velocity-based scheduling
-    const { data: appsToSync, error: fetchError } = await supabase.rpc(
-      'get_apps_for_reviews_sync',
-      { p_limit: batchSize }
-    );
+  let emptyClaimRounds = 0;
+  let activeClaimedAppids: number[] = [];
 
-    if (fetchError) {
-      throw new Error(`Failed to get apps for sync: ${fetchError.message}`);
-    }
-
-    if (!appsToSync || appsToSync.length === 0) {
-      log.info('No apps due for reviews sync');
-
-      // Mark job as completed with 0 items
-      if (job) {
-        await supabase
-          .from('sync_jobs')
-          .update({
-            status: 'completed',
-            completed_at: new Date().toISOString(),
-            items_processed: 0,
-            items_succeeded: 0,
-            items_failed: 0,
-            items_created: 0,
-            items_updated: 0,
-          })
-          .eq('id', job.id);
-      }
-      return;
-    }
-
-    // Log velocity tier breakdown
-    const tierCounts = appsToSync.reduce(
-      (acc: Record<string, number>, app: { velocity_tier: string }) => {
-        acc[app.velocity_tier] = (acc[app.velocity_tier] || 0) + 1;
-        return acc;
-      },
-      {}
-    );
-    log.info('Found apps to sync', { count: appsToSync.length, tierCounts });
-
-    const today = new Date().toISOString().split('T')[0];
-
-    // Fetch previous sync data including timestamps and review counts
-    const appIds = appsToSync.map(
-      (a: { appid: number; last_known_total_reviews: number | null }) => a.appid
-    );
-    const { data: syncStatuses } = await supabase
-      .from('sync_status')
-      .select('appid, last_reviews_sync, last_known_total_reviews')
-      .in('appid', appIds);
-
-    // Fetch positive reviews from daily_metrics for delta calculation
-    const { data: previousMetrics } = await supabase
-      .from('daily_metrics')
-      .select('appid, total_reviews, positive_reviews')
-      .in('appid', appIds)
-      .order('metric_date', { ascending: false });
-
-    // Build map of previous sync data
-    const previousSyncData = new Map<number, PreviousSyncData>();
-
-    // First, populate from sync_status (has last_known_total_reviews)
-    for (const s of syncStatuses || []) {
-      previousSyncData.set(s.appid, {
-        totalReviews: s.last_known_total_reviews ?? 0,
-        positiveReviews: 0, // Will be updated from daily_metrics
-        lastSync: s.last_reviews_sync ? new Date(s.last_reviews_sync) : null,
-      });
-    }
-
-    // Then, update with positive reviews from daily_metrics
-    if (previousMetrics) {
-      for (const m of previousMetrics) {
-        const existing = previousSyncData.get(m.appid);
-        if (existing && existing.positiveReviews === 0) {
-          existing.positiveReviews = m.positive_reviews ?? 0;
-          // Also use daily_metrics total if sync_status doesn't have it
-          if (existing.totalReviews === 0) {
-            existing.totalReviews = m.total_reviews ?? 0;
-          }
-        }
-      }
-    }
-
-    // Build set of apps that have never been synced (first-time enrichment)
-    const neverSyncedSet = new Set(
-      (syncStatuses || [])
-        .filter((s) => s.last_reviews_sync === null)
-        .map((s) => s.appid)
-    );
-
-    log.info('First-time vs refresh breakdown', {
-      firstTime: neverSyncedSet.size,
-      refresh: appsToSync.length - neverSyncedSet.size,
+  const progressInterval = setInterval(() => {
+    log.info('Reviews sync progress', {
+      ...stats,
+      tokenWaitSeconds: Number((stats.tokenWaitMs / 1000).toFixed(1)),
+      elapsedMinutes: Number(((Date.now() - startTime) / 1000 / 60).toFixed(1)),
+      remainingMinutes: Number(
+        Math.max(0, (deadline - Date.now()) / 1000 / 60).toFixed(1)
+      ),
     });
+  }, 10000);
 
-    // Process apps with controlled concurrency
-    // Rate limiter handles API throttling, p-limit controls parallelism
-    const limit = pLimit(CONCURRENCY);
+  try {
+    while (Date.now() < deadline && stats.appsProcessed < maxAppsToProcess) {
+      const requestLimit = Math.min(
+        Math.max(1, claimBatchSize),
+        maxAppsToProcess - stats.appsProcessed
+      );
 
-    // Log progress every 10 seconds
-    const progressInterval = setInterval(() => {
-      log.info('Sync progress', { ...stats });
-    }, 10000);
+      stats.claimRounds += 1;
+      stats.claimsRequested += requestLimit;
 
-    try {
+      const claimedApps = await claimAppsForReviewsSync(
+        supabase,
+        workerId,
+        requestLimit,
+        claimTtlMinutes
+      );
+
+      activeClaimedAppids = claimedApps.map((app) => app.appid);
+
+      if (claimedApps.length === 0) {
+        emptyClaimRounds += 1;
+        stats.emptyClaims += 1;
+
+        if (emptyClaimRounds >= emptyClaimExitThreshold) {
+          log.info('Stopping reviews sync after repeated empty claims', {
+            emptyClaimRounds,
+            claimRounds: stats.claimRounds,
+          });
+          break;
+        }
+
+        await sleep(idleDelayMs);
+        continue;
+      }
+
+      emptyClaimRounds = 0;
+      stats.claimedApps += claimedApps.length;
+      const laneCounts = recordLaneClaims(stats, claimedApps);
+
+      log.info('Claimed reviews batch', {
+        requested: requestLimit,
+        claimed: claimedApps.length,
+        laneCounts,
+      });
+
+      const today = new Date().toISOString().split('T')[0];
+      const appIds = claimedApps.map((app) => app.appid);
+      const { previousSyncData, neverSyncedSet } = await loadPreviousSyncData(supabase, appIds);
+
+      log.info('Claimed batch sync breakdown', {
+        firstTime: neverSyncedSet.size,
+        refresh: claimedApps.length - neverSyncedSet.size,
+      });
+
+      const limit = pLimit(CONCURRENCY);
       await Promise.all(
-        appsToSync.map(({ appid }: { appid: number }) =>
+        claimedApps.map((app) =>
           limit(() =>
-            processApp(appid, supabase, today, previousSyncData, neverSyncedSet, stats)
+            processApp(
+              app,
+              supabase,
+              workerId,
+              today,
+              previousSyncData,
+              neverSyncedSet,
+              stats
+            )
           )
         )
       );
-    } finally {
-      clearInterval(progressInterval);
+
+      await releaseReviewClaims(supabase, activeClaimedAppids, workerId);
+      activeClaimedAppids = [];
     }
 
     if (job) {
@@ -325,10 +596,16 @@ async function main(): Promise<void> {
         .eq('id', job.id);
     }
 
-    const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
-    log.info('Reviews sync completed', { ...stats, durationMinutes: duration });
+    log.info('Reviews sync completed', {
+      ...stats,
+      durationMinutes: Number(((Date.now() - startTime) / 1000 / 60).toFixed(2)),
+      tokenWaitSeconds: Number((stats.tokenWaitMs / 1000).toFixed(1)),
+    });
   } catch (error) {
-    log.error('Reviews sync failed', { error });
+    const errorMessage = formatUnknownError(error);
+    log.error('Reviews sync failed', { error: errorMessage });
+
+    await releaseReviewClaims(supabase, activeClaimedAppids, workerId);
 
     if (job) {
       await supabase
@@ -336,7 +613,7 @@ async function main(): Promise<void> {
         .update({
           status: 'failed',
           completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
+          error_message: errorMessage,
           items_processed: stats.appsProcessed,
           items_succeeded: stats.appsCreated + stats.appsUpdated,
           items_failed: stats.appsFailed,
@@ -347,6 +624,8 @@ async function main(): Promise<void> {
     }
 
     process.exit(1);
+  } finally {
+    clearInterval(progressInterval);
   }
 }
 

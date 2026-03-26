@@ -25,6 +25,10 @@ import {
   normalizeStorefrontMediaVersion,
   normalizeStorefrontSnapshot,
 } from '../change-intel/storefront.js';
+import {
+  isLaunchWindowRelease,
+  promoteReviewsSync,
+} from './reviews-sync.js';
 
 const log = logger.child({ component: 'change-intel-support' });
 const STEAM_NEWS_MAX_LENGTH = 20_000;
@@ -183,6 +187,31 @@ export async function captureStorefrontState(
         lastNewsSync,
       });
     }
+  }
+
+  const isGame = (details.type || 'game').toLowerCase() === 'game';
+  const inLaunchWindow = isLaunchWindowRelease(!details.comingSoon, details.releaseDate);
+  const shouldPromoteChangeCritical =
+    isGame &&
+    trigger.triggerReason !== 'storefront_safety_sweep' &&
+    (snapshotVersion.inserted || mediaVersion.inserted);
+
+  if (isGame && inLaunchWindow) {
+    await promoteReviewsSync(supabase, {
+      appid,
+      bucket: 'launch_critical',
+      score: 100,
+      reason: 'storefront_launch_window_refresh',
+      until: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+    });
+  } else if (shouldPromoteChangeCritical) {
+    await promoteReviewsSync(supabase, {
+      appid,
+      bucket: 'change_critical',
+      score: 70,
+      reason: 'storefront_change_detected',
+      until: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    });
   }
 
   return {
