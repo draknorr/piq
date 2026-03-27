@@ -155,6 +155,10 @@ interface DataCoverage {
   items: DataCoverageItem[];
 }
 
+function hasFreshSummaryMetrics(appSummary: AppSummary | null): boolean {
+  return Boolean(appSummary?.metric_date || appSummary?.data_updated_at);
+}
+
 async function getAppSummary(appid: number): Promise<AppSummary | null> {
   try {
     const apps = await getAppsByIds([appid]);
@@ -561,6 +565,7 @@ export default async function AppDetailPage({
   }
 
   const latestMetrics = metrics[0] ?? null;
+  const summaryMetricsAreFresh = hasFreshSummaryMetrics(appSummary);
   const preferLatestReviewMetrics = shouldPreferLatestReviewMetrics(
     appSummary,
     latestMetrics,
@@ -582,11 +587,21 @@ export default async function AppDetailPage({
     totalReviews !== null && positiveReviews !== null && totalReviews > 0
       ? Math.round((positiveReviews / totalReviews) * 100)
       : null;
-  const ownersMin = appSummary?.owners_min ?? latestMetrics?.owners_min ?? null;
-  const ownersMax = appSummary?.owners_max ?? latestMetrics?.owners_max ?? null;
-  const peakCcu = appSummary?.ccu_peak ?? latestMetrics?.ccu_peak ?? null;
-  const avgPlaytimeForever = appSummary?.average_playtime_forever ?? latestMetrics?.average_playtime_forever ?? null;
-  const avgPlaytime2Weeks = appSummary?.average_playtime_2weeks ?? latestMetrics?.average_playtime_2weeks ?? null;
+  const ownersMin = summaryMetricsAreFresh
+    ? appSummary?.owners_min ?? latestMetrics?.owners_min ?? null
+    : latestMetrics?.owners_min ?? null;
+  const ownersMax = summaryMetricsAreFresh
+    ? appSummary?.owners_max ?? latestMetrics?.owners_max ?? null
+    : latestMetrics?.owners_max ?? null;
+  const peakCcu = summaryMetricsAreFresh
+    ? appSummary?.ccu_peak ?? latestMetrics?.ccu_peak ?? null
+    : latestMetrics?.ccu_peak ?? null;
+  const avgPlaytimeForever = summaryMetricsAreFresh
+    ? appSummary?.average_playtime_forever ?? latestMetrics?.average_playtime_forever ?? null
+    : latestMetrics?.average_playtime_forever ?? null;
+  const avgPlaytime2Weeks = summaryMetricsAreFresh
+    ? appSummary?.average_playtime_2weeks ?? latestMetrics?.average_playtime_2weeks ?? null
+    : latestMetrics?.average_playtime_2weeks ?? null;
   const growthPct =
     appSummary?.ccu_growth_7d_percent !== null && appSummary?.ccu_growth_7d_percent !== undefined
       ? Math.round(appSummary.ccu_growth_7d_percent)

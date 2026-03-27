@@ -17,6 +17,10 @@ import {
   fetchSteamCCUBatchWithStatus,
   type CCUResultWithStatus,
 } from '../apis/steam-ccu.js';
+import {
+  getSuspiciousZeroAppids,
+  isTierAssignmentsStale,
+} from '../workers-support/ccu-guardrails.js';
 
 const log = logger.child({ worker: 'ccu-daily-sync' });
 
@@ -53,17 +57,24 @@ async function getTier3Games(
   supabase: ReturnType<typeof getServiceClient>,
   limit: number,
   partitionCount: number = 1,
-  partitionId: number = 0
+  partitionId: number = 0,
+  useTierAssignments: boolean = true
 ): Promise<{ appids: number[]; skippedCount: number }> {
   const now = new Date().toISOString();
   const isPartitioned = partitionCount > 1;
 
+  if (!useTierAssignments) {
+    log.warn('Tier assignments are stale, bypassing assignment-based CCU selection');
+  }
+
   // Count how many are being skipped (apps with skip_until in the future)
-  const { count: skippedCount } = await (supabase as any)
-    .from('ccu_tier_assignments')
-    .select('*', { count: 'exact', head: true })
-    .eq('ccu_tier', 3)
-    .gt('ccu_skip_until', now);
+  const { count: skippedCount } = useTierAssignments
+    ? await (supabase as any)
+        .from('ccu_tier_assignments')
+        .select('*', { count: 'exact', head: true })
+        .eq('ccu_tier', 3)
+        .gt('ccu_skip_until', now)
+    : { count: 0 };
 
   // Paginate through Tier 3 games, excluding skipped apps
   // Note: We use client-side pagination instead of RPC because PostgREST
@@ -74,40 +85,42 @@ async function getTier3Games(
   let hasMore = true;
   let rowIndex = 0;
 
-  while (hasMore && allAppids.length < limit) {
-    const { data: pageData, error: pageError } = await (supabase as any)
-      .from('ccu_tier_assignments')
-      .select('appid')
-      .eq('ccu_tier', 3)
-      .or(`ccu_skip_until.is.null,ccu_skip_until.lt.${now}`)
-      .order('last_ccu_synced', { ascending: true, nullsFirst: true })
-      .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
+  if (useTierAssignments) {
+    while (hasMore && allAppids.length < limit) {
+      const { data: pageData, error: pageError } = await (supabase as any)
+        .from('ccu_tier_assignments')
+        .select('appid')
+        .eq('ccu_tier', 3)
+        .or(`ccu_skip_until.is.null,ccu_skip_until.lt.${now}`)
+        .order('last_ccu_synced', { ascending: true, nullsFirst: true })
+        .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
 
-    if (pageError) {
-      throw new Error(`Failed to get Tier 3 games: ${pageError.message}`);
-    }
-
-    if (!pageData || pageData.length === 0) {
-      hasMore = false;
-    } else {
-      for (const row of pageData as { appid: number }[]) {
-        // For partitioned mode, only include rows where (rowIndex % partitionCount) == partitionId
-        if (!isPartitioned || rowIndex % partitionCount === partitionId) {
-          if (allAppids.length < limit) {
-            allAppids.push(row.appid);
-          }
-        }
-        rowIndex++;
+      if (pageError) {
+        throw new Error(`Failed to get Tier 3 games: ${pageError.message}`);
       }
-      offset += SUPABASE_PAGE_SIZE;
-      hasMore = pageData.length === SUPABASE_PAGE_SIZE;
 
-      if (offset % 10000 === 0) {
-        log.info('Fetching Tier 3 appids...', {
-          fetched: allAppids.length,
-          offset,
-          ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-        });
+      if (!pageData || pageData.length === 0) {
+        hasMore = false;
+      } else {
+        for (const row of pageData as { appid: number }[]) {
+          // For partitioned mode, only include rows where (rowIndex % partitionCount) == partitionId
+          if (!isPartitioned || rowIndex % partitionCount === partitionId) {
+            if (allAppids.length < limit) {
+              allAppids.push(row.appid);
+            }
+          }
+          rowIndex++;
+        }
+        offset += SUPABASE_PAGE_SIZE;
+        hasMore = pageData.length === SUPABASE_PAGE_SIZE;
+
+        if (offset % 10000 === 0) {
+          log.info('Fetching Tier 3 appids...', {
+            fetched: allAppids.length,
+            offset,
+            ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
+          });
+        }
       }
     }
   }
@@ -389,13 +402,15 @@ async function main(): Promise<void> {
     isShuttingDown = true;
   });
 
+  const supabase = getServiceClient();
+  const tierAssignmentsStale = await isTierAssignmentsStale(supabase);
+
   log.info('Starting daily CCU sync (Tier 3)', {
     githubRunId,
     batchLimit,
+    tierAssignmentsStale,
     ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
   });
-
-  const supabase = getServiceClient();
 
   // Create sync job record
   const { data: job } = await supabase
@@ -405,7 +420,6 @@ async function main(): Promise<void> {
       github_run_id: githubRunId,
       status: 'running',
       batch_size: batchLimit,
-      metadata: isPartitioned ? { partitionId, partitionCount } : undefined,
     })
     .select()
     .single();
@@ -424,7 +438,8 @@ async function main(): Promise<void> {
       supabase,
       batchLimit,
       partitionCount,
-      partitionId
+      partitionId,
+      !tierAssignmentsStale
     );
     stats.appsSkipped = skippedCount;
 
@@ -445,7 +460,6 @@ async function main(): Promise<void> {
             items_processed: 0,
             items_succeeded: 0,
             items_failed: 0,
-            metadata: { skipped: skippedCount, ...(isPartitioned && { partitionId, partitionCount }) },
           })
           .eq('id', job.id);
       }
@@ -459,6 +473,7 @@ async function main(): Promise<void> {
     });
 
     // Fetch CCU from Steam API with status tracking and shutdown check
+    const suspiciousZeroAppids = await getSuspiciousZeroAppids(supabase, appids);
     const result = await fetchSteamCCUBatchWithStatus(
       appids,
       (processed, total) => {
@@ -475,7 +490,8 @@ async function main(): Promise<void> {
           });
         }
       },
-      () => isShuttingDown
+      () => isShuttingDown,
+      { suspiciousZeroAppids }
     );
 
     // Update stats based on actual processing
@@ -526,28 +542,16 @@ async function main(): Promise<void> {
       });
     }
 
-    // Determine final status based on whether we completed or shut down early
-    const finalStatus = isShuttingDown ? 'completed' : 'completed';
-    const statusNote = isShuttingDown ? 'graceful_shutdown' : undefined;
-
     // Update sync job
     if (job) {
       await supabase
         .from('sync_jobs')
         .update({
-          status: finalStatus,
+          status: 'completed',
           completed_at: new Date().toISOString(),
           items_processed: stats.appsProcessed,
           items_succeeded: stats.appsSucceeded,
           items_failed: stats.appsFailed,
-          metadata: {
-            skipped: stats.appsSkipped,
-            invalid: stats.appsInvalid,
-            valid: result.validCount,
-            errors: result.errorCount,
-            ...(isPartitioned && { partitionId, partitionCount }),
-            ...(statusNote && { note: statusNote }),
-          },
         })
         .eq('id', job.id);
     }
@@ -573,11 +577,6 @@ async function main(): Promise<void> {
           items_processed: stats.appsProcessed,
           items_succeeded: stats.appsSucceeded,
           items_failed: stats.appsFailed,
-          metadata: {
-            skipped: stats.appsSkipped,
-            invalid: stats.appsInvalid,
-            ...(isPartitioned && { partitionId, partitionCount }),
-          },
         })
         .eq('id', job.id);
     }

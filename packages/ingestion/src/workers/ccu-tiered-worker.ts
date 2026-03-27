@@ -13,6 +13,10 @@
 import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamCCUBatch } from '../apis/steam-ccu.js';
+import {
+  getSuspiciousZeroAppids,
+  isTierAssignmentsStale,
+} from '../workers-support/ccu-guardrails.js';
 
 const log = logger.child({ worker: 'ccu-tiered-sync' });
 
@@ -178,16 +182,17 @@ async function main(): Promise<void> {
   const githubRunId = process.env.GITHUB_RUN_ID;
   const currentHour = new Date().getUTCHours();
   const isEvenHour = currentHour % 2 === 0;
-  const shouldRecalculateTiers = currentHour === 0;
+  const supabase = getServiceClient();
+  const tierAssignmentsStale = await isTierAssignmentsStale(supabase);
+  const shouldRecalculateTiers = currentHour === 0 || tierAssignmentsStale;
 
   log.info('Starting tiered CCU sync', {
     githubRunId,
     currentHour,
     isEvenHour,
     shouldRecalculateTiers,
+    tierAssignmentsStale,
   });
-
-  const supabase = getServiceClient();
 
   // Create sync job record
   const { data: job } = await supabase
@@ -196,7 +201,6 @@ async function main(): Promise<void> {
       job_type: 'ccu-tiered',
       github_run_id: githubRunId,
       status: 'running',
-      metadata: { hour: currentHour, isEvenHour, shouldRecalculateTiers },
     })
     .select()
     .single();
@@ -280,11 +284,12 @@ async function main(): Promise<void> {
     }
 
     // Fetch CCU data from Steam API
+    const suspiciousZeroAppids = await getSuspiciousZeroAppids(supabase, gamesToPoll);
     const result = await fetchSteamCCUBatch(gamesToPoll, (processed, total) => {
       if (processed % 500 === 0) {
         log.info('CCU fetch progress', { processed, total });
       }
-    });
+    }, { suspiciousZeroAppids });
 
     // Insert snapshots
     const { failed: snapshotFailed } = await insertSnapshots(
@@ -334,13 +339,6 @@ async function main(): Promise<void> {
           items_processed: stats.tier1Processed + stats.tier2Processed,
           items_succeeded: stats.tier1Succeeded + stats.tier2Succeeded,
           items_failed: stats.totalFailed,
-          metadata: {
-            hour: currentHour,
-            isEvenHour,
-            tierRecalculated: stats.tierRecalculated,
-            tier1: { processed: stats.tier1Processed, succeeded: stats.tier1Succeeded },
-            tier2: { processed: stats.tier2Processed, succeeded: stats.tier2Succeeded },
-          },
         })
         .eq('id', job.id);
     }
