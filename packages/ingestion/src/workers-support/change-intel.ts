@@ -1,5 +1,6 @@
 import type { TypedSupabaseClient } from '@publisheriq/database';
-import { logger } from '@publisheriq/shared';
+import * as databaseIngestion from '@publisheriq/database/ingestion';
+import { ApiError, logger } from '@publisheriq/shared';
 import { fetchAppNews } from '../apis/steam-web.js';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
 import {
@@ -41,6 +42,15 @@ const DEFAULT_NEWS_STALE_HOURS = 24;
 const DEFAULT_INCREMENTAL_NEWS_COUNT = 25;
 const DEFAULT_CATCHUP_MAX_PAGES = 5;
 const PROJECTION_REFRESH_CURSOR = 'recent';
+const TERMINAL_NEWS_HTTP_STATUSES = new Set([403, 404, 410]);
+const listNewsCatchupCandidates = (
+  databaseIngestion as unknown as {
+    listNewsCatchupCandidates: (params: {
+      limit: number;
+      staleBeforeIso: string;
+    }) => Promise<Array<{ appid: number }>>;
+  }
+).listNewsCatchupCandidates;
 
 async function enqueueProjectionRefresh(supabase: TypedSupabaseClient, appid: number, triggerReason: string): Promise<void> {
   await enqueueCaptureJobs(supabase, [
@@ -79,6 +89,22 @@ function getCatchupMaxPages(): number {
 
 export function resolveNewsCaptureMode(triggerReason: string): NewsCaptureMode {
   return triggerReason === 'stale_news_catchup' ? 'catchup' : 'incremental';
+}
+
+export function isTerminalNewsCaptureError(error: unknown): boolean {
+  return error instanceof ApiError && TERMINAL_NEWS_HTTP_STATUSES.has(error.statusCode);
+}
+
+export function classifyNewsCaptureError(error: unknown): string {
+  if (error instanceof ApiError) {
+    return `steam_news_http_${error.statusCode}: ${error.message}`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 export function shouldCaptureIncrementalNews(
@@ -314,7 +340,12 @@ export async function captureNewsForApp(
     await enqueueProjectionRefresh(supabase, appid, 'news_change_event');
   }
 
-  await updateSyncStatusFields(supabase, appid, { last_news_sync: observedAt });
+  await updateSyncStatusFields(supabase, appid, {
+    last_news_sync: observedAt,
+    last_error_source: null,
+    last_error_message: null,
+    last_error_at: null,
+  });
   return processedCount;
 }
 
@@ -331,20 +362,14 @@ export async function seedStaleNewsCatchup(
   limit: number
 ): Promise<number> {
   const staleBefore = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await (supabase as any)
-    .from('sync_status')
-    .select('appid')
-    .or(`last_news_sync.is.null,last_news_sync.lt.${staleBefore}`)
-    .order('last_news_sync', { ascending: true, nullsFirst: true })
-    .limit(limit);
-
-  if (error) {
-    throw new Error(`Failed to seed stale news catch-up: ${error.message}`);
-  }
+  const candidates = await listNewsCatchupCandidates({
+    limit,
+    staleBeforeIso: staleBefore,
+  });
 
   return enqueueCaptureJobs(
     supabase,
-    (data ?? []).map((row: { appid: number }) => ({
+    candidates.map((row: { appid: number }) => ({
       appid: row.appid,
       source: 'news' as const,
       triggerReason: 'stale_news_catchup',

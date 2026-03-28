@@ -20,12 +20,15 @@ import {
   refreshChangePatternAppWindowsForApp,
   refreshChangePatternActivityDaysForApp,
   requeueStaleCaptureClaims,
+  updateSyncStatusFields,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
 import { upsertLatestStorefrontState } from '../change-intel/storefront-latest-state.js';
 import {
   archiveHeroAssetsForApp,
+  classifyNewsCaptureError,
   captureNewsForApp,
+  isTerminalNewsCaptureError,
   captureStorefrontState,
   resolveNewsCaptureMode,
   seedStaleNewsCatchup,
@@ -133,7 +136,26 @@ async function processClaimedJobs(
         completedJobIds.push(claimedJob.id);
       } catch (error) {
         failedCount += 1;
-        const failureStatus = claimedJob.attempts >= 5 ? 'dead_letter' : 'queued';
+        const isTerminalNewsFailure = source === 'news' && isTerminalNewsCaptureError(error);
+        const failureStatus = isTerminalNewsFailure || claimedJob.attempts >= 5 ? 'dead_letter' : 'queued';
+
+        if (source === 'news') {
+          try {
+            await updateSyncStatusFields(supabase, claimedJob.appid, {
+              last_error_source: 'news',
+              last_error_message: classifyNewsCaptureError(error),
+              last_error_at: new Date().toISOString(),
+            });
+          } catch (recordError) {
+            log.error('Failed to record news capture error state', {
+              source,
+              appid: claimedJob.appid,
+              id: claimedJob.id,
+              error: recordError,
+            });
+          }
+        }
+
         await completeCaptureQueueItems(
           supabase,
           [claimedJob.id],

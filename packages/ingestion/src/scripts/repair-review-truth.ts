@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getServiceClient } from '@publisheriq/database';
+import * as databaseIngestion from '@publisheriq/database/ingestion';
 import {
   acquireApiRateToken,
   getReviewTruthRepairCandidates,
@@ -19,6 +20,16 @@ const log = logger.child({ worker: 'repair-review-truth' });
 const DEFAULT_BATCH_SIZE = 250;
 const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_MIN_TOTAL_REVIEWS = 1000;
+const DEFAULT_REFRESH_TIMEOUT_MS = 900000;
+
+const refreshMatView = (
+  databaseIngestion as {
+    refreshMaterializedView: (
+      viewName: string,
+      options?: { concurrently?: boolean; timeoutMs?: number }
+    ) => Promise<void>;
+  }
+).refreshMaterializedView;
 
 interface RepairStats {
   appsFailed: number;
@@ -79,8 +90,7 @@ async function waitForReviewRateToken(workerId: string, stats: RepairStats): Pro
   }
 }
 
-async function refreshReviewDependentViews(): Promise<void> {
-  const supabase = getServiceClient();
+async function refreshReviewDependentViews(timeoutMs: number): Promise<void> {
   const views = [
     'latest_daily_metrics',
     'publisher_metrics',
@@ -92,13 +102,9 @@ async function refreshReviewDependentViews(): Promise<void> {
 
   for (const viewName of views) {
     log.info('Refreshing materialized view after review repair', { viewName });
-    const { error } = await supabase.rpc('refresh_materialized_view', {
-      view_name: viewName,
+    await refreshMatView(viewName, {
+      timeoutMs,
     });
-
-    if (error) {
-      throw new Error(`Failed to refresh ${viewName}: ${error.message}`);
-    }
   }
 }
 
@@ -137,6 +143,10 @@ async function main(): Promise<void> {
   const concurrency = Number.parseInt(process.env.CONCURRENCY || `${DEFAULT_CONCURRENCY}`, 10);
   const dryRun = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
   const explicitAppids = parseAppIds(process.env.APPIDS);
+  const refreshTimeoutMs = Number.parseInt(
+    process.env.REFRESH_TIMEOUT_MS || `${DEFAULT_REFRESH_TIMEOUT_MS}`,
+    10
+  );
   const today = new Date().toISOString().split('T')[0];
   const supabase = getServiceClient();
 
@@ -147,6 +157,7 @@ async function main(): Promise<void> {
     explicitAppidsCount: explicitAppids?.length ?? 0,
     githubRunId,
     minTotalReviews,
+    refreshTimeoutMs,
     workerId,
   });
 
@@ -223,7 +234,7 @@ async function main(): Promise<void> {
     );
 
     if (stats.appsRepaired > 0) {
-      await refreshReviewDependentViews();
+      await refreshReviewDependentViews(refreshTimeoutMs);
     }
 
     if (job) {

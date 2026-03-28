@@ -7,7 +7,14 @@ export {
 } from './client.js';
 
 // Operational helpers used by ingestion workers
-export { recalculateCcuTiers, type RecalculateCcuTiersResult } from './ingestion.js';
+export {
+  listNewsCatchupCandidates,
+  recalculateCcuTiers,
+  refreshMaterializedView,
+  type NewsCatchupCandidate,
+  type RecalculateCcuTiersResult,
+  type RefreshMaterializedViewOptions,
+} from './ingestion.js';
 
 // Types
 export type { Database } from './types.js';

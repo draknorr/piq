@@ -71,6 +71,11 @@ export interface RecalculateCcuTiersResult {
   tier3Count: number;
 }
 
+export interface RefreshMaterializedViewOptions {
+  concurrently?: boolean;
+  timeoutMs?: number;
+}
+
 export interface ReviewVelocityTierDistribution {
   dormant: number;
   high: number;
@@ -84,6 +89,12 @@ export interface ReviewTruthRepairCandidate {
   currentTotalReviews: number;
   lastReviewsSync: string | null;
   lastSteamspySync: string;
+}
+
+export interface NewsCatchupCandidate {
+  appid: number;
+  lastNewsSync: string | null;
+  lastStorefrontSync: string;
 }
 
 interface ClaimedReviewAppRow extends QueryResultRow {
@@ -149,6 +160,12 @@ interface ReviewTruthRepairCandidateRow extends QueryResultRow {
   last_steamspy_sync: Date | string;
 }
 
+interface NewsCatchupCandidateRow extends QueryResultRow {
+  appid: number;
+  last_news_sync: Date | string | null;
+  last_storefront_sync: Date | string;
+}
+
 const DEFAULT_POOL_MAX = 3;
 const DEFAULT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
@@ -160,6 +177,7 @@ const INTERPOLATION_BATCH_TIMEOUT_MS = 60_000;
 const VELOCITY_REFRESH_TIMEOUT_MS = 600_000;
 const VELOCITY_UPDATE_TIMEOUT_MS = 600_000;
 const CCU_TIER_RECALC_TIMEOUT_MS = 300_000;
+const MATVIEW_REFRESH_TIMEOUT_MS = 900_000;
 
 let ingestionPool: Pool | null = null;
 
@@ -485,6 +503,28 @@ export async function refreshReviewVelocityStats(
   });
 }
 
+export async function refreshMaterializedView(
+  viewName: string,
+  options: RefreshMaterializedViewOptions = {}
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? MATVIEW_REFRESH_TIMEOUT_MS;
+  const refreshSql = options.concurrently === false
+    ? `REFRESH MATERIALIZED VIEW ${viewName}`
+    : `REFRESH MATERIALIZED VIEW CONCURRENTLY ${viewName}`;
+
+  await withSessionStatementTimeout(timeoutMs, async (client) => {
+    try {
+      await client.query(refreshSql);
+    } catch (error) {
+      if (options.concurrently === false) {
+        throw error;
+      }
+
+      await client.query(`REFRESH MATERIALIZED VIEW ${viewName}`);
+    }
+  });
+}
+
 export async function recalculateCcuTiers(options: {
   timeoutMs?: number;
 } = {}): Promise<RecalculateCcuTiersResult> {
@@ -699,5 +739,54 @@ export async function getReviewsQueueHealth(): Promise<ReviewsQueueHealth> {
       stuckClaimCount: parseNumber(stuck?.stuck_claim_count),
       oldestStuckClaimMinutes: parseOptionalNumber(stuck?.oldest_stuck_claim_minutes),
     };
+  });
+}
+
+export async function listNewsCatchupCandidates(params: {
+  limit: number;
+  staleBeforeIso: string;
+}): Promise<NewsCatchupCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(params.limit, 500));
+
+  return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
+    const { rows } = await client.query<NewsCatchupCandidateRow>(
+      `
+        SELECT
+          s.appid,
+          s.last_news_sync,
+          s.last_storefront_sync
+        FROM sync_status s
+        LEFT JOIN app_capture_work_state w
+          ON w.appid = s.appid
+         AND w.source = 'news'
+        WHERE s.last_storefront_sync IS NOT NULL
+          AND COALESCE(s.storefront_accessible, TRUE) = TRUE
+          AND (
+            s.last_news_sync IS NULL
+            OR s.last_news_sync < $1::TIMESTAMPTZ
+          )
+          AND (
+            w.id IS NULL
+            OR (
+              w.dirty_since IS NULL
+              AND w.claimed_at IS NULL
+              AND w.dead_lettered_at IS NULL
+            )
+          )
+        ORDER BY
+          CASE WHEN s.last_news_sync IS NULL THEN 0 ELSE 1 END,
+          s.last_storefront_sync DESC,
+          s.last_news_sync ASC NULLS FIRST,
+          s.appid ASC
+        LIMIT $2
+      `,
+      [params.staleBeforeIso, requestedLimit]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      lastNewsSync: normalizeTimestamp(row.last_news_sync),
+      lastStorefrontSync: normalizeTimestamp(row.last_storefront_sync)!,
+    }));
   });
 }
