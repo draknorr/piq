@@ -81,35 +81,33 @@ AS $$
       AND COALESCE(j.items_failed, 0) = 0
     ORDER BY j.started_at DESC
     LIMIT 1
-  ),
-  current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  ),
-  counts AS (
-    SELECT
-      (SELECT COUNT(*)::BIGINT FROM public.apps) AS db_app_count,
-      (SELECT COUNT(*)::BIGINT FROM current_catalog) AS current_catalog_count,
-      (
-        SELECT COUNT(*)::BIGINT
-        FROM public.sync_jobs j
-        WHERE j.job_type = 'applist'
-          AND j.status = 'running'
-          AND j.started_at < NOW() - INTERVAL '1 hour'
-      ) AS stale_running_count
   )
   SELECT
-    counts.current_catalog_count,
-    GREATEST(counts.db_app_count - counts.current_catalog_count, 0),
-    COALESCE(latest_successful_applist.live_app_count, counts.current_catalog_count),
+    cc.current_catalog_count,
+    GREATEST(dbx.db_app_count - cc.current_catalog_count, 0),
+    COALESCE(latest_successful_applist.live_app_count, cc.current_catalog_count),
     GREATEST(
-      COALESCE(latest_successful_applist.live_app_count, counts.current_catalog_count) - counts.current_catalog_count,
+      COALESCE(latest_successful_applist.live_app_count, cc.current_catalog_count) - cc.current_catalog_count,
       0
     ),
-    counts.stale_running_count,
+    sj.stale_running_count,
     latest_successful_applist.started_at,
     latest_successful_applist.completed_at
-  FROM counts
+  FROM (
+    SELECT COUNT(*)::BIGINT AS current_catalog_count
+    FROM public.get_current_catalog_appids()
+  ) AS cc
+  CROSS JOIN (
+    SELECT COUNT(*)::BIGINT AS db_app_count
+    FROM public.apps
+  ) AS dbx
+  CROSS JOIN (
+    SELECT COUNT(*)::BIGINT AS stale_running_count
+    FROM public.sync_jobs j
+    WHERE j.job_type = 'applist'
+      AND j.status = 'running'
+      AND j.started_at < NOW() - INTERVAL '1 hour'
+  ) AS sj
   LEFT JOIN latest_successful_applist ON TRUE;
 $$;
 
@@ -123,12 +121,8 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT COUNT(*)::BIGINT
-  FROM current_catalog c
+  FROM public.get_current_catalog_appids() c
   JOIN public.sync_status s ON s.appid = c.appid
   WHERE s.last_steamspy_sync IS NOT NULL
     AND s.last_storefront_sync IS NOT NULL
@@ -141,11 +135,10 @@ COMMENT ON FUNCTION public.get_fully_completed_apps_count() IS
 
 CREATE OR REPLACE FUNCTION public.refresh_dashboard_stats()
 RETURNS void
-LANGUAGE plpgsql
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-BEGIN
   INSERT INTO public.dashboard_stats_cache (
     id,
     apps_count,
@@ -159,45 +152,41 @@ BEGIN
     parent_app_count,
     updated_at
   )
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT
     'main',
-    (SELECT COUNT(*) FROM current_catalog),
+    (SELECT COUNT(*) FROM public.get_current_catalog_appids()),
     (SELECT COUNT(*) FROM public.publishers),
     (SELECT COUNT(*) FROM public.developers),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_pics_sync IS NOT NULL
     ),
     (
       SELECT COUNT(DISTINCT ac.appid)
       FROM public.app_categories ac
-      JOIN current_catalog c ON c.appid = ac.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ac.appid
     ),
     (
       SELECT COUNT(DISTINCT ag.appid)
       FROM public.app_genres ag
-      JOIN current_catalog c ON c.appid = ag.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ag.appid
     ),
     (
       SELECT COUNT(DISTINCT ast.appid)
       FROM public.app_steam_tags ast
-      JOIN current_catalog c ON c.appid = ast.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ast.appid
     ),
     (
       SELECT COUNT(DISTINCT af.appid)
       FROM public.app_franchises af
-      JOIN current_catalog c ON c.appid = af.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = af.appid
     ),
     (
       SELECT COUNT(*)
       FROM public.apps a
-      JOIN current_catalog c ON c.appid = a.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = a.appid
       WHERE a.parent_appid IS NOT NULL
     ),
     NOW()
@@ -212,7 +201,6 @@ BEGIN
     franchises_count = EXCLUDED.franchises_count,
     parent_app_count = EXCLUDED.parent_app_count,
     updated_at = NOW();
-END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.get_pics_data_stats()
@@ -248,42 +236,38 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT
-    (SELECT COUNT(*) FROM current_catalog),
+    (SELECT COUNT(*) FROM public.get_current_catalog_appids()),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_pics_sync IS NOT NULL
     ),
     (
       SELECT COUNT(DISTINCT ac.appid)
       FROM public.app_categories ac
-      JOIN current_catalog c ON c.appid = ac.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ac.appid
     ),
     (
       SELECT COUNT(DISTINCT ag.appid)
       FROM public.app_genres ag
-      JOIN current_catalog c ON c.appid = ag.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ag.appid
     ),
     (
       SELECT COUNT(DISTINCT ast.appid)
       FROM public.app_steam_tags ast
-      JOIN current_catalog c ON c.appid = ast.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = ast.appid
     ),
     (
       SELECT COUNT(DISTINCT af.appid)
       FROM public.app_franchises af
-      JOIN current_catalog c ON c.appid = af.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = af.appid
     ),
     (
       SELECT COUNT(*)
       FROM public.apps a
-      JOIN current_catalog c ON c.appid = a.appid
+      JOIN public.get_current_catalog_appids() c ON c.appid = a.appid
       WHERE a.parent_appid IS NOT NULL
     );
 END;
@@ -306,40 +290,28 @@ DECLARE
   v_one_day_ago TIMESTAMPTZ := NOW() - INTERVAL '1 day';
   v_seven_days_ago TIMESTAMPTZ := NOW() - INTERVAL '7 days';
 BEGIN
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT COUNT(*) INTO v_total
-  FROM current_catalog;
+  FROM public.get_current_catalog_appids();
 
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT COUNT(*) INTO v_steamspy_total
-  FROM current_catalog c
+  FROM public.get_current_catalog_appids() c
   JOIN public.sync_status s ON s.appid = c.appid
   WHERE s.steamspy_available IS NULL OR s.steamspy_available = TRUE;
 
   RETURN QUERY
-  WITH current_catalog AS (
-    SELECT c.appid
-    FROM public.get_current_catalog_appids() c
-  )
   SELECT
     'steamspy'::TEXT,
     v_steamspy_total,
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE (s.steamspy_available IS NULL OR s.steamspy_available = TRUE)
         AND s.last_steamspy_sync IS NOT NULL
     ),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE (s.steamspy_available IS NULL OR s.steamspy_available = TRUE)
         AND s.last_steamspy_sync IS NOT NULL
@@ -351,13 +323,13 @@ BEGIN
     v_total,
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_storefront_sync IS NOT NULL
     ),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_storefront_sync IS NOT NULL
         AND s.last_storefront_sync < v_one_day_ago
@@ -368,13 +340,13 @@ BEGIN
     v_total,
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_reviews_sync IS NOT NULL
     ),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_reviews_sync IS NOT NULL
         AND s.last_reviews_sync < v_one_day_ago
@@ -385,13 +357,13 @@ BEGIN
     v_total,
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_histogram_sync IS NOT NULL
     ),
     (
       SELECT COUNT(*)
-      FROM current_catalog c
+      FROM public.get_current_catalog_appids() c
       JOIN public.sync_status s ON s.appid = c.appid
       WHERE s.last_histogram_sync IS NOT NULL
         AND s.last_histogram_sync < v_seven_days_ago
