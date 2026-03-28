@@ -272,6 +272,9 @@ class PICSDatabase:
         # Get existing appids from database - only process apps that exist
         all_appids = [app.appid for app in apps]
         existing_appids = set(self._get_existing_appids(all_appids))
+        existing_names = self._get_existing_app_names(
+            [app.appid for app in apps if app.appid in existing_appids]
+        )
 
         # Filter to only apps that exist in database
         apps_to_process = [app for app in apps if app.appid in existing_appids]
@@ -310,7 +313,12 @@ class PICSDatabase:
         for app in apps_to_process:
             has_storefront_date = app.appid in apps_with_storefront_dates
             has_storefront_sync = app.appid in apps_with_storefront_sync
-            record = self._build_app_record(app, has_storefront_date=has_storefront_date, has_storefront_sync=has_storefront_sync)
+            record = self._build_app_record(
+                app,
+                has_storefront_date=has_storefront_date,
+                has_storefront_sync=has_storefront_sync,
+                existing_name=existing_names.get(app.appid),
+            )
             if record:
                 app_records.append(record)
                 appid_to_app[app.appid] = app
@@ -328,20 +336,43 @@ class PICSDatabase:
         # Upsert apps in batches
         for i in range(0, len(app_records), self.UPSERT_BATCH_SIZE):
             batch = app_records[i : i + self.UPSERT_BATCH_SIZE]
-            batch_appids = {r["appid"] for r in batch}
-            try:
-                self._db.client.table("apps").upsert(batch, on_conflict="appid").execute()
-                stats["updated"] += len(batch)
-                successful_appids.update(batch_appids)
-            except Exception as e:
-                logger.error(f"Failed to upsert app batch: {e}")
-                stats["failed"] += len(batch)
+            batch_successful_appids, batch_failures = self._upsert_app_records(batch)
+            stats["updated"] += len(batch_successful_appids)
+            stats["failed"] += batch_failures
+            successful_appids.update(batch_successful_appids)
 
         # Process relationships only for successfully upserted apps
         successful_apps = [appid_to_app[appid] for appid in successful_appids if appid in appid_to_app]
         self._sync_relationships(successful_apps, successful_appids, trigger_cursor=trigger_cursor)
 
         return stats
+
+    def _get_existing_app_names(self, appids: List[int]) -> Dict[int, str]:
+        """Fetch existing non-null app names so PICS upserts can preserve them."""
+        if not appids:
+            return {}
+
+        names: Dict[int, str] = {}
+        batch_size = 1000
+
+        for i in range(0, len(appids), batch_size):
+            batch = appids[i : i + batch_size]
+            try:
+                result = (
+                    self._db.client.table("apps")
+                    .select("appid,name")
+                    .in_("appid", batch)
+                    .execute()
+                )
+                for row in result.data:
+                    appid = row.get("appid")
+                    name = row.get("name")
+                    if isinstance(appid, int) and isinstance(name, str) and name:
+                        names[appid] = name
+            except Exception as e:
+                logger.error(f"Failed to fetch existing app names: {e}")
+
+        return names
 
     def _get_existing_appids(self, appids: List[int]) -> List[int]:
         """Check which appids already exist in the apps table."""
@@ -720,16 +751,61 @@ class PICSDatabase:
                 parts.append(str(value))
         return " ".join(parts).lower()
 
-    def _build_app_record(self, app: ExtractedPICSData, has_storefront_date: bool = False, has_storefront_sync: bool = False) -> Optional[Dict[str, Any]]:
+    def _upsert_app_records(self, records: List[Dict[str, Any]]) -> tuple[Set[int], int]:
+        """Persist app rows, falling back to single-row retries when a batch fails."""
+        if not records:
+            return set(), 0
+
+        batch_appids = {int(record["appid"]) for record in records}
+
+        try:
+            self._db.client.table("apps").upsert(records, on_conflict="appid").execute()
+            return batch_appids, 0
+        except Exception as e:
+            logger.error(f"Failed to upsert app batch: {e}")
+
+        if len(records) == 1:
+            return set(), 1
+
+        logger.warning(
+            "Retrying %s PICS app upserts individually after batch failure",
+            len(records),
+        )
+
+        successful_appids: Set[int] = set()
+        failed = 0
+
+        for record in records:
+            appid = int(record["appid"])
+            try:
+                self._db.client.table("apps").upsert(record, on_conflict="appid").execute()
+                successful_appids.add(appid)
+            except Exception as error:
+                logger.error("Failed to upsert app %s after batch fallback: %s", appid, error)
+                failed += 1
+
+        return successful_appids, failed
+
+    def _build_app_record(
+        self,
+        app: ExtractedPICSData,
+        has_storefront_date: bool = False,
+        has_storefront_sync: bool = False,
+        existing_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Build a database record from extracted PICS data."""
         try:
             # Use PICS type if available, otherwise infer from other data
             app_type = app.type if app.type else self._infer_type(app)
+            app_name = app.name or existing_name
+
+            if not app_name:
+                logger.warning("Skipping PICS app %s because no name is available", app.appid)
+                return None
 
             return {
                 "appid": app.appid,
-                # Only update name if it exists (don't overwrite with None)
-                **({"name": app.name} if app.name else {}),
+                "name": app_name,
                 # Always set type - either from PICS or inferred
                 "type": self._map_app_type(app_type),
                 # PICS-specific fields

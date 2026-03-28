@@ -226,14 +226,15 @@ def create_history_database(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSu
 
 def stub_latest_state_writes(monkeypatch: pytest.MonkeyPatch, database: PICSDatabase) -> None:
     monkeypatch.setattr(database, "_get_existing_appids", lambda appids: appids)
+    monkeypatch.setattr(database, "_get_existing_app_names", lambda appids: {})
     monkeypatch.setattr(database, "_get_apps_with_storefront_dates", lambda appids: set())
     monkeypatch.setattr(database, "_get_apps_with_storefront_sync", lambda appids: set())
     monkeypatch.setattr(
         database,
         "_build_app_record",
-        lambda app, has_storefront_date=False, has_storefront_sync=False: {
+        lambda app, has_storefront_date=False, has_storefront_sync=False, existing_name=None: {
             "appid": app.appid,
-            "name": app.name,
+            "name": app.name or existing_name,
             "updated_at": datetime.utcnow().isoformat(),
         },
     )
