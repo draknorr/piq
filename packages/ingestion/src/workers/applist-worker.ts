@@ -69,14 +69,16 @@ async function main(): Promise<void> {
 
     // Get existing app IDs for comparison (paginate to get ALL, not just 1000)
     const existingSet = new Set<number>();
-    let from = 0;
-    const pageSize = 10000;
+    let lastAppId = 0;
+    const pageSize = 1000;
 
     while (true) {
       const { data: existingIds, error: fetchError } = await supabase
         .from('apps')
         .select('appid')
-        .range(from, from + pageSize - 1);
+        .gt('appid', lastAppId)
+        .order('appid', { ascending: true })
+        .limit(pageSize);
 
       if (fetchError) {
         log.error('Error fetching existing apps', { error: fetchError });
@@ -90,7 +92,7 @@ async function main(): Promise<void> {
       }
 
       if (existingIds.length < pageSize) break;
-      from += pageSize;
+      lastAppId = existingIds[existingIds.length - 1]?.appid ?? lastAppId;
     }
 
     log.info('Existing apps in database', { count: existingSet.size });
