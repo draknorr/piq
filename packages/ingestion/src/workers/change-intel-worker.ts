@@ -202,6 +202,7 @@ async function main(): Promise<void> {
   const claimLimit = parseInt(process.env.CLAIM_LIMIT || '25', 10);
   const pollIntervalMs = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10);
   const catchupSeedLimit = parseInt(process.env.NEWS_CATCHUP_SEED_LIMIT || '10', 10);
+  const maxCatchupSeedBatches = Math.max(0, parseInt(process.env.NEWS_CATCHUP_MAX_SEED_BATCHES || '0', 10));
   const maxIdlePolls = parseInt(process.env.MAX_IDLE_POLLS || '0', 10);
   const staleClaimAfterMs = Math.max(0, parseInt(process.env.CLAIM_STALE_AFTER_MS || '1800000', 10));
   const staleSyncJobAfterMs = Math.max(
@@ -218,12 +219,15 @@ async function main(): Promise<void> {
   const supabase = getServiceClient();
   let idlePolls = 0;
   let lastStaleClaimSweepAt = 0;
+  let catchupSeedBatches = 0;
 
   log.info('Starting change-intel queue worker', {
     workerId,
     claimLimit,
     sources,
     pollIntervalMs,
+    catchupSeedLimit: catchupSeedLimit > 0 ? catchupSeedLimit : null,
+    maxCatchupSeedBatches: maxCatchupSeedBatches > 0 ? maxCatchupSeedBatches : null,
     staleClaimAfterMs: staleClaimAfterMs > 0 ? staleClaimAfterMs : null,
     staleSyncJobAfterMs,
     staleClaimSweepIntervalMs: staleClaimAfterMs > 0 ? staleClaimSweepIntervalMs : null,
@@ -292,11 +296,17 @@ async function main(): Promise<void> {
       }
     }
 
-    if (!processedAny && sources.includes('news') && catchupSeedLimit > 0) {
+    const canSeedNewsCatchup =
+      sources.includes('news') &&
+      catchupSeedLimit > 0 &&
+      (maxCatchupSeedBatches === 0 || catchupSeedBatches < maxCatchupSeedBatches);
+
+    if (!processedAny && canSeedNewsCatchup) {
       try {
         const seeded = await seedStaleNewsCatchup(supabase, catchupSeedLimit);
         processedAny = seeded > 0;
         if (seeded > 0) {
+          catchupSeedBatches += 1;
           log.info('Seeded stale news catch-up jobs', { seeded });
         }
       } catch (error) {
