@@ -79,6 +79,13 @@ export interface ReviewVelocityTierDistribution {
   unknown: number;
 }
 
+export interface ReviewTruthRepairCandidate {
+  appid: number;
+  currentTotalReviews: number;
+  lastReviewsSync: string | null;
+  lastSteamspySync: string;
+}
+
 interface ClaimedReviewAppRow extends QueryResultRow {
   appid: number;
   lane: ReviewLane;
@@ -133,6 +140,13 @@ interface ReviewsQueueHealthStuckRow extends QueryResultRow {
 interface ReviewVelocityTierDistributionRow extends QueryResultRow {
   count: number | string;
   tier: string | null;
+}
+
+interface ReviewTruthRepairCandidateRow extends QueryResultRow {
+  appid: number;
+  current_total_reviews: number | string;
+  last_reviews_sync: Date | string | null;
+  last_steamspy_sync: Date | string;
 }
 
 const DEFAULT_POOL_MAX = 3;
@@ -548,6 +562,55 @@ export async function getReviewVelocityTierDistribution(): Promise<ReviewVelocit
   });
 }
 
+export async function getReviewTruthRepairCandidates(params: {
+  appids?: number[];
+  limit: number;
+  minTotalReviews?: number;
+}): Promise<ReviewTruthRepairCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(params.limit, 5000));
+  const minTotalReviews = Math.max(0, params.minTotalReviews ?? 0);
+  const explicitAppids = params.appids && params.appids.length > 0 ? params.appids : null;
+
+  return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
+    const { rows } = await client.query<ReviewTruthRepairCandidateRow>(
+      `
+        SELECT
+          s.appid,
+          COALESCE(ldm.total_reviews, s.last_known_total_reviews, 0)::INTEGER AS current_total_reviews,
+          s.last_reviews_sync,
+          s.last_steamspy_sync
+        FROM sync_status s
+        LEFT JOIN latest_daily_metrics ldm ON ldm.appid = s.appid
+        WHERE s.is_syncable = TRUE
+          AND s.last_steamspy_sync IS NOT NULL
+          AND s.last_steamspy_sync > COALESCE(s.last_reviews_sync, '-infinity'::TIMESTAMPTZ)
+          AND (
+            $3::INT[] IS NOT NULL
+            OR COALESCE(ldm.total_reviews, s.last_known_total_reviews, 0) >= $1
+          )
+          AND (
+            $3::INT[] IS NULL
+            OR s.appid = ANY($3)
+          )
+        ORDER BY
+          COALESCE(ldm.total_reviews, s.last_known_total_reviews, 0) DESC,
+          s.last_reviews_sync ASC NULLS FIRST,
+          s.last_steamspy_sync DESC,
+          s.appid ASC
+        LIMIT $2
+      `,
+      [minTotalReviews, requestedLimit, explicitAppids]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      currentTotalReviews: parseNumber(row.current_total_reviews),
+      lastReviewsSync: normalizeTimestamp(row.last_reviews_sync),
+      lastSteamspySync: normalizeTimestamp(row.last_steamspy_sync)!,
+    }));
+  });
+}
+
 export async function getReviewsQueueHealth(): Promise<ReviewsQueueHealth> {
   return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
     const { rows: laneRows } = await client.query<ReviewsQueueLaneHealthRow>(`
@@ -572,9 +635,19 @@ export async function getReviewsQueueHealth(): Promise<ReviewsQueueHealth> {
           EXTRACT(EPOCH FROM (NOW() - COALESCE(s.next_reviews_sync, NOW()))) / 3600.0 AS hours_overdue
         FROM sync_status s
         LEFT JOIN apps a ON a.appid = s.appid
+        LEFT JOIN latest_daily_metrics ldm ON ldm.appid = s.appid
         WHERE s.is_syncable = TRUE
           AND (s.next_reviews_sync IS NULL OR s.next_reviews_sync <= NOW())
           AND (s.reviews_claim_expires_at IS NULL OR s.reviews_claim_expires_at <= NOW())
+          AND NOT (
+            a.release_date > CURRENT_DATE + INTERVAL '7 days'
+            AND COALESCE(ldm.total_reviews, s.last_known_total_reviews, 0) = 0
+            AND NOT (
+              s.reviews_priority_override_until IS NOT NULL
+              AND s.reviews_priority_override_until > NOW()
+              AND s.reviews_priority_override_bucket IS NOT NULL
+            )
+          )
       )
       SELECT
         lane,

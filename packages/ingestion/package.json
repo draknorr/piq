@@ -21,6 +21,7 @@
     "app-change-hints": "tsx src/workers/app-change-hints-worker.ts",
     "change-intel-worker": "tsx src/workers/change-intel-worker.ts",
     "change-intel-backfill-projection": "tsx src/scripts/backfill-change-activity-projection.ts",
+    "repair-review-truth": "tsx src/scripts/repair-review-truth.ts",
     "reviews-queue-health": "tsx src/scripts/reviews-queue-health.ts",
     "storefront-sync": "tsx src/workers/storefront-worker.ts",
     "reviews-sync": "tsx src/workers/reviews-worker.ts",

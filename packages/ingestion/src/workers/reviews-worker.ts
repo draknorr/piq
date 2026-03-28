@@ -22,6 +22,11 @@ import { logger, BATCH_SIZES } from '@publisheriq/shared';
 import pLimit from 'p-limit';
 import { fetchReviewSummary } from '../apis/reviews.js';
 import { withRetry } from '../utils/retry.js';
+import {
+  loadPreviousReviewSyncData,
+  persistReviewSummary,
+  type PreviousReviewSyncData,
+} from '../workers-support/reviews-persistence.js';
 
 const log = logger.child({ worker: 'reviews-sync' });
 
@@ -59,14 +64,6 @@ interface SyncStats {
   laneClaims: Record<ReviewLane, number>;
 }
 
-interface PreviousSyncData {
-  intervalHours: number;
-  totalReviews: number;
-  positiveReviews: number;
-  lastSync: Date | null;
-  consecutiveErrors: number;
-}
-
 function getDb(supabase: SupabaseClient): any {
   return supabase as any;
 }
@@ -94,29 +91,6 @@ function formatUnknownError(error: unknown): string {
 function calculateFailureBackoffMinutes(consecutiveErrors: number): number {
   const cappedErrors = Math.max(1, Math.min(consecutiveErrors, 6));
   return Math.min(15 * 2 ** (cappedErrors - 1), 360);
-}
-
-function getIntervalHoursForVelocityTier(velocityTier: string | null | undefined): number {
-  switch (velocityTier) {
-    case 'high':
-      return 4;
-    case 'medium':
-      return 12;
-    case 'low':
-      return 24;
-    case 'dormant':
-      return 72;
-    default:
-      return 24;
-  }
-}
-
-function normalizeIntervalHours(value: number | null | undefined): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    return 24;
-  }
-
-  return Math.max(1, Math.round(value));
 }
 
 function createEmptyLaneCounts(): Record<ReviewLane, number> {
@@ -183,69 +157,14 @@ async function waitForReviewRateToken(
 async function loadPreviousSyncData(
   supabase: SupabaseClient,
   appIds: number[]
-): Promise<{ previousSyncData: Map<number, PreviousSyncData>; neverSyncedSet: Set<number> }> {
-  const { data: syncStatuses, error: syncError } = await getDb(supabase)
-    .from('sync_status')
-    .select(
-      'appid, last_reviews_sync, last_known_total_reviews, consecutive_errors, reviews_interval_hours'
-    )
-    .in('appid', appIds);
-
-  if (syncError) {
-    throw new Error(`Failed to load sync status rows: ${syncError.message}`);
-  }
-
-  const { data: previousMetrics, error: metricsError } = await getDb(supabase)
-    .from('daily_metrics')
-    .select('appid, total_reviews, positive_reviews')
-    .in('appid', appIds)
-    .order('metric_date', { ascending: false });
-
-  if (metricsError) {
-    throw new Error(`Failed to load previous daily metrics: ${metricsError.message}`);
-  }
-
-  const previousSyncData = new Map<number, PreviousSyncData>();
-
-  for (const status of syncStatuses ?? []) {
-    previousSyncData.set(status.appid, {
-      intervalHours: normalizeIntervalHours(status.reviews_interval_hours),
-      totalReviews: status.last_known_total_reviews ?? 0,
-      positiveReviews: 0,
-      lastSync: status.last_reviews_sync ? new Date(status.last_reviews_sync) : null,
-      consecutiveErrors: status.consecutive_errors ?? 0,
-    });
-  }
-
-  for (const metric of previousMetrics ?? []) {
-    const existing = previousSyncData.get(metric.appid);
-    if (!existing) {
-      continue;
-    }
-
-    if (existing.positiveReviews === 0) {
-      existing.positiveReviews = metric.positive_reviews ?? 0;
-      if (existing.totalReviews === 0) {
-        existing.totalReviews = metric.total_reviews ?? 0;
-      }
-    }
-  }
-
-  const neverSyncedAppids: number[] = [];
-  for (const status of syncStatuses ?? []) {
-    if (status.last_reviews_sync === null) {
-      neverSyncedAppids.push(status.appid);
-    }
-  }
-  const neverSyncedSet = new Set<number>(neverSyncedAppids);
-
-  return { previousSyncData, neverSyncedSet };
+): Promise<{ previousSyncData: Map<number, PreviousReviewSyncData>; neverSyncedSet: Set<number> }> {
+  return loadPreviousReviewSyncData(supabase, appIds);
 }
 
 async function markAppFailure(
   appid: number,
   supabase: SupabaseClient,
-  previous: PreviousSyncData | undefined,
+  previous: PreviousReviewSyncData | undefined,
   errorMessage: string
 ): Promise<void> {
   const nextErrorCount = (previous?.consecutiveErrors ?? 0) + 1;
@@ -280,7 +199,7 @@ async function processApp(
   supabase: SupabaseClient,
   workerId: string,
   today: string,
-  previousSyncData: Map<number, PreviousSyncData>,
+  previousSyncData: Map<number, PreviousReviewSyncData>,
   neverSyncedSet: Set<number>,
   stats: SyncStats
 ): Promise<void> {
@@ -296,90 +215,14 @@ async function processApp(
     }
 
     const previous = previousSyncData.get(appid);
-    const previousTotal = previous?.totalReviews ?? 0;
-    const previousPositive = previous?.positiveReviews ?? 0;
-    const lastSyncTime = previous?.lastSync;
-
-    const reviewsAdded = Math.max(0, summary.totalReviews - previousTotal);
-    const positiveAdded = Math.max(0, summary.positiveReviews - previousPositive);
-    const negativeAdded = Math.max(0, reviewsAdded - positiveAdded);
-
-    const hoursSinceLastSync = lastSyncTime
-      ? (Date.now() - lastSyncTime.getTime()) / (1000 * 60 * 60)
-      : null;
-
-    const intervalHours =
-      previous?.intervalHours ?? getIntervalHoursForVelocityTier(app.velocity_tier);
-    const nextSync = new Date(Date.now() + intervalHours * 60 * 60 * 1000);
-    const nowIso = new Date().toISOString();
-
-    const { error: deltaError } = await getDb(supabase).from('review_deltas').upsert(
-      {
-        appid,
-        delta_date: today,
-        total_reviews: summary.totalReviews,
-        positive_reviews: summary.positiveReviews,
-        review_score: summary.reviewScore,
-        review_score_desc: summary.reviewScoreDesc,
-        reviews_added: reviewsAdded,
-        positive_added: positiveAdded,
-        negative_added: negativeAdded,
-        hours_since_last_sync: hoursSinceLastSync,
-        is_interpolated: false,
-      },
-      { onConflict: 'appid,delta_date' }
-    );
-
-    if (deltaError) {
-      throw new Error(`Failed to upsert review_deltas row: ${deltaError.message}`);
-    }
-
-    const { error: metricsError } = await getDb(supabase).from('daily_metrics').upsert(
-      {
-        appid,
-        metric_date: today,
-        total_reviews: summary.totalReviews,
-        positive_reviews: summary.positiveReviews,
-        negative_reviews: summary.negativeReviews,
-        review_score: summary.reviewScore,
-        review_score_desc: summary.reviewScoreDesc,
-      },
-      { onConflict: 'appid,metric_date' }
-    );
-
-    if (metricsError) {
-      throw new Error(`Failed to upsert daily_metrics row: ${metricsError.message}`);
-    }
-
-    const syncUpdate: Record<string, unknown> = {
-      last_reviews_sync: nowIso,
-      next_reviews_sync: nextSync.toISOString(),
-      last_known_total_reviews: summary.totalReviews,
-      consecutive_errors: 0,
-      last_error_source: null,
-      last_error_message: null,
-      last_error_at: null,
-      reviews_claimed_by: null,
-      reviews_claimed_at: null,
-      reviews_claim_expires_at: null,
-      reviews_priority_override_bucket: null,
-      reviews_priority_override_score: null,
-      reviews_priority_override_reason: null,
-      reviews_priority_override_until: null,
-    };
-
-    if (reviewsAdded > 0) {
-      syncUpdate.last_activity_at = nowIso;
-    }
-
-    const { error: syncError } = await getDb(supabase)
-      .from('sync_status')
-      .update(syncUpdate)
-      .eq('appid', appid);
-
-    if (syncError) {
-      throw new Error(`Failed to update sync_status row: ${syncError.message}`);
-    }
+    await persistReviewSummary({
+      appid,
+      previous,
+      summary,
+      supabase,
+      today,
+      velocityTier: app.velocity_tier,
+    });
 
     if (neverSyncedSet.has(appid)) {
       stats.appsCreated += 1;

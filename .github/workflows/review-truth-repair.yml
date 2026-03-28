@@ -1,0 +1,56 @@
+name: Review Truth Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'Number of contaminated appids to repair'
+        required: false
+        default: '250'
+      min_total_reviews:
+        description: 'Minimum current total reviews for candidate selection'
+        required: false
+        default: '1000'
+      appids:
+        description: 'Optional comma-separated appids to repair explicitly'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Select candidates only without writing review truth'
+        required: false
+        default: 'true'
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run review truth repair
+        run: pnpm --filter @publisheriq/ingestion repair-review-truth
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '250' }}
+          MIN_TOTAL_REVIEWS: ${{ github.event.inputs.min_total_reviews || '1000' }}
+          APPIDS: ${{ github.event.inputs.appids }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
