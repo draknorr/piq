@@ -36,14 +36,21 @@ async function getStats() {
   }
 
   // Fallback to direct queries only if cache table is empty/missing
-  const [appsResult, publishersResult, developersResult] = await Promise.all([
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: catalogControl } = await (supabase.rpc as any)('get_catalog_control_stats');
+  const currentCatalogApps =
+    catalogControl && catalogControl.length > 0
+      ? Number(catalogControl[0]?.current_catalog_apps ?? 0)
+      : null;
+
+  const [legacyAppsResult, publishersResult, developersResult] = await Promise.all([
     supabase.from('apps').select('*', { count: 'exact', head: true }),
     supabase.from('publishers').select('*', { count: 'exact', head: true }),
     supabase.from('developers').select('*', { count: 'exact', head: true }),
   ]);
 
   return {
-    appCount: appsResult.count ?? 0,
+    appCount: currentCatalogApps ?? legacyAppsResult.count ?? 0,
     publisherCount: publishersResult.count ?? 0,
     developerCount: developersResult.count ?? 0,
   };

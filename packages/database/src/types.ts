@@ -1048,6 +1048,7 @@ export type Database = {
           is_released: boolean | null
           languages: Json | null
           last_content_update: string | null
+          last_seen_in_steam_applist_at: string | null
           metacritic_score: number | null
           metacritic_url: string | null
           name: string
@@ -1079,6 +1080,7 @@ export type Database = {
           is_released?: boolean | null
           languages?: Json | null
           last_content_update?: string | null
+          last_seen_in_steam_applist_at?: string | null
           metacritic_score?: number | null
           metacritic_url?: string | null
           name: string
@@ -1110,6 +1112,7 @@ export type Database = {
           is_released?: boolean | null
           languages?: Json | null
           last_content_update?: string | null
+          last_seen_in_steam_applist_at?: string | null
           metacritic_score?: number | null
           metacritic_url?: string | null
           name?: string
@@ -3606,6 +3609,18 @@ export type Database = {
         Args: { p_appid: number; p_end: string; p_start: string }
         Returns: Json
       }
+      get_catalog_control_stats: {
+        Args: never
+        Returns: {
+          current_catalog_apps: number
+          historical_retained_apps: number
+          latest_applist_completed_at: string | null
+          latest_applist_started_at: string | null
+          latest_live_app_count: number
+          live_only_missing: number
+          stale_running_applist_jobs: number
+        }[]
+      }
       get_companies_aggregate_stats: {
         Args: {
           p_categories?: number[]
@@ -3803,6 +3818,10 @@ export type Database = {
           option_id: number
           option_name: string
         }[]
+      }
+      get_fully_completed_apps_count: {
+        Args: never
+        Returns: number
       }
       get_game_momentum: {
         Args: { p_appid: number }

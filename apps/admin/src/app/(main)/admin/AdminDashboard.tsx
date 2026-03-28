@@ -168,6 +168,58 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
         </div>
       </CollapsibleSection>
 
+      <CollapsibleSection
+        title="Catalog Control"
+        badge={{
+          value: data.catalogControlStats.currentCatalogApps.toLocaleString(),
+          variant: data.catalogControlStats.liveOnlyMissing > 0 || data.catalogControlStats.staleRunningApplistJobs > 0
+            ? 'warning'
+            : 'success',
+        }}
+        headerExtra={
+          <span className="text-caption text-text-muted">
+            live applist: {data.catalogControlStats.latestLiveAppCount.toLocaleString()}
+          </span>
+        }
+      >
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <QueueMetric
+            label="Current Catalog"
+            value={data.catalogControlStats.currentCatalogApps}
+            status="success"
+          />
+          <QueueMetric
+            label="Historical Retained"
+            value={data.catalogControlStats.historicalRetainedApps}
+            status={data.catalogControlStats.historicalRetainedApps > 0 ? 'info' : 'neutral'}
+          />
+          <QueueMetric
+            label="Live Missing"
+            value={data.catalogControlStats.liveOnlyMissing}
+            status={data.catalogControlStats.liveOnlyMissing > 0 ? 'error' : 'success'}
+          />
+          <QueueMetric
+            label="Stale Applist Jobs"
+            value={data.catalogControlStats.staleRunningApplistJobs}
+            status={data.catalogControlStats.staleRunningApplistJobs > 0 ? 'warning' : 'success'}
+          />
+        </div>
+        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-caption text-text-muted">
+          <div>
+            Latest applist started:{' '}
+            {data.catalogControlStats.latestApplistStartedAt
+              ? formatRelativeTime(data.catalogControlStats.latestApplistStartedAt)
+              : 'Never'}
+          </div>
+          <div>
+            Latest applist completed:{' '}
+            {data.catalogControlStats.latestApplistCompletedAt
+              ? formatRelativeTime(data.catalogControlStats.latestApplistCompletedAt)
+              : 'Never'}
+          </div>
+        </div>
+      </CollapsibleSection>
+
       {/* Sync Queue Section */}
       <CollapsibleSection
         title="Sync Queue"

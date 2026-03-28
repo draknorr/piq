@@ -12,6 +12,7 @@ import {
   getFullyCompletedAppsCount,
   getPICSSyncState,
   getPICSDataStats,
+  getCatalogControlStats,
   getLastSyncTimes,
   type PriorityDistribution,
   type QueueStatus,
@@ -20,6 +21,7 @@ import {
   type SyncHealthData,
   type PICSSyncState,
   type PICSDataStats,
+  type CatalogControlStats,
 } from '@/lib/sync-queries';
 import { getCachedDashboardData, setCachedDashboardData } from '@/lib/admin-dashboard-cache';
 import type { GuardrailTraceEntry, ToolAnswerContractSummary } from '@/lib/chat/chat-context-types';
@@ -78,6 +80,7 @@ export interface AdminDashboardData {
   allJobs: SyncJob[];
   picsSyncState: PICSSyncState;
   picsDataStats: PICSDataStats;
+  catalogControlStats: CatalogControlStats;
   chatLogs: ChatQueryLog[];
 }
 
@@ -96,15 +99,12 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
 
   // Phase 1: Fetch shared data first to avoid duplicate queries
   // These are used by multiple functions below
-  const [queueStatus, lastSyncs, totalAppsResult] = await Promise.all([
+  const [queueStatus, lastSyncs, catalogControlStats] = await Promise.all([
     getQueueStatus(supabase),
     getLastSyncTimes(supabase),
-    supabase
-      .from('sync_status')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_syncable', true),
+    getCatalogControlStats(supabase),
   ]);
-  const totalApps = totalAppsResult.count ?? 0;
+  const totalApps = catalogControlStats.currentCatalogApps;
 
   // Phase 2: Fetch remaining data, passing shared data where needed
   const [
@@ -160,6 +160,7 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     allJobs: allJobsData,
     picsSyncState,
     picsDataStats,
+    catalogControlStats,
     chatLogs: chatLogs.data ?? [],
   };
 

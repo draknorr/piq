@@ -71,6 +71,16 @@ export interface PICSDataStats {
   withParentApp: number;
 }
 
+export interface CatalogControlStats {
+  currentCatalogApps: number;
+  historicalRetainedApps: number;
+  latestLiveAppCount: number;
+  liveOnlyMissing: number;
+  staleRunningApplistJobs: number;
+  latestApplistStartedAt: string | null;
+  latestApplistCompletedAt: string | null;
+}
+
 /**
  * Get job statistics for the last 24 hours
  */
@@ -381,13 +391,13 @@ export async function getSourceCompletionStats(
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Get total syncable apps count
-  const { count: totalApps } = await supabase
-    .from('sync_status')
-    .select('*', { count: 'exact', head: true })
-    .eq('is_syncable', true);
-
-  const total = totalApps ?? 0;
+  const total =
+    sharedData?.totalApps ??
+    (await supabase
+      .from('sync_status')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_syncable', true)).count ??
+    0;
 
   // Query completion stats for each source in parallel
   const [
@@ -446,6 +456,13 @@ export async function getSourceCompletionStats(
 export async function getFullyCompletedAppsCount(
   supabase: SupabaseClient<Database>
 ): Promise<number> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('get_fully_completed_apps_count');
+
+  if (!error && data !== null && data !== undefined) {
+    return Number(data);
+  }
+
   const { count } = await supabase
     .from('sync_status')
     .select('*', { count: 'exact', head: true })
@@ -456,6 +473,51 @@ export async function getFullyCompletedAppsCount(
     .not('last_histogram_sync', 'is', null);
 
   return count ?? 0;
+}
+
+export async function getCatalogControlStats(
+  supabase: SupabaseClient<Database>
+): Promise<CatalogControlStats> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('get_catalog_control_stats');
+
+  if (!error && data && data.length > 0) {
+    const row = data[0];
+    return {
+      currentCatalogApps: Number(row.current_catalog_apps ?? 0),
+      historicalRetainedApps: Number(row.historical_retained_apps ?? 0),
+      latestLiveAppCount: Number(row.latest_live_app_count ?? 0),
+      liveOnlyMissing: Number(row.live_only_missing ?? 0),
+      staleRunningApplistJobs: Number(row.stale_running_applist_jobs ?? 0),
+      latestApplistStartedAt: row.latest_applist_started_at ?? null,
+      latestApplistCompletedAt: row.latest_applist_completed_at ?? null,
+    };
+  }
+
+  console.warn('get_catalog_control_stats RPC failed, falling back to legacy totals:', error);
+
+  const [dbApps, syncableApps, staleRunningJobs] = await Promise.all([
+    supabase.from('apps').select('*', { count: 'exact', head: true }),
+    supabase.from('sync_status').select('*', { count: 'exact', head: true }).eq('is_syncable', true),
+    supabase
+      .from('sync_jobs')
+      .select('*', { count: 'exact', head: true })
+      .eq('job_type', 'applist')
+      .eq('status', 'running'),
+  ]);
+
+  const currentCatalogApps = syncableApps.count ?? 0;
+  const totalApps = dbApps.count ?? currentCatalogApps;
+
+  return {
+    currentCatalogApps,
+    historicalRetainedApps: Math.max(totalApps - currentCatalogApps, 0),
+    latestLiveAppCount: currentCatalogApps,
+    liveOnlyMissing: 0,
+    staleRunningApplistJobs: staleRunningJobs.count ?? 0,
+    latestApplistStartedAt: null,
+    latestApplistCompletedAt: null,
+  };
 }
 
 /**
