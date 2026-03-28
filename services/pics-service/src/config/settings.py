@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     steam_password: Optional[str] = None
 
     # Service configuration
-    mode: str = "change_monitor"  # 'bulk_sync' or 'change_monitor'
+    mode: str = "change_monitor"  # 'bulk_sync', 'first_pass', or 'change_monitor'
     port: int = 8080
 
     # Bulk sync options
@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     bulk_request_delay: float = 0.5
     bulk_timeout: int = 60  # Timeout per batch fetch (seconds)
     bulk_max_retries: int = 5  # Retry attempts per batch
+    first_pass_batch_limit: int = 500
+    first_pass_candidate_pool_size: int = 1000
+    first_pass_recent_release_days: int = 30
+    first_pass_near_release_days: int = 14
 
     # Change monitor options
     poll_interval: int = 30

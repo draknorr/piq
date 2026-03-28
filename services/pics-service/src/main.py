@@ -80,6 +80,11 @@ def main():
             result = worker.run()
             logger.info(f"Bulk sync completed: {result}")
 
+        elif settings.mode == "first_pass":
+            worker = BulkSyncWorker(health_server=health_server)
+            result = worker.run_first_pass()
+            logger.info(f"First-pass sync completed: {result}")
+
         elif settings.mode == "change_monitor":
             current_worker = ChangeMonitorWorker(health_server=health_server)
             current_worker.run()

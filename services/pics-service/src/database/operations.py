@@ -2,7 +2,7 @@
 
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 
 import httpx
@@ -135,6 +135,84 @@ CATEGORY_NAMES: Dict[int, str] = {
     78: "Adjustable Difficulty",
     79: "Save Anytime",
 }
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+
+    normalized = value.replace("Z", "+00:00")
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+
+    return parsed
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if not isinstance(value, str) or not value:
+        return None
+
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _extract_related_app(row: Dict[str, Any]) -> Dict[str, Any]:
+    app_data = row.get("apps")
+    if isinstance(app_data, list):
+        return app_data[0] if app_data else {}
+    if isinstance(app_data, dict):
+        return app_data
+    return {}
+
+
+def select_first_pass_app_ids(
+    rows: List[Dict[str, Any]],
+    limit: int,
+    recent_release_days: int,
+    near_release_days: int,
+    today: Optional[date] = None,
+) -> List[int]:
+    effective_limit = max(1, limit)
+    effective_today = today or datetime.now(timezone.utc).date()
+    recent_cutoff = effective_today - timedelta(days=max(1, recent_release_days))
+    near_release_cutoff = effective_today + timedelta(days=max(1, near_release_days))
+    ranked: List[tuple[tuple[int, float, int], int]] = []
+
+    for row in rows:
+        appid = row.get("appid")
+        last_storefront_sync = _parse_iso_datetime(row.get("last_storefront_sync"))
+
+        if not isinstance(appid, int) or appid <= 0 or last_storefront_sync is None:
+            continue
+
+        if row.get("storefront_accessible") is False:
+            continue
+
+        app_data = _extract_related_app(row)
+        release_date = _parse_iso_date(app_data.get("release_date"))
+        is_released = bool(app_data.get("is_released"))
+
+        if is_released and release_date is not None and release_date >= recent_cutoff:
+            bucket = 0
+        elif release_date is not None and effective_today <= release_date <= near_release_cutoff:
+            bucket = 1
+        elif is_released:
+            bucket = 2
+        else:
+            bucket = 3
+
+        ranked.append(((bucket, -last_storefront_sync.timestamp(), appid), appid))
+
+    ranked.sort(key=lambda item: item[0])
+    return [appid for _, appid in ranked[:effective_limit]]
 
 
 class PICSDatabase:
@@ -987,6 +1065,47 @@ class PICSDatabase:
             return self._get_unsynced_app_ids_paginated()
         else:
             return self._get_all_app_ids_paginated()
+
+    def get_first_pass_app_ids(
+        self,
+        limit: int,
+        candidate_pool_size: int,
+        recent_release_days: int,
+        near_release_days: int,
+    ) -> List[int]:
+        """Get prioritized unsynced app IDs for first-pass PICS capture."""
+        effective_limit = max(1, limit)
+        effective_pool_size = max(effective_limit, min(max(candidate_pool_size, effective_limit), 1000))
+
+        try:
+            result = (
+                self._db.client.table("sync_status")
+                .select(
+                    "appid,last_pics_sync,last_storefront_sync,storefront_accessible,"
+                    "apps!inner(release_date,is_released)"
+                )
+                .is_("last_pics_sync", "null")
+                .not_.is_("last_storefront_sync", "null")
+                .order("last_storefront_sync", desc=True)
+                .limit(effective_pool_size)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch first-pass PICS candidates: {e}")
+            return []
+
+        selected = select_first_pass_app_ids(
+            result.data or [],
+            limit=effective_limit,
+            recent_release_days=recent_release_days,
+            near_release_days=near_release_days,
+        )
+        logger.info(
+            "Selected %s prioritized first-pass PICS app IDs from %s candidates",
+            len(selected),
+            len(result.data or []),
+        )
+        return selected
 
     def _get_unsynced_app_ids_paginated(self) -> List[int]:
         """Get all unsynced app IDs with cursor-based pagination."""

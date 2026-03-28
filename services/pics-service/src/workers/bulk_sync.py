@@ -28,13 +28,14 @@ class BulkSyncWorker:
         self._db = PICSDatabase()
         self._health = health_server
 
-    def run(self, app_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    def run(self, app_ids: Optional[List[int]] = None, trigger_reason: str = "bulk_sync") -> Dict[str, Any]:
         """
         Run bulk sync for all apps or specified list.
 
         Args:
             app_ids: Optional list of specific app IDs to sync.
                      If None, fetches all known app IDs from database.
+            trigger_reason: Persistence reason recorded with the latest-state write path.
 
         Returns:
             Dict with stats: processed, failed, elapsed
@@ -96,7 +97,7 @@ class BulkSyncWorker:
 
                 # Persist to database
                 if extracted:
-                    stats = self._db.upsert_apps_batch(extracted, trigger_reason="bulk_sync")
+                    stats = self._db.upsert_apps_batch(extracted, trigger_reason=trigger_reason)
                     total_processed += stats["updated"]
                     total_failed += stats["failed"]
                     logger.info(f"Database upsert: {stats['updated']} updated, {stats['failed']} failed")
@@ -137,3 +138,14 @@ class BulkSyncWorker:
         )
 
         return {"processed": total_processed, "failed": total_failed, "elapsed": elapsed}
+
+    def run_first_pass(self) -> Dict[str, Any]:
+        """Run a bounded prioritized first-pass sync for newly discovered unsynced apps."""
+        app_ids = self._db.get_first_pass_app_ids(
+            limit=settings.first_pass_batch_limit,
+            candidate_pool_size=settings.first_pass_candidate_pool_size,
+            recent_release_days=settings.first_pass_recent_release_days,
+            near_release_days=settings.first_pass_near_release_days,
+        )
+        logger.info("Fetched %s first-pass PICS app IDs from prioritized backlog", len(app_ids))
+        return self.run(app_ids=app_ids, trigger_reason="first_pass")
