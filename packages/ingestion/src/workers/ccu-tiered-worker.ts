@@ -12,11 +12,15 @@
 
 import * as database from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
-import { fetchSteamCCUBatch } from '../apis/steam-ccu.js';
+import {
+  fetchSteamCCUBatchWithStatus,
+  type CCUResultWithStatus,
+} from '../apis/steam-ccu.js';
 import {
   getSuspiciousZeroAppids,
   isTierAssignmentsStale,
 } from '../workers-support/ccu-guardrails.js';
+import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 type DatabaseModule = typeof database & {
   recalculateCcuTiers: (options?: {
@@ -208,6 +212,23 @@ async function updateDailyMetricsPeak(
   }
 }
 
+async function persistTierValidationResults(
+  supabase: ReturnType<typeof getServiceClient>,
+  results: Map<number, CCUResultWithStatus>
+): Promise<void> {
+  const skipUntil = new Date();
+  skipUntil.setDate(skipUntil.getDate() + 30);
+
+  const persisted = await persistOfficialCcuValidationResults(
+    supabase,
+    results,
+    new Date().toISOString(),
+    skipUntil.toISOString()
+  );
+
+  log.info('Persisted tiered CCU validation state', { ...persisted });
+}
+
 async function main(): Promise<void> {
   const startTime = Date.now();
   const githubRunId = process.env.GITHUB_RUN_ID;
@@ -321,21 +342,28 @@ async function main(): Promise<void> {
 
     // Fetch CCU data from Steam API
     const suspiciousZeroAppids = await getSuspiciousZeroAppids(supabase, gamesToPoll);
-    const result = await fetchSteamCCUBatch(gamesToPoll, (processed, total) => {
+    const result = await fetchSteamCCUBatchWithStatus(gamesToPoll, (processed, total) => {
       if (processed % 500 === 0) {
         log.info('CCU fetch progress', { processed, total });
       }
-    }, { suspiciousZeroAppids });
+    }, undefined, { suspiciousZeroAppids });
+
+    const validCcuData = new Map<number, number>();
+    for (const [appid, ccuResult] of result.results) {
+      if (ccuResult.status === 'valid' && ccuResult.playerCount !== undefined) {
+        validCcuData.set(appid, ccuResult.playerCount);
+      }
+    }
 
     // Insert snapshots
     const { failed: snapshotFailed } = await insertSnapshots(
       supabase,
-      result.data,
+      validCcuData,
       tierMap
     );
 
     // Calculate per-tier success
-    for (const [appid] of result.data) {
+    for (const [appid] of validCcuData) {
       const tier = tierMap.get(appid);
       if (tier === 1) {
         stats.tier1Succeeded++;
@@ -344,24 +372,27 @@ async function main(): Promise<void> {
       }
     }
 
-    stats.totalFailed = result.failedCount + snapshotFailed;
+    stats.totalFailed = result.invalidCount + result.errorCount + snapshotFailed;
 
     // Update daily_metrics with peaks
     const today = new Date().toISOString().split('T')[0];
-    await updateDailyMetricsPeak(supabase, result.data, today);
+    await updateDailyMetricsPeak(supabase, validCcuData, today);
+    await persistTierValidationResults(supabase, result.results);
 
     // Log statistics
-    const ccuValues = Array.from(result.data.values());
+    const ccuValues = Array.from(validCcuData.values());
     if (ccuValues.length > 0) {
       const maxCCU = Math.max(...ccuValues);
       const avgCCU = Math.round(ccuValues.reduce((a, b) => a + b, 0) / ccuValues.length);
       const gamesWithPlayers = ccuValues.filter((c) => c > 0).length;
 
       log.info('CCU statistics', {
-        gamesWithData: result.data.size,
+        gamesWithData: validCcuData.size,
         gamesWithPlayers,
         maxCCU,
         avgCCU,
+        invalidAppids: result.invalidCount,
+        erroredAppids: result.errorCount,
       });
     }
 

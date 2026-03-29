@@ -13,6 +13,7 @@ import {
   getPICSSyncState,
   getPICSDataStats,
   getCatalogControlStats,
+  getCcuQualityStats,
   getLastSyncTimes,
   type PriorityDistribution,
   type QueueStatus,
@@ -22,6 +23,7 @@ import {
   type PICSSyncState,
   type PICSDataStats,
   type CatalogControlStats,
+  type CcuQualityStats,
 } from '@/lib/sync-queries';
 import { getCachedDashboardData, setCachedDashboardData } from '@/lib/admin-dashboard-cache';
 import type { GuardrailTraceEntry, ToolAnswerContractSummary } from '@/lib/chat/chat-context-types';
@@ -81,6 +83,7 @@ export interface AdminDashboardData {
   picsSyncState: PICSSyncState;
   picsDataStats: PICSDataStats;
   catalogControlStats: CatalogControlStats;
+  ccuQualityStats: CcuQualityStats;
   chatLogs: ChatQueryLog[];
 }
 
@@ -117,6 +120,7 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     allJobs,
     picsSyncState,
     picsDataStats,
+    ccuQualityStats,
     chatLogs,
   ] = await Promise.all([
     // Pass queueStatus.overdue and lastSyncs to avoid re-fetching
@@ -139,6 +143,7 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     getPICSSyncState(supabase),
     // Pass totalApps to avoid re-fetching
     getPICSDataStats(supabase, totalApps),
+    getCcuQualityStats(supabase, totalApps),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (supabase.from('chat_query_logs') as any)
       .select('*')
@@ -161,6 +166,7 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     picsSyncState,
     picsDataStats,
     catalogControlStats,
+    ccuQualityStats,
     chatLogs: chatLogs.data ?? [],
   };
 

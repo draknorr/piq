@@ -11,7 +11,9 @@
 
 import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
-import { fetchSteamCCUBatch } from '../apis/steam-ccu.js';
+import { fetchSteamCCUBatchWithStatus } from '../apis/steam-ccu.js';
+import { getSuspiciousZeroAppids } from '../workers-support/ccu-guardrails.js';
+import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-sync' });
 
@@ -172,31 +174,50 @@ async function main(): Promise<void> {
     log.info('Found apps for CCU sync', { count: appids.length });
 
     // Fetch CCU from Steam API
-    const result = await fetchSteamCCUBatch(appids, (processed, total) => {
+    const suspiciousZeroAppids = await getSuspiciousZeroAppids(supabase, appids);
+    const result = await fetchSteamCCUBatchWithStatus(appids, (processed, total) => {
       log.info('CCU fetch progress', { processed, total });
-    });
+    }, undefined, { suspiciousZeroAppids });
+
+    const validCcuData = new Map<number, number>();
+    for (const [appid, ccuResult] of result.results) {
+      if (ccuResult.status === 'valid' && ccuResult.playerCount !== undefined) {
+        validCcuData.set(appid, ccuResult.playerCount);
+      }
+    }
 
     stats.appsProcessed = appids.length;
 
     // Upsert to daily_metrics
     const today = new Date().toISOString().split('T')[0];
-    const { succeeded, failed } = await upsertCCUData(supabase, result.data, today);
+    const { succeeded, failed } = await upsertCCUData(supabase, validCcuData, today);
+
+    const skipUntil = new Date();
+    skipUntil.setDate(skipUntil.getDate() + 30);
+    await persistOfficialCcuValidationResults(
+      supabase,
+      result.results,
+      new Date().toISOString(),
+      skipUntil.toISOString()
+    );
 
     stats.appsSucceeded = succeeded;
-    stats.appsFailed = failed + result.failedCount;
+    stats.appsFailed = failed + result.invalidCount + result.errorCount;
 
     // Log some interesting stats
-    const ccuValues = Array.from(result.data.values());
+    const ccuValues = Array.from(validCcuData.values());
     if (ccuValues.length > 0) {
       const maxCCU = Math.max(...ccuValues);
       const avgCCU = Math.round(ccuValues.reduce((a, b) => a + b, 0) / ccuValues.length);
       const gamesWithPlayers = ccuValues.filter((c) => c > 0).length;
 
       log.info('CCU statistics', {
-        gamesWithData: result.data.size,
+        gamesWithData: validCcuData.size,
         gamesWithPlayers,
         maxCCU,
         avgCCU,
+        invalidAppids: result.invalidCount,
+        erroredAppids: result.errorCount,
       });
     }
 

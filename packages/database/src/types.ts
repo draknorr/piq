@@ -1190,6 +1190,8 @@ export type Database = {
           ccu_growth_7d_percent: number | null
           ccu_skip_until: string | null
           ccu_tier: number
+          last_ccu_validation_at: string | null
+          last_ccu_validation_state: string | null
           last_ccu_synced: string | null
           last_tier_change: string | null
           recent_peak_ccu: number | null
@@ -1204,6 +1206,8 @@ export type Database = {
           ccu_growth_7d_percent?: number | null
           ccu_skip_until?: string | null
           ccu_tier?: number
+          last_ccu_validation_at?: string | null
+          last_ccu_validation_state?: string | null
           last_ccu_synced?: string | null
           last_tier_change?: string | null
           recent_peak_ccu?: number | null
@@ -1218,6 +1222,8 @@ export type Database = {
           ccu_growth_7d_percent?: number | null
           ccu_skip_until?: string | null
           ccu_tier?: number
+          last_ccu_validation_at?: string | null
+          last_ccu_validation_state?: string | null
           last_ccu_synced?: string | null
           last_tier_change?: string | null
           recent_peak_ccu?: number | null
@@ -2707,6 +2713,49 @@ export type Database = {
           },
         ]
       }
+      latest_ccu_status: {
+        Row: {
+          appid: number | null
+          ccu_confidence_state: string | null
+          ccu_fetch_status: string | null
+          ccu_skip_until: string | null
+          ccu_source: string | null
+          has_tier_assignment: boolean | null
+          last_ccu_synced: string | null
+          last_ccu_validation_at: string | null
+          last_ccu_validation_state: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ccu_tier_assignments_appid_fkey"
+            columns: ["appid"]
+            isOneToOne: false
+            referencedRelation: "app_filter_data"
+            referencedColumns: ["appid"]
+          },
+          {
+            foreignKeyName: "ccu_tier_assignments_appid_fkey"
+            columns: ["appid"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["appid"]
+          },
+          {
+            foreignKeyName: "ccu_tier_assignments_appid_fkey"
+            columns: ["appid"]
+            isOneToOne: false
+            referencedRelation: "developer_game_metrics"
+            referencedColumns: ["appid"]
+          },
+          {
+            foreignKeyName: "ccu_tier_assignments_appid_fkey"
+            columns: ["appid"]
+            isOneToOne: false
+            referencedRelation: "publisher_game_metrics"
+            referencedColumns: ["appid"]
+          },
+        ]
+      }
       latest_daily_metrics: {
         Row: {
           appid: number | null
@@ -3619,6 +3668,23 @@ export type Database = {
           latest_live_app_count: number
           live_only_missing: number
           stale_running_applist_jobs: number
+        }[]
+      }
+      get_ccu_quality_stats: {
+        Args: never
+        Returns: {
+          confirmed_positive: number
+          confirmed_zero: number
+          current_catalog_apps: number
+          invalid: number
+          legacy_unknown: number
+          no_tier_assignment: number
+          skipped: number
+          steam_api: number
+          steamspy: number
+          suspect_zero: number
+          tier_assigned: number
+          unavailable: number
         }[]
       }
       get_companies_aggregate_stats: {

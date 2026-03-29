@@ -91,6 +91,28 @@ export interface ReviewTruthRepairCandidate {
   lastSteamspySync: string;
 }
 
+export type CcuRepairSource = 'steam_api' | 'steamspy';
+
+export interface CcuProvenanceRepairCandidate {
+  appid: number;
+  ccuPeak: number;
+  inferredSource: CcuRepairSource;
+  metricDate: string;
+}
+
+export interface CcuValidationBackfillCandidate {
+  appid: number;
+  ccuFetchStatus: string | null;
+  ccuPeak: number | null;
+  ccuSource: string | null;
+  existingValidationAt: string | null;
+  existingValidationState: string | null;
+  lastCcuSynced: string | null;
+  latestPositiveSnapshotAt: string | null;
+  metricDate: string | null;
+  updatedAt: string | null;
+}
+
 export interface NewsCatchupCandidate {
   appid: number;
   lastNewsSync: string | null;
@@ -158,6 +180,26 @@ interface ReviewTruthRepairCandidateRow extends QueryResultRow {
   current_total_reviews: number | string;
   last_reviews_sync: Date | string | null;
   last_steamspy_sync: Date | string;
+}
+
+interface CcuProvenanceRepairCandidateRow extends QueryResultRow {
+  appid: number;
+  ccu_peak: number | string;
+  inferred_source: CcuRepairSource;
+  metric_date: string;
+}
+
+interface CcuValidationBackfillCandidateRow extends QueryResultRow {
+  appid: number;
+  ccu_fetch_status: string | null;
+  ccu_peak: number | string | null;
+  ccu_source: string | null;
+  existing_validation_at: Date | string | null;
+  existing_validation_state: string | null;
+  last_ccu_synced: Date | string | null;
+  latest_positive_snapshot_at: Date | string | null;
+  metric_date: string | null;
+  updated_at: Date | string | null;
 }
 
 interface NewsCatchupCandidateRow extends QueryResultRow {
@@ -647,6 +689,145 @@ export async function getReviewTruthRepairCandidates(params: {
       currentTotalReviews: parseNumber(row.current_total_reviews),
       lastReviewsSync: normalizeTimestamp(row.last_reviews_sync),
       lastSteamspySync: normalizeTimestamp(row.last_steamspy_sync)!,
+    }));
+  });
+}
+
+export async function getCcuProvenanceRepairCandidates(params: {
+  appids?: number[];
+  limit: number;
+}): Promise<CcuProvenanceRepairCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(params.limit, 5000));
+  const explicitAppids = params.appids && params.appids.length > 0 ? params.appids : null;
+
+  return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
+    const { rows } = await client.query<CcuProvenanceRepairCandidateRow>(
+      `
+        WITH current_catalog AS (
+          SELECT appid
+          FROM public.get_current_catalog_appids()
+        ),
+        candidates AS (
+          SELECT
+            ldm.appid,
+            ldm.ccu_peak,
+            ldm.metric_date,
+            CASE
+              WHEN ct.last_ccu_synced IS NOT NULL
+                   AND ldm.metric_date IS NOT NULL
+                   AND ct.last_ccu_synced::DATE = ldm.metric_date
+                   AND (s.last_steamspy_sync IS NULL OR ct.last_ccu_synced >= s.last_steamspy_sync)
+              THEN 'steam_api'
+              WHEN s.last_steamspy_sync IS NOT NULL
+                   AND ldm.metric_date IS NOT NULL
+                   AND s.last_steamspy_sync::DATE = ldm.metric_date
+                   AND (ct.last_ccu_synced IS NULL OR s.last_steamspy_sync > ct.last_ccu_synced)
+              THEN 'steamspy'
+              ELSE NULL
+            END AS inferred_source
+          FROM current_catalog c
+          JOIN public.latest_daily_metrics ldm ON ldm.appid = c.appid
+          LEFT JOIN public.sync_status s ON s.appid = c.appid
+          LEFT JOIN public.ccu_tier_assignments ct ON ct.appid = c.appid
+          WHERE ldm.ccu_peak IS NOT NULL
+            AND ldm.ccu_source IS NULL
+            AND (
+              $2::INT[] IS NULL
+              OR ldm.appid = ANY($2)
+            )
+        )
+        SELECT
+          appid,
+          ccu_peak,
+          inferred_source,
+          metric_date
+        FROM candidates
+        WHERE inferred_source IS NOT NULL
+        ORDER BY
+          ccu_peak DESC,
+          metric_date DESC,
+          appid ASC
+        LIMIT $1
+      `,
+      [requestedLimit, explicitAppids]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      ccuPeak: parseNumber(row.ccu_peak),
+      inferredSource: row.inferred_source,
+      metricDate: row.metric_date,
+    }));
+  });
+}
+
+export async function getCcuValidationBackfillCandidates(params: {
+  appids?: number[];
+  limit: number;
+}): Promise<CcuValidationBackfillCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(params.limit, 5000));
+  const explicitAppids = params.appids && params.appids.length > 0 ? params.appids : null;
+
+  return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
+    const { rows } = await client.query<CcuValidationBackfillCandidateRow>(
+      `
+        WITH current_catalog AS (
+          SELECT appid
+          FROM public.get_current_catalog_appids()
+        ),
+        positive_snapshots AS (
+          SELECT
+            cs.appid,
+            MAX(cs.snapshot_time) AS latest_positive_snapshot_at
+          FROM public.ccu_snapshots cs
+          JOIN current_catalog c ON c.appid = cs.appid
+          WHERE cs.player_count > 0
+            AND cs.snapshot_time >= NOW() - INTERVAL '30 days'
+          GROUP BY cs.appid
+        )
+        SELECT
+          ct.appid,
+          ct.ccu_fetch_status,
+          ldm.ccu_peak,
+          ldm.ccu_source,
+          ct.last_ccu_validation_at AS existing_validation_at,
+          ct.last_ccu_validation_state AS existing_validation_state,
+          ct.last_ccu_synced,
+          ps.latest_positive_snapshot_at,
+          ldm.metric_date,
+          ct.updated_at
+        FROM public.ccu_tier_assignments ct
+        JOIN current_catalog c ON c.appid = ct.appid
+        LEFT JOIN public.latest_daily_metrics ldm ON ldm.appid = ct.appid
+        LEFT JOIN positive_snapshots ps ON ps.appid = ct.appid
+        WHERE (
+            ct.last_ccu_validation_state IS NULL
+            OR ct.last_ccu_validation_at IS NULL
+          )
+          AND (
+            $2::INT[] IS NULL
+            OR ct.appid = ANY($2)
+          )
+        ORDER BY
+          COALESCE(ldm.ccu_peak, 0) DESC,
+          ct.last_ccu_synced DESC NULLS LAST,
+          ct.appid ASC
+        LIMIT $1
+      `,
+      [requestedLimit, explicitAppids]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      ccuFetchStatus: row.ccu_fetch_status,
+      ccuPeak: parseOptionalNumber(row.ccu_peak),
+      ccuSource: row.ccu_source,
+      existingValidationAt: normalizeTimestamp(row.existing_validation_at),
+      existingValidationState: row.existing_validation_state,
+      lastCcuSynced: normalizeTimestamp(row.last_ccu_synced),
+      latestPositiveSnapshotAt: normalizeTimestamp(row.latest_positive_snapshot_at),
+      metricDate: row.metric_date,
+      updatedAt: normalizeTimestamp(row.updated_at),
     }));
   });
 }

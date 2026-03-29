@@ -8,9 +8,13 @@ export {
 
 // Operational helpers used by ingestion workers
 export {
+  getCcuProvenanceRepairCandidates,
+  getCcuValidationBackfillCandidates,
   listNewsCatchupCandidates,
   recalculateCcuTiers,
   refreshMaterializedView,
+  type CcuProvenanceRepairCandidate,
+  type CcuValidationBackfillCandidate,
   type NewsCatchupCandidate,
   type RecalculateCcuTiersResult,
   type RefreshMaterializedViewOptions,

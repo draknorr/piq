@@ -1,5 +1,4 @@
-import { API_URLS, logger, ApiError } from '@publisheriq/shared';
-import { withRetry } from '../utils/retry.js';
+import { API_URLS, logger } from '@publisheriq/shared';
 import { rateLimiters } from '../utils/rate-limiter.js';
 
 const log = logger.child({ component: 'SteamCCU' });
@@ -106,48 +105,8 @@ async function fetchSteamCCUWithOptions(
   appid: number,
   options: CCUFetchOptions
 ): Promise<number | null> {
-  await rateLimiters.steamCCU.acquire();
-
-  try {
-    const response = await withRetry(async () => {
-      const result = await requestSteamCCU(appid);
-
-      if (result.status < 200 || result.status >= 300 || !result.data) {
-        throw new ApiError(`Failed to fetch Steam CCU for ${appid}`, result.status, result.url);
-      }
-
-      return result.data;
-    });
-
-    // Result 1 = success, 42 = invalid appid
-    if (response.response.result !== 1) {
-      log.debug('Steam CCU returned invalid result', { appid, result: response.response.result });
-      return null;
-    }
-
-    if (options.confirmSuspiciousZero && response.response.player_count === 0) {
-      const confirmedCount = await confirmSuspiciousZero(appid);
-
-      if (confirmedCount !== null) {
-        if (confirmedCount > 0) {
-          log.warn('Suspicious zero overridden after cache-busting recheck', {
-            appid,
-            initialPlayerCount: 0,
-            confirmedPlayerCount: confirmedCount,
-          });
-        } else {
-          log.info('Suspicious zero confirmed after cache-busting recheck', { appid });
-        }
-
-        return confirmedCount;
-      }
-    }
-
-    return response.response.player_count;
-  } catch (error) {
-    log.error('Failed to fetch Steam CCU', { appid, error });
-    return null;
-  }
+  const result = await fetchSteamCCUWithStatusOptions(appid, options);
+  return result.status === 'valid' ? result.playerCount ?? 0 : null;
 }
 
 /**
@@ -170,11 +129,19 @@ export interface CCUBatchResult {
  */
 export type CCUFetchStatus = 'valid' | 'invalid' | 'error';
 
+export type CCUValidationState =
+  | 'confirmed_positive'
+  | 'confirmed_zero'
+  | 'suspect_zero'
+  | 'invalid'
+  | 'error';
+
 /**
  * Result from a single CCU fetch with status tracking
  */
 export interface CCUResultWithStatus {
   status: CCUFetchStatus;
+  validationState: CCUValidationState;
   playerCount?: number;
 }
 
@@ -203,13 +170,13 @@ async function fetchSteamCCUWithStatusOptions(
 
     if (!result.data) {
       log.debug('Failed to parse CCU response body', { appid, status: result.status });
-      return { status: 'error' };
+      return { status: 'error', validationState: 'error' };
     }
 
     // ONLY mark invalid if result === 42 (definitive from Steam)
     if (result.data.response.result === 42) {
       log.debug('Steam CCU returned invalid appid', { appid });
-      return { status: 'invalid' };
+      return { status: 'invalid', validationState: 'invalid' };
     }
 
     // Success case
@@ -231,19 +198,29 @@ async function fetchSteamCCUWithStatusOptions(
           }
 
           playerCount = confirmedCount;
+        } else {
+          return {
+            status: 'valid',
+            validationState: 'suspect_zero',
+            playerCount: 0,
+          };
         }
       }
 
-      return { status: 'valid', playerCount };
+      return {
+        status: 'valid',
+        validationState: playerCount > 0 ? 'confirmed_positive' : 'confirmed_zero',
+        playerCount,
+      };
     }
 
     // Unknown response format - treat as error, NOT invalid
     log.debug('Steam CCU returned unexpected result', { appid, result: result.data.response.result });
-    return { status: 'error' };
+    return { status: 'error', validationState: 'error' };
   } catch (error) {
     // Network error, timeout, etc. - NEVER mark as invalid
     log.debug('CCU fetch failed with network error', { appid, error });
-    return { status: 'error' };
+    return { status: 'error', validationState: 'error' };
   }
 }
 
@@ -344,12 +321,12 @@ export async function fetchSteamCCUBatch(
 
   for (let i = 0; i < appids.length; i++) {
     const appid = appids[i];
-    const ccu = await fetchSteamCCUWithOptions(appid, {
+    const result = await fetchSteamCCUWithStatusOptions(appid, {
       confirmSuspiciousZero: options?.suspiciousZeroAppids?.has(appid) ?? false,
     });
 
-    if (ccu !== null) {
-      results.set(appid, ccu);
+    if (result.status === 'valid' && result.playerCount !== undefined) {
+      results.set(appid, result.playerCount);
       successCount++;
     } else {
       failedCount++;

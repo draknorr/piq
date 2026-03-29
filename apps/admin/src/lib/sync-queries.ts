@@ -81,6 +81,21 @@ export interface CatalogControlStats {
   latestApplistCompletedAt: string | null;
 }
 
+export interface CcuQualityStats {
+  currentCatalogApps: number;
+  tierAssigned: number;
+  noTierAssignment: number;
+  confirmedPositive: number;
+  confirmedZero: number;
+  suspectZero: number;
+  skipped: number;
+  invalid: number;
+  unavailable: number;
+  steamApi: number;
+  steamspy: number;
+  legacyUnknown: number;
+}
+
 /**
  * Get job statistics for the last 24 hours
  */
@@ -517,6 +532,80 @@ export async function getCatalogControlStats(
     staleRunningApplistJobs: staleRunningJobs.count ?? 0,
     latestApplistStartedAt: null,
     latestApplistCompletedAt: null,
+  };
+}
+
+export async function getCcuQualityStats(
+  supabase: SupabaseClient<Database>,
+  sharedCurrentCatalogApps?: number
+): Promise<CcuQualityStats> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('get_ccu_quality_stats');
+
+  if (!error && data && data.length > 0) {
+    const row = data[0];
+    return {
+      currentCatalogApps: Number(row.current_catalog_apps ?? 0),
+      tierAssigned: Number(row.tier_assigned ?? 0),
+      noTierAssignment: Number(row.no_tier_assignment ?? 0),
+      confirmedPositive: Number(row.confirmed_positive ?? 0),
+      confirmedZero: Number(row.confirmed_zero ?? 0),
+      suspectZero: Number(row.suspect_zero ?? 0),
+      skipped: Number(row.skipped ?? 0),
+      invalid: Number(row.invalid ?? 0),
+      unavailable: Number(row.unavailable ?? 0),
+      steamApi: Number(row.steam_api ?? 0),
+      steamspy: Number(row.steamspy ?? 0),
+      legacyUnknown: Number(row.legacy_unknown ?? 0),
+    };
+  }
+
+  console.warn('get_ccu_quality_stats RPC failed, falling back to approximate CCU stats:', error);
+
+  const currentCatalogApps = sharedCurrentCatalogApps ?? 0;
+  const [tierAssigned, invalidAssignments, officialRows, steamspyRows, unknownSourceRows] =
+    await Promise.all([
+      supabase.from('ccu_tier_assignments').select('*', { count: 'exact', head: true }),
+      supabase
+        .from('ccu_tier_assignments')
+        .select('*', { count: 'exact', head: true })
+        .eq('ccu_fetch_status', 'invalid'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from('latest_daily_metrics')
+        .select('appid', { count: 'exact', head: true })
+        .eq('ccu_source', 'steam_api')
+        .not('ccu_peak', 'is', null),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from('latest_daily_metrics')
+        .select('appid', { count: 'exact', head: true })
+        .eq('ccu_source', 'steamspy')
+        .not('ccu_peak', 'is', null),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from('latest_daily_metrics')
+        .select('appid', { count: 'exact', head: true })
+        .is('ccu_source', null)
+        .not('ccu_peak', 'is', null),
+    ]);
+
+  const tierAssignedCount = tierAssigned.count ?? 0;
+  const unavailable = Math.max(currentCatalogApps - tierAssignedCount, 0);
+
+  return {
+    currentCatalogApps,
+    tierAssigned: tierAssignedCount,
+    noTierAssignment: unavailable,
+    confirmedPositive: 0,
+    confirmedZero: 0,
+    suspectZero: 0,
+    skipped: 0,
+    invalid: invalidAssignments.count ?? 0,
+    unavailable,
+    steamApi: officialRows.count ?? 0,
+    steamspy: steamspyRows.count ?? 0,
+    legacyUnknown: unknownSourceRows.count ?? 0,
   };
 }
 

@@ -21,6 +21,7 @@ import {
   getSuspiciousZeroAppids,
   isTierAssignmentsStale,
 } from '../workers-support/ccu-guardrails.js';
+import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-daily-sync' });
 
@@ -308,67 +309,23 @@ async function updateSkipTracking(
   const skipUntil = new Date();
   skipUntil.setDate(skipUntil.getDate() + SKIP_DURATION_DAYS);
   const skipUntilStr = skipUntil.toISOString();
-
-  // Separate valid and invalid results (ignore errors - they'll be retried)
-  const validAppids: number[] = [];
-  const invalidAppids: number[] = [];
-
-  for (const [appid, result] of results) {
-    if (result.status === 'valid') {
-      validAppids.push(appid);
-    } else if (result.status === 'invalid') {
-      invalidAppids.push(appid);
-    }
-    // 'error' status: no update, will be retried next run
-  }
-
-  let validUpdated = 0;
-  let invalidUpdated = 0;
-
-  // Update valid apps: clear skip_until, set status, record sync time for rotation
-  // Cast to any because ccu_tier_assignments may not be in generated types yet
-  const validBatchSize = 500;
   const syncTime = new Date().toISOString();
-  for (let i = 0; i < validAppids.length; i += validBatchSize) {
-    const batch = validAppids.slice(i, i + validBatchSize);
-    const { error } = await (supabase as any)
-      .from('ccu_tier_assignments')
-      .update({
-        ccu_fetch_status: 'valid',
-        ccu_skip_until: null,
-        last_ccu_synced: syncTime,
-      })
-      .in('appid', batch);
+  const persisted = await persistOfficialCcuValidationResults(
+    supabase,
+    results,
+    syncTime,
+    skipUntilStr
+  );
 
-    if (error) {
-      log.warn('Failed to update valid status batch', { error, batchStart: i });
-    } else {
-      validUpdated += batch.length;
-    }
-  }
-
-  // Update invalid apps: set skip_until, set status, record sync time
-  for (let i = 0; i < invalidAppids.length; i += validBatchSize) {
-    const batch = invalidAppids.slice(i, i + validBatchSize);
-    const { error } = await (supabase as any)
-      .from('ccu_tier_assignments')
-      .update({
-        ccu_fetch_status: 'invalid',
-        ccu_skip_until: skipUntilStr,
-        last_ccu_synced: syncTime,
-      })
-      .in('appid', batch);
-
-    if (error) {
-      log.warn('Failed to update invalid status batch', { error, batchStart: i });
-    } else {
-      invalidUpdated += batch.length;
-    }
-  }
+  const validUpdated =
+    persisted.confirmedPositive + persisted.confirmedZero + persisted.suspectZero;
+  const invalidUpdated = persisted.invalid;
 
   log.info('Updated skip tracking', {
     validUpdated,
     invalidUpdated,
+    erroredUpdated: persisted.error,
+    suspectZeroUpdated: persisted.suspectZero,
     skipUntil: skipUntilStr,
   });
 

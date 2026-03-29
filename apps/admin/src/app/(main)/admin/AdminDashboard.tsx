@@ -105,6 +105,12 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
 
   const totalApps = data.completionStats[0]?.totalApps ?? 0;
   const priorityTotal = Object.values(data.priorityDistribution).reduce((a, b) => a + b, 0);
+  const confirmedCcuCount =
+    data.ccuQualityStats.confirmedPositive + data.ccuQualityStats.confirmedZero;
+  const confirmedCcuPercent =
+    data.ccuQualityStats.currentCatalogApps > 0
+      ? (confirmedCcuCount / data.ccuQualityStats.currentCatalogApps) * 100
+      : 0;
 
   return (
     <div className="space-y-3">
@@ -217,6 +223,82 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
               ? formatRelativeTime(data.catalogControlStats.latestApplistCompletedAt)
               : 'Never'}
           </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="CCU Quality"
+        badge={{
+          value: `${confirmedCcuPercent.toFixed(1)}%`,
+          variant:
+            data.ccuQualityStats.suspectZero > 0 || data.ccuQualityStats.legacyUnknown > 0
+              ? 'warning'
+              : 'success',
+        }}
+        headerExtra={
+          <span className="text-caption text-text-muted">
+            {confirmedCcuCount.toLocaleString()} / {data.ccuQualityStats.currentCatalogApps.toLocaleString()} confirmed
+          </span>
+        }
+      >
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <QueueMetric
+            label="Tier Assigned"
+            value={data.ccuQualityStats.tierAssigned}
+            status="success"
+          />
+          <QueueMetric
+            label="No Tier"
+            value={data.ccuQualityStats.noTierAssignment}
+            status={data.ccuQualityStats.noTierAssignment > 0 ? 'warning' : 'success'}
+          />
+          <QueueMetric
+            label="Confirmed +"
+            value={data.ccuQualityStats.confirmedPositive}
+            status="success"
+          />
+          <QueueMetric
+            label="Confirmed 0"
+            value={data.ccuQualityStats.confirmedZero}
+            status="info"
+          />
+          <QueueMetric
+            label="Suspect 0"
+            value={data.ccuQualityStats.suspectZero}
+            status={data.ccuQualityStats.suspectZero > 0 ? 'warning' : 'success'}
+          />
+          <QueueMetric
+            label="Skipped"
+            value={data.ccuQualityStats.skipped}
+            status="neutral"
+          />
+          <QueueMetric
+            label="Invalid"
+            value={data.ccuQualityStats.invalid}
+            status={data.ccuQualityStats.invalid > 0 ? 'warning' : 'success'}
+          />
+          <QueueMetric
+            label="Unavailable"
+            value={data.ccuQualityStats.unavailable}
+            status={data.ccuQualityStats.unavailable > 0 ? 'warning' : 'success'}
+          />
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <QueueMetric
+            label="Steam API"
+            value={data.ccuQualityStats.steamApi}
+            status="success"
+          />
+          <QueueMetric
+            label="SteamSpy"
+            value={data.ccuQualityStats.steamspy}
+            status={data.ccuQualityStats.steamspy > 0 ? 'info' : 'neutral'}
+          />
+          <QueueMetric
+            label="Legacy Unknown"
+            value={data.ccuQualityStats.legacyUnknown}
+            status={data.ccuQualityStats.legacyUnknown > 0 ? 'warning' : 'success'}
+          />
         </div>
       </CollapsibleSection>
 
