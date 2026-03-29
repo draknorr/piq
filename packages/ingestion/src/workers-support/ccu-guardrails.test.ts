@@ -101,6 +101,35 @@ test('getSuspiciousZeroAppids uses the RPC when available', async () => {
   assert.equal(fromCalled, false);
 });
 
+test('getSuspiciousZeroAppids chunks RPC calls for large batches', async () => {
+  const rpcCalls: number[][] = [];
+  const appids = Array.from({ length: 251 }, (_, index) => index + 1);
+
+  const supabase = {
+    rpc(name: string, args: RpcArgs): RpcResponse {
+      assert.equal(name, 'get_suspicious_zero_appids');
+      rpcCalls.push(args.p_appids as number[]);
+      return Promise.resolve({
+        data: [rpcCalls.length === 1 ? 1 : 251],
+        error: null,
+      });
+    },
+    from() {
+      throw new Error('from() should not be called when chunked RPC succeeds');
+    },
+  };
+
+  const suspicious = await getSuspiciousZeroAppids(
+    supabase as unknown as SuspiciousZeroClient,
+    appids
+  );
+
+  assert.equal(rpcCalls.length, 2);
+  assert.equal(rpcCalls[0].length, 250);
+  assert.equal(rpcCalls[1].length, 1);
+  assert.deepEqual([...suspicious], [1, 251]);
+});
+
 test('getSuspiciousZeroAppids falls back safely when the RPC is unavailable', async () => {
   const recentRelease = new Date();
   recentRelease.setDate(recentRelease.getDate() - 10);

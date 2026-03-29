@@ -75,30 +75,36 @@ async function getSuspiciousZeroAppidsViaRpc(
   supabase: ServiceClient,
   appids: number[]
 ): Promise<Set<number> | null> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any).rpc(SUSPICIOUS_ZERO_RPC, {
-      p_appids: appids,
-    });
+  const suspicious = new Set<number>();
 
-    if (error) {
-      log.warn('Suspicious zero RPC unavailable; falling back to chunked lookup', {
+  for (const appidChunk of chunkAppids(appids)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any).rpc(SUSPICIOUS_ZERO_RPC, {
+        p_appids: appidChunk,
+      });
+
+      if (error) {
+        log.warn('Suspicious zero RPC unavailable; falling back to chunked lookup', {
+          appids: appids.length,
+          chunkSize: appidChunk.length,
+          error: error.message ?? 'Unknown error',
+        });
+        return null;
+      }
+
+      appendNumericAppids(suspicious, Array.isArray(data) ? data : []);
+    } catch (error) {
+      log.warn('Suspicious zero RPC threw; falling back to chunked lookup', {
         appids: appids.length,
-        error: error.message ?? 'Unknown error',
+        chunkSize: appidChunk.length,
+        error: describeError(error),
       });
       return null;
     }
-
-    const suspicious = new Set<number>();
-    appendNumericAppids(suspicious, Array.isArray(data) ? data : []);
-    return suspicious;
-  } catch (error) {
-    log.warn('Suspicious zero RPC threw; falling back to chunked lookup', {
-      appids: appids.length,
-      error: describeError(error),
-    });
-    return null;
   }
+
+  return suspicious;
 }
 
 async function getSuspiciousZeroAppidsViaFallback(
