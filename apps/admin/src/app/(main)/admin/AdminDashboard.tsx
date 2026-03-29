@@ -111,6 +111,9 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
     data.ccuQualityStats.currentCatalogApps > 0
       ? (confirmedCcuCount / data.ccuQualityStats.currentCatalogApps) * 100
       : 0;
+  const ccuUpdatedLabel = data.ccuQualityStats.updatedAt
+    ? `updated ${formatRelativeTime(data.ccuQualityStats.updatedAt)}`
+    : null;
 
   return (
     <div className="space-y-3">
@@ -231,14 +234,22 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
         badge={{
           value: `${confirmedCcuPercent.toFixed(1)}%`,
           variant:
-            data.ccuQualityStats.suspectZero > 0 || data.ccuQualityStats.legacyUnknown > 0
+            data.ccuQualityStats.isApproximate
+              || data.ccuQualityStats.suspectZero > 0
+              || data.ccuQualityStats.legacyUnknown > 0
               ? 'warning'
               : 'success',
         }}
         headerExtra={
-          <span className="text-caption text-text-muted">
-            {confirmedCcuCount.toLocaleString()} / {data.ccuQualityStats.currentCatalogApps.toLocaleString()} confirmed
-          </span>
+          <div className="flex flex-wrap items-center gap-2 text-caption text-text-muted">
+            <span>
+              {confirmedCcuCount.toLocaleString()} / {data.ccuQualityStats.currentCatalogApps.toLocaleString()} confirmed
+            </span>
+            {ccuUpdatedLabel ? <span>{ccuUpdatedLabel}</span> : null}
+            {data.ccuQualityStats.isApproximate ? (
+              <span className="text-accent-orange">approximate fallback</span>
+            ) : null}
+          </div>
         }
       >
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">

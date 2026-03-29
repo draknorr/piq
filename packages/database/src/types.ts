@@ -1542,6 +1542,19 @@ export type Database = {
         Row: {
           apps_count: number | null
           categories_count: number | null
+          ccu_confirmed_positive: number | null
+          ccu_confirmed_zero: number | null
+          ccu_current_catalog_apps: number | null
+          ccu_invalid: number | null
+          ccu_legacy_unknown: number | null
+          ccu_no_tier_assignment: number | null
+          ccu_quality_updated_at: string | null
+          ccu_skipped: number | null
+          ccu_steam_api: number | null
+          ccu_steamspy: number | null
+          ccu_suspect_zero: number | null
+          ccu_tier_assigned: number | null
+          ccu_unavailable: number | null
           developers_count: number | null
           franchises_count: number | null
           genres_count: number | null
@@ -1555,6 +1568,19 @@ export type Database = {
         Insert: {
           apps_count?: number | null
           categories_count?: number | null
+          ccu_confirmed_positive?: number | null
+          ccu_confirmed_zero?: number | null
+          ccu_current_catalog_apps?: number | null
+          ccu_invalid?: number | null
+          ccu_legacy_unknown?: number | null
+          ccu_no_tier_assignment?: number | null
+          ccu_quality_updated_at?: string | null
+          ccu_skipped?: number | null
+          ccu_steam_api?: number | null
+          ccu_steamspy?: number | null
+          ccu_suspect_zero?: number | null
+          ccu_tier_assigned?: number | null
+          ccu_unavailable?: number | null
           developers_count?: number | null
           franchises_count?: number | null
           genres_count?: number | null
@@ -1568,6 +1594,19 @@ export type Database = {
         Update: {
           apps_count?: number | null
           categories_count?: number | null
+          ccu_confirmed_positive?: number | null
+          ccu_confirmed_zero?: number | null
+          ccu_current_catalog_apps?: number | null
+          ccu_invalid?: number | null
+          ccu_legacy_unknown?: number | null
+          ccu_no_tier_assignment?: number | null
+          ccu_quality_updated_at?: string | null
+          ccu_skipped?: number | null
+          ccu_steam_api?: number | null
+          ccu_steamspy?: number | null
+          ccu_suspect_zero?: number | null
+          ccu_tier_assigned?: number | null
+          ccu_unavailable?: number | null
           developers_count?: number | null
           franchises_count?: number | null
           genres_count?: number | null
@@ -3676,7 +3715,9 @@ export type Database = {
           confirmed_positive: number
           confirmed_zero: number
           current_catalog_apps: number
+          data_source: string
           invalid: number
+          is_approximate: boolean
           legacy_unknown: number
           no_tier_assignment: number
           skipped: number
@@ -3685,6 +3726,7 @@ export type Database = {
           suspect_zero: number
           tier_assigned: number
           unavailable: number
+          updated_at: string
         }[]
       }
       get_companies_aggregate_stats: {
@@ -4178,6 +4220,7 @@ export type Database = {
         }[]
       }
       refresh_all_metrics_views: { Args: never; Returns: undefined }
+      refresh_ccu_quality_stats: { Args: never; Returns: undefined }
       refresh_dashboard_stats: { Args: never; Returns: undefined }
       refresh_entity_metrics: { Args: never; Returns: undefined }
       refresh_filter_count_views: { Args: never; Returns: undefined }

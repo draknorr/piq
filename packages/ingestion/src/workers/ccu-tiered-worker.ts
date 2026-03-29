@@ -20,6 +20,7 @@ import {
   getSuspiciousZeroAppids,
   isTierAssignmentsStale,
 } from '../workers-support/ccu-guardrails.js';
+import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 type DatabaseModule = typeof database & {
@@ -409,6 +410,8 @@ async function main(): Promise<void> {
         })
         .eq('id', job.id);
     }
+
+    await refreshCcuQualityCacheSafely('ccu-tiered');
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
     log.info('Tiered CCU sync completed', { ...stats, durationMinutes: duration });

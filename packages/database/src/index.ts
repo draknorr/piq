@@ -12,11 +12,13 @@ export {
   getCcuValidationBackfillCandidates,
   listNewsCatchupCandidates,
   recalculateCcuTiers,
+  refreshCcuQualityStats,
   refreshMaterializedView,
   type CcuProvenanceRepairCandidate,
   type CcuValidationBackfillCandidate,
   type NewsCatchupCandidate,
   type RecalculateCcuTiersResult,
+  type RefreshCcuQualityStatsOptions,
   type RefreshMaterializedViewOptions,
 } from './ingestion.js';
 

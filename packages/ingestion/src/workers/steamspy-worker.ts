@@ -18,6 +18,7 @@ import {
   parseOwnerEstimate,
   type SteamSpyAppSummary,
 } from '../apis/steamspy.js';
+import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 import { withRetry } from '../utils/retry.js';
 
 const log = logger.child({ worker: 'steamspy-sync' });
@@ -463,6 +464,10 @@ async function main(): Promise<void> {
           items_failed: stats.errors,
         })
         .eq('id', job.id);
+    }
+
+    if (stats.appsProcessed > 0) {
+      await refreshCcuQualityCacheSafely('steamspy');
     }
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);

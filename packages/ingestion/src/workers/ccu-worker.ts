@@ -13,6 +13,7 @@ import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamCCUBatchWithStatus } from '../apis/steam-ccu.js';
 import { getSuspiciousZeroAppids } from '../workers-support/ccu-guardrails.js';
+import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-sync' });
@@ -234,6 +235,8 @@ async function main(): Promise<void> {
         })
         .eq('id', job.id);
     }
+
+    await refreshCcuQualityCacheSafely('ccu');
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
     log.info('CCU sync completed', { ...stats, durationMinutes: duration });

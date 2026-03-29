@@ -94,6 +94,9 @@ export interface CcuQualityStats {
   steamApi: number;
   steamspy: number;
   legacyUnknown: number;
+  updatedAt: string | null;
+  dataSource: 'cache' | 'live' | 'approximate_fallback';
+  isApproximate: boolean;
 }
 
 /**
@@ -557,6 +560,12 @@ export async function getCcuQualityStats(
       steamApi: Number(row.steam_api ?? 0),
       steamspy: Number(row.steamspy ?? 0),
       legacyUnknown: Number(row.legacy_unknown ?? 0),
+      updatedAt: row.updated_at ?? null,
+      dataSource:
+        row.data_source === 'cache' || row.data_source === 'live'
+          ? row.data_source
+          : 'live',
+      isApproximate: row.is_approximate === true,
     };
   }
 
@@ -606,6 +615,9 @@ export async function getCcuQualityStats(
     steamApi: officialRows.count ?? 0,
     steamspy: steamspyRows.count ?? 0,
     legacyUnknown: unknownSourceRows.count ?? 0,
+    updatedAt: null,
+    dataSource: 'approximate_fallback',
+    isApproximate: true,
   };
 }
 

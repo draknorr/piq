@@ -9,6 +9,7 @@
 import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamAppList } from '../apis/steam-web.js';
+import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 import { promoteReviewsSyncBatch } from '../workers-support/reviews-sync.js';
 
 const log = logger.child({ worker: 'applist-sync' });
@@ -202,6 +203,8 @@ async function main(): Promise<void> {
           error: refreshDashboardError,
         });
       }
+
+      await refreshCcuQualityCacheSafely('applist');
     }
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);

@@ -76,6 +76,10 @@ export interface RefreshMaterializedViewOptions {
   timeoutMs?: number;
 }
 
+export interface RefreshCcuQualityStatsOptions {
+  timeoutMs?: number;
+}
+
 export interface ReviewVelocityTierDistribution {
   dormant: number;
   high: number;
@@ -220,6 +224,7 @@ const INTERPOLATION_BATCH_TIMEOUT_MS = 60_000;
 const VELOCITY_REFRESH_TIMEOUT_MS = 600_000;
 const VELOCITY_UPDATE_TIMEOUT_MS = 600_000;
 const CCU_TIER_RECALC_TIMEOUT_MS = 300_000;
+const CCU_QUALITY_REFRESH_TIMEOUT_MS = 600_000;
 const MATVIEW_REFRESH_TIMEOUT_MS = 900_000;
 
 let ingestionPool: Pool | null = null;
@@ -594,6 +599,16 @@ export async function recalculateCcuTiers(options: {
       tier2Count: parseNumber(row?.tier2_count),
       tier3Count: parseNumber(row?.tier3_count),
     };
+  });
+}
+
+export async function refreshCcuQualityStats(
+  options: RefreshCcuQualityStatsOptions = {}
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? CCU_QUALITY_REFRESH_TIMEOUT_MS;
+
+  await withSessionStatementTimeout(timeoutMs, async (client) => {
+    await client.query('SELECT public.refresh_ccu_quality_stats()');
   });
 }
 

@@ -6,6 +6,7 @@ import type {
   CcuValidationBackfillCandidate,
 } from '@publisheriq/database/ingestion';
 import { logger } from '@publisheriq/shared';
+import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 
 const log = logger.child({ worker: 'repair-current-ccu-state' });
 
@@ -323,6 +324,13 @@ async function main(): Promise<void> {
     if (!dryRun && stats.provenanceUpdated > 0) {
       log.info('Refreshing latest_daily_metrics after CCU provenance repair');
       await refreshMaterializedView('latest_daily_metrics', { timeoutMs: refreshTimeoutMs });
+    }
+
+    if (
+      !dryRun &&
+      (stats.provenanceUpdated > 0 || stats.validationUpdated > 0)
+    ) {
+      await refreshCcuQualityCacheSafely('repair-current-ccu-state', refreshTimeoutMs);
     }
 
     if (job) {
