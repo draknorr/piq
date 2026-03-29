@@ -83,42 +83,88 @@ RETURNS TABLE(
   steamspy BIGINT,
   legacy_unknown BIGINT
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  WITH current_catalog AS (
-    SELECT appid
-    FROM public.get_current_catalog_appids()
-  ),
-  ccu_status AS (
-    SELECT lcs.*
-    FROM public.latest_ccu_status lcs
-    JOIN current_catalog c ON c.appid = lcs.appid
-  ),
-  source_counts AS (
-    SELECT
-      COUNT(*) FILTER (WHERE ldm.ccu_peak IS NOT NULL AND ldm.ccu_source = 'steam_api')::BIGINT AS steam_api,
-      COUNT(*) FILTER (WHERE ldm.ccu_peak IS NOT NULL AND ldm.ccu_source = 'steamspy')::BIGINT AS steamspy,
-      COUNT(*) FILTER (WHERE ldm.ccu_peak IS NOT NULL AND ldm.ccu_source IS NULL)::BIGINT AS legacy_unknown
-    FROM current_catalog c
-    LEFT JOIN public.latest_daily_metrics ldm ON ldm.appid = c.appid
-  )
+BEGIN
+  RETURN QUERY
   SELECT
-    (SELECT COUNT(*)::BIGINT FROM current_catalog) AS current_catalog_apps,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE has_tier_assignment) AS tier_assigned,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE NOT has_tier_assignment) AS no_tier_assignment,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'confirmed_positive') AS confirmed_positive,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'confirmed_zero') AS confirmed_zero,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'suspect_zero') AS suspect_zero,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'skipped') AS skipped,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'invalid') AS invalid,
-    (SELECT COUNT(*)::BIGINT FROM ccu_status WHERE ccu_confidence_state = 'unavailable') AS unavailable,
-    source_counts.steam_api,
-    source_counts.steamspy,
-    source_counts.legacy_unknown
-  FROM source_counts;
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.get_current_catalog_appids()
+    ) AS current_catalog_apps,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.has_tier_assignment
+    ) AS tier_assigned,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE NOT lcs.has_tier_assignment
+    ) AS no_tier_assignment,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'confirmed_positive'
+    ) AS confirmed_positive,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'confirmed_zero'
+    ) AS confirmed_zero,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'suspect_zero'
+    ) AS suspect_zero,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'skipped'
+    ) AS skipped,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'invalid'
+    ) AS invalid,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.latest_ccu_status lcs
+      JOIN public.get_current_catalog_appids() c ON c.appid = lcs.appid
+      WHERE lcs.ccu_confidence_state = 'unavailable'
+    ) AS unavailable,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.get_current_catalog_appids() c
+      LEFT JOIN public.latest_daily_metrics ldm ON ldm.appid = c.appid
+      WHERE ldm.ccu_peak IS NOT NULL
+        AND ldm.ccu_source = 'steam_api'
+    ) AS steam_api,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.get_current_catalog_appids() c
+      LEFT JOIN public.latest_daily_metrics ldm ON ldm.appid = c.appid
+      WHERE ldm.ccu_peak IS NOT NULL
+        AND ldm.ccu_source = 'steamspy'
+    ) AS steamspy,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.get_current_catalog_appids() c
+      LEFT JOIN public.latest_daily_metrics ldm ON ldm.appid = c.appid
+      WHERE ldm.ccu_peak IS NOT NULL
+        AND ldm.ccu_source IS NULL
+    ) AS legacy_unknown;
+END;
 $$;
 
 COMMENT ON FUNCTION public.get_ccu_quality_stats() IS
