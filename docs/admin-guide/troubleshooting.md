@@ -2,7 +2,7 @@
 
 Common issues and solutions for PublisherIQ.
 
-**Last Updated:** January 31, 2026
+**Last Updated:** March 30, 2026
 
 ## Database Connection Issues
 
@@ -69,7 +69,7 @@ SUPABASE_SERVICE_KEY=eyJ...
 1. Workers have built-in rate limiting - wait and retry
 2. Reduce batch size if needed:
    ```bash
-   BATCH_SIZE=100 pnpm --filter ingestion storefront-sync
+   BATCH_SIZE=100 pnpm --filter @publisheriq/ingestion storefront-sync
    ```
 3. Check if multiple syncs running simultaneously
 
@@ -188,14 +188,14 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY latest_daily_metrics;
 
 **Cause:** SQL validation blocked the query.
 
-**Explanation:** The chat interface blocks certain operations for security:
+**Explanation:** The raw SQL tool path blocks certain operations for security:
 
 - Only SELECT queries allowed
 - Maximum 50 rows returned
 - Maximum 5000 character query
 - Blocked: INSERT, UPDATE, DELETE, DROP, etc.
 
-**Solution:** Rephrase your question to use read-only operations.
+**Solution:** Rephrase your question to use read-only operations, or use a structured chat prompt instead of forcing a raw SQL shape. Inspect `/admin` chat logs for the exact tool route and guardrail trace.
 
 ### "No results found"
 
@@ -228,7 +228,7 @@ pnpm install
 pnpm build
 
 # Or build specific package
-pnpm --filter database build
+pnpm --filter @publisheriq/database build
 ```
 
 ### Type Errors
@@ -239,7 +239,7 @@ pnpm --filter database build
 
 ```bash
 # Regenerate types from Supabase
-pnpm --filter database generate
+pnpm --filter @publisheriq/database generate-types
 
 # Rebuild
 pnpm build
@@ -275,7 +275,7 @@ pnpm build
 2. Verify Qdrant credentials in environment
 3. Run embedding sync manually:
    ```bash
-   pnpm --filter ingestion run sync:embeddings
+   pnpm --filter @publisheriq/ingestion embedding-sync
    ```
 
 ### Similarity Search Slow
@@ -311,7 +311,8 @@ pnpm build
 
 1. Check Railway logs for error messages
 2. Verify Supabase credentials
-3. Ensure PICS tables exist in database
+3. Ensure PICS tables exist in the database
+4. Confirm the service mode is one of `bulk_sync`, `first_pass`, or `change_monitor`
 
 ### "Steam connection failed"
 

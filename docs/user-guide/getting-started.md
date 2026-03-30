@@ -31,7 +31,7 @@ If your email is not approved yet, use `/waitlist`.
 | `/dashboard` | Signed-in home page |
 | `/chat` | AI query interface |
 | `/insights` | Top, newest, trending, and personalized views |
-| `/changes` | Change Feed and Steam news |
+| `/changes` | Unified Steam change feed and news activity |
 | `/apps` | Games analytics |
 | `/companies` | Unified publishers/developers analytics |
 | `/account` | Profile and credit balance |
@@ -58,13 +58,15 @@ pnpm --filter @publisheriq/ingestion app-change-hints
 pnpm --filter @publisheriq/ingestion change-intel-worker
 ```
 
+If you want the newest change-intelligence surfaces to stay current, keep both `app-change-hints` and `change-intel-worker` running in addition to the warehouse syncs.
+
 ## 5. Sanity-Check the Product
 
 After the app is running and you have data:
 
 - open `/apps` and confirm games load
 - open `/companies` and confirm company metrics load
-- open `/changes` and confirm feed/news data is available if the change-intel surfaces are present
+- open `/changes` and confirm the feed and news tabs populate when the change-intel surfaces are present
 - open `/chat` and ask a simple warehouse question
 
 ## 6. What to Read Next

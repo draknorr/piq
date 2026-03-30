@@ -6,9 +6,9 @@ This section covers the product-facing internal APIs and the external data sourc
 
 | API | Purpose | Guide |
 |-----|---------|-------|
-| Chat streaming | SSE-based AI responses | [Streaming API](./streaming-api.md) |
-| Dashboard internals | Pins, alerts, auth validation, app data | [Internal API](./internal-api.md) |
-| Change Feed internals | Burst list, detail, news, status | [Internal API](./internal-api.md) |
+| Chat JSON and streaming | AI responses, tool calls, and follow-up context | [Streaming API](./streaming-api.md) |
+| Dashboard internals | Pins, alerts, auth validation, and app data | [Internal API](./internal-api.md) |
+| Change Feed internals | Activity, detail, news, and status surfaces | [Internal API](./internal-api.md) |
 
 ## External Source APIs
 

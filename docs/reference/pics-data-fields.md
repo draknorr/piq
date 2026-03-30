@@ -9,6 +9,7 @@ PICS is an enrichment and fallback source in PublisherIQ.
 - Storefront is authoritative for parsed `release_date` and `is_free`
 - PICS release metadata should not overwrite a valid Storefront-derived `release_date`
 - when Storefront only exposes non-parseable release text, preserve the raw text instead of forcing a typed date
+- PICS fields are enrichment and fallback inputs; the `first_pass` mode uses them to bootstrap prioritized coverage, but it does not override Storefront source-of-truth fields
 
 ## Data Structure
 
@@ -34,7 +35,7 @@ The `common` section contains the most relevant metadata.
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Game/app name |
-| `type` | string | "game", "dlc", "demo", "mod", "video", "tool", "application" |
+| `type` | string | "game", "dlc", "demo", "mod", "video", "hardware", "music", "episode", "tool", "application", "series", "advertising" |
 | `developer` | string | Developer name |
 | `publisher` | string | Publisher name |
 | `gameid` | int | Steam game ID (usually same as appid) |
@@ -270,6 +271,18 @@ Tags are stored as ID references:
 ```
 
 Tag IDs map to names via the Steam API or can be looked up in the `steam_tags` table after PICS sync.
+
+## Runtime Modes
+
+The PICS service supports three modes:
+
+| Mode | Purpose |
+|------|---------|
+| `bulk_sync` | Full bulk capture over the configured app set |
+| `first_pass` | Prioritized bootstrap of unsynced apps using the backlog selector |
+| `change_monitor` | Ongoing capture path for new or dirty apps |
+
+`first_pass` is the preferred mode when you want to seed the highest-value unsynced apps before continuing with normal monitoring.
 
 ---
 

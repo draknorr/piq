@@ -4,7 +4,7 @@
 
 **Database**: PostgreSQL (Supabase)
 
-**Last Updated:** January 10, 2026
+**Last Updated:** March 30, 2026
 
 **Semantic Layer**: Cube.js provides type-safe queries over these tables. See [Chat Data System](chat-data-system.md) for Cube schema documentation.
 
@@ -14,10 +14,13 @@
 
 ```sql
 -- App content type
-CREATE TYPE app_type AS ENUM ('game', 'dlc', 'demo', 'mod', 'video', 'hardware', 'music');
+CREATE TYPE app_type AS ENUM ('game', 'dlc', 'demo', 'mod', 'video', 'hardware', 'music', 'episode', 'tool', 'application', 'series', 'advertising');
 
 -- Data sync source
-CREATE TYPE sync_source AS ENUM ('steamspy', 'storefront', 'reviews', 'histogram', 'scraper', 'pics');
+CREATE TYPE sync_source AS ENUM ('steamspy', 'storefront', 'reviews', 'histogram', 'scraper', 'pics', 'news', 'hero_asset', 'change_hints');
+
+-- Change-intelligence capture source
+CREATE TYPE app_capture_source AS ENUM ('storefront', 'news', 'hero_asset', 'projection_refresh');
 
 -- Review sentiment trend
 CREATE TYPE trend_direction AS ENUM ('up', 'down', 'stable');
@@ -461,6 +464,140 @@ Job execution history.
 
 ---
 
+### app_capture_work_state
+
+Coalesced dirty-state work tracking for storefront, news, projection refresh, and hero asset capture.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| id | BIGSERIAL | NO | auto | Primary key |
+| appid | INTEGER | NO | - | FK to apps.appid |
+| source | app_capture_source | NO | - | Capture source |
+| priority | INTEGER | NO | 100 | Work priority |
+| latest_trigger_reason | TEXT | NO | - | Latest reason the row was dirtied |
+| latest_trigger_cursor | TEXT | NO | '' | Latest trigger cursor |
+| payload | JSONB | NO | '{}' | Merged work payload |
+| dirty_since | TIMESTAMPTZ | YES | NULL | First dirty timestamp for current work |
+| last_dirty_at | TIMESTAMPTZ | YES | NULL | Most recent dirty timestamp |
+| claimed_at | TIMESTAMPTZ | YES | NULL | Current claim time |
+| worker_id | TEXT | YES | NULL | Worker that claimed the row |
+| attempts | INTEGER | NO | 0 | Attempt count |
+| next_available_at | TIMESTAMPTZ | NO | NOW() | When the row can be claimed again |
+| last_completed_at | TIMESTAMPTZ | YES | NULL | Last successful completion |
+| last_error | TEXT | YES | NULL | Last failure detail |
+| dead_lettered_at | TIMESTAMPTZ | YES | NULL | Dead-letter timestamp |
+| created_at | TIMESTAMPTZ | NO | NOW() | Record creation time |
+| updated_at | TIMESTAMPTZ | NO | NOW() | Last update time |
+
+**Unique**: `(appid, source)`
+
+### change_activity_bursts
+
+Grouped per-app change bursts used by the `/changes` feed and change-intel chat tools.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| burst_id | TEXT | NO | - | Primary key |
+| appid | INTEGER | NO | - | FK to apps.appid |
+| app_name | TEXT | NO | - | App name at projection time |
+| app_type | app_type | YES | NULL | App type |
+| is_released | BOOLEAN | YES | NULL | Release flag |
+| release_date | DATE | YES | NULL | Release date |
+| effective_at | TIMESTAMPTZ | NO | - | Burst effective timestamp |
+| burst_started_at | TIMESTAMPTZ | NO | - | Burst start |
+| burst_ended_at | TIMESTAMPTZ | NO | - | Burst end |
+| event_count | INTEGER | NO | - | Number of source events |
+| change_type_count | INTEGER | NO | - | Distinct change type count |
+| source_set | TEXT[] | NO | ARRAY[]::TEXT[] | Source set |
+| change_types | TEXT[] | NO | ARRAY[]::TEXT[] | Change types in the burst |
+| headline_change_types | TEXT[] | NO | ARRAY[]::TEXT[] | Headline change types |
+| highlight_labels | TEXT[] | NO | ARRAY[]::TEXT[] | Human-readable highlights |
+| signal_families | TEXT[] | NO | ARRAY[]::TEXT[] | Signal family labels |
+| story_kind | TEXT | NO | - | Burst story kind |
+| has_related_news | BOOLEAN | NO | FALSE | Whether related news exists |
+| related_news_count | INTEGER | NO | 0 | Related news row count |
+| include_in_high_signal | BOOLEAN | NO | FALSE | Whether the burst qualifies for high-signal views |
+| created_at | TIMESTAMPTZ | NO | NOW() | Record creation time |
+| updated_at | TIMESTAMPTZ | NO | NOW() | Last update time |
+
+### change_pattern_activity_days
+
+Daily rollup of grouped change activity used for pattern searches.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| appid | INTEGER | NO | - | FK to apps.appid |
+| activity_date | DATE | NO | - | Activity date |
+| app_name | TEXT | NO | - | App name at projection time |
+| app_type | app_type | YES | NULL | App type |
+| is_released | BOOLEAN | YES | NULL | Release flag |
+| release_date | DATE | YES | NULL | Release date |
+| latest_occurred_at | TIMESTAMPTZ | NO | - | Latest event timestamp |
+| burst_ids | TEXT[] | NO | ARRAY[]::TEXT[] | Burst ids included in the rollup |
+| signal_families | TEXT[] | NO | ARRAY[]::TEXT[] | Signal families |
+| story_kinds | TEXT[] | NO | ARRAY[]::TEXT[] | Story kinds |
+| announcement_count | INTEGER | NO | 0 | Announcement count |
+| total_bursts | INTEGER | NO | 0 | Burst count |
+| release_count | INTEGER | NO | 0 | Release count |
+| pricing_count | INTEGER | NO | 0 | Pricing count |
+| store_page_count | INTEGER | NO | 0 | Store-page count |
+| media_count | INTEGER | NO | 0 | Media count |
+| taxonomy_count | INTEGER | NO | 0 | Taxonomy count |
+| platform_count | INTEGER | NO | 0 | Platform count |
+| build_count | INTEGER | NO | 0 | Build count |
+| created_at | TIMESTAMPTZ | NO | NOW() | Record creation time |
+| updated_at | TIMESTAMPTZ | NO | NOW() | Last update time |
+
+### change_pattern_app_windows
+
+Windowed shortlist projection for broad change-pattern candidate search.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| appid | INTEGER | NO | - | FK to apps.appid |
+| window_days | INTEGER | NO | - | Window length |
+| app_name | TEXT | NO | - | App name at projection time |
+| app_type | app_type | YES | NULL | App type |
+| is_released | BOOLEAN | YES | NULL | Release flag |
+| release_date | DATE | YES | NULL | Release date |
+| latest_occurred_at | TIMESTAMPTZ | NO | - | Latest event timestamp |
+| activity_ids | TEXT[] | NO | ARRAY[]::TEXT[] | Activity ids included in the window |
+| signal_families | TEXT[] | NO | ARRAY[]::TEXT[] | Signal families |
+| story_kinds | TEXT[] | NO | ARRAY[]::TEXT[] | Story kinds |
+| announcement_count | INTEGER | NO | 0 | Announcement count |
+| change_count | INTEGER | NO | 0 | Change count |
+| release_count | INTEGER | NO | 0 | Release count |
+| pricing_count | INTEGER | NO | 0 | Pricing count |
+| store_page_count | INTEGER | NO | 0 | Store-page count |
+| media_count | INTEGER | NO | 0 | Media count |
+| taxonomy_count | INTEGER | NO | 0 | Taxonomy count |
+| platform_count | INTEGER | NO | 0 | Platform count |
+| build_count | INTEGER | NO | 0 | Build count |
+| created_at | TIMESTAMPTZ | NO | NOW() | Record creation time |
+| updated_at | TIMESTAMPTZ | NO | NOW() | Last update time |
+
+### steam_news_search_projection
+
+Lean recent-news search projection used by chat topic search.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| gid | TEXT | NO | - | Primary key |
+| appid | INTEGER | NO | - | FK to apps.appid |
+| published_at | TIMESTAMPTZ | YES | NULL | Original publish time |
+| first_seen_at | TIMESTAMPTZ | NO | - | First time the gid was observed |
+| sort_time | TIMESTAMPTZ | NO | - | Sort timestamp used for ranking |
+| feed_scope | TEXT | NO | - | Feed scope label |
+| title | TEXT | YES | NULL | News title |
+| search_document | TSVECTOR | NO | - | Search vector for topic search |
+
+**Indexes**:
+- `idx_steam_news_search_projection_search_document` on `search_document`
+- `idx_steam_news_search_projection_feed_scope_sort_time_gid` on `(feed_scope, sort_time DESC, gid DESC)`
+- `idx_steam_news_search_projection_appid_sort_time` on `(appid, sort_time DESC)`
+
+---
+
 ### chat_query_logs
 
 Chat query analytics and debugging logs. **7-day retention** with automatic cleanup.
@@ -476,6 +613,15 @@ Chat query analytics and debugging logs. **7-day retention** with automatic clea
 | timing_llm_ms | INTEGER | YES | NULL | LLM processing time (ms) |
 | timing_tools_ms | INTEGER | YES | NULL | Tool execution time (ms) |
 | timing_total_ms | INTEGER | YES | NULL | Total request time (ms) |
+| input_tokens | INTEGER | YES | NULL | Provider input tokens |
+| output_tokens | INTEGER | YES | NULL | Provider output tokens |
+| tool_credits_used | INTEGER | YES | NULL | Credits used for tool calls |
+| total_credits_charged | INTEGER | YES | NULL | Total credits charged |
+| chat_family | TEXT | YES | NULL | Answer family |
+| quality_flags | TEXT[] | YES | NULL | Quality flags emitted during the turn |
+| session_context_summary | JSONB | YES | NULL | Condensed session context payload |
+| guardrail_trace | JSONB | YES | NULL | Guardrail trace |
+| answer_contract_summary | JSONB | YES | NULL | Deterministic answer contract summary |
 | created_at | TIMESTAMPTZ | NO | NOW() | Query timestamp |
 
 **Indexes**:
@@ -488,6 +634,32 @@ cleanup_old_chat_logs() -- Deletes logs older than 7 days
 ```
 
 **Used by**: Admin chat logs dashboard at `/admin/chat-logs`
+
+---
+
+### Operational RPCs
+
+These read-only RPCs back the admin dashboard, `/changes`, and chat change-intel tools:
+
+- `get_source_completion_stats()`
+- `get_catalog_control_stats()`
+- `get_ccu_quality_stats()`
+- `get_change_feed_activity()`
+- `get_change_feed_bursts()`
+- `get_change_feed_burst_detail()`
+- `get_change_feed_news()`
+- `get_chat_recent_news(appids, days, limit)`
+- `get_chat_change_activity_candidates(...)`
+- `get_chat_change_pattern_candidates(...)`
+- `search_recent_news_topics(query, days, recent_days, feed_scope, app_types, appids, exclude_gids)`
+
+They are paired with the projection tables above:
+
+- `change_activity_bursts`
+- `change_pattern_activity_days`
+- `change_pattern_app_windows`
+- `steam_news_search_projection`
+- `app_capture_work_state`
 
 ---
 

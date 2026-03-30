@@ -2,7 +2,7 @@
 
 PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived metadata.
 
-**Last Updated:** March 15, 2026
+**Last Updated:** March 30, 2026
 
 ## Source Hierarchy
 
@@ -15,6 +15,7 @@ PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived
 | 1 | Steam News | Public announcements and update posts |
 | 2 | SteamSpy | Owners, playtime, tag enrichment |
 | 3 | PICS | Specialized metadata, relationships, Steam Deck, PICS-side change history |
+| 3 | Internal projections | Change bursts, pattern windows, and news search surfaces derived from the source feeds |
 
 ## Authority Rules
 
@@ -42,15 +43,18 @@ PICS is enrichment and fallback data for:
 
 PICS does not override authoritative Storefront values for `release_date` or `is_free`.
 
+Projection refresh surfaces are derived views over Storefront, news, and PICS inputs. They improve read performance for `/changes` and chat, but they never replace the source records they summarize.
+
 ## Change-Intelligence Sources
 
-PublisherIQ’s change-intelligence runtime depends on four source families:
+PublisherIQ’s change-intelligence runtime depends on five source families:
 
 | Source | Captures |
 |--------|----------|
 | App List hints | `last_modified` and `price_change_number` for recapture seeding |
 | Storefront | copy, languages, pricing, release text, platforms, categories, genres, media URLs |
 | Steam News | announcements and post history |
+| Projection refresh | change bursts, activity days, app windows, and lean news search rows |
 | PICS | release state, build/update signals, tags, categories, genres, Steam Deck, relationships |
 
 ## Source Notes
@@ -70,8 +74,9 @@ PublisherIQ’s change-intelligence runtime depends on four source families:
 ### Steam News
 
 - endpoint family: `ISteamNews/GetNewsForApp`
-- used for `/changes?tab=news`
+- used for `/changes` news surfaces and the chat news tools
 - nearby posts are attached to change bursts when they fall within the related-news window
+- stored news text is also projected into the lean `steam_news_search_projection` table for topic search
 
 ### SteamSpy
 
@@ -81,7 +86,7 @@ PublisherIQ’s change-intelligence runtime depends on four source families:
 ### PICS
 
 - direct Steam client-protocol data, not a standard public Web API
-- current-state enrichment and historical PICS snapshotting are both implemented in this repo
+- current-state enrichment, historical PICS snapshotting, and the `first_pass` bootstrap mode are both implemented in this repo
 
 ## Related Documentation
 

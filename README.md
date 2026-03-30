@@ -4,12 +4,12 @@ Steam analytics platform for browsing games and companies, tracking change intel
 
 ## Current Highlights
 
-- **Change Feed** at `/changes` for grouped storefront, PICS, media, and news activity
+- **Change Feed** at `/changes` for grouped storefront, PICS, media, and news activity with health states
 - **Games + Companies analytics** with advanced filters, saved views, compare, and export
 - **Insights dashboard** for top games, newest releases, and personalized monitoring
-- **AI chat** backed by Cube.js, Qdrant, and streaming responses
+- **AI chat** backed by Cube.js, Qdrant, streaming responses, and recent-news / change-intel tools
 - **OTP-first auth** with waitlist approval, `?next=` redirects, and hardened callback handling
-- **Change-intelligence runtime** across TypeScript workers, SQL read surfaces, and the PICS service
+- **Change-intelligence runtime** across TypeScript workers, SQL read surfaces, app-capture work state, and the PICS service
 
 ## Quick Start
 

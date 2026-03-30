@@ -1,6 +1,6 @@
 # Internal API Reference
 
-This document describes the main internal endpoints used by the PublisherIQ dashboard.
+This document describes the internal endpoints used by the PublisherIQ dashboard.
 
 ## Authentication
 
@@ -17,11 +17,15 @@ Typical unauthenticated response:
 
 ## Chat
 
+### `POST /api/chat`
+
+JSON response endpoint for chat callers that do not need SSE streaming.
+
 ### `POST /api/chat/stream`
 
-Streaming chat endpoint using SSE.
+Streaming chat endpoint using Server-Sent Events.
 
-Key events:
+The stream returns:
 
 - `text_delta`
 - `tool_start`
@@ -29,7 +33,11 @@ Key events:
 - `message_end`
 - `error`
 
-Related doc: [Streaming API](./streaming-api.md)
+`message_end` includes timing data and may include debug, quality, session context, usage, and credits charged.
+
+### `POST /api/chat/eval`
+
+Internal evaluation endpoint used by the chat smoke and eval tooling.
 
 ## Change Feed
 
@@ -53,7 +61,7 @@ Important query params:
 
 Returns expanded detail for one activity card, including:
 
-- typed before / after diffs when available
+- before / after diffs when available
 - related announcements
 - impact windows for grouped change activity
 

@@ -4,15 +4,15 @@ This guide covers sign-in, account access, and credit visibility in PublisherIQ.
 
 ## Signing In
 
-PublisherIQ uses email OTPs as the primary sign-in flow.
+PublisherIQ uses invite-only email OTPs on `/login`.
 
 ### Login Flow
 
 1. Go to `/login`
 2. Enter your approved email address
-3. Check your inbox for an **8-digit code**
-4. Enter the code on the login page
-5. If you were redirected from a protected route, you return there through `?next=...`
+3. Check your inbox for the **8-digit code**
+4. Enter the code within 10 minutes
+5. If you came from a protected page, you return there through `?next=...`
 
 ### OTP Details
 
@@ -21,55 +21,42 @@ PublisherIQ uses email OTPs as the primary sign-in flow.
 | Code length | 8 digits |
 | Code expiry | 10 minutes |
 | Resend cooldown | 60 seconds |
-| Rate limit | 3 failed attempts per 15 minutes |
+| Failed-attempt limit | 3 attempts per 15 minutes |
 
 ### Important Notes
 
-- Access is invite-only. Unapproved emails are sent to the waitlist flow.
+- Access is invite-only. Unapproved emails are directed to `/waitlist`.
 - PublisherIQ waits for a fully established browser session before redirecting after verification.
 - `/auth/callback` and `/auth/confirm` still exist for callback compatibility, but the main UX is OTP entry on `/login`.
 
-### Troubleshooting Login
-
-**Code not arriving**
-- check spam or junk
-- confirm the email was approved
-- wait for the resend cooldown before requesting another code
-
-**Code expired**
-- return to `/login`
-- request a new code
-
-**Redirected back to login**
-- verify `NEXT_PUBLIC_SITE_URL` is configured correctly in the deployment
-- clear stale cookies/local storage if you were testing older auth builds
-
 ## Accessing Your Account
 
-Navigate to `/account` from the signed-in navigation.
+Open `/account` from the signed-in navigation.
 
-## Account Overview
+## What The Account Page Shows
 
-Your account page shows:
+The account page currently shows:
 
 | Field | Description |
 |-------|-------------|
+| **Credit Balance** | Credits currently available for chat |
 | **Email** | Login email address |
 | **Name** | Display name, if present |
-| **Role** | `user` or `admin` |
-| **Member Since** | Account creation timestamp |
-| **Credit Balance** | Credits currently available for chat |
+| **Organization** | Organization, if present |
+| **Messages sent** | Total chat messages sent |
+| **Total credits used** | Lifetime chat credits consumed |
 
-## Transaction History
+## Recent Activity
 
-Recent credit transactions include:
+The page also shows the 10 most recent credit transactions, including:
 
-| Column | Description |
-|--------|-------------|
-| **Date** | When the transaction happened |
-| **Type** | Usage, signup bonus, refund, or admin adjustment |
-| **Amount** | Credits added or consumed |
-| **Description** | Human-readable detail |
+| Type | Meaning |
+|------|---------|
+| `signup_bonus` | Initial credits added at signup |
+| `admin_grant` | Credits added by an administrator |
+| `admin_deduct` | Credits removed by an administrator |
+| `chat_usage` | Finalized chat usage charge |
+| `refund` | Refunded reservation after a failed or cancelled run |
 
 ## Sign Out
 

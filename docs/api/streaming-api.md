@@ -1,6 +1,6 @@
 # Streaming API
 
-The chat system uses Server-Sent Events (SSE) for real-time streaming responses.
+The chat system uses Server-Sent Events (SSE) for real-time responses.
 
 **Endpoint**: `POST /api/chat/stream`
 
@@ -16,13 +16,20 @@ Content-Type: application/json
 
 {
   "messages": [
-    {"role": "user", "content": "What are the top games by CCU?"}
+    { "role": "user", "content": "What are the top games by CCU?" }
   ],
   "sessionContext": null
 }
 ```
 
-`sessionContext` is optional. When present, it carries the compact phase-1 follow-up summary for the current in-browser chat session: resolved entities, active constraints, the current candidate set, and the last answer state.
+`sessionContext` is optional. When present, it carries the compact follow-up summary for the current browser chat session:
+
+- resolved entities
+- active constraints
+- the current candidate set
+- the last answer state
+
+The client should resend this context on the next turn when it is available.
 
 ---
 
@@ -32,10 +39,10 @@ The stream emits JSON events in `data: {...}\n\n` format:
 
 | Event | Description |
 |-------|-------------|
-| `text_delta` | Incremental text chunk from LLM |
+| `text_delta` | Incremental text chunk from the model |
 | `tool_start` | Tool call initiated |
 | `tool_result` | Tool execution completed |
-| `message_end` | Response complete with timing/debug info |
+| `message_end` | Response complete with timing, debug, and turn summary data |
 | `error` | Error occurred |
 
 ---
@@ -46,31 +53,25 @@ The stream emits JSON events in `data: {...}\n\n` format:
 
 ### TextDeltaEvent
 
-Incremental text from LLM:
-
 ```typescript
 interface TextDeltaEvent {
   type: 'text_delta';
-  delta: string;  // Text chunk
+  delta: string;
 }
 ```
 
 ### ToolStartEvent
 
-Tool call started:
-
 ```typescript
 interface ToolStartEvent {
   type: 'tool_start';
   toolCallId: string;
-  name: string;  // e.g., "query_analytics", "find_similar"
+  name: string;
   arguments: Record<string, unknown>;
 }
 ```
 
 ### ToolResultEvent
-
-Tool execution complete:
 
 ```typescript
 interface ToolResultEvent {
@@ -85,112 +86,67 @@ interface ToolResultEvent {
 
 ### MessageEndEvent
 
-Stream complete:
-
 ```typescript
 interface MessageEndEvent {
   type: 'message_end';
   timing: {
-    llmMs: number;    // Total LLM processing time
-    toolsMs: number;  // Total tool execution time
-    totalMs: number;  // Total request time
+    llmMs: number;
+    toolsMs: number;
+    totalMs: number;
   };
   debug?: {
-    iterations: number;        // LLM call count (max 5)
-    textDeltaCount: number;    // Text chunks received
-    totalChars: number;        // Total characters streamed
-    toolCallCount: number;     // Tools called
+    iterations: number;
+    textDeltaCount: number;
+    totalChars: number;
+    toolCallCount: number;
     lastIterationHadText: boolean;
   };
-  quality?: {
-    family?: string;
-    qualityFlags: string[];
-    fallbackUsed: boolean;
-    contextApplied: boolean;
-    guardrailTrace: Array<{
-      step: string;
-      decision: 'allow' | 'block' | 'observe';
-      toolName?: string;
-      reason: string;
-    }>;
+  quality?: ChatTurnQualityInfo;
+  sessionContext?: SessionChatContext | null;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
   };
-  sessionContext?: {
-    version: 1;
-    entities: Array<{ kind: string; id?: number | string; name: string }>;
-    constraints: Array<{ key: string; label: string; value: string }>;
-    candidateSet?: {
-      kind: 'games' | 'publishers' | 'developers' | 'activities';
-      ids: Array<number | string>;
-      names: string[];
-      totalFound?: number;
-    } | null;
-    lastAnswer?: {
-      family?: string;
-      summary: string;
-      noMatch?: boolean;
-      sparse?: boolean;
-      clarificationNeeded?: boolean;
-      fallbackAction?: string;
-    } | null;
-    updatedAt: string;
-  };
+  creditsCharged?: number;
 }
 ```
 
-### ErrorEvent
+What those fields mean:
 
-Error occurred:
-
-```typescript
-interface ErrorEvent {
-  type: 'error';
-  message: string;
-}
-```
+- `debug` is the stream-level performance summary.
+- `quality` carries the turn-level guardrail and contract summary.
+- `sessionContext` is the compact carry-forward state for the next browser turn.
+- `usage` and `creditsCharged` are returned when token accounting is available.
 
 ---
 
-## Tool Iteration Loop
+## Tool Loop
 
-The streaming API uses a tool loop with a maximum of 5 iterations:
+The streaming API uses a maximum of 5 tool iterations:
 
-1. Send user message to LLM
-2. If LLM requests tool calls, execute them
-3. Send tool results back to LLM
-4. Repeat until LLM produces final text response or max iterations reached
-5. Emit `message_end` with timing and debug stats
+1. Send the user message to the model
+2. Execute any requested tools
+3. Send tool results back to the model
+4. Repeat until the model produces final text or the limit is reached
+5. Emit `message_end` with timing and debug data
 
-When `CHAT_PHASE1_QUALITY_ENABLED=true`, the same `message_end` event also returns:
+If the limit is reached without a final response, the route emits a fallback message explaining that the request should be rephrased or narrowed.
 
-- `quality`: the turn-level guardrail and contract summary used for operator/debug visibility
-- `sessionContext`: the compact carry-forward state the client should resend on the next turn in the same browser session
-
-**Constant**: `MAX_TOOL_ITERATIONS = 5`
-
-If max iterations reached without final response, a fallback message is generated.
+When phase-1 quality capture is enabled, the same completion event also includes the session context that should be sent back on the next turn.
 
 ---
 
-## Entity Link Pre-Formatting
+## Entity Links
 
-Before tool results are sent back to the LLM, `formatResultWithEntityLinks()` transforms entity names into markdown links:
+Tool results are pre-formatted before they are sent back to the model so the model can copy links directly into its answer.
 
-```
-{gameName: "Half-Life 2", appid: 220}
-  → {gameName: "[Half-Life 2](game:220)", appid: 220}
-```
-
-This ensures the LLM copies links directly into responses without needing to format them.
-
-### Link Formats
+Link formats:
 
 | Entity Type | Format |
 |-------------|--------|
 | Game | `[Name](game:APPID)` |
 | Developer | `[Name](/developers/ID)` |
 | Publisher | `[Name](/publishers/ID)` |
-
-**Source File**: `apps/admin/src/lib/llm/format-entity-links.ts`
 
 ---
 
@@ -201,8 +157,9 @@ const response = await fetch('/api/chat/stream', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    messages: [{ role: 'user', content: 'Top games by CCU' }]
-  })
+    messages: [{ role: 'user', content: 'Top games by CCU' }],
+    sessionContext: null,
+  }),
 });
 
 const reader = response.body.getReader();
@@ -216,19 +173,19 @@ while (true) {
   const lines = chunk.split('\n\n');
 
   for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      const event = JSON.parse(line.slice(6));
-      switch (event.type) {
-        case 'text_delta':
-          console.log(event.delta);
-          break;
-        case 'tool_start':
-          console.log(`Calling ${event.name}...`);
-          break;
-        case 'message_end':
-          console.log(`Done in ${event.timing.totalMs}ms`);
-          break;
-      }
+    if (!line.startsWith('data: ')) continue;
+
+    const event = JSON.parse(line.slice(6));
+    switch (event.type) {
+      case 'text_delta':
+        console.log(event.delta);
+        break;
+      case 'tool_start':
+        console.log(`Calling ${event.name}...`);
+        break;
+      case 'message_end':
+        console.log(`Done in ${event.timing.totalMs}ms`);
+        break;
     }
   }
 }
@@ -238,6 +195,6 @@ while (true) {
 
 ## Related Documentation
 
-- [Chat Data System](../developer-guide/architecture/chat-data-system.md) - Full chat system architecture
-- [Chat Interface Guide](../user-guide/chat-interface.md) - How to use the chat
-- [Internal API](./internal-api.md) - Other API endpoints
+- [Chat Interface Guide](../user-guide/chat-interface.md)
+- [Chat Data System](../developer-guide/architecture/chat-data-system.md)
+- [Internal API](./internal-api.md)

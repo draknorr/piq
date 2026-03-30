@@ -2,14 +2,14 @@
 
 This document describes how PublisherIQ moves data from external sources into the warehouse and then into product-facing surfaces.
 
-**Last Updated:** March 15, 2026
+**Last Updated:** March 30, 2026
 
 ## Pipeline Summary
 
 PublisherIQ has two ingestion families:
 
 - **scheduled warehouse syncs** for catalog, metrics, reviews, CCU, and embeddings
-- **change-intelligence runtimes** for recent storefront, media, news, and PICS changes
+- **change-intelligence runtimes** for recent storefront, media, news, projection, and PICS changes
 
 ## Scheduled Warehouse Syncs
 
@@ -29,6 +29,7 @@ The TypeScript workers in `packages/ingestion` handle the regular warehouse pipe
 | `ccu-sync` / `ccu-tiered-sync` / `ccu-daily-sync` | Exact CCU collection |
 | `embedding-sync` | Qdrant embeddings |
 | `refresh-views` | Materialized view refreshes |
+| `change-intel-backfill-projection` | Seed projection refresh jobs for change-intel backfills |
 
 ## Change-Intelligence Pipeline
 
@@ -40,22 +41,25 @@ Change intelligence runs across three components.
 
 ### 2. Queue Draining
 
-`change-intel-worker` drains `app_capture_queue` for:
+`change-intel-worker` drains `app_capture_work_state` for:
 
 - `storefront`
 - `news`
+- `projection_refresh`
 - `hero_asset`
 
-It captures data, writes snapshots and versions, and emits `app_change_events`.
+It captures data, writes snapshots and versions, refreshes the change/news projections, and emits `app_change_events`.
 
 ### 3. PICS-Side History
 
-`services/pics-service` captures normalized PICS snapshots and PICS diff events before it performs the usual latest-state upserts.
+`services/pics-service` runs in `bulk_sync`, `first_pass`, or `change_monitor` mode. `first_pass` pulls prioritized unsynced apps before the usual latest-state upserts, while the change monitor writes normalized PICS snapshots and PICS diff events inline.
 
 ## Operational Characteristics
 
 - stale queue claims are automatically requeued through the worker’s stale-claim sweep
 - canonical diffing normalizes JSON payloads before comparing them to reduce false positives from key-order churn
+- projection refresh jobs update `change_activity_bursts`, `change_pattern_activity_days`, `change_pattern_app_windows`, and `steam_news_search_projection`
+- `app_capture_work_state` keeps one live row per app/source pair and coalesces repeated dirty signals
 - PICS history capture retries transient/schema-cache failures
 - repeated PICS history failures trigger a short cooldown for historical writes while latest-state upserts continue
 
@@ -66,15 +70,20 @@ The `/changes` page is backed by SQL read surfaces and internal APIs:
 - `get_change_feed_bursts`
 - `get_change_feed_burst_detail`
 - `get_change_feed_news`
+- `get_change_feed_activity`
+- `/api/change-feed/activity/[activityId]`
 - `/api/change-feed/status`
 
-These provide grouped burst rows, detail drill-down, recent news rows, and capture health status.
+These provide grouped activity rows, news rows, detail drill-down, and capture health status.
+
+Shared chat surfaces such as `get_chat_recent_news` and `search_recent_news_topics` use the same underlying projections, but they are not the primary `/changes` page contract.
 
 ## Authority Rules
 
 - Storefront is authoritative for parsed `release_date` and `is_free`
 - PICS is enrichment/fallback data
 - when Storefront release text is not parseable, raw text is preserved instead of forcing invalid typed dates
+- projection refresh is a derived read surface only and never the source of truth for Storefront values
 
 ## Useful Runtime Knobs
 
@@ -83,7 +92,7 @@ These provide grouped burst rows, detail drill-down, recent news rows, and captu
 ```bash
 CLAIM_LIMIT=25
 POLL_INTERVAL_MS=5000
-QUEUE_SOURCES=storefront,news,hero_asset
+QUEUE_SOURCES=storefront,news,projection_refresh,hero_asset
 NEWS_CATCHUP_SEED_LIMIT=10
 MAX_IDLE_POLLS=0
 CLAIM_STALE_AFTER_MS=1800000

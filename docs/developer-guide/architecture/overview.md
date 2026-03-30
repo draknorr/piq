@@ -4,20 +4,20 @@ PublisherIQ is a Steam analytics platform built around three product surfaces:
 
 - analytics pages for games and companies
 - a Change Feed for recent storefront, media, PICS, and news activity
-- an AI chat interface over curated warehouse data
+- an AI chat interface over curated warehouse data and change-intelligence projections
 
-**Last Updated:** March 15, 2026
+**Last Updated:** March 30, 2026
 
 ## High-Level Stack
 
 | Layer | Technology | Purpose |
 |-------|------------|---------|
-| Frontend | Next.js 15 + React 19 | Signed-in dashboard and public landing page |
-| Database | Supabase Postgres | Core warehouse, auth, queueing, RPCs |
-| Semantic Layer | Cube.js | Chat analytics queries |
+| Frontend | Next.js 15 + React 19 | Signed-in dashboard and public entry surfaces |
+| Database | Supabase Postgres | Warehouse tables, queues, auth, RPCs, and cached admin stats |
+| Semantic Layer | Cube.js | Chat analytics, screeners, and structured discovery |
 | Vector Search | Qdrant Cloud | Similarity and concept search |
-| TS Workers | `@publisheriq/ingestion` | Scheduled syncs and change-intel workers |
-| Python Service | `services/pics-service` | PICS ingestion and PICS-side change history |
+| TS Workers | `@publisheriq/ingestion` | Scheduled syncs, queue workers, and change-intel maintenance |
+| Python Service | `services/pics-service` | PICS ingestion plus history capture and first-pass bootstrap |
 
 ## Main Product Routes
 
@@ -26,7 +26,7 @@ PublisherIQ is a Steam analytics platform built around three product surfaces:
 | `/dashboard` | Signed-in home |
 | `/chat` | AI query interface |
 | `/insights` | Curated analytics and personalization |
-| `/changes` | Change Feed and Steam news |
+| `/changes` | Unified Change Feed and Steam news exploration |
 | `/apps` | Games analytics |
 | `/companies` | Unified publishers/developers browse |
 | `/admin` | Admin system status |
@@ -39,7 +39,7 @@ Steam APIs / Steam News / SteamSpy / PICS
         ↓
 TypeScript workers + PICS service
         ↓
-Supabase (tables, queues, RPCs, auth)
+Supabase (tables, queues, projections, RPCs, auth)
         ↓
 Cube.js + Qdrant
         ↓
@@ -53,8 +53,8 @@ Next.js dashboard
 The dashboard in `apps/admin` owns:
 
 - OTP-first login and callback handling
-- games, companies, insights, and Change Feed pages
-- admin pages and waitlist flows
+- games, companies, insights, chat, and Change Feed pages
+- admin pages for users, waitlist, usage, and system health
 - internal APIs for chat, alerts, pins, and Change Feed
 
 ### Ingestion Workers
@@ -64,13 +64,14 @@ The dashboard in `apps/admin` owns:
 - catalog and metadata sync (`applist-sync`, `storefront-sync`, `steamspy-sync`)
 - reviews, histogram, CCU, and derived metrics
 - `app-change-hints` to seed change-intel capture work
-- `change-intel-worker` to drain `storefront`, `news`, and `hero_asset` queue sources
+- `change-intel-worker` to drain `storefront`, `news`, `projection_refresh`, and `hero_asset` work
 
 ### PICS Service
 
 `services/pics-service` owns:
 
 - direct PICS polling
+- bulk backfill and the bounded `first_pass` bootstrap mode
 - normalized PICS snapshot history
 - PICS diff event generation
 - latest-state app and relationship upserts
@@ -81,14 +82,15 @@ Supabase stores:
 
 - the warehouse tables and derived views
 - auth/session state
-- the capture queue and change events
-- Change Feed SQL read surfaces such as `get_change_feed_bursts`
+- capture queue state and coalesced work-state rows
+- change-intel projections and change-feed read surfaces
+- cached admin stats for catalog control and CCU quality
 
 Cube.js and Qdrant support the AI chat and search/discovery surfaces.
 
 ## Auth Model
 
-PublisherIQ now uses an OTP-first auth flow:
+PublisherIQ uses an OTP-first auth flow:
 
 - protected routes redirect to `/login?next=...`
 - `/login` verifies an 8-digit code
@@ -98,13 +100,14 @@ PublisherIQ now uses an OTP-first auth flow:
 
 ## Change-Intelligence Flow
 
-The current change-intelligence system has three runtimes:
+The current change-intelligence system has four cooperating layers:
 
-1. `app-change-hints` reads Steam hint cursors and enqueues capture work.
-2. `change-intel-worker` captures storefront snapshots, Steam news, and hero assets, then writes change events.
-3. `pics-service` captures normalized PICS history and PICS diff events inline before latest-state writes.
+1. `app-change-hints` reads Steam hint cursors and enqueues storefront capture work.
+2. `change-intel-worker` captures storefront snapshots, Steam news, projection refreshes, and hero assets, then writes change events and refreshes downstream projections.
+3. `app_capture_work_state` coalesces repeated dirty signals so the worker maintains one live task per app/source.
+4. `pics-service` captures normalized PICS history and diff events inline before latest-state writes, while `first_pass` can bootstrap prioritized catalog gaps.
 
-The `/changes` page reads from SQL functions and internal APIs on top of those stored events.
+The `/changes` page reads from SQL functions and internal APIs on top of those stored events and projections.
 
 ## Monorepo Structure
 

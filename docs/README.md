@@ -21,12 +21,13 @@ PublisherIQ documentation is organized by audience and kept aligned with the cur
 
 ## Latest Release
 
-**[v2.9 - Change Feed, Auth Hardening, and Change Intelligence](releases/v2.9-change-feed-auth-intelligence.md)** (March 15, 2026)
+**[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** (March 30, 2026)
 
 Highlights:
-- New `/changes` Change Feed with grouped bursts, Steam news, detail drill-down, and health states
-- Auth/session hardening for OTP-first login, `?next=` redirects, callback routing, and origin validation
-- Expanded change-intelligence runtime documentation across workers, SQL read surfaces, and PICS history capture
+- Recent Steam news tools now cover latest-item detail, bounded digests, and topic search over stored news text
+- Admin operations now surface catalog control, CCU quality, and richer chat-log quality metadata
+- PICS first-pass sync, app-capture work state, and news-search projections keep the current runtime easier to operate
+- Change-intelligence and chat guardrails now align around recent-news routing and carry-forward session context
 
 ---
 
@@ -124,6 +125,7 @@ Highlights:
 
 ## Previous Releases
 
+- **[v2.9 - Change Feed, Auth Hardening, and Change Intelligence](releases/v2.9-change-feed-auth-intelligence.md)** - Change Feed, auth, and change-intel baseline
 - **[v2.8 - Security Fixes](releases/v2.8-security-fixes.md)** - OTP auth and security hardening baseline
 - **[v2.7 - Command Palette](releases/v2.7-design-command-palette.md)** - Filter syntax and command palette
 - **[v2.6 - Games Page](releases/v2.6-games-page.md)** - Game discovery dashboard

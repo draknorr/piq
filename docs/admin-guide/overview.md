@@ -9,10 +9,10 @@ This guide covers the admin-only surfaces in PublisherIQ.
 | Task | Route | Guide |
 |------|-------|-------|
 | Monitor system health | `/admin` | [Dashboard](./dashboard.md) |
-| Review sync queue and PICS coverage | `/admin` | [Dashboard](./dashboard.md) |
-| Manage users | `/admin/users` | [Dashboard](./dashboard.md#user-management-adminusers) |
-| Review waitlist requests | `/admin/waitlist` | [Dashboard](./dashboard.md#waitlist-management-adminwaitlist) |
-| Review credit usage | `/admin/usage` | [Dashboard](./dashboard.md#usage-analytics-adminusage) |
+| Review sync queue, catalog control, and PICS coverage | `/admin` | [Dashboard](./dashboard.md) |
+| Manage users | `/admin/users` | [Dashboard](./dashboard.md#user-management) |
+| Review waitlist requests | `/admin/waitlist` | [Dashboard](./dashboard.md#waitlist-management) |
+| Review credit usage | `/admin/usage` | [Dashboard](./dashboard.md#usage-analytics) |
 | Debug chat issues | `/admin` | [Chat Logs](./chat-logs.md) |
 | Troubleshoot auth or runtime issues | `/admin` | [Troubleshooting](./troubleshooting.md) |
 
@@ -24,6 +24,8 @@ The main dashboard focuses on operational status:
 
 - status bar
 - data completion by source
+- catalog control
+- CCU quality
 - sync queue health
 - PICS service metrics
 - sync errors
@@ -45,6 +47,7 @@ The main dashboard focuses on operational status:
 
 - analyze credit consumption
 - inspect top users and tool usage
+- compare 7d, 30d, and 90d activity windows
 
 ## Common Workflows
 

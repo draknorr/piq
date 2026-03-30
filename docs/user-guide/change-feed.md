@@ -1,16 +1,26 @@
-# Steam Activity Guide
+# Change Feed Guide
 
-Steam Activity at `/changes` is the fastest way to scan what is happening across Steam in one readable feed.
+Steam Activity at `/changes` is the unified feed for recent storefront, PICS, media, and Steam news activity.
 
 ## What the Page Shows
 
-The page is one activity stream with three modes:
+The page has three modes:
 
-- **All activity** mixes grouped change cards and standalone announcements
-- **Changes only** hides announcement-only cards
-- **Announcements only** shows just Steam posts
+- `All activity` mixes grouped change cards and announcement cards
+- `Changes only` hides announcement-only cards
+- `Announcements only` shows just Steam posts
 
-Each row is an activity card with:
+It also has five views:
+
+| View | What it emphasizes |
+|------|--------------------|
+| `Overview` | Most relevant recent activity across Steam |
+| `Launch Watch` | Upcoming titles, recent launches, and release-date movement |
+| `Commercial Moves` | Pricing, discount, package, and monetization shifts |
+| `Store Refreshes` | Copy, artwork, screenshots, trailers, tags, and presentation changes |
+| `All Activity` | The raw stream in recency order |
+
+Each activity card includes:
 
 - app name and app type
 - whether the title is upcoming
@@ -24,41 +34,29 @@ Expanding a card shows:
 - related announcements
 - impact windows when enough response data exists
 
-Use this when you need to move from “something happened” to “what changed and what happened next.”
-
-## Quick Views
-
-The page supports these top-level views:
-
-| View | What it emphasizes |
-|------|--------------------|
-| **Overview** | Most relevant recent activity across Steam |
-| **Launch Watch** | Upcoming titles, recent launches, and date-locking activity |
-| **Commercial Moves** | Pricing, discount, package, and monetization shifts |
-| **Store Refreshes** | Copy, artwork, screenshots, trailers, tags, and presentation changes |
-| **All Activity** | The raw recent stream in strict recency order |
-
 ## Filters
 
-You can refine the stream with:
+You can narrow the feed by:
 
-- **Time range**: `24h`, `7d`, `30d`
-- **Signal family**
-- **App type**
-- **Search** by app name, headline, or theme
-- **Sort**
+- time range: `24h`, `7d`, or `30d`
+- mode
+- view
+- app type
+- signal family
+- search by app name, headline, or theme
+- sort order
 
 ## Status Badge
 
-The page shows a health badge for change capture:
+The page shows a capture-health badge:
 
 | State | Meaning |
 |-------|---------|
 | `healthy` | capture is current |
-| `catching_up` | queue backlog or event freshness needs attention |
-| `delayed` | backlog or capture freshness is materially behind |
+| `catching_up` | backlog or freshness needs attention |
+| `delayed` | capture is materially behind |
 
-This is a monitoring hint, not a guarantee that no events are missing.
+The badge is a monitoring hint, not a guarantee that every event is present.
 
 ## Best Uses
 
@@ -69,7 +67,7 @@ This is a monitoring hint, not a guarantee that no events are missing.
 
 ## Related Documentation
 
-- [Games Page](./games-page.md)
-- [Insights Page](./insights-page.md)
-- [Steam Activity Developer Guide](../developer-guide/features/change-feed.md)
+- [Getting Started](./getting-started.md)
+- [Chat Interface Guide](./chat-interface.md)
+- [Change Feed Developer Guide](../developer-guide/features/change-feed.md)
 - [Steam Change Intelligence](../developer-guide/workers/steam-change-intelligence.md)

@@ -46,15 +46,15 @@ Required for accessing Steam's official APIs.
 
 The chat interface requires an LLM provider. Choose one:
 
-**Option A: Anthropic (Recommended)**
-1. Create account at [console.anthropic.com](https://console.anthropic.com)
-2. Generate an API key
-3. Uses Claude 3.5 Haiku by default
-
-**Option B: OpenAI**
+**Option A: OpenAI (Default)**
 1. Create account at [platform.openai.com](https://platform.openai.com)
 2. Generate an API key
-3. Uses GPT-4o-mini by default
+3. Uses GPT-4o Mini by default
+
+**Option B: Anthropic**
+1. Create account at [console.anthropic.com](https://console.anthropic.com)
+2. Generate an API key
+3. Uses Claude 3.5 Haiku when selected
 
 ### 4. OpenAI API Key (for Embeddings)
 

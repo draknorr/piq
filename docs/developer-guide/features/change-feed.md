@@ -1,6 +1,6 @@
 # Steam Activity Architecture
 
-This document describes the implementation of the `/changes` feature.
+This document describes the implementation of the `/changes` feature and its unified activity read path.
 
 ## Overview
 
@@ -8,8 +8,8 @@ Steam Activity is a signed-in dashboard surface that lets users inspect:
 
 - one unified activity feed of grouped change cards and announcement cards
 - readable before / after detail for grouped change activity
-- related announcements and impact windows
-- capture health status
+- related announcements, news digests, and topic search results
+- capture health and projection freshness status
 
 ## Main Route
 
@@ -52,6 +52,8 @@ It is responsible for:
 - mapping raw rows into activity-card UI types
 - falling back to legacy burst/news surfaces if the unified RPC is unavailable
 - caching default activity responses for a short TTL
+- pulling recent-news digests and topic-search rows from the lean news projection
+- topic search is exposed through the server access layer and chat tools rather than a dedicated public route
 
 ## Internal APIs
 
@@ -75,8 +77,15 @@ The feature depends on these functions:
 - `get_change_feed_burst_detail`
 - `get_change_feed_news`
 
+The broader change-intel runtime also shares `get_chat_recent_news`, `search_recent_news_topics`, `get_chat_change_activity_candidates`, and `get_chat_change_pattern_candidates` with the chat system, but those RPCs are not used directly by the page route.
+
 They are created by:
 
+- `20260323193000_add_change_activity_projection.sql`
+- `20260324110000_add_change_pattern_activity_days.sql`
+- `20260324133000_add_change_pattern_app_windows.sql`
+- `20260329235900_add_chat_recent_news_digest_rpc.sql`
+- `20260330001000_add_recent_news_topic_search.sql`
 - `20260315193000_add_change_feed_activity_read_surface.sql`
 - `20260315114500_add_change_feed_read_surfaces.sql`
 - `20260315143000_optimize_change_feed_news_rpc.sql`
@@ -92,17 +101,20 @@ The status endpoint derives one of three states:
 The state is based on:
 
 - queued storefront/news jobs
+- queued projection refresh jobs
 - age of the oldest queued item
 - freshness of the latest storefront change event
 - freshness of the latest news change event
+- freshness of the latest projection refresh data
 
 ## Dependencies on the Change-Intel Runtime
 
 The UI is only as useful as the runtime beneath it:
 
 - `app-change-hints` must continue seeding new storefront capture work
-- `change-intel-worker` must keep draining `storefront`, `news`, and `hero_asset`
+- `change-intel-worker` must keep draining `storefront`, `news`, `projection_refresh`, and `hero_asset`
 - `pics-service` must keep writing internal history and diff events
+- the projection refresh path must keep the unified `/changes` feed current
 
 ## Related Documentation
 

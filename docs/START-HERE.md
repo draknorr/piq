@@ -25,6 +25,6 @@ Start with:
 
 ## Quick Links
 
-- [Latest Release Notes](./releases/v2.9-change-feed-auth-intelligence.md)
+- [Latest Release Notes](./releases/v2.10-chat-news-ops-refresh.md)
 - [API Overview](./api/overview.md)
 - [Reference Docs](./reference/)

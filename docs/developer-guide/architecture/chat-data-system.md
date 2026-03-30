@@ -2,18 +2,14 @@
 
 This document provides a complete reference for the PublisherIQ chat system's data handling architecture, including all cubes, dimensions, measures, segments, and tools. Use this as a guide for understanding the system and planning future expansions.
 
-**Last Updated:** January 19, 2026
+**Last Updated:** March 30, 2026
 
 ## Recent Improvements
 
-- **search_by_concept Tool**: Semantic search by natural language description (v2.4)
-- **discover_trending Tool**: Trend-based discovery with momentum analysis (v2.4)
-- **Enhanced Embeddings**: Include CCU momentum, review velocity, sentiment trajectory (v2.4)
-- **Dimension Reduction**: 1536 → 512 dimensions (~67% storage savings) (v2.4)
-- **lookup_games Tool**: New tool for specific game name queries (v2.1)
-- **ReviewVelocity Cube**: Pre-computed velocity stats for trend analysis (v2.1)
-- **ReviewDeltas Cube**: Time-series data for per-game review charts (v2.1)
-- **Expanded Cube Enum**: query_analytics now includes 11 cubes (was 4) (v2.1)
+- **Change-intel tools**: `query_change_activity`, `get_game_change_timeline`, `get_recent_news_detail`, `get_recent_news_digest`, `search_recent_news_topics`, `get_change_activity_detail`, `compare_change_before_after`, and `find_change_patterns`
+- **Streaming metadata**: `message_end` now includes `quality`, `sessionContext`, and credit usage metadata
+- **GameCatalog routing**: specific title and broad catalog questions now use the richer catalog cube rather than the older discovery-only model
+- **Lookup-first behavior**: `lookup_games`, `lookup_publishers`, and `lookup_developers` remain the canonical identity resolvers
 - **Retry Logic**: 3 retries with exponential backoff (500ms-4s) for Cube.js 502/503/504 errors
 - **30s Timeout**: AbortController timeout prevents hanging queries
 - **Tag Normalization**: "coop" automatically converts to "co-op"
@@ -49,7 +45,7 @@ This document provides a complete reference for the PublisherIQ chat system's da
                                    │
                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                             LLM (Claude)                                     │
+│                          LLM Provider Layer                                  │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ System Prompt: Cube schema, tool definitions, entity linking rules  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -59,6 +55,7 @@ This document provides a complete reference for the PublisherIQ chat system's da
 │            ▼                      ▼                      ▼                  │
 │   lookup_publishers     query_analytics          find_similar               │
 │   lookup_developers     search_games             lookup_tags                │
+│   lookup_games          change-intel tools      discover_trending           │
 └────────────┬──────────────────────┬──────────────────────┬──────────────────┘
              │                      │                      │
              ▼                      ▼                      ▼
@@ -104,7 +101,7 @@ This document provides a complete reference for the PublisherIQ chat system's da
 
 ## LLM Tools Reference
 
-The chat system provides 9 tools to the LLM for data access.
+The chat system provides 18 tools to the LLM for data access.
 
 ### 1. query_analytics
 
@@ -116,7 +113,7 @@ The chat system provides 9 tools to the LLM for data access.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `cube` | string | Yes | One of: Discovery, PublisherMetrics, PublisherYearMetrics, PublisherGameMetrics, DeveloperMetrics, DeveloperYearMetrics, DeveloperGameMetrics, DailyMetrics, LatestMetrics, MonthlyGameMetrics, MonthlyPublisherMetrics |
+| `cube` | string | Yes | One of: GameCatalog, DlcRelations, Discovery, PublisherMetrics, PublisherYearMetrics, PublisherGameMetrics, DeveloperMetrics, DeveloperYearMetrics, DeveloperGameMetrics, DailyMetrics, LatestMetrics, MonthlyGameMetrics, MonthlyPublisherMetrics |
 | `dimensions` | string[] | No | Fields to select (e.g., `["Discovery.appid", "Discovery.name"]`) |
 | `measures` | string[] | No | Aggregations (e.g., `["Discovery.count"]`) |
 | `filters` | array | No | Filter conditions (see [Filter Syntax](#filter-syntax)) |
@@ -361,9 +358,30 @@ The chat system provides 9 tools to the LLM for data access.
 
 ---
 
+### 10. Change-Intelligence Tools
+
+These tools cover the current `/changes` and recent-news surfaces.
+
+| Tool | Purpose |
+|------|---------|
+| `query_change_activity` | Cross-game recent activity search across change cards and announcement cards |
+| `get_game_change_timeline` | Per-game timeline of storefront, PICS, media, and news-derived changes |
+| `get_recent_news_detail` | Latest Steam news item for one title, summarized as what actually changed |
+| `get_recent_news_digest` | Bounded recent-news digest for one title or a small known set |
+| `search_recent_news_topics` | Cross-game stored news text search for concrete topics like patch notes or roadmaps |
+| `get_change_activity_detail` | Single activity drill-down with before/after detail |
+| `compare_change_before_after` | Before/after comparison around a major recent change burst |
+| `find_change_patterns` | Deterministic pattern-finding for marketing, relaunch, under-marketed, rescue, and sustained-response prompts |
+
+These tools are routed directly by intent in the chat system prompt. For recent-news topic prompts, use `search_recent_news_topics` instead of generic discovery tools.
+
+---
+
 ## Cube.js Semantic Layer
 
 Cube.js provides a semantic layer over PostgreSQL with pre-defined schemas.
+
+Current chat routing uses `GameCatalog` for specific-title and broad catalog questions, `DlcRelations` for DLC/expansion lookups, and `Discovery` for the hardcoded discovery segments.
 
 **Configuration**: [packages/cube/cube.js](../../packages/cube/cube.js)
 
@@ -874,7 +892,7 @@ The stream emits JSON events in `data: {...}\n\n` format:
 | `text_delta` | Incremental text chunk from LLM |
 | `tool_start` | Tool call initiated |
 | `tool_result` | Tool execution completed |
-| `message_end` | Response complete with timing/debug info |
+| `message_end` | Response complete with timing/debug, quality, context, and credit info |
 | `error` | Error occurred |
 
 ### Event Schemas
@@ -921,6 +939,13 @@ interface MessageEndEvent {
     toolCallCount: number;     // Tools called
     lastIterationHadText: boolean;
   };
+  quality?: ChatTurnQualityInfo;
+  sessionContext?: SessionChatContext | null;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  creditsCharged?: number;
 }
 
 // Error occurred
@@ -1014,6 +1039,13 @@ Every chat query is logged to the `chat_query_logs` table for analytics and debu
 | `timing_llm_ms` | Time spent in LLM calls |
 | `timing_tools_ms` | Time spent executing tools |
 | `timing_total_ms` | Total request time |
+| `chat_family` | Routed answer family, when available |
+| `quality_flags` | Phase-1 / guardrail quality flags |
+| `session_context_summary` | Condensed session context payload |
+| `guardrail_trace` | Guardrail decisions taken during the turn |
+| `answer_contract_summary` | Deterministic answer contract summary |
+| `input_tokens` / `output_tokens` | Provider token usage |
+| `tool_credits_used` / `total_credits_charged` | Credit accounting metadata |
 
 ### Data Retention
 
@@ -1058,8 +1090,8 @@ Access chat logs at `/admin/chat-logs`:
 
 1. **Date/Year Injection**: Current year for temporal queries
 2. **Mandatory Entity Linking Rules**: Format requirements
-3. **Tool Descriptions**: When to use each tool
-4. **Cube Schema Documentation**: All dimensions, measures, segments
+3. **Tool Descriptions**: When to use each cube, lookup, similarity, and change-intel tool
+4. **Cube Schema Documentation**: Current cube dimensions, measures, and segments
 5. **Query Format Examples**: JSON query templates
 6. **Filter Syntax Reference**: All supported operators
 7. **Natural Language Mappings**: Domain terms to query translations
@@ -1071,9 +1103,10 @@ Access chat logs at `/admin/chat-logs`:
 1. Always include ID columns for entity linking
 2. Use segments over filters when possible
 3. Call lookup tools before filtering by name
-4. Use fully-qualified segment names: `"DeveloperGameMetrics.lastYear"`
-5. Stop after first successful tool call with relevant data
-6. Never invent data or use external URLs
+4. Use fully-qualified segment names and the current cube names
+5. Prefer the change-intel tools for recent activity and news prompts instead of generic discovery
+6. Keep iterating until the answer is complete or the iteration limit is reached
+7. Never invent data or use external URLs
 
 ---
 
@@ -1173,7 +1206,10 @@ Access chat logs at `/admin/chat-logs`:
 
 | Query Type | Cube to Use |
 |------------|-------------|
-| Game lists with metrics | Discovery |
+| Specific game title lookup | GameCatalog |
+| Broad game discovery with prices/reviews/release state | GameCatalog |
+| DLC / expansion lists | DlcRelations |
+| Hardcoded Discovery segments | Discovery |
 | Publisher ALL-TIME stats | PublisherMetrics |
 | Developer ALL-TIME stats | DeveloperMetrics |
 | Publishers by release year | PublisherYearMetrics |

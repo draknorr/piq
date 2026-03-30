@@ -12,11 +12,12 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...
 STEAM_API_KEY=your_steam_api_key
 
-# Required for chat interface (choose one)
-ANTHROPIC_API_KEY=sk-ant-...
-# or
+# Chat defaults to OpenAI; switch providers only if you explicitly want Anthropic
 OPENAI_API_KEY=sk-...
-LLM_PROVIDER=anthropic
+LLM_PROVIDER=openai
+# Optional alternate provider
+ANTHROPIC_API_KEY=sk-ant-...
+# LLM_PROVIDER=anthropic
 ```
 
 ---
@@ -50,13 +51,13 @@ LLM_PROVIDER=anthropic
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LLM_PROVIDER` | No | `anthropic` (default) or `openai` |
+| `LLM_PROVIDER` | No | `openai` (default) or `anthropic` |
+| `OPENAI_API_KEY` | Recommended | OpenAI API key for the default chat provider and embeddings |
 | `ANTHROPIC_API_KEY` | If using Anthropic | Anthropic API key |
-| `OPENAI_API_KEY` | If using OpenAI | OpenAI API key |
 
-**Models used:**
-- Anthropic: Claude 3.5 Haiku (`claude-3-5-haiku-latest`)
+**Models used by default repo configuration:**
 - OpenAI: GPT-4o Mini (`gpt-4o-mini`)
+- Anthropic: Claude 3.5 Haiku (`claude-3-5-haiku-20241022`) when `LLM_PROVIDER=anthropic`
 
 ### Cube.js Semantic Layer
 
@@ -92,8 +93,8 @@ Optional variables for user authentication and credits:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | If auth | - | Public anon key (client-side) |
 
 **Credit System:**
-- Signup bonus: 1000 credits ($10 equivalent)
-- Rate limits: 20/minute, 200/hour per user
+- Signup bonus: 1000 credits
+- Chat uses reservation plus finalize/refund billing with the current runtime defaults
 - Reservation pattern: Credits reserved before chat, finalized after
 
 ---
@@ -171,8 +172,8 @@ For dashboard deployment, add these in Vercel project settings:
 |----------|-------|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Your service role key |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `LLM_PROVIDER` | `anthropic` |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `LLM_PROVIDER` | `openai` |
 | `CUBE_API_URL` | Cube.js API endpoint |
 | `CUBE_API_SECRET` | Cube.js JWT secret |
 | `QDRANT_URL` | Qdrant cluster URL |
@@ -207,8 +208,8 @@ SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 STEAM_API_KEY=ABCD1234EFGH5678
 
 # LLM (for chat)
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-api03-...
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 
 # Cube.js (semantic layer)
 CUBE_API_URL=https://publisheriq-cube.fly.dev/cubejs-api/v1
@@ -230,8 +231,8 @@ SUPABASE_URL=https://abcdefgh.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 # LLM (for chat)
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-api03-...
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 
 # Cube.js (semantic layer)
 CUBE_API_URL=https://publisheriq-cube.fly.dev/cubejs-api/v1

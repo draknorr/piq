@@ -1,11 +1,12 @@
 # @publisheriq/database
 
-Supabase client and TypeScript types for PublisherIQ.
+Supabase client factories, ingestion helpers, and TypeScript types for PublisherIQ.
 
 ## Overview
 
 This package provides:
 - Pre-configured Supabase clients
+- Ingestion helper functions used by workers and repair scripts
 - Auto-generated TypeScript types from database schema
 - Type-safe database operations
 
@@ -37,6 +38,8 @@ const { data, error } = await supabase
   .select('*')
   .limit(10);
 ```
+
+The package also exports the singleton-oriented `getServiceClient()` helper for worker and runtime code that wants to reuse a cached pool.
 
 ### Browser-Side (Anon Key)
 

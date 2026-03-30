@@ -151,6 +151,47 @@ function VersionCard({ version, isLatest }: { version: Version; isLatest: boolea
 // All versions data
 const versions: Version[] = [
   {
+    version: 'v2.10',
+    name: 'Chat News & Ops Refresh',
+    date: 'March 2026',
+    headline: 'Recent news search, CCU quality visibility, and PICS first-pass sync make the current runtime easier to trust',
+    accentColor: 'bg-accent-green/10',
+    icon: <Search className="h-6 w-6 text-accent-green" />,
+    highlights: [
+      'Recent Steam news now has latest-item detail, bounded digests, and topic search over stored news text',
+      'Admin surfaces now include catalog control, CCU quality, and richer chat-log quality metadata',
+      'PICS first-pass sync gives newly discovered unsynced apps a prioritized bounded backfill path',
+      'News search projections and app-capture work state keep the change-intelligence runtime responsive',
+    ],
+    features: [
+      {
+        title: 'Recent News Detail',
+        description: 'Ask what actually changed in the latest Steam news item for a title and get a bounded, evidence-backed answer.',
+        icon: <Bell className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Topic Search',
+        description: 'Search recent stored Steam news text for developer diaries, patch notes, demos, playtests, roadmaps, and similar concrete topics.',
+        icon: <Search className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Catalog Control And CCU Quality',
+        description: 'The admin dashboard now surfaces current catalog coverage, live catalog counts, and a cached CCU quality breakdown with confidence signals.',
+        icon: <Gauge className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'PICS First-Pass Sync',
+        description: 'The PICS service now supports a bounded first-pass mode that prioritizes newly discovered unsynced apps before a full bulk backfill.',
+        icon: <LineChart className="h-4 w-4 text-text-tertiary" />,
+      },
+    ],
+    improvements: [
+      'Redundant recent-news queries are blocked within a turn when the earlier result already answers the user',
+      'App-capture work state and news-search projections replace the older projection path',
+      'Storefront remains authoritative for parsed release dates and free-to-play flags',
+    ],
+  },
+  {
     version: 'v2.9',
     name: 'Change Feed & Auth Hardening',
     date: 'March 2026',

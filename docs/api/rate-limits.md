@@ -2,7 +2,7 @@
 
 Complete reference for all API rate limits in PublisherIQ.
 
-**Last Updated:** January 10, 2026
+**Last Updated:** March 30, 2026
 
 ## Summary Table
 
@@ -15,6 +15,22 @@ Complete reference for all API rate limits in PublisherIQ.
 | Steam CCU | ~60/min | 1/sec | GetNumberOfCurrentPlayers (v2.2) |
 | SteamSpy All | 1/60sec | 1/min | Paginated bulk fetch |
 | SteamSpy Detail | 1/sec | 1/sec | Single app queries |
+
+---
+
+## Product Runtime Notes
+
+### Chat Stream API
+
+The authenticated chat runtime (`POST /api/chat/stream`) uses a database-backed rate-limit check before reserving credits.
+
+- Over limit: returns HTTP `429` with JSON body `{ "error": "rate_limited" }`
+- Retry guidance: includes `Retry-After` when the limiter reports a reset window
+- Credit guardrail: returns HTTP `402` with `{ "error": "insufficient_credits" }` when the user cannot reserve the current default chat reservation
+
+The current reservation default in code is `25` credits before finalize/refund billing.
+
+For the full streaming contract, see [Streaming API](streaming-api.md).
 
 ---
 

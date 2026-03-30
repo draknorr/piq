@@ -2,7 +2,7 @@
 
 > **Steam Data Analytics Platform with AI Chat Interface**
 
-PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from seven sources into a single dashboard with advanced filtering, AI-powered natural language querying, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, and Qdrant, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, and market trends.
+PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from seven sources into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, and Qdrant, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, and market trends.
 
 ---
 
@@ -41,8 +41,8 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 
 - **Unified View**: All Steam game data consolidated into a single, searchable platform
 - **Real-Time Tracking**: Hourly concurrent user monitoring for top games, with tiered polling for the full catalog
-- **Change Intelligence**: Track grouped storefront, media, PICS, and news changes in a dense feed
-- **AI-Powered Analysis**: Ask natural language questions and receive structured, data-backed answers
+- **Change Intelligence**: Track grouped storefront, media, PICS, and news changes in a unified Steam Activity feed, plus recent-news and before/after detail in chat
+- **AI-Powered Analysis**: Ask natural language questions and receive structured, data-backed answers across analytics, discovery, and change-intel tools
 - **Deep Discovery**: 12 preset views, 40+ filter parameters, and 6 computed insight metrics for finding hidden gems, tracking trends, and comparing games
 - **Personalized Monitoring**: Pin games and companies, receive alerts on CCU spikes, trend reversals, review surges, and more
 
@@ -51,12 +51,12 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 15, React 19, TailwindCSS |
-| Database | Supabase (PostgreSQL), 20 materialized views |
+| Database | Supabase (PostgreSQL) with materialized views and RPC read surfaces |
 | Semantic Layer | Cube.js (27 cubes across 9 model files) |
 | Vector Search | Qdrant Cloud (5 collections, OpenAI text-embedding-3-small) |
 | LLM | GPT-4o-mini (default), streaming via SSE |
-| Ingestion | TypeScript workers (15+ scheduled jobs) |
-| PICS Service | Python microservice (SteamKit2) |
+| Ingestion | TypeScript workers, repair scripts, and change-intel runtime |
+| PICS Service | Python microservice (SteamKit2; bulk, first-pass, and change-monitor modes) |
 
 ### Scale
 
@@ -301,12 +301,13 @@ Columns hide progressively on smaller screens:
 
 ### 2.4 Change Feed
 
-The Change Feed (`/changes`) surfaces recent grouped changes across storefront metadata, media updates, PICS-derived signals, and Steam news.
+The Change Feed (`/changes`) is a unified Steam Activity surface that combines grouped bursts, announcement cards, and news drill-downs in one place.
 
-#### Tabs
+#### Views and Modes
 
-- **Feed** - grouped change bursts for a single app
-- **News** - recent Steam news posts
+- **Views**: Overview, Launch Watch, Commercial Moves, Store Refreshes, and All Activity
+- **Modes**: All activity, Changes only, or Announcements only
+- **Status**: healthy, catching_up, or delayed capture health states
 
 #### Feed Presets
 
@@ -320,24 +321,18 @@ The Change Feed (`/changes`) surfaces recent grouped changes across storefront m
 
 - time range: `24h`, `7d`, `30d`
 - app type
-- source filter on the Feed tab
-- search by app name
+- signal family
+- search by app name, headline, or theme
+- sort by relevance, recency, or commercial/launch emphasis
 
 #### Detail View
 
-Each burst can expand into:
+Each activity card can expand into:
 
 - individual change events
-- related news posts
+- related announcements
+- before / after diffs when available
 - impact windows showing pre/post movement in key metrics
-
-#### Status
-
-The page also shows capture health states:
-
-- `healthy`
-- `catching_up`
-- `delayed`
 
 ---
 
@@ -404,19 +399,16 @@ The AI chat interface (`/chat`) enables natural language querying of all platfor
 4. **Entity Linking**: Results enriched with clickable links to game/company pages
 5. **Streaming Response**: Results streamed via Server-Sent Events (SSE)
 
-#### 9 LLM Tools
+#### 18 LLM Tools
 
-| Tool | Purpose | Credit Cost |
-|------|---------|-------------|
-| `query_analytics` | Cube.js queries across 11 cubes (Discovery, Publisher/Developer Metrics, DailyMetrics, LatestMetrics, ReviewVelocity, ReviewDeltas, Monthly cubes) | 8 |
-| `find_similar` | Semantic similarity search via Qdrant with filters | 8 |
-| `search_games` | Tag/genre/category/platform filtering | 4 |
-| `search_by_concept` | Natural language concept search (e.g., "tactical roguelikes with deck building") | 8 |
-| `discover_trending` | Trend-based discovery: momentum, accelerating, breaking_out, declining | 8 |
-| `lookup_tags` | Discover available Steam tags | 4 |
-| `lookup_publishers` | Find exact publisher names | 4 |
-| `lookup_developers` | Find exact developer names | 4 |
-| `lookup_games` | Search by game name | 4 |
+The chat runtime now exposes 18 tools across analytics, similarity search, discovery, and change intelligence.
+
+| Tool family | Tools |
+|-------------|-------|
+| Analytics and discovery | `query_analytics`, `find_similar`, `search_games`, `lookup_tags`, `lookup_publishers`, `lookup_developers`, `search_by_concept`, `discover_trending`, `screen_games`, `lookup_games` |
+| Change intelligence | `query_change_activity`, `get_game_change_timeline`, `get_recent_news_digest`, `get_recent_news_detail`, `search_recent_news_topics`, `get_change_activity_detail`, `compare_change_before_after`, `find_change_patterns` |
+
+`query_analytics` currently spans the Cube.js models used by the dashboard, including Discovery, GameCatalog, DlcRelations, PublisherMetrics, DeveloperMetrics, DailyMetrics, LatestMetrics, and the monthly metrics cubes.
 
 #### Query Capabilities
 
@@ -428,6 +420,8 @@ The chat supports a wide range of queries across categories:
 - **Trend Discovery**: "What games are gaining momentum?", "Breaking out hidden gems", "Games losing players"
 - **Similar Games**: "Find games similar to Hades", "Games like Celeste under $20"
 - **Publisher & Developer Analysis**: "How many games has Devolver Digital published?", "Top publishers by revenue"
+- **Recent News**: "What actually changed in the latest Steam news for ARC Raiders?" / "Which games posted patch notes lately?"
+- **Change Patterns**: "Find under-marketed games" / "Which games look like signable candidates?"
 - **Steam Deck & Platform**: "Best Steam Deck verified games", "Linux-compatible games with multiplayer"
 - **Price & Deals**: "Top rated games under $10", "Best free-to-play games"
 - **Historical & Time-Based**: "Games released this month with best reviews", "CCU trends for Terraria over 30 days"
@@ -441,6 +435,7 @@ Every chat response includes an expandable details panel showing:
 - Cube.js queries generated
 - LLM reasoning steps
 - Raw result data
+- Session carry-forward context and guardrail/quality metadata when phase-1 chat quality is enabled
 
 #### Streaming Protocol
 
@@ -448,7 +443,7 @@ Responses stream via SSE with these event types:
 - `text_delta` - Incremental text content
 - `tool_start` - Tool execution beginning
 - `tool_result` - Tool execution results
-- `message_end` - Response complete with usage stats
+- `message_end` - Response complete with usage stats, plus `quality` and `sessionContext` when phase-1 chat quality is enabled
 - `error` - Error information
 
 #### Smart Suggestions
@@ -571,25 +566,29 @@ The admin dashboard provides system health monitoring and user management across
 - Errors (recent failures)
 - PICS (service status)
 
-**Data Completion** - Progress tracking across 6 sources: SteamSpy, Storefront, Reviews, Histogram, Page Creation, PICS
+**Data Completion** - Progress tracking across 5 sources: SteamSpy, Storefront, Reviews, Histogram, and PICS
 
 **Sync Queue** - Priority distribution across 5 tiers with sync intervals:
 
 | Tier | Interval |
 |------|----------|
-| Active | 6-12 hours |
-| Moderate | 24-48 hours |
-| Dormant | Weekly |
-| Dead | Monthly |
-| New | Priority sync |
+| High | 6 hours |
+| Medium | 12 hours |
+| Normal | 24 hours |
+| Low | 48 hours |
+| Minimal | 7 days |
 
 **PICS Service** - Change number, last update, data coverage breakdown
 
+**Catalog Control** - Current catalog coverage, historical retention, and live-app coverage gaps
+
+**CCU Quality** - Confirmed positive/zero counts, suspect zeroes, source mix, and confidence state
+
 **Sync Errors** - Filterable error list with app name, error count, source, message, timestamp
 
-**Recent Jobs** - 15 most recent sync jobs with expandable details
+**Recent Jobs** - 10 most recent sync jobs with expandable details
 
-**Chat Logs** - Query analytics with tool usage, timing metrics, and iteration counts
+**Chat Logs** - Query analytics with tool usage, timing metrics, iteration counts, quality flags, session context, and guardrail traces
 
 #### User Management (`/admin/users`)
 
@@ -605,8 +604,8 @@ The admin dashboard provides system health monitoring and user management across
 
 #### Usage Analytics (`/admin/usage`)
 
-- Summary cards: Total Credits Used, Active Users, Avg Credits/Chat, Top Tool
-- Time range selector: 24h/7d/30d/all time
+- Summary cards: Credits in System, Total Credits Used, Total Messages, and recent-window activity
+- Time range selector: 7d/30d/90d
 - Transaction history with type/amount/description
 - Top users breakdown and tool usage frequency
 
@@ -624,6 +623,7 @@ PublisherIQ consolidates data from seven external sources organized in a three-t
 |--------|--------------|------------|-----------------|
 | **Steam App List** | Master inventory of all Steam apps (appid, name, type) | 100K requests/day | Daily |
 | **Steam Storefront API** | Developers, publishers, pricing, release dates, categories, genres, platforms (AUTHORITATIVE for developer/publisher names) | ~200 requests/5 min | Every 6-12 hours |
+| **Steam News API** | Public announcements, update posts, and recent-news history for change-intelligence search | App-dependent / recent only | Continuous / near real-time |
 | **Steam Reviews API** | Review counts, positive/negative totals, review score | 60 requests/min | 4-72 hours (velocity-based) |
 | **Steam Review Histogram** | Monthly review aggregates for trend analysis | 60 requests/min | Weekly |
 | **Steam CCU API** | Exact concurrent player counts (replaced SteamSpy estimates in v2.2) | 1 request/sec | Hourly to daily (tiered) |
@@ -639,6 +639,8 @@ PublisherIQ consolidates data from seven external sources organized in a three-t
 | Source | Data Provided | Rate Limit | Update Frequency |
 |--------|--------------|------------|-----------------|
 | **PICS Service** | Tags, genres, categories, franchises, Steam Deck compatibility, controller support, review score/percentage, store_asset_mtime, parent app relationships | N/A (SteamKit2 connection) | Continuous monitoring |
+
+The PICS service runs in `bulk_sync`, `first_pass`, or `change_monitor` mode depending on whether the goal is a full backfill, prioritized new-app backfill, or continuous change monitoring.
 
 ### 3.2 Sync Pipeline
 
@@ -697,7 +699,7 @@ Reviews are synced at intervals determined by review velocity:
 | Tier 2 | Top 1,000 newest releases (past year) | Every 2 hours | ~1,000 |
 | Tier 3 | All other games | 3x daily (rotation) | ~120,000 |
 
-Tier 3 uses rotation tracking (`last_ccu_synced`) with oldest-first ordering to achieve full catalog coverage every ~2 days. Invalid app IDs are automatically skipped for 30 days to reduce wasted API calls.
+Tier 3 uses rotation tracking (`last_ccu_synced`) with oldest-first ordering to achieve full catalog coverage every ~2 days. Invalid app IDs are automatically skipped for 30 days to reduce wasted API calls. The PICS service also supports a bounded `first_pass` mode for newly discovered unsynced apps.
 
 ### 3.3 Data Freshness
 
@@ -1213,6 +1215,7 @@ Key UI components:
 | **v2.7** | Jan 25, 2026 | Command palette (Cmd+K) with filter syntax, active filter bar with color-coded chips, warm stone color palette, DM Sans + JetBrains Mono typography |
 | **v2.8** | Jan 31, 2026 | 14 security vulnerabilities patched, OTP authentication (8-digit codes), token refresh loop fix, apps/companies page sparkline and timeout fixes, standardized Supabase client patterns |
 | **v2.9** | Mar 15, 2026 | New Change Feed at `/changes`, OTP/session hardening, origin validation, Change Feed SQL read surfaces, stale-claim recovery, improved change-intel and PICS history capture |
+| **v2.10** | Mar 30, 2026 | Recent news detail/digest/topic search in chat, catalog control and CCU quality in admin, first-pass PICS sync, chat quality/session logging, and news search projection refresh |
 
 ### Feature Matrix
 
@@ -1232,6 +1235,8 @@ Key UI components:
 | Computed Insight Metrics | v2.6 | Active |
 | Change Feed | v2.9 | Active |
 | Change-Intelligence Runtime | v2.9 | Active |
+| Recent News Chat Tools | v2.10 | Active |
+| Catalog Control & CCU Quality | v2.10 | Active |
 | Command Palette | v2.7 | Active |
 | Filter Syntax | v2.7 | Active |
 | Design System (Warm Stone) | v2.7 | Active |

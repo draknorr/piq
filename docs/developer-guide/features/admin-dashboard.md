@@ -2,16 +2,16 @@
 
 This document describes the admin dashboard and related analytics pages in PublisherIQ.
 
-**Last Updated:** January 9, 2026
+**Last Updated:** March 30, 2026
 
 ## Overview
 
-The admin dashboard provides a comprehensive view of system health, sync status, and data completion. Version 2.0 introduces:
+The admin dashboard provides a comprehensive view of system health, sync status, catalog control, CCU quality, and data completion. Version 2.0 introduced the collapsible layout, and the current surface layers in the newer operational RPCs:
 
 - **Single-page collapsible layout** (replaces tabbed interface)
 - **66% query reduction** (from ~40 queries to ~12)
-- **Optimized RPC functions** for aggregated data
-- **Chat logs integration** within the dashboard
+- **Optimized RPC functions** for aggregated data, catalog control, and CCU quality
+- **Chat logs integration** within the dashboard, including quality/session context metadata
 - **Mobile-responsive design**
 
 ---
@@ -25,6 +25,10 @@ AdminDashboard
 ├── StatusBar              # Top-level health indicators
 ├── CollapsibleSection     # Data Completion
 │   └── SourceCompletionCard[] (6 sources)
+├── CollapsibleSection     # Catalog Control
+│   └── QueueMetric[]
+├── CollapsibleSection     # CCU Quality
+│   └── QueueMetric[]
 ├── CollapsibleSection     # Sync Queue
 │   ├── Priority Distribution
 │   └── Queue Status (QueueMetric[])
@@ -88,6 +92,8 @@ page.tsx (Server Component)
     │   ├── supabase.rpc('get_priority_distribution')
     │   ├── supabase.rpc('get_queue_status')
     │   ├── supabase.rpc('get_source_completion_stats')
+    │   ├── supabase.rpc('get_catalog_control_stats')
+    │   ├── supabase.rpc('get_ccu_quality_stats')
     │   ├── supabase.rpc('get_pics_data_stats')
     │   ├── supabase.from('sync_jobs').select(...)
     │   └── supabase.from('chat_query_logs').select(...)
@@ -111,6 +117,8 @@ page.tsx (Server Component)
 | 4 queue status counts | 1 RPC call | 75% |
 | 11 source completion counts | 1 RPC call | 91% |
 | 7 PICS data counts | 1 RPC call | 86% |
+| catalog control rollups | 1 RPC call | avoids repeated applist scans |
+| CCU quality counts | 1 RPC call | avoids repeated fallback scans |
 
 ### RPC Functions
 
@@ -172,6 +180,48 @@ RETURNS TABLE(
 ```
 
 **Returns rows for:** steamspy, storefront, reviews, histogram, page_creation
+
+#### get_catalog_control_stats()
+
+Returns catalog control and applist coverage stats.
+
+```sql
+CREATE FUNCTION get_catalog_control_stats()
+RETURNS TABLE(
+  current_catalog_apps BIGINT,
+  historical_retained_apps BIGINT,
+  latest_applist_started_at TIMESTAMPTZ,
+  latest_applist_completed_at TIMESTAMPTZ,
+  latest_live_app_count BIGINT,
+  live_only_missing BIGINT,
+  stale_running_applist_jobs BIGINT
+)
+```
+
+#### get_ccu_quality_stats()
+
+Returns CCU quality coverage and source distribution stats.
+
+```sql
+CREATE FUNCTION get_ccu_quality_stats()
+RETURNS TABLE(
+  current_catalog_apps BIGINT,
+  tier_assigned BIGINT,
+  no_tier_assignment BIGINT,
+  confirmed_positive BIGINT,
+  confirmed_zero BIGINT,
+  suspect_zero BIGINT,
+  skipped BIGINT,
+  invalid BIGINT,
+  unavailable BIGINT,
+  steam_api BIGINT,
+  steamspy BIGINT,
+  legacy_unknown BIGINT,
+  data_source TEXT,
+  is_approximate BOOLEAN,
+  updated_at TIMESTAMPTZ
+)
+```
 
 #### get_pics_data_stats()
 
@@ -297,6 +347,26 @@ Shows sync completion percentage for each data source:
 | Page Creation | Steam page creation dates |
 | PICS | Real-time PICS data |
 
+### Catalog Control
+
+Shows applist coverage and catalog integrity:
+
+- Current catalog app count
+- Historical retained app count
+- Latest applist start and completion timestamps
+- Live-only missing apps
+- Stale running applist jobs
+
+### CCU Quality
+
+Shows CCU coverage and source quality:
+
+- Current catalog app count
+- Tier-assigned versus unassigned apps
+- Confirmed positive, confirmed zero, suspect zero, skipped, invalid, unavailable
+- CCU source split across Steam API, SteamSpy, and legacy unknown
+- Cached freshness timestamp and approximate fallback state
+
 ### Sync Queue
 
 Displays priority distribution and queue status:
@@ -337,7 +407,7 @@ Lists apps with consecutive sync errors:
 
 ### Recent Jobs
 
-Shows the 15 most recent sync jobs with:
+Shows the most recent sync jobs with:
 
 - Status badge (running/completed/failed)
 - Job type
@@ -356,6 +426,8 @@ Integrated chat query logs with:
 
 - Query statistics (total, avg response time, avg tools)
 - Recent queries with tools used
+- Session context summaries
+- Guardrail traces and answer contract metadata when available
 - Action buttons (Search, Copy)
 - 7-day retention
 
@@ -392,7 +464,11 @@ Located at `/admin/usage`. Shows:
 | `apps/admin/src/app/(main)/admin/page.tsx` | Server component, data fetching |
 | `apps/admin/src/app/(main)/admin/AdminDashboard.tsx` | Client component, UI |
 | `apps/admin/src/lib/sync-queries.ts` | Query helpers and formatters |
-| `supabase/migrations/20260103000001_add_admin_dashboard_rpcs.sql` | RPC functions |
+| `supabase/migrations/20260328143000_phase3_catalog_control.sql` | Catalog control RPCs |
+| `supabase/migrations/20260328224500_phase4a_ccu_confidence.sql` | CCU quality RPCs |
+| `supabase/migrations/20260328235500_cache_ccu_quality_stats.sql` | CCU quality cache |
+| `supabase/migrations/20260323110000_add_chat_phase1_quality_logs.sql` | Chat quality/session context columns |
+| `supabase/migrations/20260327123000_add_app_capture_work_state.sql` | Work-state queue table |
 | `apps/admin/src/app/(main)/admin/users/page.tsx` | User management (v2.1) |
 | `apps/admin/src/app/(main)/admin/waitlist/page.tsx` | Waitlist approval (v2.1) |
 | `apps/admin/src/app/(main)/admin/usage/page.tsx` | Usage analytics (v2.1) |

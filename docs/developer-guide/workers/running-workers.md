@@ -23,6 +23,7 @@ pnpm --filter @publisheriq/ingestion refresh-views
 pnpm --filter @publisheriq/ingestion alert-detection
 pnpm --filter @publisheriq/ingestion app-change-hints
 pnpm --filter @publisheriq/ingestion change-intel-worker
+pnpm --filter @publisheriq/ingestion change-intel-backfill-projection
 ```
 
 ## Useful Environment Overrides
@@ -54,6 +55,12 @@ QUEUE_SOURCES=news MAX_IDLE_POLLS=10 pnpm --filter @publisheriq/ingestion change
 QUEUE_SOURCES=storefront MAX_IDLE_POLLS=10 pnpm --filter @publisheriq/ingestion change-intel-worker
 ```
 
+### Drain Only Projection Refresh Jobs
+
+```bash
+QUEUE_SOURCES=projection_refresh MAX_IDLE_POLLS=10 pnpm --filter @publisheriq/ingestion change-intel-worker
+```
+
 ### Relevant Change-Intel Knobs
 
 ```bash
@@ -62,6 +69,13 @@ POLL_INTERVAL_MS=5000
 NEWS_CATCHUP_SEED_LIMIT=10
 CLAIM_STALE_AFTER_MS=1800000
 STALE_CLAIM_SWEEP_INTERVAL_MS=60000
+```
+
+### PICS First Pass
+
+```bash
+cd services/pics-service
+MODE=first_pass python3 -m src.main
 ```
 
 ## Validation

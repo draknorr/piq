@@ -9,7 +9,7 @@ The dashboard provides:
 - game and company analytics
 - the `/changes` Change Feed
 - Insights and personalization surfaces
-- admin system-status pages
+- admin system-status pages, catalog control, and CCU quality
 - OTP-first authentication and invite/waitlist flows
 
 ## Development
@@ -33,13 +33,13 @@ The development server runs on `http://localhost:3001`.
 | `/dashboard` | Signed-in home dashboard |
 | `/chat` | AI query interface |
 | `/insights` | Top, newest, trending, and personalized insights |
-| `/changes` | Change Feed and Steam news |
+| `/changes` | Steam Activity and Steam news |
 | `/apps` | Games analytics |
 | `/companies` | Unified publisher/developer browse surface |
 | `/publishers/[id]` | Publisher detail page |
 | `/developers/[id]` | Developer detail page |
 | `/account` | Profile and credits |
-| `/admin` | System status |
+| `/admin` | System status, catalog control, and CCU quality |
 | `/admin/users` | User administration |
 | `/admin/waitlist` | Waitlist review |
 | `/admin/usage` | Credit usage analytics |

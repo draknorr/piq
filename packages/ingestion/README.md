@@ -2,7 +2,7 @@
 
 TypeScript workers and API clients for Steam ingestion, sync scheduling, and change intelligence.
 
-**Last Updated:** March 15, 2026
+**Last Updated:** March 30, 2026
 
 ## Overview
 
@@ -10,7 +10,8 @@ This package provides:
 
 - Steam, SteamSpy, reviews, storefront, CCU, and embedding clients
 - scheduled sync workers for metadata and metrics
-- the change-intelligence queue worker and hint seeding worker
+- the change-intelligence queue worker, hint seeding worker, and news hot-refresh paths
+- repair / backfill scripts for review truth, CCU quality, and change-intel projections
 - rate limiting, retry, and change-intel support utilities
 
 ## Core Commands
@@ -34,6 +35,10 @@ pnpm --filter @publisheriq/ingestion refresh-views
 pnpm --filter @publisheriq/ingestion alert-detection
 pnpm --filter @publisheriq/ingestion app-change-hints
 pnpm --filter @publisheriq/ingestion change-intel-worker
+pnpm --filter @publisheriq/ingestion change-intel-backfill-projection
+pnpm --filter @publisheriq/ingestion repair-current-ccu-state
+pnpm --filter @publisheriq/ingestion repair-review-truth
+pnpm --filter @publisheriq/ingestion reviews-queue-health
 pnpm --filter @publisheriq/ingestion test:change-intel
 ```
 
@@ -42,7 +47,7 @@ pnpm --filter @publisheriq/ingestion test:change-intel
 The change-intelligence runtime is split across two TypeScript workers plus the PICS service:
 
 - `app-change-hints` reads Steam app list hints and seeds capture work when the hint cursor changes.
-- `change-intel-worker` drains `app_capture_queue` for `storefront`, `news`, and `hero_asset`.
+- `change-intel-worker` drains `app_capture_work_state` for `storefront`, `news`, `projection_refresh`, and `hero_asset`, including bounded news catch-up and hot-refresh paths.
 - `services/pics-service` writes normalized PICS history snapshots and PICS diff events before latest-state upserts.
 
 ### Operational Notes
@@ -50,13 +55,14 @@ The change-intelligence runtime is split across two TypeScript workers plus the 
 - Storefront and news queue work is requeued automatically when stale claims are detected.
 - Canonical diffing normalizes JSON payloads before comparing them, which reduces false positives caused by key ordering.
 - Storefront remains authoritative for parsed `release_date` and `is_free`; PICS is enrichment/fallback data.
+- Recent news search projections and latest projections keep chat/news queries fast without depending on the legacy projection path.
 
 ### Important Environment Variables
 
 ```bash
 CLAIM_LIMIT=25
 POLL_INTERVAL_MS=5000
-QUEUE_SOURCES=storefront,news,hero_asset
+QUEUE_SOURCES=storefront,news,projection_refresh,hero_asset
 NEWS_CATCHUP_SEED_LIMIT=10
 MAX_IDLE_POLLS=0
 CLAIM_STALE_AFTER_MS=1800000
