@@ -28,6 +28,7 @@ import {
   normalizeBroadDiscoveryToolCall,
   type BroadDiscoveryState,
 } from '@/lib/chat/discovery-guardrails';
+import { buildRedundantNewsToolSkipResult } from '@/lib/chat/news-tool-guardrails';
 import {
   applyCompanyToolResultPolicy,
   buildGenericCompanyLookupSkipResult,
@@ -345,7 +346,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   return handleChatStreamRequest(request, { requireEvalSecret: false });
 }
 
-export async function handleChatStreamRequest(
+async function handleChatStreamRequest(
   request: NextRequest,
   { requireEvalSecret }: { requireEvalSecret: boolean }
 ): Promise<Response> {
@@ -774,11 +775,16 @@ export async function handleChatStreamRequest(
               routedToolCall,
               lastUserPrompt
             );
+            const redundantNewsSkipResult = buildRedundantNewsToolSkipResult(
+              allToolCalls,
+              routedToolCall
+            );
             const skipResult =
               genericCompanyLookupSkipResult ??
               unsupportedCompanyWindowSkipResult ??
               redundantCompanySkipResult ??
-              redundantSkipResult;
+              redundantSkipResult ??
+              redundantNewsSkipResult;
 
             if (skipResult) {
               const contract = phase1State

@@ -113,7 +113,7 @@ Your output: | Half-Life 2 | 9 |  ← NEVER DO THIS
 **search_games** - Find games by tags, genres, categories, platforms, PICS data (use for tag-based discovery)
 **screen_games** - Strict games-page style screening with ranking metrics like CCU, momentum, velocity, and sentiment
 **discover_trending** - Find games with trend momentum (accelerating reviews, breaking out, declining)
-**lookup_games** - Search game names (use FIRST when user asks about a specific game by name)
+**lookup_games** - Search game names (use FIRST for generic game-info questions, or when a title is ambiguous / misspelled)
 **lookup_tags** - Search available tags, genres, or categories (use when unsure of tag names)
 **lookup_publishers** - Search publisher names (use BEFORE querying by publisher)
 **lookup_developers** - Search developer names (use BEFORE querying by developer)
@@ -137,6 +137,10 @@ Use these rules for natural-language change questions:
 - Use **search_recent_news_topics** for cross-game topic prompts that search the recent news text itself, such as developer diaries, roadmaps, demos, playtests, patch notes, or behind-the-scenes updates.
 - Do NOT use **query_change_activity** for those topic-search prompts. It is not a full news-body search tool.
 - Use **get_game_change_timeline** instead when the user wants the broader Steam change timeline, not just the news copy.
+- If the user already named one specific title and the prompt is clearly about recent Steam news, call the matching recent-news tool directly. Do NOT call **lookup_games** first unless the title looks ambiguous, misspelled, or the tool returns an ambiguity error.
+- Treat these as recent-news detail prompts even when paraphrased: "what changed in the newest Steam announcement for X?", "tell me what actually changed in X's latest Steam news", "what changed in X's latest Steam post".
+- Treat these as recent-news digest prompts even when paraphrased: "summarize recent Steam news for X", "give me the key recent Steam news changes for X", "what are the most important recent Steam announcements for X".
+- For cross-game topic prompts like "What games have released developer diaries lately?" or "Which games posted patch notes lately?", call **search_recent_news_topics** directly. Do NOT call **lookup_games** first.
 
 4. Cross-game recent change discovery:
 - Use **query_change_activity**.
@@ -146,6 +150,8 @@ Use these rules for natural-language change questions:
 5. Multi-title recent-news comparisons:
 - When the user names a small known set of titles and wants the recent Steam news compared or summarized, use **get_recent_news_digest** with that small explicit title set in one batched call.
 - Do NOT split that into repeated single-title news calls unless the user explicitly asks to drill into one title afterward.
+- Example: "Summarize the most meaningful recent Steam news across ARC Raiders and Mafia: The Old Country." should be one **get_recent_news_digest** call with both titles, not two lookup calls plus two digest calls.
+- Example: "Which of ARC Raiders and THE FINALS had the most material recent Steam news change, and why?" should also be one batched **get_recent_news_digest** call.
 
 6. Higher-level pattern prompts:
 - Use **find_change_patterns** for marketing push, relaunch pattern, update tease, under-marketed, signable, rescue candidate, sustained-response, and "announcement but weak downstream response" requests.

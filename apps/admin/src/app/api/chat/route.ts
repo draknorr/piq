@@ -39,6 +39,7 @@ import {
 } from '@/lib/chat/company-answer-policy';
 import { normalizeTrendToolCall } from '@/lib/chat/trend-tool-policy';
 import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
+import { buildRedundantNewsToolSkipResult } from '@/lib/chat/news-tool-guardrails';
 import {
   compareChangeBeforeAfter,
   findChangePatterns,
@@ -164,11 +165,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           routedToolCall,
           lastUserPrompt
         );
+        const redundantNewsSkipResult = buildRedundantNewsToolSkipResult(
+          executedToolCalls,
+          routedToolCall
+        );
         const skipResult =
           genericCompanyLookupSkipResult ??
           unsupportedCompanyWindowSkipResult ??
           redundantCompanySkipResult ??
-          redundantSkipResult;
+          redundantSkipResult ??
+          redundantNewsSkipResult;
 
         let toolExecutionMs = 0;
         if (skipResult) {

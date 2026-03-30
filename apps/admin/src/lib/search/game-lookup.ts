@@ -50,6 +50,30 @@ export async function lookupGames(args: LookupGamesArgs): Promise<LookupGamesRes
     const supabase = getServiceSupabase();
     const maxResults = Math.min(limit, 20); // Hard cap at 20
 
+    // Exact case-insensitive title matches should win immediately, even for
+    // delisted apps, so historical/news queries do not degrade into fuzzy ambiguity.
+    const { data: exactData, error: exactError } = await supabase
+      .from('apps')
+      .select('appid, name, release_date')
+      .eq('type', 'game')
+      .ilike('name', query.trim())
+      .order('release_date', { ascending: false, nullsFirst: false })
+      .limit(maxResults);
+
+    if (!exactError && exactData && exactData.length > 0) {
+      return {
+        success: true,
+        query,
+        results: exactData.map((g) => ({
+          appid: g.appid,
+          name: g.name,
+          releaseYear: g.release_date ? new Date(g.release_date).getFullYear() : null,
+          similarityScore: 1,
+          isExactMatch: true,
+        })),
+      };
+    }
+
     // Prefer the fuzzy search RPC so chat tolerates typos, spacing differences,
     // and near matches on a very large catalog.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

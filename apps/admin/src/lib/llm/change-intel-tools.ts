@@ -115,6 +115,8 @@ export const GET_RECENT_NEWS_DIGEST_TOOL: Tool = {
 
 Use this for:
 - "Summarize the most important recent Steam news updates for ARC Raiders"
+- "Summarize recent Steam news for ARC Raiders"
+- "Give me the key recent Steam news changes for ARC Raiders"
 - "Summarize the most meaningful recent Steam news across these 3 titles"
 - "Which of these titles had the most material recent Steam news change?"
 
@@ -163,6 +165,7 @@ export const GET_RECENT_NEWS_DETAIL_TOOL: Tool = {
 Use this for:
 - "What actually changed in the latest Steam news for Hades II?"
 - "What changed in the newest Steam announcement for ARC Raiders?"
+- "Tell me what actually changed in ARC Raiders's latest Steam news."
 
 Prefer this over get_recent_news_digest when the user wants the latest item specifically, not a broader recent digest.`,
     parameters: {
@@ -200,6 +203,7 @@ Use this for:
 - "What games have released developer diaries lately?"
 - "What games mentioned a roadmap in recent Steam news?"
 - "Which games announced a demo or playtest lately?"
+- "Which games posted patch notes lately?"
 
 This searches recent stored news text, not just app names or announcement headlines.`,
     parameters: {

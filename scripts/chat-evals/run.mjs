@@ -906,7 +906,14 @@ function inferSupportTier(sourceKinds) {
 
 function inferCostClass(family, supportTier) {
   if (supportTier === 'speculative_reference') return 'heavy';
-  if (family.startsWith('change_') || family === 'lookup_game' || family === 'lookup_entity') return 'heavy';
+  if (
+    family.startsWith('change_') ||
+    family.startsWith('news_') ||
+    family === 'lookup_game' ||
+    family === 'lookup_entity'
+  ) {
+    return 'heavy';
+  }
   if (family === 'similarity' || family === 'concept_search' || family === 'trending' || family === 'tag_search') {
     return 'medium';
   }
@@ -915,6 +922,12 @@ function inferCostClass(family, supportTier) {
 
 function inferExpectedTools(family, promptText) {
   switch (family) {
+    case 'news_detail':
+      return ['get_recent_news_detail'];
+    case 'news_digest':
+      return ['get_recent_news_digest'];
+    case 'news_topic_search':
+      return ['search_recent_news_topics'];
     case 'change_cross_game':
       return ['query_change_activity'];
     case 'change_single_game':
@@ -946,6 +959,46 @@ function inferExpectedTools(family, promptText) {
 
 function inferFamily(promptText, isTemplate = false) {
   const text = promptText.toLowerCase();
+
+  if (
+    text.includes('latest steam news') ||
+    text.includes('newest steam announcement') ||
+    text.includes('newest steam post') ||
+    text.includes("latest steam announcement") ||
+    text.includes("'s latest steam news")
+  ) {
+    return 'news_detail';
+  }
+
+  if (
+    text.includes('recent steam news updates') ||
+    text.includes('summarize recent steam news') ||
+    text.includes('recent steam news changes') ||
+    text.includes('recent steam announcements') ||
+    text.includes('most meaningful recent steam news across') ||
+    text.includes('material recent steam news change')
+  ) {
+    return 'news_digest';
+  }
+
+  if (
+    text.includes('developer diar') ||
+    text.includes('dev diar') ||
+    text.includes('behind-the-scenes updates') ||
+    text.includes('behind the scenes updates') ||
+    text.includes('roadmap in recent steam news') ||
+    text.includes('roadmap recently on steam') ||
+    text.includes("what's next in recent steam news") ||
+    text.includes('what is next in recent steam news') ||
+    text.includes('demo or playtest lately') ||
+    text.includes('demo or playtest in recent steam news') ||
+    text.includes('public playtest lately') ||
+    text.includes('patch notes lately') ||
+    text.includes('release notes recently') ||
+    text.includes('official steam announcements only')
+  ) {
+    return 'news_topic_search';
+  }
 
   if (
     text.includes('marketing push') ||
@@ -1537,6 +1590,7 @@ function parseSse(rawSse) {
           typeof event.result?.failure_kind === 'string' ? event.result.failure_kind : null,
         error_message: typeof event.result?.error === 'string' ? event.result.error : null,
         result_summary: summarizeToolResult(event.result),
+        result_payload: sanitizeToolResultPayload(event.name, event.result),
       });
       continue;
     }
@@ -1595,6 +1649,167 @@ function summarizeScenarioSessionContext(sessionContext) {
     candidateSet,
     lastAnswer: sessionContext.lastAnswer?.summary || null,
   };
+}
+
+function sanitizeToolResultPayload(toolName, result) {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+
+  switch (toolName) {
+    case 'get_recent_news_detail':
+      return {
+        app: sanitizeResolvedApp(result.app),
+        detail_mode: typeof result.detail_mode === 'string' ? result.detail_mode : null,
+        latestItem: sanitizeNewsItem(result.latestItem),
+        items: sanitizeNewsItems(result.items, 3),
+        meta: sanitizeNewsMeta(result.meta),
+      };
+    case 'get_recent_news_digest':
+      return {
+        app: sanitizeResolvedApp(result.app),
+        apps: sanitizeResolvedApps(result.apps, 3),
+        scope: typeof result.scope === 'string' ? result.scope : null,
+        items: sanitizeNewsItems(result.items, 6),
+        meta: sanitizeNewsMeta(result.meta),
+      };
+    case 'search_recent_news_topics':
+      return {
+        items: sanitizeTopicItems(result.items, 8),
+        meta: sanitizeTopicMeta(result.meta),
+      };
+    case 'get_game_change_timeline':
+    case 'compare_change_before_after':
+      return {
+        app: sanitizeResolvedApp(result.app),
+      };
+    case 'query_change_activity':
+      return {
+        results: sanitizeActivityResults(result.results, 3),
+      };
+    default:
+      return null;
+  }
+}
+
+function sanitizeResolvedApp(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return {
+    appid: Number.isInteger(value.appid) ? value.appid : null,
+    name: typeof value.name === 'string' ? value.name : null,
+  };
+}
+
+function sanitizeResolvedApps(value, maxItems) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(sanitizeResolvedApp)
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function sanitizeNewsItems(value, maxItems) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(sanitizeNewsItem)
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function sanitizeNewsItem(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return {
+    appid: Number.isInteger(value.appid) ? value.appid : null,
+    appName:
+      typeof value.appName === 'string'
+        ? value.appName
+        : typeof value.name === 'string'
+          ? value.name
+          : null,
+    title: typeof value.title === 'string' ? truncate(value.title, 180) : null,
+    publishedAt: typeof value.publishedAt === 'string' ? value.publishedAt : null,
+    firstSeenAt: typeof value.firstSeenAt === 'string' ? value.firstSeenAt : null,
+    excerpt: typeof value.excerpt === 'string' ? truncate(value.excerpt, 260) : null,
+    bodyPreview: typeof value.bodyPreview === 'string' ? truncate(value.bodyPreview, 260) : null,
+  };
+}
+
+function sanitizeTopicItems(value, maxItems) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      const newsItem = sanitizeNewsItem(item);
+      if (!newsItem) {
+        return null;
+      }
+
+      return {
+        ...newsItem,
+        matchReason: typeof item.matchReason === 'string' ? truncate(item.matchReason, 200) : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function sanitizeNewsMeta(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return {
+    days: typeof value.days === 'number' ? value.days : null,
+    limit: typeof value.limit === 'number' ? value.limit : null,
+    detailMode: typeof value.detailMode === 'string' ? value.detailMode : null,
+  };
+}
+
+function sanitizeTopicMeta(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return {
+    days: typeof value.days === 'number' ? value.days : null,
+    limit: typeof value.limit === 'number' ? value.limit : null,
+    query: typeof value.query === 'string' ? value.query : null,
+    feedScope: typeof value.feedScope === 'string' ? value.feedScope : null,
+  };
+}
+
+function sanitizeActivityResults(value, maxItems) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+
+      return {
+        appid: Number.isInteger(item.appid) ? item.appid : null,
+        name: typeof item.name === 'string' ? item.name : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, maxItems);
 }
 
 function summarizeToolResult(result) {
@@ -2256,6 +2471,7 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
           failure_kind: tool.failure_kind,
           error_message: tool.error_message,
           result_summary: tool.result_summary,
+          result_payload: tool.result_payload || null,
         })),
         null,
         2

@@ -28,7 +28,7 @@ import {
   type JsonValue,
 } from '@/app/(main)/changes/lib';
 import type { ToolCall } from '@/lib/llm/types';
-import { lookupGames } from '@/lib/search/game-lookup';
+import { lookupGames, type LookupGamesArgs } from '@/lib/search/game-lookup';
 import { getServiceSupabase } from '@/lib/supabase-service';
 
 type AppType = Database['public']['Enums']['app_type'];
@@ -255,6 +255,11 @@ interface NewsTopicDefinition {
   patterns: RegExp[];
 }
 
+interface CheckedDateWindow {
+  windowStart: string;
+  windowEnd: string;
+}
+
 const NEWS_TOPIC_DEFINITIONS: NewsTopicDefinition[] = [
   {
     key: 'developer_diary',
@@ -306,6 +311,90 @@ function normalizeSearch(value: string | undefined): string | null {
 
 function normalizeEntityKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function buildCheckedDateWindow(days: number): CheckedDateWindow {
+  const windowEnd = new Date();
+  const windowStart = new Date(windowEnd.getTime() - days * 24 * 60 * 60 * 1000);
+
+  return {
+    windowStart: windowStart.toISOString().split('T')[0] ?? '',
+    windowEnd: windowEnd.toISOString().split('T')[0] ?? '',
+  };
+}
+
+function toResolvedApp(row: {
+  appid: number;
+  name: string;
+  release_date?: string | null;
+  type?: AppType | null;
+}): ResolvedApp {
+  return {
+    appid: row.appid,
+    name: row.name,
+    appType: row.type ?? 'game',
+    releaseYear: row.release_date ? new Date(row.release_date).getFullYear() : null,
+    isExactMatch: true,
+    alternatives: [],
+  };
+}
+
+async function findExactGameMatchesByName(appName: string): Promise<ResolvedApp[]> {
+  const normalizedName = normalizeSearch(appName);
+  if (!normalizedName) {
+    return [];
+  }
+
+  const supabase = getServiceSupabase();
+  const { data, error } = await supabase
+    .from('apps')
+    .select('appid, name, release_date, type')
+    .eq('type', 'game')
+    .ilike('name', normalizedName)
+    .order('release_date', { ascending: false, nullsFirst: false })
+    .limit(MAX_AMBIGUITY_CANDIDATES + 1);
+
+  if (error || !data || data.length === 0) {
+    return [];
+  }
+
+  return data.map((row) => toResolvedApp(row));
+}
+
+function splitExplicitTitleList(value: string): string[] {
+  return value
+    .replace(/\s+/g, ' ')
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((item) => normalizeSearch(item))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 3);
+}
+
+function extractExplicitMultiTitleNewsTargets(userPrompt: string | undefined): string[] {
+  const prompt = normalizeSearch(userPrompt);
+  if (!prompt) {
+    return [];
+  }
+
+  const patterns = [
+    /\bsummar(?:y|ize)\b.+?\bacross\s+(.+?)(?:[?.!]|$)/i,
+    /\bwhich of\s+(.+?)\s+h(?:ad|as)\s+the most material recent steam news change/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    const rawList = normalizeSearch(match?.[1]);
+    if (!rawList) {
+      continue;
+    }
+
+    const titles = splitExplicitTitleList(rawList);
+    if (titles.length >= 2) {
+      return titles;
+    }
+  }
+
+  return [];
 }
 
 function isConfidentGameResolution(
@@ -503,6 +592,29 @@ async function resolveAppReference(args: {
     return {
       app: null,
       error: 'A Steam game name or appid is required.',
+    };
+  }
+
+  const exactMatches = await findExactGameMatchesByName(appName);
+  if (exactMatches.length === 1) {
+    return {
+      app: exactMatches[0] ?? null,
+    };
+  }
+
+  if (exactMatches.length > 1) {
+    const candidates = exactMatches.slice(0, MAX_AMBIGUITY_CANDIDATES).map((candidate) => ({
+      appid: candidate.appid,
+      name: candidate.name,
+      releaseYear: candidate.releaseYear,
+      similarityScore: candidate.similarityScore,
+      isExactMatch: true,
+    }));
+
+    return {
+      app: null,
+      error: buildAmbiguousGameError(appName, candidates),
+      candidates,
     };
   }
 
@@ -850,6 +962,13 @@ function shouldUseRecentNewsDigest(userPrompt: string | undefined): boolean {
   return mentionsNews && mentionsDigestIntent;
 }
 
+function buildRecentNewsDateMeta(days: number): { days: number } & CheckedDateWindow {
+  return {
+    days,
+    ...buildCheckedDateWindow(days),
+  };
+}
+
 function countNewsDetailUnits(body: string | null): number {
   const normalized = body?.trim() ?? null;
   if (!normalized) {
@@ -933,6 +1052,59 @@ export async function normalizeChangeIntelToolCall(
   toolCall: ToolCall,
   userPrompt?: string
 ): Promise<ToolCall> {
+  const explicitMultiTitleTargets = extractExplicitMultiTitleNewsTargets(userPrompt);
+
+  if (toolCall.name === 'lookup_games') {
+    const args = toolCall.arguments as unknown as LookupGamesArgs;
+    const normalizedQuery = normalizeSearch(args.query);
+
+    if (shouldUseRecentNewsTopicSearch(userPrompt)) {
+      const topicQuery = extractRecentNewsTopicQuery(
+        normalizedQuery ? { query: normalizedQuery } : {},
+        userPrompt
+      );
+      if (topicQuery) {
+        return {
+          ...toolCall,
+          name: 'search_recent_news_topics',
+          arguments: {
+            query: topicQuery.query,
+          } as unknown as Record<string, unknown>,
+        };
+      }
+    }
+
+    if (explicitMultiTitleTargets.length >= 2 && shouldUseRecentNewsDigest(userPrompt)) {
+      return {
+        ...toolCall,
+        name: 'get_recent_news_digest',
+        arguments: {
+          app_names: explicitMultiTitleTargets,
+        } as unknown as Record<string, unknown>,
+      };
+    }
+
+    if (normalizedQuery && shouldUseRecentNewsDetail(userPrompt)) {
+      return {
+        ...toolCall,
+        name: 'get_recent_news_detail',
+        arguments: {
+          app_name: normalizedQuery,
+        } as unknown as Record<string, unknown>,
+      };
+    }
+
+    if (normalizedQuery && shouldUseRecentNewsDigest(userPrompt)) {
+      return {
+        ...toolCall,
+        name: 'get_recent_news_digest',
+        arguments: {
+          app_name: normalizedQuery,
+        } as unknown as Record<string, unknown>,
+      };
+    }
+  }
+
   if (toolCall.name === 'get_recent_news_digest' && shouldUseRecentNewsDetail(userPrompt)) {
     const args = toolCall.arguments as GetRecentNewsDigestArgs;
     const hasMultipleTargets = (args.appids?.length ?? 0) > 0 || (args.app_names?.length ?? 0) > 0;
@@ -943,6 +1115,24 @@ export async function normalizeChangeIntelToolCall(
         arguments: {
           appid: args.appid,
           app_name: args.app_name,
+          days: args.days,
+          limit: args.limit,
+        } as unknown as Record<string, unknown>,
+      };
+    }
+  }
+
+  if (toolCall.name === 'get_recent_news_digest' && explicitMultiTitleTargets.length >= 2) {
+    const args = toolCall.arguments as GetRecentNewsDigestArgs;
+    const hasMultipleTargets =
+      (args.appids?.length ?? 0) > 1 ||
+      (args.app_names?.length ?? 0) > 1;
+
+    if (!hasMultipleTargets && shouldUseRecentNewsDigest(userPrompt)) {
+      return {
+        ...toolCall,
+        arguments: {
+          app_names: explicitMultiTitleTargets,
           days: args.days,
           limit: args.limit,
         } as unknown as Record<string, unknown>,
@@ -965,6 +1155,18 @@ export async function normalizeChangeIntelToolCall(
         days: args.days,
         limit: args.limit,
         app_types: args.app_types,
+      } as unknown as Record<string, unknown>,
+    };
+  }
+
+  if (explicitMultiTitleTargets.length >= 2 && shouldUseRecentNewsDigest(userPrompt)) {
+    return {
+      ...toolCall,
+      name: 'get_recent_news_digest',
+      arguments: {
+        app_names: explicitMultiTitleTargets,
+        days: args.days,
+        limit: args.limit,
       } as unknown as Record<string, unknown>,
     };
   }
@@ -1572,6 +1774,7 @@ export async function getRecentNewsDigest(args: GetRecentNewsDigestArgs) {
   }
 
   const days = clamp(args.days, DEFAULT_RECENT_NEWS_DAYS, 1, MAX_RECENT_NEWS_DAYS);
+  const checkedWindow = buildRecentNewsDateMeta(days);
   const limit = clamp(
     args.limit,
     scope === 'single_app' ? DEFAULT_SINGLE_RECENT_NEWS_LIMIT : DEFAULT_MULTI_RECENT_NEWS_LIMIT,
@@ -1597,10 +1800,10 @@ export async function getRecentNewsDigest(args: GetRecentNewsDigestArgs) {
       sufficient_to_answer: true,
       sufficiency_reason: 'No recent Steam news items were found in the requested window.',
       required_answer_fields: ['checked time window', 'which titles were checked', 'that no qualifying recent news was found'],
-      response_guidance: 'State the checked titles and time window clearly. Do not imply there were recent news updates when none were found.',
+      response_guidance: 'State the checked titles and exact checked window from meta.windowStart to meta.windowEnd. Do not imply there were recent news updates when none were found.',
       items: [],
       meta: {
-        days,
+        ...checkedWindow,
         limit,
       },
     };
@@ -1617,7 +1820,7 @@ export async function getRecentNewsDigest(args: GetRecentNewsDigestArgs) {
     sufficiency_reason: 'A bounded recent-news digest is available and can be answered directly from the stored news copy.',
     required_answer_fields: ['dates', 'news titles', 'concrete changes from the news copy'],
     response_guidance:
-      'Use a short intro sentence and 2-4 bullets. Each bullet should name the game, the timing, and the concrete update from the news body. Avoid generic announcement filler.',
+      'Use a short intro sentence and 2-4 bullets. Each bullet should name the game, the exact date, and the concrete update from the news body. Avoid generic announcement filler.',
     presentation_hints: {
       format: 'recent_news_digest',
       proof_field: 'items',
@@ -1640,7 +1843,7 @@ export async function getRecentNewsDigest(args: GetRecentNewsDigestArgs) {
       })),
     },
     meta: {
-      days,
+      ...checkedWindow,
       limit,
     },
   };
@@ -1661,6 +1864,7 @@ export async function getRecentNewsDetail(args: GetRecentNewsDetailArgs) {
   }
 
   const days = clamp(args.days, DEFAULT_RECENT_NEWS_DAYS, 1, MAX_RECENT_NEWS_DAYS);
+  const checkedWindow = buildRecentNewsDateMeta(days);
   const limit = clamp(args.limit, DEFAULT_RECENT_NEWS_DETAIL_LIMIT, 1, MAX_RECENT_NEWS_DETAIL_LIMIT);
   const items = await fetchChatRecentNewsDigest({
     appIds: [resolved.app.appid],
@@ -1680,10 +1884,10 @@ export async function getRecentNewsDetail(args: GetRecentNewsDetailArgs) {
       sufficient_to_answer: true,
       sufficiency_reason: 'No recent Steam news items were found for the requested title in the checked window.',
       required_answer_fields: ['checked time window', 'which title was checked', 'that no qualifying recent news was found'],
-      response_guidance: 'State the checked title and time window clearly. Do not imply there were recent news updates when none were found.',
+      response_guidance: 'State the checked title and exact checked window from meta.windowStart to meta.windowEnd. Do not imply there were recent news updates when none were found.',
       items: [],
       meta: {
-        days,
+        ...checkedWindow,
         limit,
         detailMode: 'no_match',
       },
@@ -1711,8 +1915,8 @@ export async function getRecentNewsDetail(args: GetRecentNewsDetailArgs) {
         : ['dates', 'news titles', 'concrete changes from the recent news copy'],
     response_guidance:
       detailMode === 'latest_item'
-        ? 'Use one short intro sentence and 2-5 bullets from the newest item only. Each bullet should summarize a concrete change or takeaway from the latest news body.'
-        : 'The newest item is too thin on its own. Use one short intro sentence and 2-4 bullets across the most recent 2-3 items, naming the timing and concrete update from each item.',
+        ? 'Use one short intro sentence and 2-5 bullets from the newest item only. Each bullet should summarize a concrete change or takeaway from the latest news body and include the exact date.'
+        : 'The newest item is too thin on its own. Use one short intro sentence and 2-4 bullets across the most recent 2-3 items, naming the exact date and concrete update from each item.',
     presentation_hints: {
       format: 'recent_news_detail',
       proof_field: 'items',
@@ -1746,7 +1950,7 @@ export async function getRecentNewsDetail(args: GetRecentNewsDetailArgs) {
       })),
     },
     meta: {
-      days,
+      ...checkedWindow,
       limit,
       detailMode,
     },
@@ -1764,6 +1968,7 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
 
   const days = clamp(args.days, DEFAULT_NEWS_TOPIC_DAYS, 1, MAX_NEWS_TOPIC_DAYS);
   const limit = clamp(args.limit, DEFAULT_NEWS_TOPIC_LIMIT, 1, MAX_NEWS_TOPIC_LIMIT);
+  const checkedWindow = buildRecentNewsDateMeta(days);
   const appTypes = args.app_types && args.app_types.length > 0 ? args.app_types : DEFAULT_PATTERN_APP_TYPES;
   const appIds = Array.from(new Set((args.appids ?? []).filter((value): value is number => Number.isInteger(value)))).slice(0, 10);
   const feedScope = args.feed_scope ?? DEFAULT_NEWS_TOPIC_FEED_SCOPE;
@@ -1792,8 +1997,15 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
     return {
       success: false,
       unavailable: classified.failureKind === 'projection_unavailable',
-      error: classified.userMessage,
+      error: `${classified.userMessage} It was checking ${feedScope.replace(/_/g, ' ')} for "${topicQuery.query}" from ${checkedWindow.windowStart} to ${checkedWindow.windowEnd}. Try narrowing the topic or limiting it to one title.`,
       failure_kind: classified.failureKind,
+      meta: {
+        ...checkedWindow,
+        limit,
+        query: topicQuery.query,
+        feedScope,
+        appTypes,
+      },
     };
   }
 
@@ -1806,10 +2018,10 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
       sufficient_to_answer: true,
       sufficiency_reason: 'No recent official Steam news items matched the requested topic in the checked window.',
       required_answer_fields: ['checked time window', 'searched topic', 'that no qualifying recent news was found'],
-      response_guidance: 'State the searched topic, official-news scope, and time window clearly. Do not imply matches were found when none qualified.',
+      response_guidance: 'State the searched topic, official-news scope, and exact checked window from meta.windowStart to meta.windowEnd. Do not imply matches were found when none qualified.',
       items: [],
       meta: {
-        days,
+        ...checkedWindow,
         limit,
         query: topicQuery.query,
         feedScope,
@@ -1826,7 +2038,7 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
     sufficiency_reason: 'The result set is grounded in bounded recent official Steam news text that matched the requested topic.',
     required_answer_fields: ['matched games', 'dates', 'matched topic evidence', 'why each result matched'],
     response_guidance:
-      'Use one short intro sentence and 3-6 bullets. Each bullet should name the game, timing, the matching headline or excerpt, and why it matched the topic.',
+      'Use one short intro sentence and 3-6 bullets. Each bullet should name the game, the exact date, the matching headline or excerpt, and why it matched the topic.',
     presentation_hints: {
       format: 'recent_news_topic_search',
       proof_field: 'items',
@@ -1847,7 +2059,7 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
       })),
     },
     meta: {
-      days,
+      ...checkedWindow,
       limit,
       query: topicQuery.query,
       feedScope,
