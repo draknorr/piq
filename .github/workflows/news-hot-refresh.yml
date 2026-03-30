@@ -1,0 +1,57 @@
+name: Steam News Hot Refresh
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      claim_limit:
+        description: 'Queue claim size for each news batch'
+        required: false
+        default: '50'
+      refresh_limit:
+        description: 'How many hot news refresh jobs to seed when the worker is idle'
+        required: false
+        default: '150'
+      max_idle_polls:
+        description: 'Exit after this many idle polls so the job finishes cleanly'
+        required: false
+        default: '3'
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+
+jobs:
+  hot-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run bounded hot news refresh
+        run: pnpm --filter @publisheriq/ingestion change-intel-worker
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          QUEUE_SOURCES: news
+          CLAIM_LIMIT: ${{ github.event.inputs.claim_limit || '50' }}
+          HOT_NEWS_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '150' }}
+          HOT_NEWS_ACTIVE_STALE_MINUTES: '30'
+          HOT_NEWS_MODERATE_STALE_HOURS: '2'
+          MAX_IDLE_POLLS: ${{ github.event.inputs.max_idle_polls || '3' }}
+          POLL_INTERVAL_MS: '1000'

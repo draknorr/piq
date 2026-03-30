@@ -49,8 +49,22 @@ const listNewsCatchupCandidates = (
       limit: number;
       staleBeforeIso: string;
     }) => Promise<Array<{ appid: number }>>;
+    listHotNewsRefreshCandidates: (params: {
+      limit: number;
+      activeStaleBeforeIso: string;
+      moderateStaleBeforeIso: string;
+    }) => Promise<Array<{ appid: number }>>;
   }
 ).listNewsCatchupCandidates;
+const listHotNewsRefreshCandidates = (
+  databaseIngestion as unknown as {
+    listHotNewsRefreshCandidates: (params: {
+      limit: number;
+      activeStaleBeforeIso: string;
+      moderateStaleBeforeIso: string;
+    }) => Promise<Array<{ appid: number }>>;
+  }
+).listHotNewsRefreshCandidates;
 
 async function enqueueProjectionRefresh(supabase: TypedSupabaseClient, appid: number, triggerReason: string): Promise<void> {
   await enqueueCaptureJobs(supabase, [
@@ -85,6 +99,20 @@ function getCatchupMaxPages(): number {
     1,
     parseInt(process.env.STEAM_NEWS_CATCHUP_MAX_PAGES || process.env.STEAM_NEWS_MAX_PAGES || `${DEFAULT_CATCHUP_MAX_PAGES}`, 10)
   );
+}
+
+function getHotNewsRefreshLimit(): number {
+  return Math.max(0, parseInt(process.env.HOT_NEWS_REFRESH_LIMIT || '0', 10));
+}
+
+function getHotNewsActiveStaleWindowMs(): number {
+  const minutes = Math.max(5, parseInt(process.env.HOT_NEWS_ACTIVE_STALE_MINUTES || '30', 10));
+  return minutes * 60 * 1000;
+}
+
+function getHotNewsModerateStaleWindowMs(): number {
+  const hours = Math.max(1, parseInt(process.env.HOT_NEWS_MODERATE_STALE_HOURS || '2', 10));
+  return hours * 60 * 60 * 1000;
 }
 
 export function resolveNewsCaptureMode(triggerReason: string): NewsCaptureMode {
@@ -375,6 +403,36 @@ export async function seedStaleNewsCatchup(
       triggerReason: 'stale_news_catchup',
       triggerCursor: null,
       priority: 25,
+    }))
+  );
+}
+
+export async function seedHotNewsRefresh(
+  supabase: TypedSupabaseClient,
+  limit = getHotNewsRefreshLimit()
+): Promise<number> {
+  if (limit <= 0) {
+    return 0;
+  }
+
+  const candidates = await listHotNewsRefreshCandidates({
+    limit,
+    activeStaleBeforeIso: new Date(Date.now() - getHotNewsActiveStaleWindowMs()).toISOString(),
+    moderateStaleBeforeIso: new Date(Date.now() - getHotNewsModerateStaleWindowMs()).toISOString(),
+  });
+
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  return enqueueCaptureJobs(
+    supabase,
+    candidates.map((row: { appid: number }) => ({
+      appid: row.appid,
+      source: 'news' as const,
+      triggerReason: 'hot_news_refresh',
+      triggerCursor: null,
+      priority: 90,
     }))
   );
 }

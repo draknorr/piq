@@ -275,6 +275,23 @@ export interface ChangeNewsRow {
   url: string | null;
 }
 
+export type ChangeRecentNewsScope = 'single_app' | 'multi_app';
+
+export interface ChangeRecentNewsDigestItem {
+  gid: string;
+  appid: number;
+  appName: string;
+  appType: AppType | null;
+  publishedAt: string | null;
+  firstSeenAt: string | null;
+  title: string | null;
+  feedLabel: string | null;
+  feedName: string | null;
+  url: string | null;
+  excerpt: string | null;
+  bodyPreview: string | null;
+}
+
 export interface ChangeBurstDetail {
   burstId: string;
   appid: number;
@@ -426,6 +443,10 @@ export interface RawChangeNewsRow {
   feedlabel: string | null;
   feedname: string | null;
   url: string | null;
+}
+
+export interface RawChatRecentNewsRow extends RawChangeNewsRow {
+  contents: string | null;
 }
 
 export interface RawChangeBurstDetailRow extends RawChangeBurstRow {

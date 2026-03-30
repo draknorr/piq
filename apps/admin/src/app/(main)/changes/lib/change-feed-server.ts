@@ -14,10 +14,12 @@ import type {
   ChangeFeedBurstsResponse,
   ChangeFeedNewsResponse,
   ChangeFeedPreset,
+  ChangeRecentNewsDigestItem,
   ChangeFeedSource,
   ChangeNewsRow,
   JsonValue,
   RawChangeBurstRow,
+  RawChatRecentNewsRow,
   RawChatChangeActivityCandidateRow,
   RawChatChangePatternCandidateRow,
   RawChangeNewsRow,
@@ -52,6 +54,9 @@ import {
 } from './change-feed-query';
 
 const DEFAULT_CACHE_TTL_MS = 60 * 1000;
+const CHAT_RECENT_NEWS_CACHE_TTL_MS = 30 * 1000;
+const CHAT_RECENT_NEWS_MAX_TOTAL_CHARS = 8_000;
+const CHAT_RECENT_NEWS_MAX_ITEM_CHARS = 2_000;
 const BURST_DETAIL_NEWS_LIMIT = 50;
 const BURST_DETAIL_RELATED_NEWS_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -75,6 +80,14 @@ let defaultActivityCache:
       cachedAt: number;
     }
   | null = null;
+
+const chatRecentNewsCache = new Map<
+  string,
+  {
+    data: ChangeRecentNewsDigestItem[];
+    cachedAt: number;
+  }
+>();
 
 const SIGNAL_FAMILY_SET = new Set<ChangeActivitySignalFamily>(CHANGE_ACTIVITY_SIGNAL_FAMILIES);
 const STORY_KIND_SET = new Set<ChangeActivityStoryKind>(CHANGE_ACTIVITY_STORY_KINDS);
@@ -133,6 +146,13 @@ interface RawBurstNewsVersionRow {
   title: string | null;
   url: string | null;
   first_seen_at: string;
+}
+
+interface ChatRecentNewsParams {
+  appIds: number[] | null;
+  days: number;
+  limit: number;
+  perAppLimit: number | null;
 }
 
 interface RawChangeWindowMetricsPayload {
@@ -218,6 +238,110 @@ function addDuration(value: string, durationMs: number): string {
 
 function getNewsSortTime(row: Pick<ChangeNewsRow, 'publishedAt' | 'firstSeenAt'>): string | null {
   return row.publishedAt ?? row.firstSeenAt;
+}
+
+function normalizeRecentNewsCacheKey(params: ChatRecentNewsParams): string {
+  return JSON.stringify({
+    appIds: params.appIds ?? null,
+    days: params.days,
+    limit: params.limit,
+    perAppLimit: params.perAppLimit,
+  });
+}
+
+function stripNewsBody(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const stripped = value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return stripped.length > 0 ? stripped : null;
+}
+
+function truncateNewsText(value: string | null, maxLength: number): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
+}
+
+function mapChatRecentNewsRow(
+  row: RawChatRecentNewsRow,
+  maxItemChars: number
+): ChangeRecentNewsDigestItem {
+  const strippedBody = stripNewsBody(row.contents);
+
+  return {
+    gid: row.gid,
+    appid: row.appid,
+    appName: row.app_name,
+    appType: row.app_type,
+    publishedAt: row.published_at,
+    firstSeenAt: row.first_seen_at,
+    title: row.title,
+    feedLabel: row.feedlabel,
+    feedName: row.feedname,
+    url: row.url,
+    excerpt: truncateNewsText(strippedBody, 260),
+    bodyPreview: truncateNewsText(strippedBody, maxItemChars),
+  };
+}
+
+function applyRecentNewsBodyBudget(
+  rows: ChangeRecentNewsDigestItem[],
+  maxTotalChars = CHAT_RECENT_NEWS_MAX_TOTAL_CHARS,
+  maxItemChars = CHAT_RECENT_NEWS_MAX_ITEM_CHARS
+): ChangeRecentNewsDigestItem[] {
+  let remainingChars = maxTotalChars;
+
+  return rows.map((row) => {
+    if (!row.bodyPreview || remainingChars <= 0) {
+      return {
+        ...row,
+        bodyPreview: null,
+      };
+    }
+
+    const allowedChars = Math.min(maxItemChars, remainingChars);
+    const bodyPreview = truncateNewsText(row.bodyPreview, allowedChars);
+    remainingChars -= bodyPreview?.length ?? 0;
+
+    return {
+      ...row,
+      bodyPreview,
+    };
+  });
+}
+
+function applyPerAppLimit(
+  rows: ChangeRecentNewsDigestItem[],
+  perAppLimit: number | null
+): ChangeRecentNewsDigestItem[] {
+  if (!perAppLimit || perAppLimit < 1) {
+    return rows;
+  }
+
+  const counts = new Map<number, number>();
+  const limitedRows: ChangeRecentNewsDigestItem[] = [];
+
+  for (const row of rows) {
+    const count = counts.get(row.appid) ?? 0;
+    if (count >= perAppLimit) {
+      continue;
+    }
+
+    counts.set(row.appid, count + 1);
+    limitedRows.push(row);
+  }
+
+  return limitedRows;
 }
 
 function mapMetricsImpactWindow(value: JsonValue): ChangeBurstImpactWindow | null {
@@ -746,6 +870,58 @@ export async function fetchChangeFeedNewsResponse(
   return response;
 }
 
+export async function fetchChatRecentNewsDigest(
+  params: ChatRecentNewsParams
+): Promise<ChangeRecentNewsDigestItem[]> {
+  const normalizedLimit = Math.max(1, Math.min(params.limit, 6));
+  const normalizedPerAppLimit =
+    params.perAppLimit == null ? null : Math.max(1, Math.min(params.perAppLimit, normalizedLimit));
+  const normalizedParams: ChatRecentNewsParams = {
+    appIds:
+      params.appIds && params.appIds.length > 0
+        ? Array.from(new Set(params.appIds)).slice(0, 3)
+        : null,
+    days: Math.max(1, Math.min(params.days, 30)),
+    limit: normalizedLimit,
+    perAppLimit: normalizedPerAppLimit,
+  };
+  const cacheKey = normalizeRecentNewsCacheKey(normalizedParams);
+  const cached = chatRecentNewsCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.cachedAt < CHAT_RECENT_NEWS_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const requestedLimit =
+    normalizedParams.perAppLimit != null && (normalizedParams.appIds?.length ?? 0) > 1
+      ? Math.min(normalizedParams.limit * 2, 12)
+      : normalizedParams.limit;
+
+  const data = await executeChangeFeedRpc<RawChatRecentNewsRow[]>('get_chat_recent_news', {
+    p_appids: normalizedParams.appIds,
+    p_days: normalizedParams.days,
+    p_limit: requestedLimit,
+  });
+
+  let items = (data ?? []).map((row) => mapChatRecentNewsRow(row, CHAT_RECENT_NEWS_MAX_ITEM_CHARS));
+  items = applyPerAppLimit(items, normalizedParams.perAppLimit).slice(0, normalizedParams.limit);
+  items = applyRecentNewsBodyBudget(items);
+
+  if (chatRecentNewsCache.size >= 100) {
+    const oldestKey = chatRecentNewsCache.keys().next().value;
+    if (oldestKey) {
+      chatRecentNewsCache.delete(oldestKey);
+    }
+  }
+
+  chatRecentNewsCache.set(cacheKey, {
+    data: items,
+    cachedAt: Date.now(),
+  });
+
+  return items;
+}
+
 async function fetchComposedChangeFeedActivityResponse(
   params: ChangeFeedActivityParams
 ): Promise<ChangeFeedActivityResponse> {
@@ -850,18 +1026,7 @@ export async function fetchChangeFeedActivityResponse(
 }
 
 function toNewsExcerpt(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const stripped = value
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return stripped.length > 260 ? `${stripped.slice(0, 259).trimEnd()}…` : stripped;
+  return truncateNewsText(stripNewsBody(value), 260);
 }
 
 async function fetchChangeFeedAnnouncementDetail(gid: string): Promise<{

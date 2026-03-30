@@ -31,6 +31,7 @@ import {
   isTerminalNewsCaptureError,
   captureStorefrontState,
   resolveNewsCaptureMode,
+  seedHotNewsRefresh,
   seedStaleNewsCatchup,
 } from '../workers-support/change-intel.js';
 
@@ -296,10 +297,26 @@ async function main(): Promise<void> {
       }
     }
 
+    const canSeedHotNewsRefresh = sources.includes('news');
     const canSeedNewsCatchup =
       sources.includes('news') &&
       catchupSeedLimit > 0 &&
       (maxCatchupSeedBatches === 0 || catchupSeedBatches < maxCatchupSeedBatches);
+
+    if (!processedAny && canSeedHotNewsRefresh) {
+      try {
+        const seeded = await seedHotNewsRefresh(supabase);
+        processedAny = seeded > 0;
+        if (seeded > 0) {
+          log.info('Seeded hot news refresh jobs', { seeded });
+        }
+      } catch (error) {
+        log.error('Failed to seed hot news refresh jobs', {
+          workerId,
+          error,
+        });
+      }
+    }
 
     if (!processedAny && canSeedNewsCatchup) {
       try {

@@ -5,6 +5,7 @@ import {
   buildDiffPreview,
   fetchChangeFeedActivityDetail,
   fetchChangeFeedBurstDetail,
+  fetchChatRecentNewsDigest,
   fetchChatChangeActivityResponse,
   fetchChatChangePatternCandidates,
   formatChangeLabel,
@@ -13,6 +14,8 @@ import {
   type ChangeActivityDetail,
   type ChangeActivityMode,
   type ChangeActivityRow,
+  type ChangeRecentNewsDigestItem,
+  type ChangeRecentNewsScope,
   type ChangeActivitySignalFamily,
   type ChangeActivitySort,
   type ChangeActivityView,
@@ -34,6 +37,11 @@ const DEFAULT_ACTIVITY_LIMIT = 10;
 const MAX_ACTIVITY_LIMIT = 25;
 const DEFAULT_TIMELINE_LIMIT = 20;
 const MAX_TIMELINE_LIMIT = 50;
+const DEFAULT_RECENT_NEWS_DAYS = 14;
+const MAX_RECENT_NEWS_DAYS = 30;
+const DEFAULT_SINGLE_RECENT_NEWS_LIMIT = 4;
+const DEFAULT_MULTI_RECENT_NEWS_LIMIT = 6;
+const MAX_RECENT_NEWS_LIMIT = 6;
 const DEFAULT_PATTERN_LIMIT = 10;
 const MAX_PATTERN_LIMIT = 10;
 const DEFAULT_PATTERN_APP_TYPES: AppType[] = ['game'];
@@ -76,6 +84,15 @@ export interface GetChangeActivityDetailArgs {
   activity_id: string;
 }
 
+export interface GetRecentNewsDigestArgs {
+  app_name?: string;
+  appid?: number;
+  app_names?: string[];
+  appids?: number[];
+  days?: number;
+  limit?: number;
+}
+
 export interface CompareChangeBeforeAfterArgs {
   activity_id?: string;
   app_name?: string;
@@ -110,6 +127,12 @@ interface ResolvedApp {
 
 interface ResolveAppReferenceResult {
   app: ResolvedApp | null;
+  error?: string;
+  candidates?: ResolvedApp['alternatives'];
+}
+
+interface ResolveAppReferencesResult {
+  apps: ResolvedApp[];
   error?: string;
   candidates?: ResolvedApp['alternatives'];
 }
@@ -449,6 +472,83 @@ async function resolveAppReference(args: {
   };
 }
 
+async function resolveAppReferences(args: {
+  appids?: number[];
+  app_names?: string[];
+}): Promise<ResolveAppReferencesResult> {
+  const appIds = Array.from(new Set((args.appids ?? []).filter((value): value is number => Number.isInteger(value))));
+  if (appIds.length > 0) {
+    const supabase = getServiceSupabase();
+    const { data, error } = await supabase
+      .from('apps')
+      .select('appid, name, release_date, type')
+      .in('appid', appIds.slice(0, 3));
+
+    if (error || !data || data.length === 0) {
+      return {
+        apps: [],
+        error: 'Unable to resolve the requested games for recent news.',
+      };
+    }
+
+    const byAppId = new Map<number, ResolvedApp>(
+      data.map((row): [number, ResolvedApp] => [
+        row.appid,
+        {
+          appid: row.appid,
+          name: row.name,
+          appType: row.type ?? 'game',
+          releaseYear: row.release_date ? new Date(row.release_date).getFullYear() : null,
+          alternatives: [],
+        },
+      ])
+    );
+    const resolvedApps = appIds
+      .map((appid) => byAppId.get(appid))
+      .filter((app): app is ResolvedApp => Boolean(app));
+
+    if (resolvedApps.length === 0) {
+      return {
+        apps: [],
+        error: 'Unable to resolve the requested games for recent news.',
+      };
+    }
+
+    return {
+      apps: resolvedApps,
+    };
+  }
+
+  const appNames = Array.from(
+    new Set((args.app_names ?? []).map((value) => value.trim()).filter((value) => value.length > 0))
+  ).slice(0, 3);
+
+  if (appNames.length === 0) {
+    return {
+      apps: [],
+      error: 'At least one Steam game name or appid is required for recent news.',
+    };
+  }
+
+  const resolvedApps: ResolvedApp[] = [];
+  for (const appName of appNames) {
+    const resolved = await resolveAppReference({ app_name: appName });
+    if (!resolved.app) {
+      return {
+        apps: [],
+        error: resolved.error ?? `Unable to resolve "${appName}" to a Steam game.`,
+        candidates: resolved.candidates,
+      };
+    }
+
+    resolvedApps.push(resolved.app);
+  }
+
+  return {
+    apps: resolvedApps,
+  };
+}
+
 function isExactSingleTitleChangeSearch(
   search: string,
   app: ResolvedApp | null
@@ -562,6 +662,23 @@ function shouldUseAnnouncementWeakResponsePattern(userPrompt: string | undefined
   return mentionsAnnouncement && mentionsWeakResponse && mentionsOutcome;
 }
 
+function shouldUseRecentNewsDigest(userPrompt: string | undefined): boolean {
+  const prompt = normalizeSearch(userPrompt)?.toLowerCase();
+  if (!prompt) {
+    return false;
+  }
+
+  const mentionsNews = /\bnews\b/.test(prompt) || /\bannouncement\b/.test(prompt);
+  const mentionsDigestIntent =
+    /\bsummar(?:y|ize)\b/.test(prompt) ||
+    /\bupdate(?:s)?\b/.test(prompt) ||
+    /\blatest\b/.test(prompt) ||
+    /\brecent\b/.test(prompt) ||
+    /\bwhat actually changed\b/.test(prompt);
+
+  return mentionsNews && mentionsDigestIntent;
+}
+
 function patternNeedsLiveMetrics(pattern: ChangePattern): boolean {
   return pattern === 'under_marketed' || pattern === 'signable_candidate' || pattern === 'rescue_candidate';
 }
@@ -626,6 +743,19 @@ export async function normalizeChangeIntelToolCall(
 
   const args = toolCall.arguments as QueryChangeActivityArgs;
   const timelineArgs = await resolveSingleTitleTimelineArgs(args, userPrompt);
+  if (timelineArgs && shouldUseRecentNewsDigest(userPrompt)) {
+    return {
+      ...toolCall,
+      name: 'get_recent_news_digest',
+      arguments: {
+        appid: timelineArgs.appid,
+        app_name: timelineArgs.app_name,
+        days: args.days,
+        limit: args.limit,
+      } as unknown as Record<string, unknown>,
+    };
+  }
+
   if (!timelineArgs) {
     if (shouldUseAnnouncementWeakResponsePattern(userPrompt)) {
       return {
@@ -1160,6 +1290,118 @@ export async function getGameChangeTimeline(args: GetGameChangeTimelineArgs) {
       days,
       limit,
       signalFamilies: args.signal_families ?? null,
+    },
+  };
+}
+
+export async function getRecentNewsDigest(args: GetRecentNewsDigestArgs) {
+  const hasMultipleTargets = (args.appids?.length ?? 0) > 0 || (args.app_names?.length ?? 0) > 0;
+  const scope: ChangeRecentNewsScope = hasMultipleTargets ? 'multi_app' : 'single_app';
+  const resolvedAppsResult = hasMultipleTargets
+    ? await resolveAppReferences({
+        appids: args.appids,
+        app_names: args.app_names,
+      })
+    : (() => null)();
+
+  const resolvedSingleApp = hasMultipleTargets
+    ? null
+    : await resolveAppReference({
+        appid: args.appid,
+        app_name: args.app_name,
+      });
+
+  const resolvedApps = hasMultipleTargets
+    ? resolvedAppsResult?.apps ?? []
+    : resolvedSingleApp?.app
+      ? [resolvedSingleApp.app]
+      : [];
+  const resolutionError = hasMultipleTargets
+    ? resolvedAppsResult?.error
+    : resolvedSingleApp?.error;
+  const resolutionCandidates = hasMultipleTargets
+    ? resolvedAppsResult?.candidates ?? []
+    : resolvedSingleApp?.candidates ?? [];
+
+  if (resolvedApps.length === 0) {
+    return {
+      success: false,
+      error: resolutionError ?? 'Unable to resolve the requested game or games for recent news.',
+      candidates: resolutionCandidates,
+    };
+  }
+
+  const days = clamp(args.days, DEFAULT_RECENT_NEWS_DAYS, 1, MAX_RECENT_NEWS_DAYS);
+  const limit = clamp(
+    args.limit,
+    scope === 'single_app' ? DEFAULT_SINGLE_RECENT_NEWS_LIMIT : DEFAULT_MULTI_RECENT_NEWS_LIMIT,
+    1,
+    MAX_RECENT_NEWS_LIMIT
+  );
+  const items = await fetchChatRecentNewsDigest({
+    appIds: resolvedApps.map((app) => app.appid),
+    days,
+    limit,
+    perAppLimit: scope === 'multi_app' ? 2 : null,
+  });
+
+  if (items.length === 0) {
+    return {
+      success: true,
+      app: scope === 'single_app' ? resolvedApps[0] : undefined,
+      apps: resolvedApps,
+      scope,
+      total_found: 0,
+      selected_change_surface: 'recent_news_digest',
+      no_match: true,
+      sufficient_to_answer: true,
+      sufficiency_reason: 'No recent Steam news items were found in the requested window.',
+      required_answer_fields: ['checked time window', 'which titles were checked', 'that no qualifying recent news was found'],
+      response_guidance: 'State the checked titles and time window clearly. Do not imply there were recent news updates when none were found.',
+      items: [],
+      meta: {
+        days,
+        limit,
+      },
+    };
+  }
+
+  return {
+    success: true,
+    app: scope === 'single_app' ? resolvedApps[0] : undefined,
+    apps: resolvedApps,
+    scope,
+    total_found: items.length,
+    selected_change_surface: 'recent_news_digest',
+    sufficient_to_answer: true,
+    sufficiency_reason: 'A bounded recent-news digest is available and can be answered directly from the stored news copy.',
+    required_answer_fields: ['dates', 'news titles', 'concrete changes from the news copy'],
+    response_guidance:
+      'Use a short intro sentence and 2-4 bullets. Each bullet should name the game, the timing, and the concrete update from the news body. Avoid generic announcement filler.',
+    presentation_hints: {
+      format: 'recent_news_digest',
+      proof_field: 'items',
+    },
+    items,
+    answer_payload: {
+      scope,
+      apps: resolvedApps.map((app) => ({
+        appid: app.appid,
+        name: app.name,
+      })),
+      items: items.map((item: ChangeRecentNewsDigestItem) => ({
+        appid: item.appid,
+        appName: item.appName,
+        title: item.title,
+        publishedAt: item.publishedAt,
+        firstSeenAt: item.firstSeenAt,
+        excerpt: item.excerpt,
+        bodyPreview: item.bodyPreview,
+      })),
+    },
+    meta: {
+      days,
+      limit,
     },
   };
 }

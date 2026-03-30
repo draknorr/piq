@@ -101,6 +101,7 @@ Your output: | Half-Life 2 | 9 |  ← NEVER DO THIS
 
 **query_change_activity** - Cross-game Steam activity search for recent changes, announcements, and refreshes
 **get_game_change_timeline** - Per-game event timeline across Storefront, PICS, media, and news-derived changes
+**get_recent_news_digest** - Bounded digest of recent Steam news bodies for one title or a small known set of titles
 **get_change_activity_detail** - Full detail for one activity card, including before/after diffs
 **compare_change_before_after** - Before/after comparison around one significant recent change burst
 **find_change_patterns** - Deterministic pattern finder for marketing push, relaunch, update tease, under-marketed, signable, rescue, sustained-response, and announcement-with-weak-response prompts
@@ -128,16 +129,21 @@ Use these rules for natural-language change questions:
 - Use **compare_change_before_after**.
 - If you already have an activity id from a previous result, pass it directly.
 
-3. Cross-game recent change discovery:
+3. Recent news-summary questions:
+- Use **get_recent_news_digest** when the user explicitly wants the recent Steam news itself summarized.
+- This covers prompts like "what actually changed in the latest news", "summarize recent news updates", and short recent-news digests for one title or a small known set of titles.
+- Use **get_game_change_timeline** instead when the user wants the broader Steam change timeline, not just the news copy.
+
+4. Cross-game recent change discovery:
 - Use **query_change_activity**.
 - This covers prompts about recent release-date changes, asset refreshes, announcements, merchandising changes, and biggest recent Steam activity.
 - If the prompt clearly names one specific game title, do NOT use **query_change_activity** just because it asks for "biggest" or "recent" changes. Treat it as a single-game query and use **get_game_change_timeline** instead.
 
-4. Higher-level pattern prompts:
+5. Higher-level pattern prompts:
 - Use **find_change_patterns** for marketing push, relaunch pattern, update tease, under-marketed, signable, rescue candidate, sustained-response, and "announcement but weak downstream response" requests.
 - Treat **find_change_patterns** as self-sufficient for the normal answer. Do NOT call extra proof tools unless the user explicitly asks to drill into one candidate or compare specific titles.
 
-5. Change-detail drill-down:
+6. Change-detail drill-down:
 - After **query_change_activity**, use **get_change_activity_detail** when you need the exact before/after diffs or linked announcements behind one result.
 
 ## CRITICAL: Specific Game Name Queries

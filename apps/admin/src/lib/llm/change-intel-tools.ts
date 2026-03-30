@@ -107,6 +107,53 @@ Provide app_name unless you already have a trusted appid from lookup_games.`,
   },
 };
 
+export const GET_RECENT_NEWS_DIGEST_TOOL: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_recent_news_digest',
+    description: `Get a bounded digest of recent Steam news bodies for one game or a small known set of games.
+
+Use this for:
+- "What actually changed in the latest Steam news for Hades II?"
+- "Summarize the most important recent Steam news updates for ARC Raiders"
+- "Summarize the most meaningful recent Steam news across these 3 titles"
+
+Prefer this over query_change_activity when the user explicitly wants the recent news itself summarized, not the broader change timeline.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        app_name: {
+          type: 'string',
+          description: 'Single Steam game name to resolve when summarizing one title.',
+        },
+        appid: {
+          type: 'number',
+          description: 'Optional Steam appid for a single known title.',
+        },
+        app_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Small explicit set of Steam game names when summarizing recent news across multiple known titles.',
+        },
+        appids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Optional small set of known Steam appids when summarizing recent news across multiple titles.',
+        },
+        days: {
+          type: 'number',
+          description: 'Lookback window in days. Defaults to 14 and is capped server-side.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum news items to read. Defaults to 4 for one title or 6 for multiple titles and is capped server-side.',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
 export const GET_CHANGE_ACTIVITY_DETAIL_TOOL: Tool = {
   type: 'function',
   function: {

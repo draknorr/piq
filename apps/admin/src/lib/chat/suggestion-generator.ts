@@ -163,6 +163,31 @@ function extractEntities(toolCalls: ChatToolCall[]): ExtractedEntities {
       }
     }
 
+    if (tc.name === 'get_recent_news_digest') {
+      if (Array.isArray(tc.result.apps)) {
+        const apps = tc.result.apps as Array<{ name?: string; appid?: number }>;
+        for (const app of apps.slice(0, 3)) {
+          if (app.name) {
+            entities.games.push({ name: app.name, appid: app.appid });
+          }
+        }
+      } else if (tc.result.app) {
+        const app = tc.result.app as { name?: string; appid?: number };
+        if (app.name) {
+          entities.games.unshift({ name: app.name, appid: app.appid });
+        }
+      }
+
+      if (Array.isArray(tc.result.items)) {
+        const items = tc.result.items as Array<{ appName?: string; appid?: number }>;
+        for (const item of items.slice(0, 3)) {
+          if (item.appName) {
+            entities.games.push({ name: item.appName, appid: item.appid });
+          }
+        }
+      }
+    }
+
     // Extract tags from arguments
     const args = tc.arguments as Record<string, unknown>;
     if (args.tags && Array.isArray(args.tags)) {
@@ -288,18 +313,49 @@ function generateToolBasedSuggestions(
     });
   }
 
-  if ((toolNames.has('query_change_activity') || toolNames.has('get_game_change_timeline')) && entities.games.length > 0) {
-    const game = entities.games[0];
-    suggestions.push({
-      label: `Recent changes for ${game.name}`,
-      query: `Show me the recent Steam changes for ${game.name}`,
-      category: 'game',
-    });
-    suggestions.push({
-      label: `Compare ${game.name} before and after`,
-      query: `What changed on ${game.name} before and after its latest major update?`,
-      category: 'game',
-    });
+  if (
+    (toolNames.has('query_change_activity') ||
+      toolNames.has('get_game_change_timeline') ||
+      toolNames.has('get_recent_news_digest')) &&
+    entities.games.length > 0
+  ) {
+    if (entities.games.length > 1 && (toolNames.has('query_change_activity') || toolNames.has('get_recent_news_digest'))) {
+      const titles = entities.games.slice(0, 3).map((game) => game.name);
+      const joinedTitles =
+        titles.length === 2
+          ? `${titles[0]} and ${titles[1]}`
+          : `${titles.slice(0, -1).join(', ')}, and ${titles[titles.length - 1]}`;
+
+      suggestions.push({
+        label: 'Recent news across these titles',
+        query: `Summarize the most meaningful recent Steam news across ${joinedTitles}.`,
+        category: 'template',
+      });
+      suggestions.push({
+        label: 'Biggest news change here',
+        query: `Which of ${joinedTitles} had the most material recent Steam news change, and why?`,
+        category: 'template',
+      });
+    } else {
+      const game = entities.games[0];
+      suggestions.push({
+        label: `What changed in ${game.name} news?`,
+        query: `What actually changed in the latest Steam news for ${game.name}?`,
+        category: 'game',
+      });
+      suggestions.push({
+        label: `Recent news for ${game.name}`,
+        query: `Summarize the most important recent Steam news updates for ${game.name}.`,
+        category: 'game',
+      });
+      if (toolNames.has('get_game_change_timeline') || toolNames.has('query_change_activity')) {
+        suggestions.push({
+          label: `Compare ${game.name} before and after`,
+          query: `What changed on ${game.name} before and after its latest major update?`,
+          category: 'game',
+        });
+      }
+    }
   }
 
   if (toolNames.has('find_change_patterns')) {

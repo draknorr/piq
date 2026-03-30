@@ -829,10 +829,10 @@ export function buildAnnouncementActivityDetail(args: {
 
   return {
     ...row,
+    summary: args.excerpt ?? row.summary,
     diffs: [],
     relatedAnnouncements: [buildAnnouncementPreview({ ...args.row, excerpt: args.excerpt })],
     aftermath: null,
     body: args.body,
   };
 }
-

@@ -67,6 +67,10 @@ function getRowCount(result: Record<string, unknown>): number {
     return result.events.length;
   }
 
+  if (Array.isArray(result.items)) {
+    return result.items.length;
+  }
+
   if (Array.isArray(result.diffs)) {
     return result.diffs.length;
   }
@@ -82,6 +86,7 @@ function familyForTool(toolCall: ToolCall, result: Record<string, unknown>): str
     case 'query_change_activity':
     case 'get_change_activity_detail':
     case 'get_game_change_timeline':
+    case 'get_recent_news_digest':
     case 'compare_change_before_after':
     case 'find_change_patterns':
       return 'change_intel';
@@ -132,6 +137,10 @@ function getRequiredAnswerFields(toolCall: ToolCall, result: Record<string, unkn
       return ['dates', 'concrete title-specific changes', 'before/after values when available'];
     }
 
+    if (toolCall.name === 'get_recent_news_digest') {
+      return ['dates', 'news titles', 'concrete changes from the news copy'];
+    }
+
     return ['ranked candidates', 'evidence', 'timing', 'why it qualifies'];
   }
 
@@ -162,6 +171,8 @@ function getSupportingEvidence(toolCall: ToolCall, result: Record<string, unknow
   if (family === 'change_intel') {
     if (toolCall.name === 'compare_change_before_after') {
       evidence.push('Use structured diffs plus baseline/response windows.');
+    } else if (toolCall.name === 'get_recent_news_digest') {
+      evidence.push('Lead with the stored news copy, dates, and the concrete update from each item.');
     } else if (toolCall.name === 'query_change_activity' || toolCall.name === 'find_change_patterns') {
       evidence.push('Lead with exact change evidence, not generic pattern labels.');
     }
@@ -202,6 +213,10 @@ function getAnswerScaffold(toolCall: ToolCall, result: Record<string, unknown>, 
 
     if (toolCall.name === 'get_game_change_timeline') {
       return 'Lead with the most material title-specific changes and dates. Use before/after text when it exists.';
+    }
+
+    if (toolCall.name === 'get_recent_news_digest') {
+      return 'Use a short intro sentence and 2-4 bullets. Each bullet should name the game, timing, and concrete update from the news body.';
     }
   }
 

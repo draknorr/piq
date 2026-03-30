@@ -245,6 +245,33 @@ function renderBeforeAfterResult(result: Record<string, unknown>): string | null
   ].join('\n');
 }
 
+function renderRecentNewsDigestResult(result: Record<string, unknown>): string | null {
+  const items = asArrayOfRecords(result.items);
+  if (items.length === 0) {
+    return null;
+  }
+
+  const rows = items.slice(0, 6).map((item) => ({
+    appid: item.appid,
+    name:
+      typeof item.appName === 'string'
+        ? item.appName
+        : typeof item.name === 'string'
+          ? item.name
+          : 'Unknown',
+    Date: formatDate(item.publishedAt ?? item.firstSeenAt),
+    Headline: typeof item.title === 'string' && item.title.trim().length > 0 ? item.title : 'Steam news update',
+    Summary:
+      typeof item.excerpt === 'string' && item.excerpt.trim().length > 0
+        ? item.excerpt
+        : typeof item.bodyPreview === 'string' && item.bodyPreview.trim().length > 0
+          ? item.bodyPreview
+          : 'News body available in the digest.',
+  }));
+
+  return `Here are the most recent Steam news updates.\n\n${buildMarkdownTable(['Game', 'Date', 'Headline', 'Summary'], rows)}`;
+}
+
 export function renderToolResultForChat(
   toolCall: ToolCall,
   result: Record<string, unknown>,
@@ -260,6 +287,8 @@ export function renderToolResultForChat(
       return renderTrendResult(result);
     case 'get_game_change_timeline':
       return renderGameTimelineResult(result);
+    case 'get_recent_news_digest':
+      return renderRecentNewsDigestResult(result);
     case 'compare_change_before_after':
       return renderBeforeAfterResult(result);
     default:

@@ -123,6 +123,14 @@ export interface NewsCatchupCandidate {
   lastStorefrontSync: string;
 }
 
+export interface HotNewsRefreshCandidate {
+  appid: number;
+  lastNewsSync: string | null;
+  lastStorefrontSync: string;
+  refreshTier: string | null;
+  isLaunchWindow: boolean;
+}
+
 interface ClaimedReviewAppRow extends QueryResultRow {
   appid: number;
   lane: ReviewLane;
@@ -210,6 +218,14 @@ interface NewsCatchupCandidateRow extends QueryResultRow {
   appid: number;
   last_news_sync: Date | string | null;
   last_storefront_sync: Date | string;
+}
+
+interface HotNewsRefreshCandidateRow extends QueryResultRow {
+  appid: number;
+  last_news_sync: Date | string | null;
+  last_storefront_sync: Date | string;
+  refresh_tier: string | null;
+  is_launch_window: boolean;
 }
 
 const DEFAULT_POOL_MAX = 3;
@@ -993,6 +1009,96 @@ export async function listNewsCatchupCandidates(params: {
       appid: row.appid,
       lastNewsSync: normalizeTimestamp(row.last_news_sync),
       lastStorefrontSync: normalizeTimestamp(row.last_storefront_sync)!,
+    }));
+  });
+}
+
+export async function listHotNewsRefreshCandidates(params: {
+  limit: number;
+  activeStaleBeforeIso: string;
+  moderateStaleBeforeIso: string;
+}): Promise<HotNewsRefreshCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(params.limit, 500));
+
+  return withTransaction(QUEUE_HEALTH_TIMEOUT_MS, async (client) => {
+    const { rows } = await client.query<HotNewsRefreshCandidateRow>(
+      `
+        SELECT
+          s.appid,
+          s.last_news_sync,
+          s.last_storefront_sync,
+          s.refresh_tier,
+          (
+            COALESCE(a.is_released, FALSE) = FALSE
+            OR (
+              a.release_date IS NOT NULL
+              AND a.release_date BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '30 days'
+            )
+          ) AS is_launch_window
+        FROM sync_status s
+        JOIN apps a
+          ON a.appid = s.appid
+        LEFT JOIN app_capture_work_state w
+          ON w.appid = s.appid
+         AND w.source = 'news'
+        WHERE s.last_storefront_sync IS NOT NULL
+          AND COALESCE(s.storefront_accessible, TRUE) = TRUE
+          AND (
+            (
+              s.refresh_tier = 'active'
+              AND (
+                s.last_news_sync IS NULL
+                OR s.last_news_sync < $1::TIMESTAMPTZ
+              )
+            )
+            OR (
+              (
+                COALESCE(a.is_released, FALSE) = FALSE
+                OR (
+                  a.release_date IS NOT NULL
+                  AND a.release_date BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '30 days'
+                )
+              )
+              AND (
+                s.last_news_sync IS NULL
+                OR s.last_news_sync < $2::TIMESTAMPTZ
+              )
+            )
+          )
+          AND (
+            w.id IS NULL
+            OR (
+              w.dirty_since IS NULL
+              AND w.claimed_at IS NULL
+              AND w.dead_lettered_at IS NULL
+            )
+          )
+        ORDER BY
+          CASE WHEN s.refresh_tier = 'active' THEN 0 ELSE 1 END,
+          CASE
+            WHEN (
+              COALESCE(a.is_released, FALSE) = FALSE
+              OR (
+                a.release_date IS NOT NULL
+                AND a.release_date BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '30 days'
+              )
+            ) THEN 0
+            ELSE 1
+          END,
+          s.last_news_sync ASC NULLS FIRST,
+          s.last_storefront_sync DESC,
+          s.appid ASC
+        LIMIT $3
+      `,
+      [params.activeStaleBeforeIso, params.moderateStaleBeforeIso, requestedLimit]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      lastNewsSync: normalizeTimestamp(row.last_news_sync),
+      lastStorefrontSync: normalizeTimestamp(row.last_storefront_sync)!,
+      refreshTier: row.refresh_tier,
+      isLaunchWindow: row.is_launch_window,
     }));
   });
 }
