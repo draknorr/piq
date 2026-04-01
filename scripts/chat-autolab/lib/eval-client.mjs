@@ -31,6 +31,7 @@ export async function evaluatePrompt({
       timing: null,
       usage: null,
       iterations: null,
+      tigerShadow: null,
     };
   }
 
@@ -43,6 +44,7 @@ function parseSse(rawSse) {
   let timing = null;
   let usage = null;
   let iterations = null;
+  let tigerShadow = null;
   let errorMessage = null;
 
   for (const block of rawSse.split('\n\n')) {
@@ -86,6 +88,7 @@ function parseSse(rawSse) {
           }
         : null;
       iterations = event.debug?.iterations ?? null;
+      tigerShadow = event.tigerShadow || null;
       continue;
     }
 
@@ -102,6 +105,7 @@ function parseSse(rawSse) {
     timing,
     usage,
     iterations,
+    tigerShadow,
   };
 }
 

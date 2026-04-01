@@ -92,7 +92,11 @@ async function runScenarioEvaluation(env) {
   const results = [];
 
   console.log(`Prepared ${executableScenarios.length} multi-turn scenarios against ${PROD_ORIGIN}`);
-  console.log(`Authenticated against ${PROD_ORIGIN} as ${env.BYPASS_AUTH_EMAIL}`);
+  console.log(
+    auth.authMode === 'eval_bypass'
+      ? `Using local eval bypass against ${PROD_ORIGIN} as ${auth.email}`
+      : `Authenticated against ${PROD_ORIGIN} as ${auth.email}`
+  );
 
   for (let index = 0; index < executableScenarios.length; index += 1) {
     const scenario = executableScenarios[index];
@@ -115,6 +119,8 @@ async function runScenarioEvaluation(env) {
         origin: PROD_ORIGIN,
         scenariosFile: path.relative(ROOT, SCENARIOS_FILE),
         scenarioCount: executableScenarios.length,
+        authEmail: auth.email,
+        authMode: auth.authMode,
       },
       null,
       2
@@ -180,6 +186,8 @@ function renderScenarioReport(results) {
       lines.push(`- Status: ${turn.status}`);
       lines.push(`- Tools: ${turn.tool_calls.map((tool) => tool.name).join(', ') || 'none'}`);
       lines.push(`- Time: ${turn.timing?.totalMs ?? '-'}ms`);
+      lines.push(`- Tiger primary: ${summarizeTigerPrimary(turn.tiger_primary)}`);
+      lines.push(`- Tiger shadow: ${summarizeTigerShadow(turn.tiger_shadow)}`);
       if (turn.session_context_summary) {
         lines.push(
           `- Session Context: ${[
@@ -226,7 +234,8 @@ async function runFullEvaluation(env, manifest, executableManifest, includePromp
     maxPrompts: MAX_PROMPTS,
     outDir: OUT_DIR,
     docPath: DOC_PATH,
-    authEmail: env.BYPASS_AUTH_EMAIL,
+    authEmail: readEvalBypassEmail(env),
+    authMode: null,
     runStatus: resumedResults.length > 0 ? 'resuming' : 'starting',
     completedPrompts: resumedResults.length,
     totalExecutablePrompts: manifestToRun.length,
@@ -244,7 +253,12 @@ async function runFullEvaluation(env, manifest, executableManifest, includePromp
   await checkpoint(resumedResults);
 
   const auth = await authenticate(env);
-  console.log(`Authenticated against ${PROD_ORIGIN} as ${env.BYPASS_AUTH_EMAIL}`);
+  metadata.authMode = auth.authMode;
+  console.log(
+    auth.authMode === 'eval_bypass'
+      ? `Using local eval bypass against ${PROD_ORIGIN} as ${auth.email}`
+      : `Authenticated against ${PROD_ORIGIN} as ${auth.email}`
+  );
 
   const results = [...resumedResults];
   if (results.length === 0 && manifestToRun.length > 0) {
@@ -330,7 +344,8 @@ async function runRetry429Only(env, manifest, executableManifest, includePrompts
     maxPrompts: MAX_PROMPTS,
     outDir: OUT_DIR,
     docPath: DOC_PATH,
-    authEmail: env.BYPASS_AUTH_EMAIL,
+    authEmail: readEvalBypassEmail(env),
+    authMode: null,
     runStatus: 'starting',
     completedPrompts: 0,
     totalExecutablePrompts: retryTargets.length,
@@ -364,7 +379,12 @@ async function runRetry429Only(env, manifest, executableManifest, includePrompts
   }
 
   const auth = await authenticate(env);
-  console.log(`Authenticated against ${PROD_ORIGIN} as ${env.BYPASS_AUTH_EMAIL}`);
+  metadata.authMode = auth.authMode;
+  console.log(
+    auth.authMode === 'eval_bypass'
+      ? `Using local eval bypass against ${PROD_ORIGIN} as ${auth.email}`
+      : `Authenticated against ${PROD_ORIGIN} as ${auth.email}`
+  );
 
   if (RETRY_429_INITIAL_COOLDOWN_MS > 0) {
     metadata.runStatus = 'cooldown';
@@ -629,14 +649,36 @@ async function loadEnvFiles(files) {
 }
 
 function validateEnv(env) {
-  for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL']) {
+  const requiredKeys = shouldUseLocalEvalBypass(PROD_ORIGIN, env)
+    ? ['CHAT_EVAL_SECRET']
+    : ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL'];
+
+  for (const key of requiredKeys) {
     if (!env[key]) {
       throw new Error(`Missing required env var: ${key}`);
     }
   }
+
+  if (!readEvalBypassEmail(env)) {
+    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
+  }
 }
 
 async function authenticate(env) {
+  const bypassEmail = readEvalBypassEmail(env);
+  if (!bypassEmail) {
+    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
+  }
+
+  if (shouldUseLocalEvalBypass(PROD_ORIGIN, env)) {
+    return {
+      cookieJar: new Map(),
+      email: bypassEmail,
+      authMode: 'eval_bypass',
+      evalSecret: env.CHAT_EVAL_SECRET,
+    };
+  }
+
   const generateResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/generate_link`, {
     method: 'POST',
     headers: {
@@ -646,7 +688,7 @@ async function authenticate(env) {
     },
     body: JSON.stringify({
       type: 'magiclink',
-      email: env.BYPASS_AUTH_EMAIL,
+      email: bypassEmail,
     }),
   });
 
@@ -690,8 +732,31 @@ async function authenticate(env) {
 
   return {
     cookieJar,
-    email: env.BYPASS_AUTH_EMAIL,
+    email: bypassEmail,
+    authMode: 'magiclink',
+    evalSecret: null,
   };
+}
+
+function shouldUseLocalEvalBypass(origin, env) {
+  if (env.CHAT_EVAL_LOCAL_BYPASS_ENABLED !== 'true') {
+    return false;
+  }
+
+  if (!env.CHAT_EVAL_SECRET?.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(origin);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function readEvalBypassEmail(env) {
+  return env.CHAT_EVAL_BYPASS_EMAIL?.trim() || env.BYPASS_AUTH_EMAIL?.trim() || '';
 }
 
 function storeResponseCookies(response, cookieJar) {
@@ -1441,6 +1506,8 @@ async function evaluateScenario(scenario, auth) {
       iterations: result.iterations,
       quality: result.quality,
       session_context_summary: summarizeScenarioSessionContext(result.sessionContext),
+      tiger_primary: result.tigerPrimary,
+      tiger_shadow: result.tigerShadow,
     });
 
     if (result.status !== 'success') {
@@ -1467,12 +1534,18 @@ async function evaluateScenario(scenario, auth) {
 
 async function evaluateChatRequest(requestBody, auth) {
   try {
+    const headers = {
+      Cookie: serializeCookies(auth.cookieJar),
+      'Content-Type': 'application/json',
+    };
+
+    if (auth.evalSecret) {
+      headers['x-chat-eval-secret'] = auth.evalSecret;
+    }
+
     const response = await fetch(new URL('/api/chat/stream', PROD_ORIGIN), {
       method: 'POST',
-      headers: {
-        Cookie: serializeCookies(auth.cookieJar),
-        'Content-Type': 'application/json',
-      },
+      headers,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       body: JSON.stringify(requestBody),
     });
@@ -1490,6 +1563,8 @@ async function evaluateChatRequest(requestBody, auth) {
         iterations: null,
         quality: null,
         sessionContext: null,
+        tigerPrimary: null,
+        tigerShadow: null,
         transport_ok: false,
         message_end_received: false,
         failure_kind: classifyFailure({
@@ -1516,6 +1591,8 @@ async function evaluateChatRequest(requestBody, auth) {
       iterations: parsed.iterations,
       quality: parsed.quality,
       sessionContext: parsed.sessionContext,
+      tigerPrimary: parsed.tigerPrimary,
+      tigerShadow: parsed.tigerShadow,
       transport_ok: true,
       message_end_received: parsed.message_end_received,
       failure_kind: classifyFailure({
@@ -1538,6 +1615,8 @@ async function evaluateChatRequest(requestBody, auth) {
       iterations: null,
       quality: null,
       sessionContext: null,
+      tigerPrimary: null,
+      tigerShadow: null,
       transport_ok: false,
       message_end_received: false,
       failure_kind: classifyFailure({
@@ -1559,6 +1638,8 @@ function parseSse(rawSse) {
   let error_message = null;
   let quality = null;
   let sessionContext = null;
+  let tigerPrimary = null;
+  let tigerShadow = null;
   let message_end_received = false;
 
   for (const block of rawSse.split('\n\n')) {
@@ -1600,6 +1681,8 @@ function parseSse(rawSse) {
       iterations = event.debug?.iterations ?? null;
       quality = event.quality || null;
       sessionContext = event.sessionContext || null;
+      tigerPrimary = event.tigerPrimary || null;
+      tigerShadow = event.tigerShadow || null;
       message_end_received = true;
       continue;
     }
@@ -1617,6 +1700,8 @@ function parseSse(rawSse) {
     error_message,
     quality,
     sessionContext,
+    tigerPrimary,
+    tigerShadow,
     message_end_received,
   };
 }
@@ -1649,6 +1734,157 @@ function summarizeScenarioSessionContext(sessionContext) {
     candidateSet,
     lastAnswer: sessionContext.lastAnswer?.summary || null,
   };
+}
+
+function summarizeTigerShadow(tigerShadow) {
+  if (!tigerShadow || typeof tigerShadow !== 'object') {
+    return '-';
+  }
+
+  const attempts = Array.isArray(tigerShadow.attempts)
+    ? tigerShadow.attempts
+        .map((attempt) => {
+          const base = `${attempt.contractName}:${attempt.status}`;
+          if (typeof attempt.resultCount === 'number') {
+            return `${base}(${attempt.resultCount})`;
+          }
+          return base;
+        })
+        .join(', ')
+    : '';
+
+  return [
+    tigerShadow.route || 'unknown',
+    tigerShadow.matchedIntent ? `intent=${tigerShadow.matchedIntent}` : null,
+    attempts ? `attempts=${attempts}` : null,
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function summarizeTigerPrimary(tigerPrimary) {
+  if (!tigerPrimary || typeof tigerPrimary !== 'object') {
+    return '-';
+  }
+
+  const attempts = Array.isArray(tigerPrimary.attempts)
+    ? tigerPrimary.attempts
+        .map((attempt) => {
+          const base = `${attempt.contractName}:${attempt.status}`;
+          if (typeof attempt.resultCount === 'number') {
+            return `${base}(${attempt.resultCount})`;
+          }
+          return base;
+        })
+        .join(', ')
+    : '';
+
+  return [
+    tigerPrimary.route || 'unknown',
+    tigerPrimary.matchedIntent ? `intent=${tigerPrimary.matchedIntent}` : null,
+    tigerPrimary.renderMode ? `render=${tigerPrimary.renderMode}` : null,
+    attempts ? `attempts=${attempts}` : null,
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function buildTigerShadowCoverageRows(results) {
+  const coverage = new Map();
+
+  for (const row of results) {
+    const tigerShadow = row?.tigerShadow;
+    if (!tigerShadow || typeof tigerShadow !== 'object') {
+      continue;
+    }
+
+    const intent = tigerShadow.matchedIntent || 'unmatched';
+    const current = coverage.get(intent) || {
+      total: 0,
+      success: 0,
+      failed: 0,
+      skipped: 0,
+      contracts: new Set(),
+    };
+
+    current.total += 1;
+    if (tigerShadow.route === 'shadow_success_legacy_answer') {
+      current.success += 1;
+    } else if (tigerShadow.route === 'skipped') {
+      current.skipped += 1;
+    } else if (tigerShadow.route === 'shadow_failed_legacy_answer') {
+      current.failed += 1;
+    }
+
+    if (Array.isArray(tigerShadow.attempts)) {
+      for (const attempt of tigerShadow.attempts) {
+        if (attempt?.contractName) {
+          current.contracts.add(attempt.contractName);
+        }
+      }
+    }
+
+    coverage.set(intent, current);
+  }
+
+  return [...coverage.entries()]
+    .map(([intent, stats]) => ({
+      intent,
+      total: stats.total,
+      success: stats.success,
+      failed: stats.failed,
+      skipped: stats.skipped,
+      contracts: [...stats.contracts].sort(),
+    }))
+    .sort((left, right) => right.total - left.total || String(left.intent).localeCompare(String(right.intent)));
+}
+
+function buildTigerPrimaryCoverageRows(results) {
+  const coverage = new Map();
+
+  for (const row of results) {
+    const tigerPrimary = row?.tigerPrimary;
+    if (!tigerPrimary || typeof tigerPrimary !== 'object') {
+      continue;
+    }
+
+    const intent = tigerPrimary.matchedIntent || 'unmatched';
+    const current = coverage.get(intent) || {
+      total: 0,
+      success: 0,
+      fallback: 0,
+      error: 0,
+      contracts: new Set(),
+    };
+
+    current.total += 1;
+    if (tigerPrimary.route === 'primary_success') {
+      current.success += 1;
+    } else if (tigerPrimary.route === 'fallback_to_legacy') {
+      current.fallback += 1;
+    } else if (tigerPrimary.route === 'error') {
+      current.error += 1;
+    }
+
+    if (Array.isArray(tigerPrimary.attempts)) {
+      for (const attempt of tigerPrimary.attempts) {
+        current.contracts.add(attempt.contractName);
+      }
+    }
+
+    coverage.set(intent, current);
+  }
+
+  return [...coverage.entries()]
+    .map(([intent, data]) => ({
+      intent,
+      total: data.total,
+      success: data.success,
+      fallback: data.fallback,
+      error: data.error,
+      contracts: [...data.contracts].sort(),
+    }))
+    .sort((left, right) => left.intent.localeCompare(right.intent));
 }
 
 function sanitizeToolResultPayload(toolName, result) {
@@ -2337,7 +2573,12 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
   lines.push(`- Generated: ${metadata.generatedAt}`);
   lines.push(`- Environment: ${metadata.origin}`);
   lines.push(`- Auth account: ${metadata.authEmail}`);
-  lines.push(`- Execution mode: authenticated production chat API run against the same \`/api/chat/stream\` endpoint used by the browser UI`);
+  lines.push(`- Auth mode: ${metadata.authMode || 'magiclink'}`);
+  lines.push(
+    metadata.authMode === 'eval_bypass'
+      ? '- Execution mode: local eval-bypass run against the same `/api/chat/stream` endpoint used by the browser UI'
+      : '- Execution mode: authenticated production chat API run against the same `/api/chat/stream` endpoint used by the browser UI'
+  );
   lines.push(`- Run mode: ${metadata.mode || 'full'}`);
   lines.push(`- Run status: ${metadata.runStatus}`);
   lines.push(`- Progress: ${metadata.completedPrompts}/${metadata.totalExecutablePrompts}`);
@@ -2398,6 +2639,32 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     }
     lines.push('');
   }
+  const tigerShadowCoverageRows = buildTigerShadowCoverageRows(results);
+  if (tigerShadowCoverageRows.length > 0) {
+    lines.push('## Tiger Shadow Coverage');
+    lines.push('');
+    lines.push('| Intent | Prompts | Success | Failed | Skipped | Contracts |');
+    lines.push('|---|---:|---:|---:|---:|---|');
+    for (const row of tigerShadowCoverageRows) {
+      lines.push(
+        `| ${escapeTable(row.intent)} | ${row.total} | ${row.success} | ${row.failed} | ${row.skipped} | ${escapeTable(row.contracts.join(', ') || '-')} |`
+      );
+    }
+    lines.push('');
+  }
+  const tigerPrimaryCoverageRows = buildTigerPrimaryCoverageRows(results);
+  if (tigerPrimaryCoverageRows.length > 0) {
+    lines.push('## Tiger Primary Coverage');
+    lines.push('');
+    lines.push('| Intent | Prompts | Primary Success | Fallback | Error | Contracts |');
+    lines.push('|---|---:|---:|---:|---:|---|');
+    for (const row of tigerPrimaryCoverageRows) {
+      lines.push(
+        `| ${escapeTable(row.intent)} | ${row.total} | ${row.success} | ${row.fallback} | ${row.error} | ${escapeTable(row.contracts.join(', ') || '-')} |`
+      );
+    }
+    lines.push('');
+  }
   lines.push('<details>');
   lines.push('<summary>Runtime Template Catalog</summary>');
   lines.push('');
@@ -2436,6 +2703,8 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     lines.push(`- Sources: ${row.source_locations.join(', ')}`);
     lines.push(`- Expected tools: ${row.expected_tools.join(', ') || '-'}`);
     lines.push(`- Actual tools: ${row.tool_calls.map((tool) => tool.name).join(', ') || '-'}`);
+    lines.push(`- Tiger primary: ${summarizeTigerPrimary(row.tigerPrimary)}`);
+    lines.push(`- Tiger shadow: ${summarizeTigerShadow(row.tigerShadow)}`);
     lines.push(
       `- Timing: total ${row.timing?.totalMs ?? '-'}ms | llm ${row.timing?.llmMs ?? '-'}ms | tools ${row.timing?.toolsMs ?? '-'}ms | iterations ${row.iterations ?? '-'}`
     );
@@ -2481,6 +2750,28 @@ function renderMarkdown({ manifest, executableManifest, results, metadata }) {
     lines.push('');
     lines.push('</details>');
     lines.push('');
+    if (row.tigerPrimary) {
+      lines.push('<details>');
+      lines.push('<summary>Tiger Primary</summary>');
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(row.tigerPrimary, null, 2));
+      lines.push('```');
+      lines.push('');
+      lines.push('</details>');
+      lines.push('');
+    }
+    if (row.tigerShadow) {
+      lines.push('<details>');
+      lines.push('<summary>Tiger Shadow</summary>');
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(row.tigerShadow, null, 2));
+      lines.push('```');
+      lines.push('');
+      lines.push('</details>');
+      lines.push('');
+    }
     if (row.retry_targeted) {
       lines.push('<details>');
       lines.push('<summary>429 Retry History</summary>');

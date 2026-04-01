@@ -1,0 +1,32 @@
+[
+  {
+    "extname": "pg_buffercache",
+    "extversion": "1.6",
+    "schema_name": "public"
+  },
+  {
+    "extname": "pg_stat_statements",
+    "extversion": "1.12",
+    "schema_name": "public"
+  },
+  {
+    "extname": "plpgsql",
+    "extversion": "1.0",
+    "schema_name": "pg_catalog"
+  },
+  {
+    "extname": "postgres_fdw",
+    "extversion": "1.2",
+    "schema_name": "public"
+  },
+  {
+    "extname": "timescaledb",
+    "extversion": "2.26.1",
+    "schema_name": "public"
+  },
+  {
+    "extname": "timescaledb_toolkit",
+    "extversion": "1.22.0",
+    "schema_name": "public"
+  }
+]

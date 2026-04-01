@@ -1,0 +1,38 @@
+{
+  "name": "@publisheriq/data-plane",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src/",
+    "capture-live-baseline": "tsx src/scripts/capture-live-baseline.ts",
+    "capture-target-baseline": "tsx src/scripts/capture-target-baseline.ts",
+    "backfill-legacy-compatibility": "tsx src/scripts/backfill-legacy-compatibility.ts",
+    "backfill-metrics-daily-metrics": "tsx src/scripts/backfill-metrics-daily-metrics.ts",
+    "backfill-events-news": "tsx src/scripts/backfill-events-news.ts",
+    "reconcile-events-news": "tsx src/scripts/reconcile-events-news.ts"
+  },
+  "dependencies": {
+    "@publisheriq/shared": "workspace:*",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.15.6",
+    "eslint": "^9.39.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "capturedAt": "2026-04-01T04:56:17.018Z",
+  "mode": "validate",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "app_change_events",
+      "steam_news_search_projection"
+    ]
+  },
+  "success": false,
+  "tableSummaries": [
+    {
+      "actions": [],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [],
+      "fullCountMatches": true,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [],
+      "passed": true,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1737023,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1737023,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1023,
+          "tigerCount": 1013
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1023,
+          "tigerCount": 1013
+        }
+      ],
+      "fullCountMatches": false,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [],
+      "passed": false,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2134222,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2134212,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [],
+      "fullCountMatches": true,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [],
+      "monthMismatchesAfter": [],
+      "monthMismatchesBefore": [],
+      "passed": true,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1332010,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1332010,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

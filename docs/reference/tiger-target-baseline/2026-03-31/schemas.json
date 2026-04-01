@@ -1,0 +1,38 @@
+[
+  {
+    "schema_name": "_timescaledb_cache"
+  },
+  {
+    "schema_name": "_timescaledb_catalog"
+  },
+  {
+    "schema_name": "_timescaledb_config"
+  },
+  {
+    "schema_name": "_timescaledb_functions"
+  },
+  {
+    "schema_name": "_timescaledb_internal"
+  },
+  {
+    "schema_name": "information_schema"
+  },
+  {
+    "schema_name": "pg_catalog"
+  },
+  {
+    "schema_name": "public"
+  },
+  {
+    "schema_name": "timescale_functions"
+  },
+  {
+    "schema_name": "timescaledb_experimental"
+  },
+  {
+    "schema_name": "timescaledb_information"
+  },
+  {
+    "schema_name": "toolkit_experimental"
+  }
+]

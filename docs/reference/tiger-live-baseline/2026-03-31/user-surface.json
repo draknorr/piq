@@ -1,0 +1,62 @@
+[
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "total_bytes": "212992",
+    "total_size": "208 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "chat_query_logs",
+    "total_bytes": "1662976",
+    "total_size": "1624 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "credit_transactions",
+    "total_bytes": "65536",
+    "total_size": "64 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "rate_limit_state",
+    "total_bytes": "24576",
+    "total_size": "24 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "user_alert_preferences",
+    "total_bytes": "32768",
+    "total_size": "32 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "user_alerts",
+    "total_bytes": "40960",
+    "total_size": "40 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "user_pin_alert_settings",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "user_pins",
+    "total_bytes": "81920",
+    "total_size": "80 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "user_profiles",
+    "total_bytes": "65536",
+    "total_size": "64 kB"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "waitlist",
+    "total_bytes": "98304",
+    "total_size": "96 kB"
+  }
+]

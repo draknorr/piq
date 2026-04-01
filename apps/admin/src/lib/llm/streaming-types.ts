@@ -1,5 +1,6 @@
 import type { ChatTiming } from './types';
 import type { ChatTurnQualityInfo, SessionChatContext } from '@/lib/chat/chat-context-types';
+import type { TigerPrimaryInfo, TigerShadowInfo } from '@/lib/chat/tiger-shadow-types';
 
 // Streaming event types for Server-Sent Events format
 export type StreamEventType =
@@ -49,6 +50,8 @@ export interface MessageEndEvent extends BaseStreamEvent {
   debug?: StreamDebugInfo;
   quality?: ChatTurnQualityInfo;
   sessionContext?: SessionChatContext | null;
+  tigerPrimary?: TigerPrimaryInfo;
+  tigerShadow?: TigerShadowInfo;
   usage?: {
     inputTokens: number;
     outputTokens: number;

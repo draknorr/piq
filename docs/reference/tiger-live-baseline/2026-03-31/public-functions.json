@@ -1,0 +1,650 @@
+[
+  {
+    "function_name": "acquire_api_rate_token",
+    "args": "p_source text, p_worker_id text"
+  },
+  {
+    "function_name": "admin_adjust_credits",
+    "args": "p_admin_id uuid, p_user_id uuid, p_amount integer, p_description text"
+  },
+  {
+    "function_name": "admin_adjust_user_credits",
+    "args": "p_user_id uuid, p_amount integer, p_description text"
+  },
+  {
+    "function_name": "aggregate_daily_ccu_peaks",
+    "args": "target_date date"
+  },
+  {
+    "function_name": "batch_update_prices",
+    "args": "p_appids integer[], p_prices integer[], p_discounts integer[]"
+  },
+  {
+    "function_name": "change_burst_id",
+    "args": "p_appid integer, p_burst_started_at timestamp with time zone, p_burst_ended_at timestamp with time zone"
+  },
+  {
+    "function_name": "change_signal_sort_rank",
+    "args": "p_signal_family text"
+  },
+  {
+    "function_name": "change_story_kind",
+    "args": "p_signal_families text[], p_is_released boolean, p_release_date date"
+  },
+  {
+    "function_name": "change_type_label",
+    "args": "p_change_type text"
+  },
+  {
+    "function_name": "change_type_signal_family",
+    "args": "p_change_type text"
+  },
+  {
+    "function_name": "check_and_increment_rate_limit",
+    "args": "p_user_id uuid"
+  },
+  {
+    "function_name": "claim_app_capture_queue",
+    "args": "p_sources app_capture_source[], p_worker_id text, p_limit integer"
+  },
+  {
+    "function_name": "claim_app_capture_work",
+    "args": "p_sources app_capture_source[], p_worker_id text, p_limit integer"
+  },
+  {
+    "function_name": "claim_apps_for_reviews_sync",
+    "args": "p_worker_id text, p_limit integer, p_claim_ttl_minutes integer, p_launch_limit integer, p_change_limit integer, p_active_limit integer, p_backfill_limit integer, p_unknown_limit integer"
+  },
+  {
+    "function_name": "cleanup_old_ccu_snapshots",
+    "args": ""
+  },
+  {
+    "function_name": "cleanup_old_chat_logs",
+    "args": ""
+  },
+  {
+    "function_name": "cleanup_stale_reservations",
+    "args": ""
+  },
+  {
+    "function_name": "complete_app_capture_queue",
+    "args": "p_ids bigint[], p_status app_capture_status, p_error text"
+  },
+  {
+    "function_name": "complete_app_capture_work",
+    "args": "p_ids bigint[], p_status app_capture_status, p_error text, p_cooldown_hours integer"
+  },
+  {
+    "function_name": "delete_steam_news_search_projection_for_gids",
+    "args": "p_gids text[]"
+  },
+  {
+    "function_name": "detect_developer_new_release_alert",
+    "args": ""
+  },
+  {
+    "function_name": "detect_price_change_alert",
+    "args": ""
+  },
+  {
+    "function_name": "detect_publisher_new_release_alert",
+    "args": ""
+  },
+  {
+    "function_name": "enqueue_app_capture_queue",
+    "args": "p_jobs jsonb"
+  },
+  {
+    "function_name": "execute_readonly_query",
+    "args": "query_text text"
+  },
+  {
+    "function_name": "finalize_credits",
+    "args": "p_reservation_id uuid, p_actual_amount integer, p_description text, p_input_tokens integer, p_output_tokens integer, p_tool_credits integer"
+  },
+  {
+    "function_name": "get_app_change_feed",
+    "args": "p_appid integer, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer"
+  },
+  {
+    "function_name": "get_app_sparkline_data",
+    "args": "p_appids integer[], p_days integer"
+  },
+  {
+    "function_name": "get_apps_aggregate_stats",
+    "args": "p_type text, p_search text, p_min_ccu integer, p_max_ccu integer, p_min_owners bigint, p_max_owners bigint, p_min_reviews integer, p_max_reviews integer, p_min_score integer, p_max_score integer, p_min_price integer, p_max_price integer, p_min_playtime integer, p_max_playtime integer, p_is_free boolean, p_min_discount integer, p_min_growth_7d numeric, p_max_growth_7d numeric, p_min_growth_30d numeric, p_max_growth_30d numeric, p_min_momentum numeric, p_max_momentum numeric, p_min_sentiment_delta numeric, p_max_sentiment_delta numeric, p_velocity_tier text, p_min_active_pct numeric, p_min_review_rate numeric, p_min_value_score numeric, p_min_vs_publisher numeric, p_genres integer[], p_genre_mode text, p_tags integer[], p_tag_mode text, p_categories integer[], p_has_workshop boolean, p_platforms text[], p_platform_mode text, p_steam_deck text, p_controller text, p_min_age integer, p_max_age integer, p_release_year integer, p_early_access boolean, p_min_hype integer, p_max_hype integer, p_publisher_search text, p_developer_search text, p_self_published boolean, p_publisher_size text, p_ccu_tier integer"
+  },
+  {
+    "function_name": "get_apps_by_ids",
+    "args": "p_appids integer[]"
+  },
+  {
+    "function_name": "get_apps_filter_option_counts",
+    "args": "p_filter_type text, p_type text, p_min_ccu integer, p_min_reviews integer, p_min_score integer, p_min_owners bigint"
+  },
+  {
+    "function_name": "get_apps_for_embedding",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_apps_for_embedding_by_ids",
+    "args": "p_appids integer[]"
+  },
+  {
+    "function_name": "get_apps_for_reviews_sync",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_apps_for_sync",
+    "args": "p_source sync_source, p_limit integer"
+  },
+  {
+    "function_name": "get_apps_for_sync_partitioned",
+    "args": "p_source sync_source, p_limit integer, p_partition_count integer, p_partition_id integer"
+  },
+  {
+    "function_name": "get_apps_with_filters",
+    "args": "p_limit integer, p_offset integer, p_sort_field text, p_sort_order text, p_type text, p_search text, p_min_ccu integer, p_max_ccu integer, p_min_owners bigint, p_max_owners bigint, p_min_reviews integer, p_max_reviews integer, p_min_score integer, p_max_score integer, p_min_price integer, p_max_price integer, p_min_playtime integer, p_max_playtime integer, p_is_free boolean, p_min_discount integer, p_min_growth_7d numeric, p_max_growth_7d numeric, p_min_growth_30d numeric, p_max_growth_30d numeric, p_min_momentum numeric, p_max_momentum numeric, p_min_sentiment_delta numeric, p_max_sentiment_delta numeric, p_velocity_tier text, p_min_active_pct numeric, p_min_review_rate numeric, p_min_value_score numeric, p_min_vs_publisher numeric, p_genres integer[], p_genre_mode text, p_tags integer[], p_tag_mode text, p_categories integer[], p_has_workshop boolean, p_platforms text[], p_platform_mode text, p_steam_deck text, p_controller text, p_min_age integer, p_max_age integer, p_release_year integer, p_early_access boolean, p_min_hype integer, p_max_hype integer, p_publisher_search text, p_developer_search text, p_self_published boolean, p_publisher_size text, p_ccu_tier integer"
+  },
+  {
+    "function_name": "get_catalog_control_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_ccu_quality_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_change_feed_activity",
+    "args": "p_days integer, p_view text, p_mode text, p_app_types text[], p_search text, p_signal_families text[], p_sort text, p_cursor_score double precision, p_cursor_time timestamp with time zone, p_cursor_activity_id text, p_limit integer"
+  },
+  {
+    "function_name": "get_change_feed_burst_detail",
+    "args": "p_burst_id text"
+  },
+  {
+    "function_name": "get_change_feed_bursts",
+    "args": "p_days integer, p_preset text, p_app_types text[], p_search text, p_source_filter text[], p_cursor_time timestamp with time zone, p_cursor_burst_id text, p_limit integer"
+  },
+  {
+    "function_name": "get_change_feed_news",
+    "args": "p_days integer, p_app_types text[], p_search text, p_cursor_time timestamp with time zone, p_cursor_gid text, p_limit integer"
+  },
+  {
+    "function_name": "get_change_window_metrics",
+    "args": "p_appid integer, p_start timestamp with time zone, p_end timestamp with time zone"
+  },
+  {
+    "function_name": "get_chat_change_activity_candidates",
+    "args": "p_days integer, p_view text, p_sort text, p_app_types text[], p_signal_families text[], p_search text, p_limit integer"
+  },
+  {
+    "function_name": "get_chat_change_pattern_candidates",
+    "args": "p_pattern text, p_days integer, p_app_types text[], p_search text, p_limit integer"
+  },
+  {
+    "function_name": "get_chat_recent_news",
+    "args": "p_appids integer[], p_days integer, p_limit integer"
+  },
+  {
+    "function_name": "get_companies_aggregate_stats",
+    "args": "p_type text, p_search text, p_min_games integer, p_max_games integer, p_min_owners bigint, p_max_owners bigint, p_min_ccu integer, p_max_ccu integer, p_min_hours bigint, p_max_hours bigint, p_min_revenue bigint, p_max_revenue bigint, p_min_score integer, p_max_score integer, p_min_reviews integer, p_max_reviews integer, p_status text, p_genres integer[], p_genre_mode text, p_tags integer[], p_categories integer[], p_steam_deck text, p_platforms text[], p_platform_mode text, p_min_growth_7d numeric, p_max_growth_7d numeric, p_min_growth_30d numeric, p_max_growth_30d numeric, p_relationship text"
+  },
+  {
+    "function_name": "get_companies_with_filters",
+    "args": "p_type text, p_search text, p_sort_by text, p_sort_order text, p_limit integer, p_offset integer, p_min_games integer, p_max_games integer, p_min_owners bigint, p_max_owners bigint, p_min_ccu integer, p_max_ccu integer, p_min_hours bigint, p_max_hours bigint, p_min_revenue bigint, p_max_revenue bigint, p_min_score integer, p_max_score integer, p_min_reviews integer, p_max_reviews integer, p_min_growth_7d numeric, p_max_growth_7d numeric, p_min_growth_30d numeric, p_max_growth_30d numeric, p_period text, p_genres integer[], p_genre_mode text, p_tags integer[], p_categories integer[], p_steam_deck text, p_platforms text[], p_platform_mode text, p_status text, p_relationship text"
+  },
+  {
+    "function_name": "get_company_sparkline_data",
+    "args": "p_company_id integer, p_company_type text, p_days integer"
+  },
+  {
+    "function_name": "get_credit_balance",
+    "args": "p_user_id uuid"
+  },
+  {
+    "function_name": "get_current_catalog_appids",
+    "args": ""
+  },
+  {
+    "function_name": "get_developer_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_developers_for_embedding",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_developers_needing_embedding",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_developers_with_metrics",
+    "args": "p_search text, p_min_owners bigint, p_min_ccu bigint, p_min_score smallint, p_min_games integer, p_status text, p_sort_field text, p_sort_order text, p_limit integer, p_offset integer"
+  },
+  {
+    "function_name": "get_filter_option_counts",
+    "args": "p_filter_type text, p_company_type text, p_min_games integer, p_min_revenue bigint, p_status text"
+  },
+  {
+    "function_name": "get_fully_completed_apps_count",
+    "args": ""
+  },
+  {
+    "function_name": "get_game_momentum",
+    "args": "p_appid integer"
+  },
+  {
+    "function_name": "get_histogram_appids",
+    "args": ""
+  },
+  {
+    "function_name": "get_histogram_appids",
+    "args": "p_limit integer, p_offset integer"
+  },
+  {
+    "function_name": "get_pics_data_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_pinned_entities_with_metrics",
+    "args": ""
+  },
+  {
+    "function_name": "get_priority_distribution",
+    "args": ""
+  },
+  {
+    "function_name": "get_publisher_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_publishers_for_embedding",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_publishers_needing_embedding",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "get_publishers_with_metrics",
+    "args": "p_search text, p_min_owners bigint, p_min_ccu bigint, p_min_score smallint, p_min_games integer, p_min_developers integer, p_status text, p_sort_field text, p_sort_order text, p_limit integer, p_offset integer"
+  },
+  {
+    "function_name": "get_queue_status",
+    "args": ""
+  },
+  {
+    "function_name": "get_recent_app_changes",
+    "args": "p_days integer, p_types app_change_type[], p_limit integer"
+  },
+  {
+    "function_name": "get_sentiment_trajectory",
+    "args": "p_appid integer"
+  },
+  {
+    "function_name": "get_source_completion_stats",
+    "args": ""
+  },
+  {
+    "function_name": "get_steamspy_individual_fetch_candidates",
+    "args": "p_limit integer, p_min_reviews integer"
+  },
+  {
+    "function_name": "get_storage_bucket_usage_bytes",
+    "args": "p_bucket_id text"
+  },
+  {
+    "function_name": "get_suspicious_zero_appids",
+    "args": "p_appids integer[]"
+  },
+  {
+    "function_name": "get_tier3_games_partitioned",
+    "args": "p_limit integer, p_partition_count integer, p_partition_id integer"
+  },
+  {
+    "function_name": "get_unsynced_app_ids",
+    "args": ""
+  },
+  {
+    "function_name": "get_user_pins_with_metrics",
+    "args": "p_user_id uuid"
+  },
+  {
+    "function_name": "gin_extract_query_trgm",
+    "args": "text, internal, smallint, internal, internal, internal, internal"
+  },
+  {
+    "function_name": "gin_extract_value_trgm",
+    "args": "text, internal"
+  },
+  {
+    "function_name": "gin_trgm_consistent",
+    "args": "internal, smallint, text, integer, internal, internal, internal, internal"
+  },
+  {
+    "function_name": "gin_trgm_triconsistent",
+    "args": "internal, smallint, text, integer, internal, internal, internal"
+  },
+  {
+    "function_name": "gtrgm_compress",
+    "args": "internal"
+  },
+  {
+    "function_name": "gtrgm_consistent",
+    "args": "internal, text, smallint, oid, internal"
+  },
+  {
+    "function_name": "gtrgm_decompress",
+    "args": "internal"
+  },
+  {
+    "function_name": "gtrgm_distance",
+    "args": "internal, text, smallint, oid, internal"
+  },
+  {
+    "function_name": "gtrgm_in",
+    "args": "cstring"
+  },
+  {
+    "function_name": "gtrgm_options",
+    "args": "internal"
+  },
+  {
+    "function_name": "gtrgm_out",
+    "args": "gtrgm"
+  },
+  {
+    "function_name": "gtrgm_penalty",
+    "args": "internal, internal, internal"
+  },
+  {
+    "function_name": "gtrgm_picksplit",
+    "args": "internal, internal"
+  },
+  {
+    "function_name": "gtrgm_same",
+    "args": "gtrgm, gtrgm, internal"
+  },
+  {
+    "function_name": "gtrgm_union",
+    "args": "internal, internal"
+  },
+  {
+    "function_name": "handle_new_user",
+    "args": ""
+  },
+  {
+    "function_name": "interpolate_all_review_deltas",
+    "args": "p_start_date date, p_end_date date"
+  },
+  {
+    "function_name": "interpolate_review_deltas",
+    "args": "p_appid integer, p_start_date date, p_end_date date"
+  },
+  {
+    "function_name": "interpolate_review_deltas_batch",
+    "args": "p_start_date date, p_end_date date, p_after_appid integer, p_app_limit integer"
+  },
+  {
+    "function_name": "is_admin",
+    "args": ""
+  },
+  {
+    "function_name": "list_recent_change_activity_appids",
+    "args": "p_lookback_days integer, p_after_appid integer, p_limit integer"
+  },
+  {
+    "function_name": "mark_app_capture_work_dirty",
+    "args": "p_jobs jsonb, p_cooldown_hours integer"
+  },
+  {
+    "function_name": "mark_apps_embedded",
+    "args": "p_appids integer[], p_hashes text[]"
+  },
+  {
+    "function_name": "mark_developers_embedded",
+    "args": "p_ids integer[], p_hashes text[]"
+  },
+  {
+    "function_name": "mark_publishers_embedded",
+    "args": "p_ids integer[], p_hashes text[]"
+  },
+  {
+    "function_name": "merge_projection_refresh_payload",
+    "args": "p_existing jsonb, p_incoming jsonb"
+  },
+  {
+    "function_name": "normalize_steam_news_search_text",
+    "args": "p_value text"
+  },
+  {
+    "function_name": "promote_reviews_sync",
+    "args": "p_appid integer, p_bucket text, p_score integer, p_reason text, p_until timestamp with time zone"
+  },
+  {
+    "function_name": "recalculate_ccu_tiers",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_all_metrics_views",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_ccu_quality_stats",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_change_activity_bursts_for_app",
+    "args": "p_appid integer, p_lookback_days integer"
+  },
+  {
+    "function_name": "refresh_change_pattern_activity_days_for_app",
+    "args": "p_appid integer, p_lookback_days integer"
+  },
+  {
+    "function_name": "refresh_change_pattern_app_windows_for_app",
+    "args": "p_appid integer, p_lookback_days integer"
+  },
+  {
+    "function_name": "refresh_dashboard_stats",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_entity_metrics",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_filter_count_views",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_latest_daily_metrics",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_materialized_view",
+    "args": "view_name text"
+  },
+  {
+    "function_name": "refresh_monthly_game_metrics",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_review_velocity_stats",
+    "args": ""
+  },
+  {
+    "function_name": "refresh_steam_news_latest_projection_for_app",
+    "args": "p_appid integer"
+  },
+  {
+    "function_name": "refresh_steam_news_search_projection_for_app",
+    "args": "p_appid integer"
+  },
+  {
+    "function_name": "refund_reservation",
+    "args": "p_reservation_id uuid"
+  },
+  {
+    "function_name": "replace_app_categories",
+    "args": "p_appid integer, p_category_ids integer[]"
+  },
+  {
+    "function_name": "replace_app_genres",
+    "args": "p_appid integer, p_genre_ids integer[], p_primary_genre_id integer"
+  },
+  {
+    "function_name": "replace_app_steam_tags",
+    "args": "p_appid integer, p_tag_ids integer[]"
+  },
+  {
+    "function_name": "requeue_stale_app_capture_work",
+    "args": "p_sources app_capture_source[], p_claimed_before timestamp with time zone, p_limit integer"
+  },
+  {
+    "function_name": "reserve_credits",
+    "args": "p_user_id uuid, p_amount integer"
+  },
+  {
+    "function_name": "search_developers_fuzzy",
+    "args": "p_query text, p_limit integer"
+  },
+  {
+    "function_name": "search_games_fuzzy",
+    "args": "p_query text, p_limit integer"
+  },
+  {
+    "function_name": "search_publishers_fuzzy",
+    "args": "p_query text, p_limit integer"
+  },
+  {
+    "function_name": "search_recent_news_topics",
+    "args": "p_query text, p_days integer, p_limit integer, p_feed_scope text, p_app_types text[], p_appids integer[], p_aliases text[]"
+  },
+  {
+    "function_name": "set_limit",
+    "args": "real"
+  },
+  {
+    "function_name": "show_limit",
+    "args": ""
+  },
+  {
+    "function_name": "show_trgm",
+    "args": "text"
+  },
+  {
+    "function_name": "similarity",
+    "args": "text, text"
+  },
+  {
+    "function_name": "similarity_dist",
+    "args": "text, text"
+  },
+  {
+    "function_name": "similarity_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "strict_word_similarity",
+    "args": "text, text"
+  },
+  {
+    "function_name": "strict_word_similarity_commutator_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "strict_word_similarity_dist_commutator_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "strict_word_similarity_dist_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "strict_word_similarity_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "update_alert_detection_state",
+    "args": "p_entity_type entity_type, p_entity_id integer, p_ccu_7d_avg integer, p_ccu_7d_max integer, p_ccu_7d_min integer, p_ccu_prev_value integer, p_review_velocity_7d_avg numeric, p_positive_ratio_prev numeric, p_total_reviews_prev integer, p_price_cents_prev integer, p_discount_percent_prev integer, p_trend_30d_direction_prev text"
+  },
+  {
+    "function_name": "update_alert_preferences_updated_at",
+    "args": ""
+  },
+  {
+    "function_name": "update_developer_game_count",
+    "args": ""
+  },
+  {
+    "function_name": "update_publisher_game_count",
+    "args": ""
+  },
+  {
+    "function_name": "update_review_velocity_tiers",
+    "args": ""
+  },
+  {
+    "function_name": "update_review_velocity_tiers_batch",
+    "args": "p_limit integer"
+  },
+  {
+    "function_name": "update_updated_at",
+    "args": ""
+  },
+  {
+    "function_name": "update_user_profile",
+    "args": "p_full_name text, p_organization text"
+  },
+  {
+    "function_name": "update_user_profile_updated_at",
+    "args": ""
+  },
+  {
+    "function_name": "upsert_developer",
+    "args": "p_name text"
+  },
+  {
+    "function_name": "upsert_franchise",
+    "args": "p_name text"
+  },
+  {
+    "function_name": "upsert_publisher",
+    "args": "p_name text"
+  },
+  {
+    "function_name": "upsert_steam_news_search_projection_for_gids",
+    "args": "p_gids text[]"
+  },
+  {
+    "function_name": "upsert_steam_tag",
+    "args": "p_tag_id integer, p_name text"
+  },
+  {
+    "function_name": "upsert_storefront_app",
+    "args": "p_appid integer, p_name text, p_type text, p_is_free boolean, p_is_delisted boolean, p_release_date date, p_release_date_raw text, p_has_workshop boolean, p_current_price_cents integer, p_current_discount_percent integer, p_is_released boolean, p_developers text[], p_publishers text[], p_dlc_appids integer[], p_parent_appid integer"
+  },
+  {
+    "function_name": "word_similarity",
+    "args": "text, text"
+  },
+  {
+    "function_name": "word_similarity_commutator_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "word_similarity_dist_commutator_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "word_similarity_dist_op",
+    "args": "text, text"
+  },
+  {
+    "function_name": "word_similarity_op",
+    "args": "text, text"
+  }
+]

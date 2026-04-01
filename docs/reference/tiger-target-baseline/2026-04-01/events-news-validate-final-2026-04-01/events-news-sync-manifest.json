@@ -1,0 +1,134 @@
+{
+  "capturedAt": "2026-04-01T03:03:09.704Z",
+  "mode": "validate",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "steam_news_search_projection",
+      "app_change_events"
+    ]
+  },
+  "success": false,
+  "tableSummaries": [
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 602,
+          "tigerCount": 600
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 602,
+          "tigerCount": 600
+        }
+      ],
+      "fullCountMatches": false,
+      "monthMismatchesAfter": [
+        {
+          "partitionKey": "2026-02-01",
+          "sourceCount": 29266,
+          "tigerCount": 29264
+        },
+        {
+          "partitionKey": "2026-03-01",
+          "sourceCount": 25809,
+          "tigerCount": 25807
+        }
+      ],
+      "monthMismatchesBefore": [
+        {
+          "partitionKey": "2026-02-01",
+          "sourceCount": 29266,
+          "tigerCount": 29264
+        },
+        {
+          "partitionKey": "2026-03-01",
+          "sourceCount": 25809,
+          "tigerCount": 25807
+        }
+      ],
+      "passed": false,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1331390,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1331386,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73651,
+          "tigerCount": 73652
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 10,
+          "tigerCount": 9
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73651,
+          "tigerCount": 73652
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 10,
+          "tigerCount": 9
+        }
+      ],
+      "fullCountMatches": true,
+      "passed": false,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1736472,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1736472,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 58,
+          "tigerCount": 53
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 57,
+          "tigerCount": 53
+        }
+      ],
+      "fullCountMatches": false,
+      "passed": false,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2133257,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2133252,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

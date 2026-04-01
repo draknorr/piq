@@ -1,0 +1,44 @@
+[
+  {
+    "schema_name": "auth"
+  },
+  {
+    "schema_name": "cron"
+  },
+  {
+    "schema_name": "extensions"
+  },
+  {
+    "schema_name": "graphql"
+  },
+  {
+    "schema_name": "graphql_public"
+  },
+  {
+    "schema_name": "information_schema"
+  },
+  {
+    "schema_name": "pg_catalog"
+  },
+  {
+    "schema_name": "pg_toast"
+  },
+  {
+    "schema_name": "pgbouncer"
+  },
+  {
+    "schema_name": "public"
+  },
+  {
+    "schema_name": "realtime"
+  },
+  {
+    "schema_name": "storage"
+  },
+  {
+    "schema_name": "supabase_migrations"
+  },
+  {
+    "schema_name": "vault"
+  }
+]

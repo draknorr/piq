@@ -1,0 +1,664 @@
+{
+  "capturedAt": "2026-04-01T03:29:47.735Z",
+  "mode": "validate",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "steam_news_search_projection",
+      "app_change_events"
+    ]
+  },
+  "success": false,
+  "tableSummaries": [
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 833,
+          "tigerCount": 832
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 605,
+          "tigerCount": 600
+        },
+        {
+          "partitionKey": "2026-03-28",
+          "sourceCount": 233,
+          "tigerCount": 232
+        },
+        {
+          "partitionKey": "2026-03-29",
+          "sourceCount": 188,
+          "tigerCount": 185
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 312,
+          "tigerCount": 302
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 177,
+          "tigerCount": 175
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1,
+          "tigerCount": 0
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 833,
+          "tigerCount": 832
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 605,
+          "tigerCount": 600
+        },
+        {
+          "partitionKey": "2026-03-28",
+          "sourceCount": 233,
+          "tigerCount": 232
+        },
+        {
+          "partitionKey": "2026-03-29",
+          "sourceCount": 188,
+          "tigerCount": 185
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 312,
+          "tigerCount": 302
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 177,
+          "tigerCount": 175
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1,
+          "tigerCount": 0
+        }
+      ],
+      "fullCountMatches": false,
+      "monthMismatchesAfter": [
+        {
+          "partitionKey": "2022-06-01",
+          "sourceCount": 10957,
+          "tigerCount": 10950
+        },
+        {
+          "partitionKey": "2022-07-01",
+          "sourceCount": 8653,
+          "tigerCount": 8646
+        },
+        {
+          "partitionKey": "2022-08-01",
+          "sourceCount": 9386,
+          "tigerCount": 9384
+        },
+        {
+          "partitionKey": "2022-09-01",
+          "sourceCount": 10083,
+          "tigerCount": 10075
+        },
+        {
+          "partitionKey": "2022-10-01",
+          "sourceCount": 11704,
+          "tigerCount": 11700
+        },
+        {
+          "partitionKey": "2022-11-01",
+          "sourceCount": 11162,
+          "tigerCount": 11158
+        },
+        {
+          "partitionKey": "2022-12-01",
+          "sourceCount": 11574,
+          "tigerCount": 11572
+        },
+        {
+          "partitionKey": "2023-01-01",
+          "sourceCount": 9950,
+          "tigerCount": 9943
+        },
+        {
+          "partitionKey": "2023-02-01",
+          "sourceCount": 10920,
+          "tigerCount": 10919
+        },
+        {
+          "partitionKey": "2023-03-01",
+          "sourceCount": 12033,
+          "tigerCount": 12027
+        },
+        {
+          "partitionKey": "2023-04-01",
+          "sourceCount": 11188,
+          "tigerCount": 11187
+        },
+        {
+          "partitionKey": "2023-06-01",
+          "sourceCount": 13246,
+          "tigerCount": 13244
+        },
+        {
+          "partitionKey": "2023-07-01",
+          "sourceCount": 10733,
+          "tigerCount": 10731
+        },
+        {
+          "partitionKey": "2023-08-01",
+          "sourceCount": 12585,
+          "tigerCount": 12574
+        },
+        {
+          "partitionKey": "2023-09-01",
+          "sourceCount": 12486,
+          "tigerCount": 12477
+        },
+        {
+          "partitionKey": "2023-10-01",
+          "sourceCount": 14742,
+          "tigerCount": 14736
+        },
+        {
+          "partitionKey": "2023-11-01",
+          "sourceCount": 15084,
+          "tigerCount": 15082
+        },
+        {
+          "partitionKey": "2023-12-01",
+          "sourceCount": 15094,
+          "tigerCount": 15088
+        },
+        {
+          "partitionKey": "2024-01-01",
+          "sourceCount": 13415,
+          "tigerCount": 13410
+        },
+        {
+          "partitionKey": "2024-02-01",
+          "sourceCount": 15916,
+          "tigerCount": 15908
+        },
+        {
+          "partitionKey": "2024-03-01",
+          "sourceCount": 15709,
+          "tigerCount": 15702
+        },
+        {
+          "partitionKey": "2024-04-01",
+          "sourceCount": 14990,
+          "tigerCount": 14963
+        },
+        {
+          "partitionKey": "2024-05-01",
+          "sourceCount": 16158,
+          "tigerCount": 16150
+        },
+        {
+          "partitionKey": "2024-06-01",
+          "sourceCount": 18705,
+          "tigerCount": 18690
+        },
+        {
+          "partitionKey": "2024-07-01",
+          "sourceCount": 15944,
+          "tigerCount": 15938
+        },
+        {
+          "partitionKey": "2024-08-01",
+          "sourceCount": 16952,
+          "tigerCount": 16943
+        },
+        {
+          "partitionKey": "2024-09-01",
+          "sourceCount": 16927,
+          "tigerCount": 16920
+        },
+        {
+          "partitionKey": "2024-10-01",
+          "sourceCount": 20303,
+          "tigerCount": 20291
+        },
+        {
+          "partitionKey": "2024-11-01",
+          "sourceCount": 19519,
+          "tigerCount": 19514
+        },
+        {
+          "partitionKey": "2024-12-01",
+          "sourceCount": 19386,
+          "tigerCount": 19382
+        },
+        {
+          "partitionKey": "2025-01-01",
+          "sourceCount": 17310,
+          "tigerCount": 17294
+        },
+        {
+          "partitionKey": "2025-02-01",
+          "sourceCount": 19323,
+          "tigerCount": 19306
+        },
+        {
+          "partitionKey": "2025-03-01",
+          "sourceCount": 20654,
+          "tigerCount": 20640
+        },
+        {
+          "partitionKey": "2025-04-01",
+          "sourceCount": 20776,
+          "tigerCount": 20770
+        },
+        {
+          "partitionKey": "2025-05-01",
+          "sourceCount": 21509,
+          "tigerCount": 21501
+        },
+        {
+          "partitionKey": "2025-06-01",
+          "sourceCount": 25055,
+          "tigerCount": 25043
+        },
+        {
+          "partitionKey": "2025-07-01",
+          "sourceCount": 21053,
+          "tigerCount": 21047
+        },
+        {
+          "partitionKey": "2025-08-01",
+          "sourceCount": 22745,
+          "tigerCount": 22723
+        },
+        {
+          "partitionKey": "2025-09-01",
+          "sourceCount": 25190,
+          "tigerCount": 25173
+        },
+        {
+          "partitionKey": "2025-10-01",
+          "sourceCount": 29450,
+          "tigerCount": 29420
+        },
+        {
+          "partitionKey": "2025-11-01",
+          "sourceCount": 26323,
+          "tigerCount": 26311
+        },
+        {
+          "partitionKey": "2025-12-01",
+          "sourceCount": 29178,
+          "tigerCount": 29164
+        },
+        {
+          "partitionKey": "2026-01-01",
+          "sourceCount": 23228,
+          "tigerCount": 23215
+        },
+        {
+          "partitionKey": "2026-02-01",
+          "sourceCount": 29288,
+          "tigerCount": 29264
+        },
+        {
+          "partitionKey": "2026-03-01",
+          "sourceCount": 25858,
+          "tigerCount": 25807
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1,
+          "tigerCount": 0
+        }
+      ],
+      "monthMismatchesBefore": [
+        {
+          "partitionKey": "2022-06-01",
+          "sourceCount": 10957,
+          "tigerCount": 10950
+        },
+        {
+          "partitionKey": "2022-07-01",
+          "sourceCount": 8653,
+          "tigerCount": 8646
+        },
+        {
+          "partitionKey": "2022-08-01",
+          "sourceCount": 9386,
+          "tigerCount": 9384
+        },
+        {
+          "partitionKey": "2022-09-01",
+          "sourceCount": 10083,
+          "tigerCount": 10075
+        },
+        {
+          "partitionKey": "2022-10-01",
+          "sourceCount": 11704,
+          "tigerCount": 11700
+        },
+        {
+          "partitionKey": "2022-11-01",
+          "sourceCount": 11162,
+          "tigerCount": 11158
+        },
+        {
+          "partitionKey": "2022-12-01",
+          "sourceCount": 11574,
+          "tigerCount": 11572
+        },
+        {
+          "partitionKey": "2023-01-01",
+          "sourceCount": 9950,
+          "tigerCount": 9943
+        },
+        {
+          "partitionKey": "2023-02-01",
+          "sourceCount": 10920,
+          "tigerCount": 10919
+        },
+        {
+          "partitionKey": "2023-03-01",
+          "sourceCount": 12033,
+          "tigerCount": 12027
+        },
+        {
+          "partitionKey": "2023-04-01",
+          "sourceCount": 11188,
+          "tigerCount": 11187
+        },
+        {
+          "partitionKey": "2023-06-01",
+          "sourceCount": 13246,
+          "tigerCount": 13244
+        },
+        {
+          "partitionKey": "2023-07-01",
+          "sourceCount": 10733,
+          "tigerCount": 10731
+        },
+        {
+          "partitionKey": "2023-08-01",
+          "sourceCount": 12585,
+          "tigerCount": 12574
+        },
+        {
+          "partitionKey": "2023-09-01",
+          "sourceCount": 12486,
+          "tigerCount": 12477
+        },
+        {
+          "partitionKey": "2023-10-01",
+          "sourceCount": 14742,
+          "tigerCount": 14736
+        },
+        {
+          "partitionKey": "2023-11-01",
+          "sourceCount": 15084,
+          "tigerCount": 15082
+        },
+        {
+          "partitionKey": "2023-12-01",
+          "sourceCount": 15094,
+          "tigerCount": 15088
+        },
+        {
+          "partitionKey": "2024-01-01",
+          "sourceCount": 13415,
+          "tigerCount": 13410
+        },
+        {
+          "partitionKey": "2024-02-01",
+          "sourceCount": 15916,
+          "tigerCount": 15908
+        },
+        {
+          "partitionKey": "2024-03-01",
+          "sourceCount": 15709,
+          "tigerCount": 15702
+        },
+        {
+          "partitionKey": "2024-04-01",
+          "sourceCount": 14990,
+          "tigerCount": 14963
+        },
+        {
+          "partitionKey": "2024-05-01",
+          "sourceCount": 16158,
+          "tigerCount": 16150
+        },
+        {
+          "partitionKey": "2024-06-01",
+          "sourceCount": 18705,
+          "tigerCount": 18690
+        },
+        {
+          "partitionKey": "2024-07-01",
+          "sourceCount": 15944,
+          "tigerCount": 15938
+        },
+        {
+          "partitionKey": "2024-08-01",
+          "sourceCount": 16952,
+          "tigerCount": 16943
+        },
+        {
+          "partitionKey": "2024-09-01",
+          "sourceCount": 16927,
+          "tigerCount": 16920
+        },
+        {
+          "partitionKey": "2024-10-01",
+          "sourceCount": 20303,
+          "tigerCount": 20291
+        },
+        {
+          "partitionKey": "2024-11-01",
+          "sourceCount": 19519,
+          "tigerCount": 19514
+        },
+        {
+          "partitionKey": "2024-12-01",
+          "sourceCount": 19386,
+          "tigerCount": 19382
+        },
+        {
+          "partitionKey": "2025-01-01",
+          "sourceCount": 17310,
+          "tigerCount": 17294
+        },
+        {
+          "partitionKey": "2025-02-01",
+          "sourceCount": 19323,
+          "tigerCount": 19306
+        },
+        {
+          "partitionKey": "2025-03-01",
+          "sourceCount": 20654,
+          "tigerCount": 20640
+        },
+        {
+          "partitionKey": "2025-04-01",
+          "sourceCount": 20776,
+          "tigerCount": 20770
+        },
+        {
+          "partitionKey": "2025-05-01",
+          "sourceCount": 21509,
+          "tigerCount": 21501
+        },
+        {
+          "partitionKey": "2025-06-01",
+          "sourceCount": 25055,
+          "tigerCount": 25043
+        },
+        {
+          "partitionKey": "2025-07-01",
+          "sourceCount": 21053,
+          "tigerCount": 21047
+        },
+        {
+          "partitionKey": "2025-08-01",
+          "sourceCount": 22745,
+          "tigerCount": 22723
+        },
+        {
+          "partitionKey": "2025-09-01",
+          "sourceCount": 25190,
+          "tigerCount": 25173
+        },
+        {
+          "partitionKey": "2025-10-01",
+          "sourceCount": 29450,
+          "tigerCount": 29420
+        },
+        {
+          "partitionKey": "2025-11-01",
+          "sourceCount": 26323,
+          "tigerCount": 26311
+        },
+        {
+          "partitionKey": "2025-12-01",
+          "sourceCount": 29178,
+          "tigerCount": 29164
+        },
+        {
+          "partitionKey": "2026-01-01",
+          "sourceCount": 23228,
+          "tigerCount": 23215
+        },
+        {
+          "partitionKey": "2026-02-01",
+          "sourceCount": 29288,
+          "tigerCount": 29264
+        },
+        {
+          "partitionKey": "2026-03-01",
+          "sourceCount": 25858,
+          "tigerCount": 25807
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1,
+          "tigerCount": 0
+        }
+      ],
+      "passed": false,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1331964,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1331501,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 33651,
+          "tigerCount": 33658
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 41345,
+          "tigerCount": 41346
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73651,
+          "tigerCount": 73652
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30341,
+          "tigerCount": 30342
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 635,
+          "tigerCount": 9
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 33651,
+          "tigerCount": 33658
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 41345,
+          "tigerCount": 41346
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73651,
+          "tigerCount": 73652
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30341,
+          "tigerCount": 30342
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 635,
+          "tigerCount": 9
+        }
+      ],
+      "fullCountMatches": false,
+      "passed": false,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1737007,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1736472,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 624,
+          "tigerCount": 53
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 624,
+          "tigerCount": 53
+        }
+      ],
+      "fullCountMatches": false,
+      "passed": false,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2133823,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2133252,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 93
+  }
+}

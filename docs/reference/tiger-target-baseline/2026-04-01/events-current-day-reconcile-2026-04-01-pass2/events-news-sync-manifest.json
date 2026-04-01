@@ -1,0 +1,61 @@
+{
+  "capturedAt": "2026-04-01T02:53:18.005Z",
+  "mode": "reconcile",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "app_change_events"
+    ]
+  },
+  "success": true,
+  "tableSummaries": [
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-31",
+          "reason": "previous_day",
+          "replayed": true,
+          "sourceCountBefore": 35460,
+          "tigerCountAfter": 35460,
+          "tigerCountBefore": 35460,
+          "writtenRows": 35460
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 27,
+          "tigerCountAfter": 27,
+          "tigerCountBefore": 0,
+          "writtenRows": 27
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 27,
+          "tigerCount": 0
+        }
+      ],
+      "fullCountMatches": true,
+      "passed": true,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2133226,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2133226,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 35487
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

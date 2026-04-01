@@ -1,0 +1,402 @@
+[
+  {
+    "schema_name": "public",
+    "relation_name": "steam_news_versions",
+    "relkind": "r",
+    "total_bytes": "4999487488",
+    "total_size": "4768 MB",
+    "estimated_rows": "1639562"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_change_events",
+    "relkind": "r",
+    "total_bytes": "3314753536",
+    "total_size": "3161 MB",
+    "estimated_rows": "2117363"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "steam_news_search_projection",
+    "relkind": "r",
+    "total_bytes": "3136020480",
+    "total_size": "2991 MB",
+    "estimated_rows": "1281339"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "daily_metrics",
+    "relkind": "r",
+    "total_bytes": "2169495552",
+    "total_size": "2069 MB",
+    "estimated_rows": "10423816"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_source_snapshots",
+    "relkind": "r",
+    "total_bytes": "2051391488",
+    "total_size": "1956 MB",
+    "estimated_rows": "474017"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "ccu_snapshots",
+    "relkind": "r",
+    "total_bytes": "1980227584",
+    "total_size": "1888 MB",
+    "estimated_rows": "9194813"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "steam_news_items",
+    "relkind": "r",
+    "total_bytes": "991862784",
+    "total_size": "946 MB",
+    "estimated_rows": "1647818"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_media_versions",
+    "relkind": "r",
+    "total_bytes": "702906368",
+    "total_size": "670 MB",
+    "estimated_rows": "343500"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "review_histogram",
+    "relkind": "r",
+    "total_bytes": "563650560",
+    "total_size": "538 MB",
+    "estimated_rows": "3085786"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "review_deltas",
+    "relkind": "r",
+    "total_bytes": "525901824",
+    "total_size": "502 MB",
+    "estimated_rows": "2450732"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_capture_queue",
+    "relkind": "r",
+    "total_bytes": "425377792",
+    "total_size": "406 MB",
+    "estimated_rows": "974893"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "sync_status",
+    "relkind": "r",
+    "total_bytes": "330162176",
+    "total_size": "315 MB",
+    "estimated_rows": "167738"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_steam_tags",
+    "relkind": "r",
+    "total_bytes": "295878656",
+    "total_size": "282 MB",
+    "estimated_rows": "2517874"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "change_activity_bursts",
+    "relkind": "r",
+    "total_bytes": "247906304",
+    "total_size": "236 MB",
+    "estimated_rows": "156366"
+  },
+  {
+    "schema_name": "storage",
+    "relation_name": "objects",
+    "relkind": "r",
+    "total_bytes": "216473600",
+    "total_size": "206 MB",
+    "estimated_rows": "158441"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "change_pattern_app_windows",
+    "relkind": "r",
+    "total_bytes": "196468736",
+    "total_size": "187 MB",
+    "estimated_rows": "272997"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "developer_metrics",
+    "relkind": "m",
+    "total_bytes": "178552832",
+    "total_size": "170 MB",
+    "estimated_rows": "64706"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "apps",
+    "relkind": "r",
+    "total_bytes": "174850048",
+    "total_size": "167 MB",
+    "estimated_rows": "167747"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_filter_data",
+    "relkind": "m",
+    "total_bytes": "128901120",
+    "total_size": "123 MB",
+    "estimated_rows": "105347"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "publisher_metrics",
+    "relkind": "m",
+    "total_bytes": "122314752",
+    "total_size": "117 MB",
+    "estimated_rows": "54963"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_hero_asset_versions",
+    "relkind": "r",
+    "total_bytes": "111591424",
+    "total_size": "106 MB",
+    "estimated_rows": "162251"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_categories",
+    "relkind": "r",
+    "total_bytes": "101285888",
+    "total_size": "97 MB",
+    "estimated_rows": "811034"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "developers",
+    "relkind": "r",
+    "total_bytes": "95100928",
+    "total_size": "91 MB",
+    "estimated_rows": "111978"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "change_pattern_activity_days",
+    "relkind": "r",
+    "total_bytes": "90062848",
+    "total_size": "86 MB",
+    "estimated_rows": "150161"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "ccu_tier_assignments",
+    "relkind": "r",
+    "total_bytes": "80887808",
+    "total_size": "77 MB",
+    "estimated_rows": "127795"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "publishers",
+    "relkind": "r",
+    "total_bytes": "74924032",
+    "total_size": "71 MB",
+    "estimated_rows": "96333"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "monthly_game_metrics",
+    "relkind": "m",
+    "total_bytes": "73719808",
+    "total_size": "70 MB",
+    "estimated_rows": "380311"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_genres",
+    "relkind": "r",
+    "total_bytes": "68804608",
+    "total_size": "66 MB",
+    "estimated_rows": "475599"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_capture_work_state",
+    "relkind": "r",
+    "total_bytes": "67010560",
+    "total_size": "64 MB",
+    "estimated_rows": "207612"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "sync_jobs",
+    "relkind": "r",
+    "total_bytes": "50872320",
+    "total_size": "49 MB",
+    "estimated_rows": "151010"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "developer_game_metrics",
+    "relkind": "m",
+    "total_bytes": "39215104",
+    "total_size": "37 MB",
+    "estimated_rows": "109946"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "publisher_game_metrics",
+    "relkind": "m",
+    "total_bytes": "35897344",
+    "total_size": "34 MB",
+    "estimated_rows": "106247"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "latest_daily_metrics",
+    "relkind": "m",
+    "total_bytes": "35848192",
+    "total_size": "34 MB",
+    "estimated_rows": "167738"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_trends",
+    "relkind": "r",
+    "total_bytes": "32104448",
+    "total_size": "31 MB",
+    "estimated_rows": "98129"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "review_velocity_stats",
+    "relkind": "m",
+    "total_bytes": "31539200",
+    "total_size": "30 MB",
+    "estimated_rows": "145026"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "publisher_year_metrics",
+    "relkind": "m",
+    "total_bytes": "30597120",
+    "total_size": "29 MB",
+    "estimated_rows": "76045"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_steam_deck",
+    "relkind": "r",
+    "total_bytes": "21020672",
+    "total_size": "20 MB",
+    "estimated_rows": "32271"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "developer_year_metrics",
+    "relkind": "m",
+    "total_bytes": "16588800",
+    "total_size": "16 MB",
+    "estimated_rows": "88134"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_developers",
+    "relkind": "r",
+    "total_bytes": "16244736",
+    "total_size": "15 MB",
+    "estimated_rows": "180400"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_publishers",
+    "relkind": "r",
+    "total_bytes": "15523840",
+    "total_size": "15 MB",
+    "estimated_rows": "167732"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_dlc",
+    "relkind": "r",
+    "total_bytes": "12582912",
+    "total_size": "12 MB",
+    "estimated_rows": "75281"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "app_franchises",
+    "relkind": "r",
+    "total_bytes": "4358144",
+    "total_size": "4256 kB",
+    "estimated_rows": "38481"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "franchises",
+    "relkind": "r",
+    "total_bytes": "2899968",
+    "total_size": "2832 kB",
+    "estimated_rows": "13891"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "chat_query_logs",
+    "relkind": "r",
+    "total_bytes": "1662976",
+    "total_size": "1624 kB",
+    "estimated_rows": "425"
+  },
+  {
+    "schema_name": "cron",
+    "relation_name": "job_run_details",
+    "relkind": "r",
+    "total_bytes": "835584",
+    "total_size": "816 kB",
+    "estimated_rows": "4403"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "steam_tags",
+    "relkind": "r",
+    "total_bytes": "786432",
+    "total_size": "768 kB",
+    "estimated_rows": "446"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "api_rate_limit_state",
+    "relkind": "r",
+    "total_bytes": "704512",
+    "total_size": "688 kB",
+    "estimated_rows": "1"
+  },
+  {
+    "schema_name": "supabase_migrations",
+    "relation_name": "schema_migrations",
+    "relkind": "r",
+    "total_bytes": "368640",
+    "total_size": "360 kB",
+    "estimated_rows": "106"
+  },
+  {
+    "schema_name": "public",
+    "relation_name": "steam_categories",
+    "relkind": "r",
+    "total_bytes": "335872",
+    "total_size": "328 kB",
+    "estimated_rows": "77"
+  },
+  {
+    "schema_name": "auth",
+    "relation_name": "refresh_tokens",
+    "relkind": "r",
+    "total_bytes": "303104",
+    "total_size": "296 kB",
+    "estimated_rows": "387"
+  }
+]

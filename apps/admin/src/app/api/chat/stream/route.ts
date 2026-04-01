@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { getServiceClient } from '@publisheriq/database';
 import { createProvider } from '@/lib/llm/providers';
 import { buildCubeSystemPrompt } from '@/lib/llm/cube-system-prompt';
 import { CUBE_TOOLS } from '@/lib/llm/cube-tools';
@@ -29,6 +30,7 @@ import {
   type BroadDiscoveryState,
 } from '@/lib/chat/discovery-guardrails';
 import { buildRedundantNewsToolSkipResult } from '@/lib/chat/news-tool-guardrails';
+import { runTigerPrimaryEvaluation, runTigerShadowEvaluation } from '@/lib/chat/tiger-shadow';
 import {
   applyCompanyToolResultPolicy,
   buildGenericCompanyLookupSkipResult,
@@ -99,11 +101,14 @@ import type {
   ErrorEvent,
   StreamDebugInfo,
 } from '@/lib/llm/streaming-types';
+import type { TigerShadowInfo } from '@/lib/chat/tiger-shadow-types';
 
 const CREDITS_ENABLED = process.env.CREDITS_ENABLED === 'true';
 const CHAT_PHASE1_QUALITY_ENABLED = process.env.CHAT_PHASE1_QUALITY_ENABLED === 'true';
 const MAX_TOOL_ITERATIONS = 5;
 const CHAT_EVAL_SECRET = process.env.CHAT_EVAL_SECRET;
+const CHAT_EVAL_LOCAL_BYPASS_ENABLED = process.env.CHAT_EVAL_LOCAL_BYPASS_ENABLED === 'true';
+const LOCAL_BYPASS_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
 interface QueryAnalyticsArgs {
   cube: string;
@@ -114,6 +119,48 @@ interface QueryAnalyticsArgs {
   order?: Record<string, 'asc' | 'desc'>;
   limit?: number;
   reasoning: string;
+}
+
+function isLocalEvalBypassEligible(request: NextRequest, isEvalRequest: boolean): boolean {
+  if (!isEvalRequest || !CHAT_EVAL_LOCAL_BYPASS_ENABLED) {
+    return false;
+  }
+
+  const hostHeader = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const hostCandidates = [request.nextUrl.hostname, hostHeader]
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim().replace(/:\d+$/, '').toLowerCase())
+    .filter(Boolean);
+
+  return hostCandidates.some((hostname) => LOCAL_BYPASS_HOSTS.has(hostname));
+}
+
+async function resolveLocalEvalBypassUserId(): Promise<string> {
+  const bypassEmail =
+    process.env.CHAT_EVAL_BYPASS_EMAIL?.trim().toLowerCase() ||
+    process.env.BYPASS_AUTH_EMAIL?.trim().toLowerCase() ||
+    '';
+
+  if (!bypassEmail) {
+    throw new Error('Missing CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL for local chat eval bypass.');
+  }
+
+  const serviceSupabase = getServiceClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: profile, error } = await (serviceSupabase.from('user_profiles') as any)
+    .select('id, email')
+    .eq('email', bypassEmail)
+    .maybeSingle() as { data: { id: string; email: string | null } | null; error: { message?: string } | null };
+
+  if (error) {
+    throw new Error(`Failed to resolve local chat eval bypass user: ${error.message || 'unknown error'}`);
+  }
+
+  if (!profile?.id) {
+    throw new Error(`Local chat eval bypass user not found in user_profiles for ${bypassEmail}.`);
+  }
+
+  return profile.id;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -213,11 +260,19 @@ function classifyStreamFailureKind(error: unknown): string {
   return 'runtime_error';
 }
 
+function sumTigerAttemptTimingMs(
+  attempts: Array<{ timingMs?: number | null }> | undefined
+): number {
+  return (attempts ?? []).reduce((total, attempt) => total + (attempt.timingMs ?? 0), 0);
+}
+
 function buildSessionLogSummary(
   context: SessionChatContext | null | undefined,
   toolCalls: ChatToolCall[],
   quality?: ChatTurnQualityInfo | null,
-  failureKind?: string
+  failureKind?: string,
+  tigerPrimary?: MessageEndEvent['tigerPrimary'],
+  tigerShadow?: MessageEndEvent['tigerShadow']
 ): Record<string, unknown> | null {
   const summary = summarizeSessionContextForLog(context) ?? {};
   const selectedChangeSurfaces = Array.from(
@@ -259,6 +314,50 @@ function buildSessionLogSummary(
 
   if (failureKind) {
     summary.failureKind = failureKind;
+  }
+
+  if (tigerPrimary) {
+    summary.tigerPrimaryRoute = tigerPrimary.route;
+    summary.tigerPrimaryIntent = tigerPrimary.matchedIntent;
+    summary.tigerPrimaryEnabled = tigerPrimary.enabled;
+    summary.tigerPrimaryCohort = tigerPrimary.cohort;
+    summary.tigerPrimaryAttemptedContracts = Array.from(
+      new Set((tigerPrimary.attempts ?? []).map((attempt) => attempt.contractName))
+    );
+    const primaryReasons = Array.from(
+      new Set(
+        (tigerPrimary.attempts ?? [])
+          .map((attempt) => attempt.reason)
+          .filter((value): value is string => Boolean(value))
+      )
+    );
+    if (primaryReasons.length > 0) {
+      summary.tigerPrimaryReasons = primaryReasons;
+    }
+  }
+
+  if (tigerShadow) {
+    summary.tigerShadowRoute = tigerShadow.route;
+    summary.tigerShadowIntent = tigerShadow.matchedIntent;
+    summary.tigerShadowEnabled = tigerShadow.enabled;
+    summary.tigerShadowCohort = tigerShadow.cohort;
+    summary.tigerShadowAttemptedContracts = Array.from(
+      new Set((tigerShadow.attempts ?? []).map((attempt) => attempt.contractName))
+    );
+    const shadowReasons = Array.from(
+      new Set(
+        (tigerShadow.attempts ?? [])
+          .map((attempt) => attempt.reason)
+          .filter((value): value is string => Boolean(value))
+      )
+    );
+    if (shadowReasons.length > 0) {
+      summary.tigerShadowReasons = shadowReasons;
+    }
+  }
+
+  if (!summary.tigerRolloutCohort && (tigerPrimary?.cohort || tigerShadow?.cohort)) {
+    summary.tigerRolloutCohort = tigerPrimary?.cohort ?? tigerShadow?.cohort ?? null;
   }
 
   return Object.keys(summary).length > 0 ? summary : null;
@@ -352,9 +451,10 @@ async function handleChatStreamRequest(
 ): Promise<Response> {
   const requestStart = performance.now();
   const encoder = new TextEncoder();
+  const presentedEvalSecret = request.headers.get('x-chat-eval-secret');
   const isEvalRequest =
     Boolean(CHAT_EVAL_SECRET) &&
-    request.headers.get('x-chat-eval-secret') === CHAT_EVAL_SECRET;
+    presentedEvalSecret === CHAT_EVAL_SECRET;
 
   if (requireEvalSecret && !isEvalRequest) {
     return new Response(
@@ -365,18 +465,31 @@ async function handleChatStreamRequest(
 
   const creditsEnabled = CREDITS_ENABLED && !isEvalRequest;
 
-  // Auth check (always required)
+  // Auth check, with an eval-only localhost bypass for local shadow testing.
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
+  let userId = user?.id ?? null;
 
-  if (!user) {
+  if (!userId && isLocalEvalBypassEligible(request, isEvalRequest)) {
+    try {
+      userId = await resolveLocalEvalBypassUserId();
+    } catch (error) {
+      return new Response(
+        JSON.stringify({
+          error: 'eval_bypass_misconfigured',
+          message: error instanceof Error ? error.message : 'Local chat eval bypass is misconfigured',
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  }
+
+  if (!userId) {
     return new Response(
       JSON.stringify({ error: 'unauthorized', message: 'Authentication required' }),
       { status: 401, headers: { 'Content-Type': 'application/json' } }
     );
   }
-
-  const userId = user.id;
   let reservationId: string | null = null;
 
   // Check credits if enabled
@@ -384,7 +497,7 @@ async function handleChatStreamRequest(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: profile } = await (supabase.from('user_profiles') as any)
       .select('credit_balance')
-      .eq('id', user.id)
+      .eq('id', userId)
       .single() as { data: { credit_balance: number } | null };
 
     if (!profile || profile.credit_balance < MINIMUM_CHARGE) {
@@ -401,7 +514,7 @@ async function handleChatStreamRequest(
     // Check rate limit
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: rateLimitResult } = await (supabase.rpc as any)('check_and_increment_rate_limit', {
-      p_user_id: user.id,
+      p_user_id: userId,
     }) as { data: Array<{ allowed: boolean; retry_after_seconds: number }> | null };
 
     if (rateLimitResult && !rateLimitResult[0]?.allowed) {
@@ -425,7 +538,7 @@ async function handleChatStreamRequest(
     // Reserve credits upfront
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: reserveResult } = await (supabase.rpc as any)('reserve_credits', {
-      p_user_id: user.id,
+      p_user_id: userId,
       p_amount: DEFAULT_RESERVATION,
     }) as { data: string | null };
 
@@ -451,6 +564,8 @@ async function handleChatStreamRequest(
       let creditsCharged = 0;
       let body: ChatRequest | null = null;
       let lastUserMessageContent: string | null = null;
+      let tigerPrimaryResult: MessageEndEvent['tigerPrimary'];
+      let tigerShadow: TigerShadowInfo | undefined;
       const executedToolNames: string[] = [];
       const executedToolCalls: ChatToolCall[] = [];
       const allToolCalls: ChatToolCall[] = [];
@@ -476,6 +591,90 @@ async function handleChatStreamRequest(
           return;
         }
 
+        const sessionContext =
+          CHAT_PHASE1_QUALITY_ENABLED && isRecord(body.sessionContext)
+            ? (body.sessionContext as SessionChatContext)
+            : null;
+        const lastUserPrompt = body.messages.filter((message) => message.role === 'user').pop()?.content ?? '';
+        lastUserMessageContent = lastUserPrompt || null;
+        updatedSessionContext = sessionContext;
+
+        const tigerPrimaryEvaluation = await runTigerPrimaryEvaluation({
+          isEvalRequest,
+          prompt: lastUserPrompt,
+          sessionContext,
+          userId,
+        });
+        const tigerPrimaryInfo = tigerPrimaryEvaluation.info;
+        totalToolsMs += sumTigerAttemptTimingMs(tigerPrimaryInfo.attempts);
+        tigerPrimaryResult = tigerPrimaryInfo;
+
+        if (tigerPrimaryResult.route === 'primary_success' && tigerPrimaryEvaluation.renderedText) {
+          debugStats.textDeltaCount = 1;
+          debugStats.totalChars = tigerPrimaryEvaluation.renderedText.length;
+          debugStats.lastIterationHadText = true;
+
+          if (lastUserMessageContent && !isEvalRequest) {
+            try {
+              await logChatQuery({
+                query_text: lastUserMessageContent.slice(0, 2000),
+                tool_names: [],
+                tool_count: 0,
+                iteration_count: 0,
+                response_length: debugStats.totalChars,
+                timing_llm_ms: 0,
+                timing_tools_ms: Math.round(totalToolsMs),
+                timing_total_ms: Math.round(performance.now() - requestStart),
+                user_id: userId ?? undefined,
+                input_tokens: undefined,
+                output_tokens: undefined,
+                tool_credits_used: creditsEnabled ? 0 : undefined,
+                total_credits_charged: creditsEnabled ? creditsCharged : undefined,
+                chat_family: phase1Quality?.family,
+                quality_flags: phase1Quality?.qualityFlags,
+                session_context_summary: buildSessionLogSummary(
+                  updatedSessionContext,
+                  allToolCalls,
+                  phase1Quality,
+                  undefined,
+                  tigerPrimaryResult,
+                  undefined
+                ),
+                guardrail_trace: phase1Quality?.guardrailTrace,
+                answer_contract_summary: phase1Quality?.terminalContract ?? null,
+              });
+            } catch (logError) {
+              console.error('Failed to log Tiger primary chat query:', logError);
+            }
+          }
+
+          const textEvent: TextDeltaEvent = {
+            type: 'text_delta',
+            delta: tigerPrimaryEvaluation.renderedText,
+          };
+          controller.enqueue(encoder.encode(formatSSE(textEvent)));
+
+          const endEvent: MessageEndEvent = {
+            type: 'message_end',
+            timing: {
+              llmMs: 0,
+              toolsMs: Math.round(totalToolsMs),
+              totalMs: Math.round(performance.now() - requestStart),
+            },
+            debug: debugStats,
+            quality: phase1Quality,
+            sessionContext: CHAT_PHASE1_QUALITY_ENABLED ? updatedSessionContext : undefined,
+            tigerPrimary: tigerPrimaryResult,
+            usage: {
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+            },
+            creditsCharged: creditsEnabled ? creditsCharged : undefined,
+          };
+          controller.enqueue(encoder.encode(formatSSE(endEvent)));
+          return;
+        }
+
         const provider = createProvider();
 
         // Check if provider supports streaming
@@ -489,10 +688,6 @@ async function handleChatStreamRequest(
         // Streaming /chat is the canonical production runtime. Keep one
         // structured tool surface here so change-intel behavior does not
         // silently disappear behind legacy SQL-mode environment toggles.
-        const sessionContext =
-          CHAT_PHASE1_QUALITY_ENABLED && isRecord(body.sessionContext)
-            ? (body.sessionContext as SessionChatContext)
-            : null;
         const systemPrompt = buildSystemPrompt(sessionContext);
         const tools: Tool[] = CUBE_TOOLS;
 
@@ -501,8 +696,6 @@ async function handleChatStreamRequest(
         let iterations = 0;
         let lastBroadDiscoveryState: BroadDiscoveryState | null = null;
         let lastCompanyState: CompanyAnswerState | null = null;
-        const lastUserPrompt = body.messages.filter((message) => message.role === 'user').pop()?.content ?? '';
-        lastUserMessageContent = lastUserPrompt || null;
         const shouldBufferCompanyResponse = Boolean(classifyCompanyIntent(lastUserPrompt));
         const phase1State = CHAT_PHASE1_QUALITY_ENABLED
           ? createPhase1GuardrailState(Boolean(sessionContext))
@@ -522,7 +715,6 @@ async function handleChatStreamRequest(
               | 'continuationExhausted'
             >
           | null = null;
-        updatedSessionContext = sessionContext;
 
         const continuationResolution = CHAT_PHASE1_QUALITY_ENABLED
           ? resolveResultSetContinuation(lastUserPrompt, sessionContext)
@@ -1048,6 +1240,18 @@ async function handleChatStreamRequest(
           });
         }
 
+        try {
+          tigerShadow = await runTigerShadowEvaluation({
+            isEvalRequest,
+            prompt: lastUserPrompt,
+            sessionContext: updatedSessionContext,
+            toolCalls: allToolCalls,
+            userId,
+          });
+        } catch (shadowError) {
+          console.error('Tiger shadow evaluation failed:', shadowError);
+        }
+
         // Log the chat query to database (do this BEFORE sending message_end)
         // Wrap in try-catch to ensure logging failures don't affect the response
         if (lastUserMessageContent && !isEvalRequest) {
@@ -1072,7 +1276,10 @@ async function handleChatStreamRequest(
               session_context_summary: buildSessionLogSummary(
                 updatedSessionContext,
                 allToolCalls,
-                phase1Quality
+                phase1Quality,
+                undefined,
+                tigerPrimaryResult,
+                tigerShadow
               ),
               guardrail_trace: phase1Quality?.guardrailTrace,
               answer_contract_summary: phase1Quality?.terminalContract ?? null,
@@ -1094,6 +1301,8 @@ async function handleChatStreamRequest(
           debug: debugStats,
           quality: phase1Quality,
           sessionContext: CHAT_PHASE1_QUALITY_ENABLED ? updatedSessionContext : undefined,
+          tigerPrimary: tigerPrimaryResult,
+          tigerShadow,
           usage: {
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
@@ -1134,7 +1343,9 @@ async function handleChatStreamRequest(
                 updatedSessionContext,
                 allToolCalls,
                 phase1Quality,
-                failureKind
+                failureKind,
+                tigerPrimaryResult,
+                tigerShadow
               ),
               guardrail_trace: phase1Quality?.guardrailTrace,
               answer_contract_summary: phase1Quality?.terminalContract ?? null,

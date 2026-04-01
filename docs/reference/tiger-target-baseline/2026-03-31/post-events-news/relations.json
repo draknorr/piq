@@ -1,0 +1,618 @@
+[
+  {
+    "schema_name": "docs",
+    "relation_name": "steam_news_search_projection",
+    "relkind": "r",
+    "total_bytes": "2892570624",
+    "total_size": "2759 MB",
+    "estimated_rows": "1328470"
+  },
+  {
+    "schema_name": "docs",
+    "relation_name": "steam_news_items",
+    "relkind": "r",
+    "total_bytes": "1166491648",
+    "total_size": "1112 MB",
+    "estimated_rows": "1736449"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_21_chunk",
+    "relkind": "r",
+    "total_bytes": "684597248",
+    "total_size": "653 MB",
+    "estimated_rows": "340969"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_20_chunk",
+    "relkind": "r",
+    "total_bytes": "654614528",
+    "total_size": "624 MB",
+    "estimated_rows": "328096"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_19_chunk",
+    "relkind": "r",
+    "total_bytes": "642826240",
+    "total_size": "613 MB",
+    "estimated_rows": "336264"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_18_chunk",
+    "relkind": "r",
+    "total_bytes": "463634432",
+    "total_size": "442 MB",
+    "estimated_rows": "232379"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_24_chunk",
+    "relkind": "r",
+    "total_bytes": "343875584",
+    "total_size": "328 MB",
+    "estimated_rows": "274285"
+  },
+  {
+    "schema_name": "core",
+    "relation_name": "entity_aliases",
+    "relkind": "r",
+    "total_bytes": "333373440",
+    "total_size": "318 MB",
+    "estimated_rows": "752126"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "app_steam_tags",
+    "relkind": "r",
+    "total_bytes": "283885568",
+    "total_size": "271 MB",
+    "estimated_rows": "2534054"
+  },
+  {
+    "schema_name": "core",
+    "relation_name": "entities",
+    "relkind": "r",
+    "total_bytes": "257015808",
+    "total_size": "245 MB",
+    "estimated_rows": "376063"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_22_chunk",
+    "relkind": "r",
+    "total_bytes": "193134592",
+    "total_size": "184 MB",
+    "estimated_rows": "110767"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_13_chunk",
+    "relkind": "r",
+    "total_bytes": "160989184",
+    "total_size": "154 MB",
+    "estimated_rows": "850604"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_10_chunk",
+    "relkind": "r",
+    "total_bytes": "160178176",
+    "total_size": "153 MB",
+    "estimated_rows": "846091"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_5_chunk",
+    "relkind": "r",
+    "total_bytes": "159391744",
+    "total_size": "152 MB",
+    "estimated_rows": "842924"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_7_chunk",
+    "relkind": "r",
+    "total_bytes": "158908416",
+    "total_size": "152 MB",
+    "estimated_rows": "840042"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_11_chunk",
+    "relkind": "r",
+    "total_bytes": "158646272",
+    "total_size": "151 MB",
+    "estimated_rows": "845181"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_8_chunk",
+    "relkind": "r",
+    "total_bytes": "158457856",
+    "total_size": "151 MB",
+    "estimated_rows": "839042"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_12_chunk",
+    "relkind": "r",
+    "total_bytes": "158015488",
+    "total_size": "151 MB",
+    "estimated_rows": "849037"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_6_chunk",
+    "relkind": "r",
+    "total_bytes": "156680192",
+    "total_size": "149 MB",
+    "estimated_rows": "830263"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_9_chunk",
+    "relkind": "r",
+    "total_bytes": "155975680",
+    "total_size": "149 MB",
+    "estimated_rows": "850090"
+  },
+  {
+    "schema_name": "core",
+    "relation_name": "entity_external_ids",
+    "relkind": "r",
+    "total_bytes": "152715264",
+    "total_size": "146 MB",
+    "estimated_rows": "376063"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_14_chunk",
+    "relkind": "r",
+    "total_bytes": "141107200",
+    "total_size": "135 MB",
+    "estimated_rows": "721993"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_4_chunk",
+    "relkind": "r",
+    "total_bytes": "136118272",
+    "total_size": "130 MB",
+    "estimated_rows": "701141"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_23_chunk",
+    "relkind": "r",
+    "total_bytes": "134062080",
+    "total_size": "128 MB",
+    "estimated_rows": "100671"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_34_chunk",
+    "relkind": "r",
+    "total_bytes": "125378560",
+    "total_size": "120 MB",
+    "estimated_rows": "81902"
+  },
+  {
+    "schema_name": "core",
+    "relation_name": "entity_relationships",
+    "relkind": "r",
+    "total_bytes": "120176640",
+    "total_size": "115 MB",
+    "estimated_rows": "358557"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_3_chunk",
+    "relkind": "r",
+    "total_bytes": "115605504",
+    "total_size": "110 MB",
+    "estimated_rows": "606700"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_2_chunk",
+    "relkind": "r",
+    "total_bytes": "107896832",
+    "total_size": "103 MB",
+    "estimated_rows": "564625"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_35_chunk",
+    "relkind": "r",
+    "total_bytes": "107077632",
+    "total_size": "102 MB",
+    "estimated_rows": "35460"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_33_chunk",
+    "relkind": "r",
+    "total_bytes": "97361920",
+    "total_size": "93 MB",
+    "estimated_rows": "60301"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "apps",
+    "relkind": "r",
+    "total_bytes": "80871424",
+    "total_size": "77 MB",
+    "estimated_rows": "167747"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_31_chunk",
+    "relkind": "r",
+    "total_bytes": "68624384",
+    "total_size": "65 MB",
+    "estimated_rows": "97818"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_1_1_chunk",
+    "relkind": "r",
+    "total_bytes": "63987712",
+    "total_size": "61 MB",
+    "estimated_rows": "321426"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "developers",
+    "relkind": "r",
+    "total_bytes": "53608448",
+    "total_size": "51 MB",
+    "estimated_rows": "111979"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_30_chunk",
+    "relkind": "r",
+    "total_bytes": "47972352",
+    "total_size": "46 MB",
+    "estimated_rows": "53732"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "app_genres",
+    "relkind": "r",
+    "total_bytes": "47390720",
+    "total_size": "45 MB",
+    "estimated_rows": "476423"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "publishers",
+    "relkind": "r",
+    "total_bytes": "46800896",
+    "total_size": "45 MB",
+    "estimated_rows": "96337"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "latest_daily_metrics",
+    "relkind": "r",
+    "total_bytes": "27189248",
+    "total_size": "26 MB",
+    "estimated_rows": "167738"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_27_chunk",
+    "relkind": "r",
+    "total_bytes": "23035904",
+    "total_size": "22 MB",
+    "estimated_rows": "16149"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_28_chunk",
+    "relkind": "r",
+    "total_bytes": "22413312",
+    "total_size": "21 MB",
+    "estimated_rows": "16068"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_29_chunk",
+    "relkind": "r",
+    "total_bytes": "20996096",
+    "total_size": "20 MB",
+    "estimated_rows": "14646"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_25_chunk",
+    "relkind": "r",
+    "total_bytes": "19529728",
+    "total_size": "19 MB",
+    "estimated_rows": "14440"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_32_chunk",
+    "relkind": "r",
+    "total_bytes": "17129472",
+    "total_size": "16 MB",
+    "estimated_rows": "9992"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "app_developers",
+    "relkind": "r",
+    "total_bytes": "15220736",
+    "total_size": "15 MB",
+    "estimated_rows": "183251"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "app_publishers",
+    "relkind": "r",
+    "total_bytes": "14303232",
+    "total_size": "14 MB",
+    "estimated_rows": "175306"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "_hyper_2_26_chunk",
+    "relkind": "r",
+    "total_bytes": "11411456",
+    "total_size": "11 MB",
+    "estimated_rows": "8705"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "steam_tags",
+    "relkind": "r",
+    "total_bytes": "139264",
+    "total_size": "136 kB",
+    "estimated_rows": "446"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "chunk",
+    "relkind": "r",
+    "total_bytes": "106496",
+    "total_size": "104 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "chunk_constraint",
+    "relkind": "r",
+    "total_bytes": "73728",
+    "total_size": "72 kB",
+    "estimated_rows": "44"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "bgw_job_stat_history",
+    "relkind": "r",
+    "total_bytes": "65536",
+    "total_size": "64 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "hypertable",
+    "relkind": "r",
+    "total_bytes": "57344",
+    "total_size": "56 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "events",
+    "relation_name": "app_change_events",
+    "relkind": "r",
+    "total_bytes": "57344",
+    "total_size": "56 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "bgw_job",
+    "relkind": "r",
+    "total_bytes": "49152",
+    "total_size": "48 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "legacy",
+    "relation_name": "steam_genres",
+    "relkind": "r",
+    "total_bytes": "49152",
+    "total_size": "48 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "metrics",
+    "relation_name": "daily_metrics",
+    "relkind": "r",
+    "total_bytes": "49152",
+    "total_size": "48 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "dimension",
+    "relkind": "r",
+    "total_bytes": "40960",
+    "total_size": "40 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "dimension_slice",
+    "relkind": "r",
+    "total_bytes": "40960",
+    "total_size": "40 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "compression_algorithm",
+    "relkind": "r",
+    "total_bytes": "32768",
+    "total_size": "32 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_agg",
+    "relkind": "r",
+    "total_bytes": "32768",
+    "total_size": "32 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "metadata",
+    "relkind": "r",
+    "total_bytes": "32768",
+    "total_size": "32 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "compression_settings",
+    "relkind": "r",
+    "total_bytes": "24576",
+    "total_size": "24 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "bgw_job_stat",
+    "relkind": "r",
+    "total_bytes": "24576",
+    "total_size": "24 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "chunk_column_stats",
+    "relkind": "r",
+    "total_bytes": "16384",
+    "total_size": "16 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "compression_chunk_size",
+    "relkind": "r",
+    "total_bytes": "16384",
+    "total_size": "16 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_bucket_function",
+    "relkind": "r",
+    "total_bytes": "16384",
+    "total_size": "16 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "tablespace",
+    "relkind": "r",
+    "total_bytes": "16384",
+    "total_size": "16 kB",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "chunk_rewrite",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_hypertable_invalidation_log",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_invalidation_threshold",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_materialization_invalidation_log",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_materialization_ranges",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "continuous_aggs_watermark",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_catalog",
+    "relation_name": "telemetry_event",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_internal",
+    "relation_name": "bgw_policy_chunk_stats",
+    "relkind": "r",
+    "total_bytes": "8192",
+    "total_size": "8192 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_cache",
+    "relation_name": "cache_inval_bgw_job",
+    "relkind": "r",
+    "total_bytes": "0",
+    "total_size": "0 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_cache",
+    "relation_name": "cache_inval_extension",
+    "relkind": "r",
+    "total_bytes": "0",
+    "total_size": "0 bytes",
+    "estimated_rows": "-1"
+  },
+  {
+    "schema_name": "_timescaledb_cache",
+    "relation_name": "cache_inval_hypertable",
+    "relkind": "r",
+    "total_bytes": "0",
+    "total_size": "0 bytes",
+    "estimated_rows": "-1"
+  }
+]

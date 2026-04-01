@@ -1,0 +1,123 @@
+{
+  "capturedAt": "2026-04-01T03:00:46.316Z",
+  "mode": "reconcile",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "app_change_events"
+    ]
+  },
+  "success": true,
+  "tableSummaries": [
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-30",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 73652,
+          "tigerCountAfter": 73653,
+          "tigerCountBefore": 73653,
+          "writtenRows": 73655
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-31",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 30343,
+          "tigerCountAfter": 30349,
+          "tigerCountBefore": 30349,
+          "writtenRows": 30342
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 8,
+          "tigerCountAfter": 9,
+          "tigerCountBefore": 0,
+          "writtenRows": 9
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73652,
+          "tigerCount": 73653
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30343,
+          "tigerCount": 30349
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 8,
+          "tigerCount": 0
+        }
+      ],
+      "fullCountMatches": true,
+      "passed": true,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1736472,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1736472,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 104006
+    },
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-31",
+          "reason": "previous_day",
+          "replayed": true,
+          "sourceCountBefore": 35460,
+          "tigerCountAfter": 35460,
+          "tigerCountBefore": 35460,
+          "writtenRows": 35460
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 52,
+          "tigerCountAfter": 53,
+          "tigerCountBefore": 27,
+          "writtenRows": 53
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 52,
+          "tigerCount": 27
+        }
+      ],
+      "fullCountMatches": true,
+      "passed": true,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2133252,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2133252,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 35513
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

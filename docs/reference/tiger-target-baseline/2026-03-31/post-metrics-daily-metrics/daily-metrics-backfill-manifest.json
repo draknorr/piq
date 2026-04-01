@@ -1,0 +1,761 @@
+{
+  "capturedAt": "2026-03-31T22:12:18.170Z",
+  "dateFrom": null,
+  "dateTo": null,
+  "partitions": [
+    {
+      "maxAppid": 3738180,
+      "metricDate": "2025-12-28",
+      "minAppid": 10,
+      "sourceCount": 36247,
+      "tigerCount": 36247,
+      "writtenRows": 36247
+    },
+    {
+      "maxAppid": 3744990,
+      "metricDate": "2025-12-29",
+      "minAppid": 10,
+      "sourceCount": 92569,
+      "tigerCount": 92569,
+      "writtenRows": 92569
+    },
+    {
+      "maxAppid": 3744990,
+      "metricDate": "2025-12-30",
+      "minAppid": 10,
+      "sourceCount": 94865,
+      "tigerCount": 94865,
+      "writtenRows": 94865
+    },
+    {
+      "maxAppid": 3744990,
+      "metricDate": "2025-12-31",
+      "minAppid": 10,
+      "sourceCount": 97745,
+      "tigerCount": 97745,
+      "writtenRows": 97745
+    },
+    {
+      "maxAppid": 3441340,
+      "metricDate": "2026-01-01",
+      "minAppid": 10,
+      "sourceCount": 20528,
+      "tigerCount": 20528,
+      "writtenRows": 20528
+    },
+    {
+      "maxAppid": 3744990,
+      "metricDate": "2026-01-02",
+      "minAppid": 10,
+      "sourceCount": 99098,
+      "tigerCount": 99098,
+      "writtenRows": 99098
+    },
+    {
+      "maxAppid": 4279960,
+      "metricDate": "2026-01-03",
+      "minAppid": 10,
+      "sourceCount": 89159,
+      "tigerCount": 89159,
+      "writtenRows": 89159
+    },
+    {
+      "maxAppid": 4284950,
+      "metricDate": "2026-01-04",
+      "minAppid": 10,
+      "sourceCount": 84329,
+      "tigerCount": 84329,
+      "writtenRows": 84329
+    },
+    {
+      "maxAppid": 4284950,
+      "metricDate": "2026-01-05",
+      "minAppid": 10,
+      "sourceCount": 90224,
+      "tigerCount": 90224,
+      "writtenRows": 90224
+    },
+    {
+      "maxAppid": 4277940,
+      "metricDate": "2026-01-06",
+      "minAppid": 10,
+      "sourceCount": 87553,
+      "tigerCount": 87553,
+      "writtenRows": 87553
+    },
+    {
+      "maxAppid": 4288050,
+      "metricDate": "2026-01-07",
+      "minAppid": 10,
+      "sourceCount": 93734,
+      "tigerCount": 93734,
+      "writtenRows": 93734
+    },
+    {
+      "maxAppid": 4291400,
+      "metricDate": "2026-01-08",
+      "minAppid": 10,
+      "sourceCount": 92756,
+      "tigerCount": 92756,
+      "writtenRows": 92756
+    },
+    {
+      "maxAppid": 4294320,
+      "metricDate": "2026-01-09",
+      "minAppid": 10,
+      "sourceCount": 91682,
+      "tigerCount": 91682,
+      "writtenRows": 91682
+    },
+    {
+      "maxAppid": 4298380,
+      "metricDate": "2026-01-10",
+      "minAppid": 10,
+      "sourceCount": 86075,
+      "tigerCount": 86075,
+      "writtenRows": 86075
+    },
+    {
+      "maxAppid": 4300430,
+      "metricDate": "2026-01-11",
+      "minAppid": 10,
+      "sourceCount": 83228,
+      "tigerCount": 83228,
+      "writtenRows": 83228
+    },
+    {
+      "maxAppid": 4294320,
+      "metricDate": "2026-01-12",
+      "minAppid": 10,
+      "sourceCount": 86309,
+      "tigerCount": 86309,
+      "writtenRows": 86309
+    },
+    {
+      "maxAppid": 4303350,
+      "metricDate": "2026-01-13",
+      "minAppid": 10,
+      "sourceCount": 83729,
+      "tigerCount": 83729,
+      "writtenRows": 83729
+    },
+    {
+      "maxAppid": 4300430,
+      "metricDate": "2026-01-14",
+      "minAppid": 10,
+      "sourceCount": 82921,
+      "tigerCount": 82921,
+      "writtenRows": 82921
+    },
+    {
+      "maxAppid": 4311190,
+      "metricDate": "2026-01-15",
+      "minAppid": 10,
+      "sourceCount": 82809,
+      "tigerCount": 82809,
+      "writtenRows": 82809
+    },
+    {
+      "maxAppid": 4315850,
+      "metricDate": "2026-01-16",
+      "minAppid": 10,
+      "sourceCount": 85903,
+      "tigerCount": 85903,
+      "writtenRows": 85903
+    },
+    {
+      "maxAppid": 4325740,
+      "metricDate": "2026-01-17",
+      "minAppid": 10,
+      "sourceCount": 83578,
+      "tigerCount": 83578,
+      "writtenRows": 83578
+    },
+    {
+      "maxAppid": 4321130,
+      "metricDate": "2026-01-18",
+      "minAppid": 10,
+      "sourceCount": 88776,
+      "tigerCount": 88776,
+      "writtenRows": 88776
+    },
+    {
+      "maxAppid": 4320710,
+      "metricDate": "2026-01-19",
+      "minAppid": 10,
+      "sourceCount": 120397,
+      "tigerCount": 120397,
+      "writtenRows": 120397
+    },
+    {
+      "maxAppid": 4333770,
+      "metricDate": "2026-01-20",
+      "minAppid": 10,
+      "sourceCount": 119997,
+      "tigerCount": 119997,
+      "writtenRows": 119997
+    },
+    {
+      "maxAppid": 4336710,
+      "metricDate": "2026-01-21",
+      "minAppid": 10,
+      "sourceCount": 119681,
+      "tigerCount": 119681,
+      "writtenRows": 119681
+    },
+    {
+      "maxAppid": 4348010,
+      "metricDate": "2026-01-22",
+      "minAppid": 10,
+      "sourceCount": 118933,
+      "tigerCount": 118933,
+      "writtenRows": 118933
+    },
+    {
+      "maxAppid": 4349610,
+      "metricDate": "2026-01-23",
+      "minAppid": 10,
+      "sourceCount": 121528,
+      "tigerCount": 121528,
+      "writtenRows": 121528
+    },
+    {
+      "maxAppid": 4329850,
+      "metricDate": "2026-01-24",
+      "minAppid": 10,
+      "sourceCount": 120320,
+      "tigerCount": 120320,
+      "writtenRows": 120320
+    },
+    {
+      "maxAppid": 4348010,
+      "metricDate": "2026-01-25",
+      "minAppid": 10,
+      "sourceCount": 120162,
+      "tigerCount": 120162,
+      "writtenRows": 120162
+    },
+    {
+      "maxAppid": 4349610,
+      "metricDate": "2026-01-26",
+      "minAppid": 10,
+      "sourceCount": 119855,
+      "tigerCount": 119855,
+      "writtenRows": 119855
+    },
+    {
+      "maxAppid": 4343800,
+      "metricDate": "2026-01-27",
+      "minAppid": 10,
+      "sourceCount": 121644,
+      "tigerCount": 121644,
+      "writtenRows": 121644
+    },
+    {
+      "maxAppid": 4363030,
+      "metricDate": "2026-01-28",
+      "minAppid": 10,
+      "sourceCount": 120482,
+      "tigerCount": 120482,
+      "writtenRows": 120482
+    },
+    {
+      "maxAppid": 4373490,
+      "metricDate": "2026-01-29",
+      "minAppid": 10,
+      "sourceCount": 119862,
+      "tigerCount": 119862,
+      "writtenRows": 119862
+    },
+    {
+      "maxAppid": 4378110,
+      "metricDate": "2026-01-30",
+      "minAppid": 10,
+      "sourceCount": 119559,
+      "tigerCount": 119559,
+      "writtenRows": 119559
+    },
+    {
+      "maxAppid": 4381190,
+      "metricDate": "2026-01-31",
+      "minAppid": 10,
+      "sourceCount": 119453,
+      "tigerCount": 119453,
+      "writtenRows": 119453
+    },
+    {
+      "maxAppid": 4375930,
+      "metricDate": "2026-02-01",
+      "minAppid": 10,
+      "sourceCount": 119856,
+      "tigerCount": 119856,
+      "writtenRows": 119856
+    },
+    {
+      "maxAppid": 4382250,
+      "metricDate": "2026-02-02",
+      "minAppid": 10,
+      "sourceCount": 111836,
+      "tigerCount": 111836,
+      "writtenRows": 111836
+    },
+    {
+      "maxAppid": 4387490,
+      "metricDate": "2026-02-03",
+      "minAppid": 10,
+      "sourceCount": 120242,
+      "tigerCount": 120242,
+      "writtenRows": 120242
+    },
+    {
+      "maxAppid": 4335960,
+      "metricDate": "2026-02-04",
+      "minAppid": 10,
+      "sourceCount": 119455,
+      "tigerCount": 119455,
+      "writtenRows": 119455
+    },
+    {
+      "maxAppid": 4329850,
+      "metricDate": "2026-02-05",
+      "minAppid": 10,
+      "sourceCount": 119713,
+      "tigerCount": 119713,
+      "writtenRows": 119713
+    },
+    {
+      "maxAppid": 4397160,
+      "metricDate": "2026-02-06",
+      "minAppid": 10,
+      "sourceCount": 119958,
+      "tigerCount": 119958,
+      "writtenRows": 119958
+    },
+    {
+      "maxAppid": 4401850,
+      "metricDate": "2026-02-07",
+      "minAppid": 10,
+      "sourceCount": 120112,
+      "tigerCount": 120112,
+      "writtenRows": 120112
+    },
+    {
+      "maxAppid": 4397780,
+      "metricDate": "2026-02-08",
+      "minAppid": 10,
+      "sourceCount": 119672,
+      "tigerCount": 119672,
+      "writtenRows": 119672
+    },
+    {
+      "maxAppid": 4400240,
+      "metricDate": "2026-02-09",
+      "minAppid": 10,
+      "sourceCount": 119604,
+      "tigerCount": 119604,
+      "writtenRows": 119604
+    },
+    {
+      "maxAppid": 4404450,
+      "metricDate": "2026-02-10",
+      "minAppid": 10,
+      "sourceCount": 119890,
+      "tigerCount": 119890,
+      "writtenRows": 119890
+    },
+    {
+      "maxAppid": 4387490,
+      "metricDate": "2026-02-11",
+      "minAppid": 10,
+      "sourceCount": 121093,
+      "tigerCount": 121093,
+      "writtenRows": 121093
+    },
+    {
+      "maxAppid": 4348980,
+      "metricDate": "2026-02-12",
+      "minAppid": 10,
+      "sourceCount": 119927,
+      "tigerCount": 119927,
+      "writtenRows": 119927
+    },
+    {
+      "maxAppid": 4397160,
+      "metricDate": "2026-02-13",
+      "minAppid": 10,
+      "sourceCount": 120529,
+      "tigerCount": 120529,
+      "writtenRows": 120529
+    },
+    {
+      "maxAppid": 4401850,
+      "metricDate": "2026-02-14",
+      "minAppid": 10,
+      "sourceCount": 120180,
+      "tigerCount": 120180,
+      "writtenRows": 120180
+    },
+    {
+      "maxAppid": 4397780,
+      "metricDate": "2026-02-15",
+      "minAppid": 10,
+      "sourceCount": 119565,
+      "tigerCount": 119565,
+      "writtenRows": 119565
+    },
+    {
+      "maxAppid": 4402740,
+      "metricDate": "2026-02-16",
+      "minAppid": 10,
+      "sourceCount": 119834,
+      "tigerCount": 119834,
+      "writtenRows": 119834
+    },
+    {
+      "maxAppid": 4404450,
+      "metricDate": "2026-02-17",
+      "minAppid": 10,
+      "sourceCount": 119903,
+      "tigerCount": 119903,
+      "writtenRows": 119903
+    },
+    {
+      "maxAppid": 4382250,
+      "metricDate": "2026-02-18",
+      "minAppid": 10,
+      "sourceCount": 119104,
+      "tigerCount": 119104,
+      "writtenRows": 119104
+    },
+    {
+      "maxAppid": 4378490,
+      "metricDate": "2026-02-19",
+      "minAppid": 10,
+      "sourceCount": 119602,
+      "tigerCount": 119602,
+      "writtenRows": 119602
+    },
+    {
+      "maxAppid": 4446810,
+      "metricDate": "2026-02-20",
+      "minAppid": 10,
+      "sourceCount": 121019,
+      "tigerCount": 121019,
+      "writtenRows": 121019
+    },
+    {
+      "maxAppid": 4397160,
+      "metricDate": "2026-02-21",
+      "minAppid": 10,
+      "sourceCount": 121413,
+      "tigerCount": 121413,
+      "writtenRows": 121413
+    },
+    {
+      "maxAppid": 4401850,
+      "metricDate": "2026-02-22",
+      "minAppid": 10,
+      "sourceCount": 120528,
+      "tigerCount": 120528,
+      "writtenRows": 120528
+    },
+    {
+      "maxAppid": 4400240,
+      "metricDate": "2026-02-23",
+      "minAppid": 10,
+      "sourceCount": 119917,
+      "tigerCount": 119917,
+      "writtenRows": 119917
+    },
+    {
+      "maxAppid": 4452310,
+      "metricDate": "2026-02-24",
+      "minAppid": 10,
+      "sourceCount": 120440,
+      "tigerCount": 120440,
+      "writtenRows": 120440
+    },
+    {
+      "maxAppid": 4397160,
+      "metricDate": "2026-02-25",
+      "minAppid": 10,
+      "sourceCount": 119418,
+      "tigerCount": 119418,
+      "writtenRows": 119418
+    },
+    {
+      "maxAppid": 4446810,
+      "metricDate": "2026-02-26",
+      "minAppid": 10,
+      "sourceCount": 121666,
+      "tigerCount": 121666,
+      "writtenRows": 121666
+    },
+    {
+      "maxAppid": 4394220,
+      "metricDate": "2026-02-27",
+      "minAppid": 10,
+      "sourceCount": 121334,
+      "tigerCount": 121334,
+      "writtenRows": 121334
+    },
+    {
+      "maxAppid": 4404450,
+      "metricDate": "2026-02-28",
+      "minAppid": 10,
+      "sourceCount": 120529,
+      "tigerCount": 120529,
+      "writtenRows": 120529
+    },
+    {
+      "maxAppid": 4452310,
+      "metricDate": "2026-03-01",
+      "minAppid": 10,
+      "sourceCount": 120189,
+      "tigerCount": 120189,
+      "writtenRows": 120189
+    },
+    {
+      "maxAppid": 4447250,
+      "metricDate": "2026-03-02",
+      "minAppid": 10,
+      "sourceCount": 120514,
+      "tigerCount": 120514,
+      "writtenRows": 120514
+    },
+    {
+      "maxAppid": 4438200,
+      "metricDate": "2026-03-03",
+      "minAppid": 10,
+      "sourceCount": 120329,
+      "tigerCount": 120329,
+      "writtenRows": 120329
+    },
+    {
+      "maxAppid": 4446810,
+      "metricDate": "2026-03-04",
+      "minAppid": 10,
+      "sourceCount": 121530,
+      "tigerCount": 121530,
+      "writtenRows": 121530
+    },
+    {
+      "maxAppid": 4416900,
+      "metricDate": "2026-03-05",
+      "minAppid": 10,
+      "sourceCount": 120693,
+      "tigerCount": 120693,
+      "writtenRows": 120693
+    },
+    {
+      "maxAppid": 4416900,
+      "metricDate": "2026-03-06",
+      "minAppid": 10,
+      "sourceCount": 120666,
+      "tigerCount": 120666,
+      "writtenRows": 120666
+    },
+    {
+      "maxAppid": 4452310,
+      "metricDate": "2026-03-07",
+      "minAppid": 10,
+      "sourceCount": 120569,
+      "tigerCount": 120569,
+      "writtenRows": 120569
+    },
+    {
+      "maxAppid": 4419310,
+      "metricDate": "2026-03-08",
+      "minAppid": 10,
+      "sourceCount": 119856,
+      "tigerCount": 119856,
+      "writtenRows": 119856
+    },
+    {
+      "maxAppid": 4446810,
+      "metricDate": "2026-03-09",
+      "minAppid": 10,
+      "sourceCount": 120912,
+      "tigerCount": 120912,
+      "writtenRows": 120912
+    },
+    {
+      "maxAppid": 4440980,
+      "metricDate": "2026-03-10",
+      "minAppid": 10,
+      "sourceCount": 121326,
+      "tigerCount": 121326,
+      "writtenRows": 121326
+    },
+    {
+      "maxAppid": 4449340,
+      "metricDate": "2026-03-11",
+      "minAppid": 10,
+      "sourceCount": 121159,
+      "tigerCount": 121159,
+      "writtenRows": 121159
+    },
+    {
+      "maxAppid": 4508710,
+      "metricDate": "2026-03-12",
+      "minAppid": 10,
+      "sourceCount": 120691,
+      "tigerCount": 120691,
+      "writtenRows": 120691
+    },
+    {
+      "maxAppid": 4510770,
+      "metricDate": "2026-03-13",
+      "minAppid": 10,
+      "sourceCount": 120593,
+      "tigerCount": 120593,
+      "writtenRows": 120593
+    },
+    {
+      "maxAppid": 4517050,
+      "metricDate": "2026-03-14",
+      "minAppid": 10,
+      "sourceCount": 123825,
+      "tigerCount": 123825,
+      "writtenRows": 123825
+    },
+    {
+      "maxAppid": 4518070,
+      "metricDate": "2026-03-15",
+      "minAppid": 10,
+      "sourceCount": 120242,
+      "tigerCount": 120242,
+      "writtenRows": 120242
+    },
+    {
+      "maxAppid": 4517350,
+      "metricDate": "2026-03-16",
+      "minAppid": 10,
+      "sourceCount": 120960,
+      "tigerCount": 120960,
+      "writtenRows": 120960
+    },
+    {
+      "maxAppid": 4522150,
+      "metricDate": "2026-03-17",
+      "minAppid": 10,
+      "sourceCount": 121621,
+      "tigerCount": 121621,
+      "writtenRows": 121621
+    },
+    {
+      "maxAppid": 4527460,
+      "metricDate": "2026-03-18",
+      "minAppid": 10,
+      "sourceCount": 121105,
+      "tigerCount": 121105,
+      "writtenRows": 121105
+    },
+    {
+      "maxAppid": 4531620,
+      "metricDate": "2026-03-19",
+      "minAppid": 10,
+      "sourceCount": 121045,
+      "tigerCount": 121045,
+      "writtenRows": 121045
+    },
+    {
+      "maxAppid": 4535170,
+      "metricDate": "2026-03-20",
+      "minAppid": 10,
+      "sourceCount": 121770,
+      "tigerCount": 121770,
+      "writtenRows": 121770
+    },
+    {
+      "maxAppid": 4538480,
+      "metricDate": "2026-03-21",
+      "minAppid": 10,
+      "sourceCount": 122938,
+      "tigerCount": 122938,
+      "writtenRows": 122938
+    },
+    {
+      "maxAppid": 4541570,
+      "metricDate": "2026-03-22",
+      "minAppid": 10,
+      "sourceCount": 121002,
+      "tigerCount": 121002,
+      "writtenRows": 121002
+    },
+    {
+      "maxAppid": 4537280,
+      "metricDate": "2026-03-23",
+      "minAppid": 10,
+      "sourceCount": 121175,
+      "tigerCount": 121175,
+      "writtenRows": 121175
+    },
+    {
+      "maxAppid": 4544550,
+      "metricDate": "2026-03-24",
+      "minAppid": 10,
+      "sourceCount": 121433,
+      "tigerCount": 121433,
+      "writtenRows": 121433
+    },
+    {
+      "maxAppid": 4549030,
+      "metricDate": "2026-03-25",
+      "minAppid": 10,
+      "sourceCount": 121241,
+      "tigerCount": 121241,
+      "writtenRows": 121241
+    },
+    {
+      "maxAppid": 4544940,
+      "metricDate": "2026-03-26",
+      "minAppid": 10,
+      "sourceCount": 121071,
+      "tigerCount": 121071,
+      "writtenRows": 121071
+    },
+    {
+      "maxAppid": 4545350,
+      "metricDate": "2026-03-27",
+      "minAppid": 10,
+      "sourceCount": 116951,
+      "tigerCount": 116951,
+      "writtenRows": 116951
+    },
+    {
+      "maxAppid": 4563400,
+      "metricDate": "2026-03-28",
+      "minAppid": 10,
+      "sourceCount": 123866,
+      "tigerCount": 123866,
+      "writtenRows": 123866
+    },
+    {
+      "maxAppid": 4555980,
+      "metricDate": "2026-03-29",
+      "minAppid": 10,
+      "sourceCount": 120108,
+      "tigerCount": 120108,
+      "writtenRows": 120108
+    },
+    {
+      "maxAppid": 4563960,
+      "metricDate": "2026-03-30",
+      "minAppid": 10,
+      "sourceCount": 127022,
+      "tigerCount": 127022,
+      "writtenRows": 127022
+    },
+    {
+      "maxAppid": 4566970,
+      "metricDate": "2026-03-31",
+      "minAppid": 10,
+      "sourceCount": 112959,
+      "tigerCount": 112975,
+      "writtenRows": 112975
+    }
+  ],
+  "sourceTotalCount": 10501390,
+  "targetTotalCount": 10501406
+}

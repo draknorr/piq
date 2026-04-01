@@ -99,6 +99,181 @@ node scripts/chat-evals/run-multi-turn-phase1.mjs --out-dir /tmp/publisheriq-cha
 
 The wrapper prints the artifact paths when it finishes.
 
+## Run The Local Tiger Shadow Expanded Pack
+
+Use this when you want to validate the current Tiger shadow coverage for:
+
+- catalog search
+- entity ranking
+- metric history
+- existing news/change shadow families
+
+This pack stays on the real `/api/chat/stream` route, but it expects the local
+admin app and local `query-api` to be running with Tiger shadow mode enabled.
+
+### Required local env
+
+In `apps/admin/.env.local`:
+
+- `CHAT_TIGER_SHADOW_MODE=eval`
+- `QUERY_API_BASE_URL=http://127.0.0.1:4318`
+- `QUERY_API_BEARER_TOKEN`
+- `CHAT_EVAL_LOCAL_BYPASS_ENABLED=true`
+- `CHAT_EVAL_SECRET`
+- `CHAT_EVAL_BYPASS_EMAIL` or `BYPASS_AUTH_EMAIL`
+
+Note:
+
+- the local eval loaders read root `.env` and `apps/admin/.env.local`
+- they do not automatically read `.env.tiger.local`
+- if your Tiger/query-api values currently live only in `.env.tiger.local`, copy or export `QUERY_API_BASE_URL`, `QUERY_API_BEARER_TOKEN`, and the local eval bypass vars before running the suite
+
+### Preflight
+
+1. Validate the current Tiger docs/events parity gate:
+
+```bash
+EVENTS_NEWS_SYNC_MODE=validate pnpm tiger:reconcile-events-news
+```
+
+2. Build the server surfaces used by the eval:
+
+```bash
+pnpm query-api:build
+pnpm --filter @publisheriq/admin build
+```
+
+3. Start the local Tiger `query-api`:
+
+```bash
+pnpm query-api:dev
+```
+
+4. Start the local admin app in a second shell:
+
+```bash
+pnpm --filter @publisheriq/admin dev
+```
+
+### Run the bounded Tiger shadow pack
+
+In a third shell:
+
+```bash
+pnpm chat-evals:tiger-shadow-expanded
+```
+
+Optional override:
+
+```bash
+CHAT_EVAL_ORIGIN=http://localhost:3001 \
+CHAT_EVAL_DELAY_MS=1000 \
+node scripts/chat-evals/run-tiger-shadow-expanded.mjs --out-dir /tmp/publisheriq-chat-evals/manual-tiger-shadow
+```
+
+### Expected outcomes
+
+Positive prompts should end with Tiger shadow metadata showing:
+
+- `matchedIntent=catalog_search`
+- `matchedIntent=entity_ranking`
+- `matchedIntent=metric_history`
+- `route=shadow_success_legacy_answer`
+
+Negative controls should stay:
+
+- `route=unmatched`, or
+- `route=skipped`
+
+Use the `Tiger Shadow Coverage` section in the generated report to confirm
+which families routed successfully and which prompts still need classifier or
+translation fixes.
+
+## Run The Local Tiger Primary Expanded Pack
+
+Use this when you want Tiger to own the visible answer for the bounded eval-only
+prompt family set:
+
+- catalog search
+- entity ranking
+- metric history
+
+This pack still goes through the real `/api/chat/eval` and `/api/chat/stream`
+route, but it enables Tiger-primary eval mode and gates on `message_end.tigerPrimary`.
+
+### Required local env
+
+In `apps/admin/.env.local`:
+
+- `CHAT_TIGER_PRIMARY_MODE=eval`
+- `CHAT_TIGER_PRIMARY_TIMEOUT_MS=8000`
+- `CHAT_TIGER_SHADOW_MODE=eval`
+- `QUERY_API_BASE_URL=http://127.0.0.1:4318`
+- `QUERY_API_BEARER_TOKEN`
+- `CHAT_EVAL_LOCAL_BYPASS_ENABLED=true`
+- `CHAT_EVAL_SECRET`
+- `CHAT_EVAL_BYPASS_EMAIL` or `BYPASS_AUTH_EMAIL`
+
+### Preflight
+
+1. Validate the current Tiger docs/events parity gate:
+
+```bash
+EVENTS_NEWS_SYNC_MODE=validate pnpm tiger:reconcile-events-news
+```
+
+2. Build the server surfaces used by the eval:
+
+```bash
+pnpm query-api:build
+pnpm --filter @publisheriq/admin build
+```
+
+3. Start local `query-api`:
+
+```bash
+pnpm query-api:dev
+```
+
+4. Start the local admin app in a second shell:
+
+```bash
+pnpm --filter @publisheriq/admin dev
+```
+
+### Run the bounded Tiger primary pack
+
+In a third shell:
+
+```bash
+pnpm chat-evals:tiger-primary-expanded
+```
+
+Optional override:
+
+```bash
+CHAT_EVAL_ORIGIN=http://localhost:3001 \
+CHAT_EVAL_DELAY_MS=1000 \
+node scripts/chat-evals/run-tiger-primary-expanded.mjs --out-dir /tmp/publisheriq-chat-evals/manual-tiger-primary
+```
+
+### Expected outcomes
+
+Positive prompts should end with Tiger primary metadata showing:
+
+- `matchedIntent=catalog_search`
+- `matchedIntent=entity_ranking`
+- `matchedIntent=metric_history`
+- `route=primary_success`
+
+Negative controls should stay:
+
+- `route=unmatched`
+
+Use the `Tiger Primary Coverage` section in the generated report to confirm
+which prompts are ready for Tiger-owned visible answers in eval mode and which
+still need fallback.
+
 ## Rebuild Draft Artifacts From An Existing Run
 
 If the raw run already exists and you only want the draft markdown plus curation template again:

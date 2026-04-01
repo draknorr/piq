@@ -38,14 +38,35 @@ export async function loadAutolabEnv() {
 }
 
 export function validateAutolabEnv(env) {
-  for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL']) {
+  const requiredKeys = shouldUseLocalEvalBypass(null, env)
+    ? ['CHAT_EVAL_SECRET']
+    : ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL'];
+
+  for (const key of requiredKeys) {
     if (!env[key]) {
       throw new Error(`Missing required env var: ${key}`);
     }
   }
+
+  if (!readEvalBypassEmail(env)) {
+    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
+  }
 }
 
 export async function authenticate(origin, env) {
+  const bypassEmail = readEvalBypassEmail(env);
+  if (!bypassEmail) {
+    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
+  }
+
+  if (shouldUseLocalEvalBypass(origin, env)) {
+    return {
+      cookieJar: new Map(),
+      email: bypassEmail,
+      authMode: 'eval_bypass',
+    };
+  }
+
   const generateResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/generate_link`, {
     method: 'POST',
     headers: {
@@ -55,7 +76,7 @@ export async function authenticate(origin, env) {
     },
     body: JSON.stringify({
       type: 'magiclink',
-      email: env.BYPASS_AUTH_EMAIL,
+      email: bypassEmail,
     }),
   });
 
@@ -99,8 +120,30 @@ export async function authenticate(origin, env) {
 
   return {
     cookieJar,
-    email: env.BYPASS_AUTH_EMAIL,
+    email: bypassEmail,
+    authMode: 'magiclink',
   };
+}
+
+function shouldUseLocalEvalBypass(origin, env) {
+  if (env.CHAT_EVAL_LOCAL_BYPASS_ENABLED !== 'true') {
+    return false;
+  }
+
+  if (!env.CHAT_EVAL_SECRET?.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(origin ?? 'http://127.0.0.1');
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function readEvalBypassEmail(env) {
+  return env.CHAT_EVAL_BYPASS_EMAIL?.trim() || env.BYPASS_AUTH_EMAIL?.trim() || '';
 }
 
 export function serializeCookies(cookieJar) {

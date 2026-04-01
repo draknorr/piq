@@ -1,0 +1,70 @@
+[
+  {
+    "schemaname": "public",
+    "matviewname": "app_filter_data"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "developer_game_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "developer_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "developer_year_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "latest_daily_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "monthly_game_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_apps_aggregate_stats"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_category_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_ccu_tier_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_genre_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_steam_deck_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_tag_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "mv_velocity_tier_counts"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "publisher_game_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "publisher_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "publisher_year_metrics"
+  },
+  {
+    "schemaname": "public",
+    "matviewname": "review_velocity_stats"
+  }
+]

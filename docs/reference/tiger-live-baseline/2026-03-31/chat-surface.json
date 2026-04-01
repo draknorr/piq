@@ -1,0 +1,74 @@
+[
+  {
+    "tool_name": "lookup_games",
+    "call_count": "71"
+  },
+  {
+    "tool_name": "find_change_patterns",
+    "call_count": "66"
+  },
+  {
+    "tool_name": "get_recent_news_digest",
+    "call_count": "52"
+  },
+  {
+    "tool_name": "query_change_activity",
+    "call_count": "52"
+  },
+  {
+    "tool_name": "get_game_change_timeline",
+    "call_count": "42"
+  },
+  {
+    "tool_name": "get_recent_news_detail",
+    "call_count": "30"
+  },
+  {
+    "tool_name": "search_recent_news_topics",
+    "call_count": "29"
+  },
+  {
+    "tool_name": "query_analytics",
+    "call_count": "28"
+  },
+  {
+    "tool_name": "screen_games",
+    "call_count": "26"
+  },
+  {
+    "tool_name": "find_similar",
+    "call_count": "19"
+  },
+  {
+    "tool_name": "discover_trending",
+    "call_count": "10"
+  },
+  {
+    "tool_name": "search_by_concept",
+    "call_count": "10"
+  },
+  {
+    "tool_name": "search_games",
+    "call_count": "8"
+  },
+  {
+    "tool_name": "get_change_activity_detail",
+    "call_count": "7"
+  },
+  {
+    "tool_name": "compare_change_before_after",
+    "call_count": "6"
+  },
+  {
+    "tool_name": "lookup_developers",
+    "call_count": "6"
+  },
+  {
+    "tool_name": "lookup_publishers",
+    "call_count": "6"
+  },
+  {
+    "tool_name": "lookup_tags",
+    "call_count": "4"
+  }
+]

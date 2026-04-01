@@ -1,0 +1,13 @@
+# Positive coverage targets
+catalog_company|Show me all games by FromSoftware
+catalog_filtered|Find indie games released this year with overwhelmingly positive reviews
+catalog_platform|Show me Linux games with overwhelmingly positive reviews
+ranking_publishers|What publisher has the most games on Steam?
+ranking_games_reviews|What are the top games by reviews?
+history_reviews|How have Hades II reviews changed over the last 30 days?
+history_ccu_owners|Show Counter-Strike 2 CCU and owners over the last 30 days
+
+# Negative controls that should remain legacy-only or unmatched
+negative_trend|What games are breaking out this week?
+negative_similarity|Games like Hades with better reviews
+negative_compare|Compare Valve and Devolver

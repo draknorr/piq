@@ -1,0 +1,1469 @@
+import { Pool, type QueryResult, type QueryResultRow } from 'pg';
+
+import { logger } from '@publisheriq/shared';
+
+import { loadSourceBaselineConfig, loadTigerConfig } from '../config.js';
+import {
+  EVENT_BATCH_SIZE,
+  NEWS_BATCH_SIZE,
+  addOneDay,
+  addOneMonth,
+  fetchDailyPlans,
+  buildInsertSql,
+  buildInsertValuesSql,
+  currentUtcDayKey,
+  currentUtcMonthKey,
+  fetchCount,
+  fetchMonthlyPlans,
+  listRecentUtcDayKeys,
+  parseSelectedEventsNewsTables,
+  resolveEventsNewsManifestLabel,
+  shiftUtcDay,
+  shiftUtcMonth,
+  writeEventsNewsManifest,
+  type EventsNewsTableName,
+} from './events-news-sync-lib.js';
+
+const DEFAULT_NEWS_DAY_LOOKBACK = 7;
+const DEFAULT_EVENT_DAY_LOOKBACK = 3;
+const DEFAULT_PROJECTION_DAY_LOOKBACK = 7;
+const EVENTS_NEWS_RECONCILE_LOCK_KEY = 20260331;
+const PROJECTION_STAGE_RELATION = 'docs.steam_news_search_projection_reconcile_stage';
+
+type SyncMode = 'reconcile' | 'validate';
+
+interface SteamNewsItemRow extends QueryResultRow {
+  appid: number;
+  author: string | null;
+  created_at: string;
+  feedlabel: string | null;
+  feedname: string | null;
+  first_seen_at: string;
+  gid: string;
+  last_seen_at: string;
+  published_at: string | null;
+  updated_at: string;
+  url: string;
+}
+
+interface SteamNewsProjectionRow extends QueryResultRow {
+  appid: number;
+  feed_scope: string;
+  first_seen_at: string;
+  gid: string;
+  published_at: string | null;
+  search_document: string;
+  sort_time: string;
+  title: string | null;
+}
+
+interface AppChangeEventRow extends QueryResultRow {
+  after_value: unknown | null;
+  appid: number;
+  before_value: unknown | null;
+  change_type: string;
+  context: unknown;
+  created_at: string;
+  id: string;
+  media_version_id: string | null;
+  news_item_gid: string | null;
+  occurred_at: string;
+  related_snapshot_id: string | null;
+  source: string;
+  source_snapshot_id: string | null;
+  trigger_cursor: string | null;
+}
+
+interface PartitionMismatch {
+  partitionKey: string;
+  sourceCount: number;
+  tigerCount: number;
+}
+
+interface PartitionActionSummary {
+  deletedRows: number;
+  partitionKey: string;
+  reason: string;
+  replayed: boolean;
+  sourceCountBefore: number;
+  tigerCountAfter: number;
+  tigerCountBefore: number;
+  writtenRows: number;
+}
+
+interface TableSyncSummary {
+  actions: PartitionActionSummary[];
+  dayMismatchesAfter: PartitionMismatch[];
+  dayMismatchesBefore: PartitionMismatch[];
+  fullCountMatches: boolean;
+  historicalDayMismatchesAfter: PartitionMismatch[];
+  historicalDayMismatchesBefore: PartitionMismatch[];
+  passed: boolean;
+  sourceRelation: string;
+  sourceTotalCount: number;
+  tableName: EventsNewsTableName;
+  targetRelation: string;
+  tigerTotalCount: number;
+  totalDeletedRows: number;
+  totalWrittenRows: number;
+}
+
+interface ProjectionSyncSummary extends TableSyncSummary {
+  monthMismatchesAfter: PartitionMismatch[];
+  monthMismatchesBefore: PartitionMismatch[];
+}
+
+interface SyncValidations {
+  duplicateEventIds: number;
+  orphanedNewsItemGids: number;
+  projectionRowsMissingNewsItems: number;
+}
+
+interface EventsNewsSyncManifest {
+  capturedAt: string;
+  mode: SyncMode;
+  settings: {
+    eventDayLookback: number;
+    newsDayLookback: number;
+    projectionDayLookback: number;
+    selectedTables: EventsNewsTableName[];
+  };
+  success: boolean;
+  tableSummaries: Array<TableSyncSummary | ProjectionSyncSummary>;
+  validations: SyncValidations;
+}
+
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
+}
+
+function serializeJsonColumnValue(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return JSON.stringify(value);
+}
+
+function readSyncMode(value: string | undefined): SyncMode {
+  if (!value?.trim()) {
+    return 'reconcile';
+  }
+
+  if (value === 'validate' || value === 'reconcile') {
+    return value;
+  }
+
+  throw new Error(`Unsupported EVENTS_NEWS_SYNC_MODE value: ${value}`);
+}
+
+function comparePartitionCounts(
+  sourceCounts: Map<string, number>,
+  tigerCounts: Map<string, number>
+): PartitionMismatch[] {
+  return [...new Set([...sourceCounts.keys(), ...tigerCounts.keys()])]
+    .sort()
+    .flatMap((partitionKey) => {
+      const sourceCount = sourceCounts.get(partitionKey) ?? 0;
+      const tigerCount = tigerCounts.get(partitionKey) ?? 0;
+
+      return sourceCount === tigerCount
+        ? []
+        : [{ partitionKey, sourceCount, tigerCount }];
+    });
+}
+
+async function fetchDayCountMap(
+  pool: Pool,
+  relation: string,
+  timeColumn: 'first_seen_at' | 'occurred_at' | 'sort_time',
+  dayKeys: string[]
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (dayKeys.length === 0) {
+    return counts;
+  }
+
+  const startDay = dayKeys[0]!;
+  const endDay = addOneDay(dayKeys[dayKeys.length - 1]!);
+  const result = await pool.query<{ day_key: string; row_count: string }>(
+    `
+      SELECT
+        ${timeColumn}::date::text AS day_key,
+        count(*)::bigint AS row_count
+      FROM ${relation}
+      WHERE ${timeColumn} >= $1::date
+        AND ${timeColumn} < $2::date
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `,
+    [startDay, endDay]
+  );
+
+  for (const dayKey of dayKeys) {
+    counts.set(dayKey, 0);
+  }
+
+  for (const row of result.rows) {
+    counts.set(row.day_key, Number(row.row_count));
+  }
+
+  return counts;
+}
+
+async function fetchMonthCountMap(
+  pool: Pool,
+  relation: string,
+  timeColumn: 'sort_time'
+): Promise<Map<string, number>> {
+  const plans = await fetchMonthlyPlans(pool, relation, timeColumn, 'gid');
+  return new Map(plans.map((plan) => [plan.partitionKey, plan.sourceCount]));
+}
+
+async function fetchFullDayCountMap(
+  pool: Pool,
+  relation: string,
+  timeColumn: 'first_seen_at' | 'occurred_at' | 'sort_time',
+  cursorColumn: 'gid' | 'id'
+): Promise<Map<string, number>> {
+  const plans = await fetchDailyPlans(pool, relation, timeColumn, cursorColumn);
+  return new Map(plans.map((plan) => [plan.partitionKey, plan.sourceCount]));
+}
+
+async function fetchNewsItemsDayCount(pool: Pool, dayKey: string): Promise<number> {
+  const result = await pool.query<{ row_count: string }>(
+    `
+      SELECT count(*)::bigint AS row_count
+      FROM docs.steam_news_items
+      WHERE first_seen_at >= $1::date
+        AND first_seen_at < $2::date
+    `,
+    [dayKey, addOneDay(dayKey)]
+  );
+
+  return Number(result.rows[0]?.row_count ?? 0);
+}
+
+async function fetchAppChangeEventsDayCount(pool: Pool, dayKey: string): Promise<number> {
+  const result = await pool.query<{ row_count: string }>(
+    `
+      SELECT count(*)::bigint AS row_count
+      FROM events.app_change_events
+      WHERE occurred_at >= $1::date
+        AND occurred_at < $2::date
+    `,
+    [dayKey, addOneDay(dayKey)]
+  );
+
+  return Number(result.rows[0]?.row_count ?? 0);
+}
+
+async function fetchProjectionMonthCount(pool: Pool, monthKey: string): Promise<number> {
+  const result = await pool.query<{ row_count: string }>(
+    `
+      SELECT count(*)::bigint AS row_count
+      FROM docs.steam_news_search_projection
+      WHERE sort_time >= $1::date
+        AND sort_time < $2::date
+    `,
+    [monthKey, addOneMonth(monthKey)]
+  );
+
+  return Number(result.rows[0]?.row_count ?? 0);
+}
+
+function buildRecentReplayDays(
+  lookbackDays: number,
+  mismatches: PartitionMismatch[],
+  now: Date = new Date()
+): Array<{ partitionKey: string; reason: string }> {
+  const currentDay = currentUtcDayKey(now);
+  const previousDay = shiftUtcDay(currentDay, -1);
+  const selected = new Map<string, string>();
+
+  selected.set(currentDay, 'current_day');
+  selected.set(previousDay, 'previous_day');
+
+  const recentKeys = new Set(listRecentUtcDayKeys(lookbackDays, now));
+  for (const mismatch of mismatches) {
+    if (recentKeys.has(mismatch.partitionKey)) {
+      selected.set(mismatch.partitionKey, 'mismatched_recent_day');
+    }
+  }
+
+  return [...selected.entries()]
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .map(([partitionKey, reason]) => ({ partitionKey, reason }));
+}
+
+function buildHistoricalReplayDays(
+  lookbackDays: number,
+  mismatches: PartitionMismatch[],
+  now: Date = new Date()
+): Array<{ partitionKey: string; reason: string }> {
+  const recentKeys = new Set(listRecentUtcDayKeys(lookbackDays, now));
+  return mismatches
+    .filter((mismatch) => !recentKeys.has(mismatch.partitionKey))
+    .map((mismatch) => ({
+      partitionKey: mismatch.partitionKey,
+      reason: 'mismatched_historical_day',
+    }));
+}
+
+function buildProjectionReplayMonths(
+  mismatches: PartitionMismatch[],
+  now: Date = new Date()
+): Array<{ partitionKey: string; reason: string }> {
+  const currentMonth = currentUtcMonthKey(now);
+  const previousMonth = shiftUtcMonth(currentMonth, -1);
+  const selected = new Map<string, string>();
+
+  for (const mismatch of mismatches) {
+    selected.set(mismatch.partitionKey, 'mismatched_month');
+  }
+
+  selected.set(previousMonth, selected.get(previousMonth) ?? 'previous_month');
+  selected.set(currentMonth, selected.get(currentMonth) ?? 'current_month');
+
+  const ordered = [...selected.entries()].sort(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey)
+  );
+  const older = ordered.filter(([partitionKey]) => partitionKey !== previousMonth && partitionKey !== currentMonth);
+  const recent = ordered.filter(([partitionKey]) => partitionKey === previousMonth || partitionKey === currentMonth);
+
+  return [...older, ...recent].map(([partitionKey, reason]) => ({ partitionKey, reason }));
+}
+
+async function acquireReconcileLock(pool: Pool): Promise<void> {
+  const result = await pool.query<{ locked: boolean }>(
+    'SELECT pg_try_advisory_lock($1) AS locked',
+    [EVENTS_NEWS_RECONCILE_LOCK_KEY]
+  );
+
+  if (!result.rows[0]?.locked) {
+    throw new Error('Another Tiger events/news reconciliation run is already active.');
+  }
+}
+
+async function releaseReconcileLock(pool: Pool): Promise<void> {
+  await pool.query('SELECT pg_advisory_unlock($1)', [EVENTS_NEWS_RECONCILE_LOCK_KEY]);
+}
+
+async function reconcileSteamNewsItemsDay(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  dayKey: string,
+  sourceCountBefore: number,
+  tigerCountBefore: number,
+  reason: string
+): Promise<PartitionActionSummary> {
+  const targetColumns = [
+    'gid',
+    'appid',
+    'url',
+    'author',
+    'feedlabel',
+    'feedname',
+    'published_at',
+    'first_seen_at',
+    'last_seen_at',
+    'created_at',
+    'updated_at',
+  ];
+  let cursorFirstSeenAt: string | null = null;
+  let cursorGid: string | null = null;
+  let writtenRows = 0;
+
+  while (true) {
+    let batchResult: QueryResult<SteamNewsItemRow>;
+
+    if (cursorFirstSeenAt && cursorGid) {
+      batchResult = await sourcePool.query<SteamNewsItemRow>(
+        `
+          SELECT
+            gid,
+            appid,
+            url,
+            author,
+            feedlabel,
+            feedname,
+            published_at::text,
+            first_seen_at::text,
+            last_seen_at::text,
+            created_at::text,
+            updated_at::text
+          FROM public.steam_news_items
+          WHERE first_seen_at >= $1::date
+            AND first_seen_at < $2::date
+            AND (first_seen_at, gid) > ($3::timestamptz, $4::text)
+          ORDER BY first_seen_at ASC, gid ASC
+          LIMIT $5
+        `,
+        [dayKey, addOneDay(dayKey), cursorFirstSeenAt, cursorGid, NEWS_BATCH_SIZE]
+      );
+    } else {
+      batchResult = await sourcePool.query<SteamNewsItemRow>(
+        `
+          SELECT
+            gid,
+            appid,
+            url,
+            author,
+            feedlabel,
+            feedname,
+            published_at::text,
+            first_seen_at::text,
+            last_seen_at::text,
+            created_at::text,
+            updated_at::text
+          FROM public.steam_news_items
+          WHERE first_seen_at >= $1::date
+            AND first_seen_at < $2::date
+          ORDER BY first_seen_at ASC, gid ASC
+          LIMIT $3
+        `,
+        [dayKey, addOneDay(dayKey), NEWS_BATCH_SIZE]
+      );
+    }
+
+    if (batchResult.rows.length === 0) {
+      break;
+    }
+
+    const values: unknown[] = [];
+    for (const row of batchResult.rows) {
+      values.push(
+        row.gid,
+        row.appid,
+        row.url,
+        row.author,
+        row.feedlabel,
+        row.feedname,
+        row.published_at,
+        row.first_seen_at,
+        row.last_seen_at,
+        row.created_at,
+        row.updated_at
+      );
+    }
+
+    await tigerPool.query(
+      buildInsertSql('docs.steam_news_items', targetColumns, ['gid'], batchResult.rows.length),
+      values
+    );
+
+    writtenRows += batchResult.rows.length;
+    const lastRow = batchResult.rows[batchResult.rows.length - 1]!;
+    cursorFirstSeenAt = lastRow.first_seen_at;
+    cursorGid = lastRow.gid;
+  }
+
+  return {
+    deletedRows: 0,
+    partitionKey: dayKey,
+    reason,
+    replayed: true,
+    sourceCountBefore,
+    tigerCountAfter: await fetchNewsItemsDayCount(tigerPool, dayKey),
+    tigerCountBefore,
+    writtenRows,
+  };
+}
+
+async function reconcileAppChangeEventsDay(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  dayKey: string,
+  sourceCountBefore: number,
+  tigerCountBefore: number,
+  reason: string
+): Promise<PartitionActionSummary> {
+  const targetColumns = [
+    'id',
+    'appid',
+    'source',
+    'change_type',
+    'occurred_at',
+    'source_snapshot_id',
+    'related_snapshot_id',
+    'media_version_id',
+    'news_item_gid',
+    'before_value',
+    'after_value',
+    'context',
+    'trigger_cursor',
+    'created_at',
+  ];
+  let cursorOccurredAt: string | null = null;
+  let cursorId: string | null = null;
+  let writtenRows = 0;
+
+  while (true) {
+    let batchResult: QueryResult<AppChangeEventRow>;
+
+    if (cursorOccurredAt && cursorId) {
+      batchResult = await sourcePool.query<AppChangeEventRow>(
+        `
+          SELECT
+            id::text,
+            appid,
+            source::text AS source,
+            change_type::text AS change_type,
+            occurred_at::text,
+            source_snapshot_id::text,
+            related_snapshot_id::text,
+            media_version_id::text,
+            news_item_gid,
+            before_value,
+            after_value,
+            context,
+            trigger_cursor,
+            created_at::text
+          FROM public.app_change_events
+          WHERE occurred_at >= $1::date
+            AND occurred_at < $2::date
+            AND (occurred_at, id) > ($3::timestamptz, $4::bigint)
+          ORDER BY occurred_at ASC, id ASC
+          LIMIT $5
+        `,
+        [dayKey, addOneDay(dayKey), cursorOccurredAt, cursorId, EVENT_BATCH_SIZE]
+      );
+    } else {
+      batchResult = await sourcePool.query<AppChangeEventRow>(
+        `
+          SELECT
+            id::text,
+            appid,
+            source::text AS source,
+            change_type::text AS change_type,
+            occurred_at::text,
+            source_snapshot_id::text,
+            related_snapshot_id::text,
+            media_version_id::text,
+            news_item_gid,
+            before_value,
+            after_value,
+            context,
+            trigger_cursor,
+            created_at::text
+          FROM public.app_change_events
+          WHERE occurred_at >= $1::date
+            AND occurred_at < $2::date
+          ORDER BY occurred_at ASC, id ASC
+          LIMIT $3
+        `,
+        [dayKey, addOneDay(dayKey), EVENT_BATCH_SIZE]
+      );
+    }
+
+    if (batchResult.rows.length === 0) {
+      break;
+    }
+
+    const values: unknown[] = [];
+    for (const row of batchResult.rows) {
+      values.push(
+        row.id,
+        row.appid,
+        row.source,
+        row.change_type,
+        row.occurred_at,
+        row.source_snapshot_id,
+        row.related_snapshot_id,
+        row.media_version_id,
+        row.news_item_gid,
+        serializeJsonColumnValue(row.before_value),
+        serializeJsonColumnValue(row.after_value),
+        serializeJsonColumnValue(row.context),
+        row.trigger_cursor,
+        row.created_at
+      );
+    }
+
+    await tigerPool.query(
+      buildInsertSql(
+        'events.app_change_events',
+        targetColumns,
+        ['occurred_at', 'id'],
+        batchResult.rows.length
+      ),
+      values
+    );
+
+    writtenRows += batchResult.rows.length;
+    const lastRow = batchResult.rows[batchResult.rows.length - 1]!;
+    cursorOccurredAt = lastRow.occurred_at;
+    cursorId = lastRow.id;
+  }
+
+  return {
+    deletedRows: 0,
+    partitionKey: dayKey,
+    reason,
+    replayed: true,
+    sourceCountBefore,
+    tigerCountAfter: await fetchAppChangeEventsDayCount(tigerPool, dayKey),
+    tigerCountBefore,
+    writtenRows,
+  };
+}
+
+async function prepareProjectionStageTable(tigerPool: Pool): Promise<void> {
+  await tigerPool.query(
+    `
+      DROP TABLE IF EXISTS ${PROJECTION_STAGE_RELATION};
+      CREATE UNLOGGED TABLE ${PROJECTION_STAGE_RELATION}
+      (LIKE docs.steam_news_search_projection INCLUDING DEFAULTS)
+    `
+  );
+}
+
+async function dropProjectionStageTable(tigerPool: Pool): Promise<void> {
+  await tigerPool.query(`DROP TABLE IF EXISTS ${PROJECTION_STAGE_RELATION}`);
+}
+
+async function reconcileProjectionMonth(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  monthKey: string,
+  sourceCountBefore: number,
+  tigerCountBefore: number,
+  reason: string
+): Promise<PartitionActionSummary> {
+  const targetColumns = [
+    'gid',
+    'appid',
+    'published_at',
+    'first_seen_at',
+    'sort_time',
+    'feed_scope',
+    'title',
+    'search_document',
+  ];
+  let cursorSortTime: string | null = null;
+  let cursorGid: string | null = null;
+  let writtenRows = 0;
+
+  await tigerPool.query(`TRUNCATE TABLE ${PROJECTION_STAGE_RELATION}`);
+
+  while (true) {
+    let batchResult: QueryResult<SteamNewsProjectionRow>;
+
+    if (cursorSortTime && cursorGid) {
+      batchResult = await sourcePool.query<SteamNewsProjectionRow>(
+        `
+          SELECT
+            gid,
+            appid,
+            published_at::text,
+            first_seen_at::text,
+            sort_time::text,
+            feed_scope,
+            title,
+            search_document::text
+          FROM public.steam_news_search_projection
+          WHERE sort_time >= $1::date
+            AND sort_time < $2::date
+            AND (sort_time, gid) > ($3::timestamptz, $4::text)
+          ORDER BY sort_time ASC, gid ASC
+          LIMIT $5
+        `,
+        [monthKey, addOneMonth(monthKey), cursorSortTime, cursorGid, NEWS_BATCH_SIZE]
+      );
+    } else {
+      batchResult = await sourcePool.query<SteamNewsProjectionRow>(
+        `
+          SELECT
+            gid,
+            appid,
+            published_at::text,
+            first_seen_at::text,
+            sort_time::text,
+            feed_scope,
+            title,
+            search_document::text
+          FROM public.steam_news_search_projection
+          WHERE sort_time >= $1::date
+            AND sort_time < $2::date
+          ORDER BY sort_time ASC, gid ASC
+          LIMIT $3
+        `,
+        [monthKey, addOneMonth(monthKey), NEWS_BATCH_SIZE]
+      );
+    }
+
+    if (batchResult.rows.length === 0) {
+      break;
+    }
+
+    const values: unknown[] = [];
+    for (const row of batchResult.rows) {
+      values.push(
+        row.gid,
+        row.appid,
+        row.published_at,
+        row.first_seen_at,
+        row.sort_time,
+        row.feed_scope,
+        row.title,
+        row.search_document
+      );
+    }
+
+    await tigerPool.query(
+      buildInsertValuesSql(PROJECTION_STAGE_RELATION, targetColumns, batchResult.rows.length),
+      values
+    );
+
+    writtenRows += batchResult.rows.length;
+    const lastRow = batchResult.rows[batchResult.rows.length - 1]!;
+    cursorSortTime = lastRow.sort_time;
+    cursorGid = lastRow.gid;
+  }
+
+  const deleteResult = await tigerPool.query(
+    `
+      DELETE FROM docs.steam_news_search_projection target
+      WHERE target.sort_time >= $1::date
+        AND target.sort_time < $2::date
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ${PROJECTION_STAGE_RELATION} stage
+          WHERE stage.gid = target.gid
+        )
+    `,
+    [monthKey, addOneMonth(monthKey)]
+  );
+
+  const upsertResult = await tigerPool.query(
+    `
+      INSERT INTO docs.steam_news_search_projection
+      (${targetColumns.join(', ')})
+      SELECT ${targetColumns.join(', ')}
+      FROM ${PROJECTION_STAGE_RELATION}
+      ON CONFLICT (gid)
+      DO UPDATE SET
+        appid = EXCLUDED.appid,
+        published_at = EXCLUDED.published_at,
+        first_seen_at = EXCLUDED.first_seen_at,
+        sort_time = EXCLUDED.sort_time,
+        feed_scope = EXCLUDED.feed_scope,
+        title = EXCLUDED.title,
+        search_document = EXCLUDED.search_document
+    `
+  );
+
+  return {
+    deletedRows: deleteResult.rowCount ?? 0,
+    partitionKey: monthKey,
+    reason,
+    replayed: true,
+    sourceCountBefore,
+    tigerCountAfter: await fetchProjectionMonthCount(tigerPool, monthKey),
+    tigerCountBefore,
+    writtenRows: upsertResult.rowCount ?? writtenRows,
+  };
+}
+
+async function fetchValidationCounts(tigerPool: Pool): Promise<SyncValidations> {
+  const [duplicateEventIds, orphanedNewsItemGids, projectionRowsMissingNewsItems] =
+    await Promise.all([
+      tigerPool.query<{ duplicate_count: string }>(
+        `
+          SELECT count(*)::bigint AS duplicate_count
+          FROM (
+            SELECT id
+            FROM events.app_change_events
+            GROUP BY id
+            HAVING count(*) > 1
+          ) duplicates
+        `
+      ),
+      tigerPool.query<{ orphan_count: string }>(
+        `
+          SELECT count(*)::bigint AS orphan_count
+          FROM events.app_change_events e
+          LEFT JOIN docs.steam_news_items n ON n.gid = e.news_item_gid
+          WHERE e.news_item_gid IS NOT NULL
+            AND n.gid IS NULL
+        `
+      ),
+      tigerPool.query<{ missing_count: string }>(
+        `
+          SELECT count(*)::bigint AS missing_count
+          FROM docs.steam_news_search_projection p
+          LEFT JOIN docs.steam_news_items n ON n.gid = p.gid
+          WHERE n.gid IS NULL
+        `
+      ),
+    ]);
+
+  return {
+    duplicateEventIds: Number(duplicateEventIds.rows[0]?.duplicate_count ?? 0),
+    orphanedNewsItemGids: Number(orphanedNewsItemGids.rows[0]?.orphan_count ?? 0),
+    projectionRowsMissingNewsItems: Number(
+      projectionRowsMissingNewsItems.rows[0]?.missing_count ?? 0
+    ),
+  };
+}
+
+async function summarizeNewsItems(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  lookbackDays: number,
+  actions: PartitionActionSummary[]
+): Promise<TableSyncSummary> {
+  const dayKeys = listRecentUtcDayKeys(lookbackDays);
+  const sourceCounts = await fetchDayCountMap(
+    sourcePool,
+    'public.steam_news_items',
+    'first_seen_at',
+    dayKeys
+  );
+  const tigerCounts = await fetchDayCountMap(
+    tigerPool,
+    'docs.steam_news_items',
+    'first_seen_at',
+    dayKeys
+  );
+  const dayMismatches = comparePartitionCounts(sourceCounts, tigerCounts);
+  const sourceTotalCount = await fetchCount(sourcePool, 'public.steam_news_items');
+  const tigerTotalCount = await fetchCount(tigerPool, 'docs.steam_news_items');
+
+  return {
+    actions,
+    dayMismatchesAfter: dayMismatches,
+    dayMismatchesBefore: [],
+    fullCountMatches: sourceTotalCount === tigerTotalCount,
+    historicalDayMismatchesAfter: [],
+    historicalDayMismatchesBefore: [],
+    passed: sourceTotalCount === tigerTotalCount && dayMismatches.length === 0,
+    sourceRelation: 'public.steam_news_items',
+    sourceTotalCount,
+    tableName: 'steam_news_items',
+    targetRelation: 'docs.steam_news_items',
+    tigerTotalCount,
+    totalDeletedRows: actions.reduce((sum, action) => sum + action.deletedRows, 0),
+    totalWrittenRows: actions.reduce((sum, action) => sum + action.writtenRows, 0),
+  };
+}
+
+async function summarizeAppChangeEvents(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  lookbackDays: number,
+  actions: PartitionActionSummary[]
+): Promise<TableSyncSummary> {
+  const dayKeys = listRecentUtcDayKeys(lookbackDays);
+  const sourceCounts = await fetchDayCountMap(
+    sourcePool,
+    'public.app_change_events',
+    'occurred_at',
+    dayKeys
+  );
+  const tigerCounts = await fetchDayCountMap(
+    tigerPool,
+    'events.app_change_events',
+    'occurred_at',
+    dayKeys
+  );
+  const dayMismatches = comparePartitionCounts(sourceCounts, tigerCounts);
+  const sourceTotalCount = await fetchCount(sourcePool, 'public.app_change_events');
+  const tigerTotalCount = await fetchCount(tigerPool, 'events.app_change_events');
+
+  return {
+    actions,
+    dayMismatchesAfter: dayMismatches,
+    dayMismatchesBefore: [],
+    fullCountMatches: sourceTotalCount === tigerTotalCount,
+    historicalDayMismatchesAfter: [],
+    historicalDayMismatchesBefore: [],
+    passed: sourceTotalCount === tigerTotalCount && dayMismatches.length === 0,
+    sourceRelation: 'public.app_change_events',
+    sourceTotalCount,
+    tableName: 'app_change_events',
+    targetRelation: 'events.app_change_events',
+    tigerTotalCount,
+    totalDeletedRows: actions.reduce((sum, action) => sum + action.deletedRows, 0),
+    totalWrittenRows: actions.reduce((sum, action) => sum + action.writtenRows, 0),
+  };
+}
+
+async function summarizeProjection(
+  sourcePool: Pool,
+  tigerPool: Pool,
+  dayLookback: number,
+  actions: PartitionActionSummary[]
+): Promise<ProjectionSyncSummary> {
+  const dayKeys = listRecentUtcDayKeys(dayLookback);
+  const sourceDayCounts = await fetchDayCountMap(
+    sourcePool,
+    'public.steam_news_search_projection',
+    'sort_time',
+    dayKeys
+  );
+  const tigerDayCounts = await fetchDayCountMap(
+    tigerPool,
+    'docs.steam_news_search_projection',
+    'sort_time',
+    dayKeys
+  );
+  const monthMismatches = comparePartitionCounts(
+    await fetchMonthCountMap(sourcePool, 'public.steam_news_search_projection', 'sort_time'),
+    await fetchMonthCountMap(tigerPool, 'docs.steam_news_search_projection', 'sort_time')
+  );
+  const dayMismatches = comparePartitionCounts(sourceDayCounts, tigerDayCounts);
+  const sourceTotalCount = await fetchCount(sourcePool, 'public.steam_news_search_projection');
+  const tigerTotalCount = await fetchCount(tigerPool, 'docs.steam_news_search_projection');
+
+  return {
+    actions,
+    dayMismatchesAfter: dayMismatches,
+    dayMismatchesBefore: [],
+    fullCountMatches: sourceTotalCount === tigerTotalCount,
+    historicalDayMismatchesAfter: [],
+    historicalDayMismatchesBefore: [],
+    monthMismatchesAfter: monthMismatches,
+    monthMismatchesBefore: [],
+    passed:
+      sourceTotalCount === tigerTotalCount &&
+      monthMismatches.length === 0 &&
+      dayMismatches.length === 0,
+    sourceRelation: 'public.steam_news_search_projection',
+    sourceTotalCount,
+    tableName: 'steam_news_search_projection',
+    targetRelation: 'docs.steam_news_search_projection',
+    tigerTotalCount,
+    totalDeletedRows: actions.reduce((sum, action) => sum + action.deletedRows, 0),
+    totalWrittenRows: actions.reduce((sum, action) => sum + action.writtenRows, 0),
+  };
+}
+
+async function main(): Promise<void> {
+  const sourceConfig = loadSourceBaselineConfig();
+  const tigerConfig = loadTigerConfig();
+  const mode = readSyncMode(process.env.EVENTS_NEWS_SYNC_MODE);
+  const selectedTables = parseSelectedEventsNewsTables(
+    process.env.EVENTS_NEWS_SYNC_TABLES
+  );
+  const newsDayLookback = readPositiveInt(
+    process.env.EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK,
+    DEFAULT_NEWS_DAY_LOOKBACK
+  );
+  const eventDayLookback = readPositiveInt(
+    process.env.EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK,
+    DEFAULT_EVENT_DAY_LOOKBACK
+  );
+  const projectionDayLookback = readPositiveInt(
+    process.env.EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK,
+    DEFAULT_PROJECTION_DAY_LOOKBACK
+  );
+
+  const supportedTables: EventsNewsTableName[] = [
+    'steam_news_items',
+    'app_change_events',
+    'steam_news_search_projection',
+  ];
+
+  if (selectedTables) {
+    const unknownTables = [...selectedTables].filter((name) => !supportedTables.includes(name));
+    if (unknownTables.length > 0) {
+      throw new Error(
+        `Unknown EVENTS_NEWS_SYNC_TABLES values: ${unknownTables.join(', ')}`
+      );
+    }
+  }
+
+  const activeTables = supportedTables.filter((tableName) =>
+    selectedTables ? selectedTables.has(tableName) : true
+  );
+  const sourcePool = new Pool({
+    application_name: `publisheriq-events-news-${mode}-source`,
+    allowExitOnIdle: true,
+    connectionString: sourceConfig.connectionString,
+    max: 4,
+    statement_timeout: sourceConfig.statementTimeoutMs,
+  });
+  const tigerPool = new Pool({
+    application_name: `publisheriq-events-news-${mode}-target`,
+    allowExitOnIdle: true,
+    connectionString: tigerConfig.connectionString,
+    max: 4,
+    statement_timeout: tigerConfig.statementTimeoutMs,
+  });
+  const manifestLabel = resolveEventsNewsManifestLabel(
+    process.env.EVENTS_NEWS_SYNC_MANIFEST_LABEL,
+    `events-news-sync-${mode}`
+  );
+
+  let lockAcquired = false;
+  let projectionStagePrepared = false;
+
+  try {
+    logger.info('Starting Tiger events/news sync', {
+      mode,
+      manifestLabel,
+      selectedTables: activeTables,
+      eventDayLookback,
+      newsDayLookback,
+      projectionDayLookback,
+    });
+
+    if (mode === 'reconcile') {
+      await acquireReconcileLock(tigerPool);
+      lockAcquired = true;
+    }
+
+    const tableSummaries: Array<TableSyncSummary | ProjectionSyncSummary> = [];
+
+    if (activeTables.includes('steam_news_items')) {
+      logger.info('Reconciling Tiger table', { mode, tableName: 'steam_news_items' });
+      const recentDayKeys = listRecentUtcDayKeys(newsDayLookback);
+      const recentDayKeySet = new Set(recentDayKeys);
+      const sourceDayCountsBefore = await fetchDayCountMap(
+        sourcePool,
+        'public.steam_news_items',
+        'first_seen_at',
+        recentDayKeys
+      );
+      const tigerDayCountsBefore = await fetchDayCountMap(
+        tigerPool,
+        'docs.steam_news_items',
+        'first_seen_at',
+        recentDayKeys
+      );
+      const dayMismatchesBefore = comparePartitionCounts(
+        sourceDayCountsBefore,
+        tigerDayCountsBefore
+      );
+      const sourceHistoricalCountsBefore = await fetchFullDayCountMap(
+        sourcePool,
+        'public.steam_news_items',
+        'first_seen_at',
+        'gid'
+      );
+      const tigerHistoricalCountsBefore = await fetchFullDayCountMap(
+        tigerPool,
+        'docs.steam_news_items',
+        'first_seen_at',
+        'gid'
+      );
+      const historicalDayMismatchesBefore = comparePartitionCounts(
+        sourceHistoricalCountsBefore,
+        tigerHistoricalCountsBefore
+      ).filter((mismatch) => !recentDayKeySet.has(mismatch.partitionKey));
+      const actions: PartitionActionSummary[] = [];
+
+      if (mode === 'reconcile') {
+        logger.info('Replaying Tiger news item recent windows', {
+          replayCount: buildRecentReplayDays(newsDayLookback, dayMismatchesBefore).length,
+        });
+        for (const { partitionKey, reason } of buildRecentReplayDays(newsDayLookback, dayMismatchesBefore)) {
+          actions.push(
+            await reconcileSteamNewsItemsDay(
+              sourcePool,
+              tigerPool,
+              partitionKey,
+              sourceDayCountsBefore.get(partitionKey) ?? 0,
+              tigerDayCountsBefore.get(partitionKey) ?? 0,
+              reason
+            )
+          );
+        }
+
+        const postRecentSummary = await summarizeNewsItems(sourcePool, tigerPool, newsDayLookback, actions);
+        if (!postRecentSummary.fullCountMatches && historicalDayMismatchesBefore.length > 0) {
+          logger.info('Replaying Tiger news item historical mismatches', {
+            replayCount: historicalDayMismatchesBefore.length,
+          });
+          for (const mismatch of historicalDayMismatchesBefore) {
+            actions.push(
+              await reconcileSteamNewsItemsDay(
+                sourcePool,
+                tigerPool,
+                mismatch.partitionKey,
+                sourceHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
+                tigerHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
+                'mismatched_historical_day'
+              )
+            );
+          }
+
+          const sourceDayCountsAfterHistorical = await fetchDayCountMap(
+            sourcePool,
+            'public.steam_news_items',
+            'first_seen_at',
+            recentDayKeys
+          );
+          const tigerDayCountsAfterHistorical = await fetchDayCountMap(
+            tigerPool,
+            'docs.steam_news_items',
+            'first_seen_at',
+            recentDayKeys
+          );
+          const recentMismatchesAfterHistorical = comparePartitionCounts(
+            sourceDayCountsAfterHistorical,
+            tigerDayCountsAfterHistorical
+          );
+          logger.info('Replaying Tiger news item recent windows after historical repair', {
+            replayCount: buildRecentReplayDays(newsDayLookback, recentMismatchesAfterHistorical).length,
+          });
+          for (const { partitionKey, reason } of buildRecentReplayDays(
+            newsDayLookback,
+            recentMismatchesAfterHistorical
+          )) {
+            actions.push(
+              await reconcileSteamNewsItemsDay(
+                sourcePool,
+                tigerPool,
+                partitionKey,
+                sourceDayCountsAfterHistorical.get(partitionKey) ?? 0,
+                tigerDayCountsAfterHistorical.get(partitionKey) ?? 0,
+                `post_historical_${reason}`
+              )
+            );
+          }
+        }
+      }
+
+      const summary = await summarizeNewsItems(sourcePool, tigerPool, newsDayLookback, actions);
+      summary.dayMismatchesBefore = dayMismatchesBefore;
+      summary.historicalDayMismatchesBefore = historicalDayMismatchesBefore;
+      summary.historicalDayMismatchesAfter = comparePartitionCounts(
+        await fetchFullDayCountMap(sourcePool, 'public.steam_news_items', 'first_seen_at', 'gid'),
+        await fetchFullDayCountMap(tigerPool, 'docs.steam_news_items', 'first_seen_at', 'gid')
+      ).filter((mismatch) => !recentDayKeySet.has(mismatch.partitionKey));
+      summary.passed =
+        summary.fullCountMatches &&
+        summary.dayMismatchesAfter.length === 0 &&
+        summary.historicalDayMismatchesAfter.length === 0;
+      tableSummaries.push(summary);
+      logger.info('Completed Tiger table sync', {
+        tableName: 'steam_news_items',
+        passed: summary.passed,
+        fullCountMatches: summary.fullCountMatches,
+        recentDayMismatches: summary.dayMismatchesAfter.length,
+        historicalDayMismatches: summary.historicalDayMismatchesAfter.length,
+        actions: summary.actions.length,
+      });
+    }
+
+    if (activeTables.includes('app_change_events')) {
+      logger.info('Reconciling Tiger table', { mode, tableName: 'app_change_events' });
+      const recentDayKeys = listRecentUtcDayKeys(eventDayLookback);
+      const recentDayKeySet = new Set(recentDayKeys);
+      const sourceDayCountsBefore = await fetchDayCountMap(
+        sourcePool,
+        'public.app_change_events',
+        'occurred_at',
+        recentDayKeys
+      );
+      const tigerDayCountsBefore = await fetchDayCountMap(
+        tigerPool,
+        'events.app_change_events',
+        'occurred_at',
+        recentDayKeys
+      );
+      const dayMismatchesBefore = comparePartitionCounts(
+        sourceDayCountsBefore,
+        tigerDayCountsBefore
+      );
+      const sourceHistoricalCountsBefore = await fetchFullDayCountMap(
+        sourcePool,
+        'public.app_change_events',
+        'occurred_at',
+        'id'
+      );
+      const tigerHistoricalCountsBefore = await fetchFullDayCountMap(
+        tigerPool,
+        'events.app_change_events',
+        'occurred_at',
+        'id'
+      );
+      const historicalDayMismatchesBefore = comparePartitionCounts(
+        sourceHistoricalCountsBefore,
+        tigerHistoricalCountsBefore
+      ).filter((mismatch) => !recentDayKeySet.has(mismatch.partitionKey));
+      const actions: PartitionActionSummary[] = [];
+
+      if (mode === 'reconcile') {
+        logger.info('Replaying Tiger app change recent windows', {
+          replayCount: buildRecentReplayDays(eventDayLookback, dayMismatchesBefore).length,
+        });
+        for (const { partitionKey, reason } of buildRecentReplayDays(eventDayLookback, dayMismatchesBefore)) {
+          actions.push(
+            await reconcileAppChangeEventsDay(
+              sourcePool,
+              tigerPool,
+              partitionKey,
+              sourceDayCountsBefore.get(partitionKey) ?? 0,
+              tigerDayCountsBefore.get(partitionKey) ?? 0,
+              reason
+            )
+          );
+        }
+
+        const postRecentSummary = await summarizeAppChangeEvents(
+          sourcePool,
+          tigerPool,
+          eventDayLookback,
+          actions
+        );
+        if (!postRecentSummary.fullCountMatches && historicalDayMismatchesBefore.length > 0) {
+          logger.info('Replaying Tiger app change historical mismatches', {
+            replayCount: historicalDayMismatchesBefore.length,
+          });
+          for (const mismatch of historicalDayMismatchesBefore) {
+            actions.push(
+              await reconcileAppChangeEventsDay(
+                sourcePool,
+                tigerPool,
+                mismatch.partitionKey,
+                sourceHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
+                tigerHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
+                'mismatched_historical_day'
+              )
+            );
+          }
+
+          const sourceDayCountsAfterHistorical = await fetchDayCountMap(
+            sourcePool,
+            'public.app_change_events',
+            'occurred_at',
+            recentDayKeys
+          );
+          const tigerDayCountsAfterHistorical = await fetchDayCountMap(
+            tigerPool,
+            'events.app_change_events',
+            'occurred_at',
+            recentDayKeys
+          );
+          const recentMismatchesAfterHistorical = comparePartitionCounts(
+            sourceDayCountsAfterHistorical,
+            tigerDayCountsAfterHistorical
+          );
+          logger.info('Replaying Tiger app change recent windows after historical repair', {
+            replayCount: buildRecentReplayDays(eventDayLookback, recentMismatchesAfterHistorical).length,
+          });
+          for (const { partitionKey, reason } of buildRecentReplayDays(
+            eventDayLookback,
+            recentMismatchesAfterHistorical
+          )) {
+            actions.push(
+              await reconcileAppChangeEventsDay(
+                sourcePool,
+                tigerPool,
+                partitionKey,
+                sourceDayCountsAfterHistorical.get(partitionKey) ?? 0,
+                tigerDayCountsAfterHistorical.get(partitionKey) ?? 0,
+                `post_historical_${reason}`
+              )
+            );
+          }
+        }
+      }
+
+      const summary = await summarizeAppChangeEvents(
+        sourcePool,
+        tigerPool,
+        eventDayLookback,
+        actions
+      );
+      summary.dayMismatchesBefore = dayMismatchesBefore;
+      summary.historicalDayMismatchesBefore = historicalDayMismatchesBefore;
+      summary.historicalDayMismatchesAfter = comparePartitionCounts(
+        await fetchFullDayCountMap(sourcePool, 'public.app_change_events', 'occurred_at', 'id'),
+        await fetchFullDayCountMap(tigerPool, 'events.app_change_events', 'occurred_at', 'id')
+      ).filter((mismatch) => !recentDayKeySet.has(mismatch.partitionKey));
+      summary.passed =
+        summary.fullCountMatches &&
+        summary.dayMismatchesAfter.length === 0 &&
+        summary.historicalDayMismatchesAfter.length === 0;
+      tableSummaries.push(summary);
+      logger.info('Completed Tiger table sync', {
+        tableName: 'app_change_events',
+        passed: summary.passed,
+        fullCountMatches: summary.fullCountMatches,
+        recentDayMismatches: summary.dayMismatchesAfter.length,
+        historicalDayMismatches: summary.historicalDayMismatchesAfter.length,
+        actions: summary.actions.length,
+      });
+    }
+
+    if (activeTables.includes('steam_news_search_projection') && mode === 'reconcile') {
+      await prepareProjectionStageTable(tigerPool);
+      projectionStagePrepared = true;
+    }
+
+    if (activeTables.includes('steam_news_search_projection')) {
+      logger.info('Reconciling Tiger table', { mode, tableName: 'steam_news_search_projection' });
+      const recentDayKeys = listRecentUtcDayKeys(projectionDayLookback);
+      const sourceMonthCountsBefore = await fetchMonthCountMap(
+        sourcePool,
+        'public.steam_news_search_projection',
+        'sort_time'
+      );
+      const tigerMonthCountsBefore = await fetchMonthCountMap(
+        tigerPool,
+        'docs.steam_news_search_projection',
+        'sort_time'
+      );
+      const sourceDayCountsBefore = await fetchDayCountMap(
+        sourcePool,
+        'public.steam_news_search_projection',
+        'sort_time',
+        recentDayKeys
+      );
+      const tigerDayCountsBefore = await fetchDayCountMap(
+        tigerPool,
+        'docs.steam_news_search_projection',
+        'sort_time',
+        recentDayKeys
+      );
+      const monthMismatchesBefore = comparePartitionCounts(
+        sourceMonthCountsBefore,
+        tigerMonthCountsBefore
+      );
+      const actions: PartitionActionSummary[] = [];
+
+      if (mode === 'reconcile') {
+        const firstPassMonths = buildProjectionReplayMonths(monthMismatchesBefore);
+        logger.info('Replaying Tiger projection months', {
+          pass: 1,
+          replayCount: firstPassMonths.length,
+        });
+        for (const { partitionKey, reason } of firstPassMonths) {
+          actions.push(
+            await reconcileProjectionMonth(
+              sourcePool,
+              tigerPool,
+              partitionKey,
+              sourceMonthCountsBefore.get(partitionKey) ?? 0,
+              tigerMonthCountsBefore.get(partitionKey) ?? 0,
+              reason
+            )
+          );
+        }
+
+        const postFirstPassSummary = await summarizeProjection(
+          sourcePool,
+          tigerPool,
+          projectionDayLookback,
+          actions
+        );
+        if (!postFirstPassSummary.passed) {
+          const secondPassMonths = buildProjectionReplayMonths(postFirstPassSummary.monthMismatchesAfter);
+          const sourceMonthCountsForSecondPass = await fetchMonthCountMap(
+            sourcePool,
+            'public.steam_news_search_projection',
+            'sort_time'
+          );
+          const tigerMonthCountsForSecondPass = await fetchMonthCountMap(
+            tigerPool,
+            'docs.steam_news_search_projection',
+            'sort_time'
+          );
+          logger.info('Replaying Tiger projection months', {
+            pass: 2,
+            replayCount: secondPassMonths.length,
+          });
+          for (const { partitionKey, reason } of secondPassMonths) {
+            actions.push(
+              await reconcileProjectionMonth(
+                sourcePool,
+                tigerPool,
+                partitionKey,
+                sourceMonthCountsForSecondPass.get(partitionKey) ?? 0,
+                tigerMonthCountsForSecondPass.get(partitionKey) ?? 0,
+                `second_pass_${reason}`
+              )
+            );
+          }
+        }
+      }
+
+      const summary = await summarizeProjection(
+        sourcePool,
+        tigerPool,
+        projectionDayLookback,
+        actions
+      );
+      summary.dayMismatchesBefore = comparePartitionCounts(
+        sourceDayCountsBefore,
+        tigerDayCountsBefore
+      );
+      summary.monthMismatchesBefore = monthMismatchesBefore;
+      tableSummaries.push(summary);
+      logger.info('Completed Tiger table sync', {
+        tableName: 'steam_news_search_projection',
+        passed: summary.passed,
+        fullCountMatches: summary.fullCountMatches,
+        recentDayMismatches: summary.dayMismatchesAfter.length,
+        monthMismatches: summary.monthMismatchesAfter.length,
+        actions: summary.actions.length,
+      });
+    }
+
+    const validations = await fetchValidationCounts(tigerPool);
+    const success =
+      tableSummaries.every((summary) => summary.passed) &&
+      validations.duplicateEventIds === 0 &&
+      validations.orphanedNewsItemGids === 0 &&
+      validations.projectionRowsMissingNewsItems === 0;
+
+    const manifestPath = writeEventsNewsManifest(
+      {
+        capturedAt: new Date().toISOString(),
+        mode,
+        settings: {
+          eventDayLookback,
+          newsDayLookback,
+          projectionDayLookback,
+          selectedTables: activeTables,
+        },
+        success,
+        tableSummaries,
+        validations,
+      } satisfies EventsNewsSyncManifest,
+      manifestLabel,
+      'events-news-sync-manifest.json'
+    );
+
+    logger.info(`Completed Tiger events/news ${mode}`, {
+      manifestPath,
+      success,
+      tableNames: activeTables,
+      validations,
+    });
+
+    if (!success) {
+      process.exitCode = 1;
+    }
+  } finally {
+    try {
+      if (projectionStagePrepared) {
+        await dropProjectionStageTable(tigerPool);
+      }
+    } finally {
+      if (lockAcquired) {
+        await releaseReconcileLock(tigerPool);
+      }
+      await sourcePool.end();
+      await tigerPool.end();
+    }
+  }
+}
+
+main()
+  .then(() => {
+    process.exit(process.exitCode ?? 0);
+  })
+  .catch((error) => {
+    logger.error('Failed to reconcile Tiger events/news tables', { error });
+    process.exit(1);
+  });

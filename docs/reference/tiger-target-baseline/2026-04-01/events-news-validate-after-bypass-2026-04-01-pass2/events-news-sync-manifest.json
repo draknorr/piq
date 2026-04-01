@@ -1,0 +1,110 @@
+{
+  "capturedAt": "2026-04-01T02:55:51.325Z",
+  "mode": "validate",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "steam_news_search_projection",
+      "app_change_events"
+    ]
+  },
+  "success": false,
+  "tableSummaries": [
+    {
+      "actions": [],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [],
+      "fullCountMatches": true,
+      "monthMismatchesAfter": [],
+      "monthMismatchesBefore": [],
+      "passed": true,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1331386,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1331386,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73652,
+          "tigerCount": 73653
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30344,
+          "tigerCount": 30349
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 7,
+          "tigerCount": 0
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73652,
+          "tigerCount": 73653
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30344,
+          "tigerCount": 30349
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 7,
+          "tigerCount": 0
+        }
+      ],
+      "fullCountMatches": false,
+      "passed": false,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1736472,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1736471,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    },
+    {
+      "actions": [],
+      "dayMismatchesAfter": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 39,
+          "tigerCount": 27
+        }
+      ],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 38,
+          "tigerCount": 27
+        }
+      ],
+      "fullCountMatches": false,
+      "passed": false,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2133238,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2133226,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 0
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

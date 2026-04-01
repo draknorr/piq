@@ -1,0 +1,980 @@
+{
+  "capturedAt": "2026-04-01T04:53:39.691Z",
+  "mode": "reconcile",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_items",
+      "app_change_events",
+      "steam_news_search_projection"
+    ]
+  },
+  "success": true,
+  "tableSummaries": [
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-26",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 33638,
+          "tigerCountAfter": 33658,
+          "tigerCountBefore": 33658,
+          "writtenRows": 33638
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-27",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 41330,
+          "tigerCountAfter": 41346,
+          "tigerCountBefore": 41346,
+          "writtenRows": 41330
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-28",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 16146,
+          "tigerCountAfter": 16151,
+          "tigerCountBefore": 16151,
+          "writtenRows": 16146
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-29",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 63042,
+          "tigerCountAfter": 63050,
+          "tigerCountBefore": 63050,
+          "writtenRows": 63042
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-30",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 73633,
+          "tigerCountAfter": 73652,
+          "tigerCountBefore": 73652,
+          "writtenRows": 73633
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-31",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 30340,
+          "tigerCountAfter": 30342,
+          "tigerCountBefore": 30342,
+          "writtenRows": 30340
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 711,
+          "tigerCountAfter": 711,
+          "tigerCountBefore": 9,
+          "writtenRows": 711
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 33638,
+          "tigerCount": 33658
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 41330,
+          "tigerCount": 41346
+        },
+        {
+          "partitionKey": "2026-03-28",
+          "sourceCount": 16146,
+          "tigerCount": 16151
+        },
+        {
+          "partitionKey": "2026-03-29",
+          "sourceCount": 63042,
+          "tigerCount": 63050
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 73633,
+          "tigerCount": 73652
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 30340,
+          "tigerCount": 30342
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 711,
+          "tigerCount": 9
+        }
+      ],
+      "fullCountMatches": true,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-14",
+          "sourceCount": 215490,
+          "tigerCount": 215497
+        },
+        {
+          "partitionKey": "2026-03-15",
+          "sourceCount": 327411,
+          "tigerCount": 327420
+        },
+        {
+          "partitionKey": "2026-03-16",
+          "sourceCount": 310114,
+          "tigerCount": 310129
+        },
+        {
+          "partitionKey": "2026-03-17",
+          "sourceCount": 308715,
+          "tigerCount": 308737
+        },
+        {
+          "partitionKey": "2026-03-18",
+          "sourceCount": 89960,
+          "tigerCount": 89962
+        },
+        {
+          "partitionKey": "2026-03-20",
+          "sourceCount": 162934,
+          "tigerCount": 162936
+        },
+        {
+          "partitionKey": "2026-03-21",
+          "sourceCount": 4465,
+          "tigerCount": 4467
+        },
+        {
+          "partitionKey": "2026-03-24",
+          "sourceCount": 2866,
+          "tigerCount": 2886
+        },
+        {
+          "partitionKey": "2026-03-25",
+          "sourceCount": 2279,
+          "tigerCount": 2281
+        }
+      ],
+      "passed": true,
+      "sourceRelation": "public.steam_news_items",
+      "sourceTotalCount": 1737023,
+      "tableName": "steam_news_items",
+      "targetRelation": "docs.steam_news_items",
+      "tigerTotalCount": 1737023,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 258840
+    },
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-31",
+          "reason": "previous_day",
+          "replayed": true,
+          "sourceCountBefore": 35460,
+          "tigerCountAfter": 35460,
+          "tigerCountBefore": 35460,
+          "writtenRows": 35460
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_recent_day",
+          "replayed": true,
+          "sourceCountBefore": 1013,
+          "tigerCountAfter": 1013,
+          "tigerCountBefore": 53,
+          "writtenRows": 1013
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 1013,
+          "tigerCount": 53
+        }
+      ],
+      "fullCountMatches": true,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [],
+      "passed": true,
+      "sourceRelation": "public.app_change_events",
+      "sourceTotalCount": 2134212,
+      "tableName": "app_change_events",
+      "targetRelation": "events.app_change_events",
+      "tigerTotalCount": 2134212,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 36473
+    },
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-06-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 10957,
+          "tigerCountAfter": 10957,
+          "tigerCountBefore": 10950,
+          "writtenRows": 10957
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-07-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 8653,
+          "tigerCountAfter": 8653,
+          "tigerCountBefore": 8646,
+          "writtenRows": 8653
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-08-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 9386,
+          "tigerCountAfter": 9386,
+          "tigerCountBefore": 9384,
+          "writtenRows": 9386
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-09-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 10083,
+          "tigerCountAfter": 10083,
+          "tigerCountBefore": 10075,
+          "writtenRows": 10083
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-10-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11704,
+          "tigerCountAfter": 11704,
+          "tigerCountBefore": 11700,
+          "writtenRows": 11704
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-11-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11162,
+          "tigerCountAfter": 11162,
+          "tigerCountBefore": 11158,
+          "writtenRows": 11162
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2022-12-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11574,
+          "tigerCountAfter": 11574,
+          "tigerCountBefore": 11572,
+          "writtenRows": 11574
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-01-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 9950,
+          "tigerCountAfter": 9950,
+          "tigerCountBefore": 9943,
+          "writtenRows": 9950
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-02-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 10920,
+          "tigerCountAfter": 10920,
+          "tigerCountBefore": 10919,
+          "writtenRows": 10920
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-03-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 12033,
+          "tigerCountAfter": 12033,
+          "tigerCountBefore": 12027,
+          "writtenRows": 12033
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-04-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11188,
+          "tigerCountAfter": 11188,
+          "tigerCountBefore": 11187,
+          "writtenRows": 11188
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-06-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 13246,
+          "tigerCountAfter": 13246,
+          "tigerCountBefore": 13244,
+          "writtenRows": 13246
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-07-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 10733,
+          "tigerCountAfter": 10733,
+          "tigerCountBefore": 10731,
+          "writtenRows": 10733
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-08-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 12585,
+          "tigerCountAfter": 12585,
+          "tigerCountBefore": 12574,
+          "writtenRows": 12585
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-09-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 12486,
+          "tigerCountAfter": 12486,
+          "tigerCountBefore": 12477,
+          "writtenRows": 12486
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-10-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 14742,
+          "tigerCountAfter": 14742,
+          "tigerCountBefore": 14736,
+          "writtenRows": 14742
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-11-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15084,
+          "tigerCountAfter": 15084,
+          "tigerCountBefore": 15082,
+          "writtenRows": 15084
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-12-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15094,
+          "tigerCountAfter": 15094,
+          "tigerCountBefore": 15088,
+          "writtenRows": 15094
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-01-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 13415,
+          "tigerCountAfter": 13415,
+          "tigerCountBefore": 13410,
+          "writtenRows": 13415
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-02-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15916,
+          "tigerCountAfter": 15916,
+          "tigerCountBefore": 15908,
+          "writtenRows": 15916
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-03-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15709,
+          "tigerCountAfter": 15709,
+          "tigerCountBefore": 15702,
+          "writtenRows": 15709
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-04-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 14990,
+          "tigerCountAfter": 14990,
+          "tigerCountBefore": 14963,
+          "writtenRows": 14990
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-05-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 16158,
+          "tigerCountAfter": 16158,
+          "tigerCountBefore": 16150,
+          "writtenRows": 16158
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-06-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 18705,
+          "tigerCountAfter": 18705,
+          "tigerCountBefore": 18690,
+          "writtenRows": 18705
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-07-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15944,
+          "tigerCountAfter": 15944,
+          "tigerCountBefore": 15938,
+          "writtenRows": 15944
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-08-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 16952,
+          "tigerCountAfter": 16952,
+          "tigerCountBefore": 16943,
+          "writtenRows": 16952
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-09-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 16927,
+          "tigerCountAfter": 16927,
+          "tigerCountBefore": 16920,
+          "writtenRows": 16927
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-10-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 20303,
+          "tigerCountAfter": 20303,
+          "tigerCountBefore": 20291,
+          "writtenRows": 20303
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-11-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 19519,
+          "tigerCountAfter": 19519,
+          "tigerCountBefore": 19514,
+          "writtenRows": 19519
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-12-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 19386,
+          "tigerCountAfter": 19386,
+          "tigerCountBefore": 19382,
+          "writtenRows": 19386
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-01-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 17310,
+          "tigerCountAfter": 17310,
+          "tigerCountBefore": 17294,
+          "writtenRows": 17310
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-02-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 19324,
+          "tigerCountAfter": 19324,
+          "tigerCountBefore": 19306,
+          "writtenRows": 19324
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-03-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 20656,
+          "tigerCountAfter": 20656,
+          "tigerCountBefore": 20640,
+          "writtenRows": 20656
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-04-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 20784,
+          "tigerCountAfter": 20784,
+          "tigerCountBefore": 20770,
+          "writtenRows": 20784
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-05-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 21509,
+          "tigerCountAfter": 21509,
+          "tigerCountBefore": 21501,
+          "writtenRows": 21509
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-06-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 25056,
+          "tigerCountAfter": 25056,
+          "tigerCountBefore": 25043,
+          "writtenRows": 25056
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-07-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 21053,
+          "tigerCountAfter": 21053,
+          "tigerCountBefore": 21047,
+          "writtenRows": 21053
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-08-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 22745,
+          "tigerCountAfter": 22745,
+          "tigerCountBefore": 22723,
+          "writtenRows": 22745
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-09-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 25190,
+          "tigerCountAfter": 25190,
+          "tigerCountBefore": 25173,
+          "writtenRows": 25190
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-10-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 29450,
+          "tigerCountAfter": 29450,
+          "tigerCountBefore": 29420,
+          "writtenRows": 29450
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-11-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 26323,
+          "tigerCountAfter": 26323,
+          "tigerCountBefore": 26311,
+          "writtenRows": 26323
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-12-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 29179,
+          "tigerCountAfter": 29179,
+          "tigerCountBefore": 29164,
+          "writtenRows": 29179
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-01-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 23229,
+          "tigerCountAfter": 23229,
+          "tigerCountBefore": 23215,
+          "writtenRows": 23229
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-02-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 29289,
+          "tigerCountAfter": 29289,
+          "tigerCountBefore": 29264,
+          "writtenRows": 29289
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 25882,
+          "tigerCountAfter": 25883,
+          "tigerCountBefore": 25807,
+          "writtenRows": 25883
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 7,
+          "tigerCountAfter": 7,
+          "tigerCountBefore": 0,
+          "writtenRows": 7
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [
+        {
+          "partitionKey": "2026-03-26",
+          "sourceCount": 833,
+          "tigerCount": 832
+        },
+        {
+          "partitionKey": "2026-03-27",
+          "sourceCount": 606,
+          "tigerCount": 600
+        },
+        {
+          "partitionKey": "2026-03-28",
+          "sourceCount": 237,
+          "tigerCount": 232
+        },
+        {
+          "partitionKey": "2026-03-29",
+          "sourceCount": 188,
+          "tigerCount": 185
+        },
+        {
+          "partitionKey": "2026-03-30",
+          "sourceCount": 314,
+          "tigerCount": 302
+        },
+        {
+          "partitionKey": "2026-03-31",
+          "sourceCount": 183,
+          "tigerCount": 175
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 7,
+          "tigerCount": 0
+        }
+      ],
+      "fullCountMatches": true,
+      "historicalDayMismatchesAfter": [],
+      "historicalDayMismatchesBefore": [],
+      "monthMismatchesAfter": [],
+      "monthMismatchesBefore": [
+        {
+          "partitionKey": "2022-06-01",
+          "sourceCount": 10957,
+          "tigerCount": 10950
+        },
+        {
+          "partitionKey": "2022-07-01",
+          "sourceCount": 8653,
+          "tigerCount": 8646
+        },
+        {
+          "partitionKey": "2022-08-01",
+          "sourceCount": 9386,
+          "tigerCount": 9384
+        },
+        {
+          "partitionKey": "2022-09-01",
+          "sourceCount": 10083,
+          "tigerCount": 10075
+        },
+        {
+          "partitionKey": "2022-10-01",
+          "sourceCount": 11704,
+          "tigerCount": 11700
+        },
+        {
+          "partitionKey": "2022-11-01",
+          "sourceCount": 11162,
+          "tigerCount": 11158
+        },
+        {
+          "partitionKey": "2022-12-01",
+          "sourceCount": 11574,
+          "tigerCount": 11572
+        },
+        {
+          "partitionKey": "2023-01-01",
+          "sourceCount": 9950,
+          "tigerCount": 9943
+        },
+        {
+          "partitionKey": "2023-02-01",
+          "sourceCount": 10920,
+          "tigerCount": 10919
+        },
+        {
+          "partitionKey": "2023-03-01",
+          "sourceCount": 12033,
+          "tigerCount": 12027
+        },
+        {
+          "partitionKey": "2023-04-01",
+          "sourceCount": 11188,
+          "tigerCount": 11187
+        },
+        {
+          "partitionKey": "2023-06-01",
+          "sourceCount": 13246,
+          "tigerCount": 13244
+        },
+        {
+          "partitionKey": "2023-07-01",
+          "sourceCount": 10733,
+          "tigerCount": 10731
+        },
+        {
+          "partitionKey": "2023-08-01",
+          "sourceCount": 12585,
+          "tigerCount": 12574
+        },
+        {
+          "partitionKey": "2023-09-01",
+          "sourceCount": 12486,
+          "tigerCount": 12477
+        },
+        {
+          "partitionKey": "2023-10-01",
+          "sourceCount": 14742,
+          "tigerCount": 14736
+        },
+        {
+          "partitionKey": "2023-11-01",
+          "sourceCount": 15084,
+          "tigerCount": 15082
+        },
+        {
+          "partitionKey": "2023-12-01",
+          "sourceCount": 15094,
+          "tigerCount": 15088
+        },
+        {
+          "partitionKey": "2024-01-01",
+          "sourceCount": 13415,
+          "tigerCount": 13410
+        },
+        {
+          "partitionKey": "2024-02-01",
+          "sourceCount": 15916,
+          "tigerCount": 15908
+        },
+        {
+          "partitionKey": "2024-03-01",
+          "sourceCount": 15709,
+          "tigerCount": 15702
+        },
+        {
+          "partitionKey": "2024-04-01",
+          "sourceCount": 14990,
+          "tigerCount": 14963
+        },
+        {
+          "partitionKey": "2024-05-01",
+          "sourceCount": 16158,
+          "tigerCount": 16150
+        },
+        {
+          "partitionKey": "2024-06-01",
+          "sourceCount": 18705,
+          "tigerCount": 18690
+        },
+        {
+          "partitionKey": "2024-07-01",
+          "sourceCount": 15944,
+          "tigerCount": 15938
+        },
+        {
+          "partitionKey": "2024-08-01",
+          "sourceCount": 16952,
+          "tigerCount": 16943
+        },
+        {
+          "partitionKey": "2024-09-01",
+          "sourceCount": 16927,
+          "tigerCount": 16920
+        },
+        {
+          "partitionKey": "2024-10-01",
+          "sourceCount": 20303,
+          "tigerCount": 20291
+        },
+        {
+          "partitionKey": "2024-11-01",
+          "sourceCount": 19519,
+          "tigerCount": 19514
+        },
+        {
+          "partitionKey": "2024-12-01",
+          "sourceCount": 19386,
+          "tigerCount": 19382
+        },
+        {
+          "partitionKey": "2025-01-01",
+          "sourceCount": 17310,
+          "tigerCount": 17294
+        },
+        {
+          "partitionKey": "2025-02-01",
+          "sourceCount": 19324,
+          "tigerCount": 19306
+        },
+        {
+          "partitionKey": "2025-03-01",
+          "sourceCount": 20656,
+          "tigerCount": 20640
+        },
+        {
+          "partitionKey": "2025-04-01",
+          "sourceCount": 20784,
+          "tigerCount": 20770
+        },
+        {
+          "partitionKey": "2025-05-01",
+          "sourceCount": 21509,
+          "tigerCount": 21501
+        },
+        {
+          "partitionKey": "2025-06-01",
+          "sourceCount": 25056,
+          "tigerCount": 25043
+        },
+        {
+          "partitionKey": "2025-07-01",
+          "sourceCount": 21053,
+          "tigerCount": 21047
+        },
+        {
+          "partitionKey": "2025-08-01",
+          "sourceCount": 22745,
+          "tigerCount": 22723
+        },
+        {
+          "partitionKey": "2025-09-01",
+          "sourceCount": 25190,
+          "tigerCount": 25173
+        },
+        {
+          "partitionKey": "2025-10-01",
+          "sourceCount": 29450,
+          "tigerCount": 29420
+        },
+        {
+          "partitionKey": "2025-11-01",
+          "sourceCount": 26323,
+          "tigerCount": 26311
+        },
+        {
+          "partitionKey": "2025-12-01",
+          "sourceCount": 29179,
+          "tigerCount": 29164
+        },
+        {
+          "partitionKey": "2026-01-01",
+          "sourceCount": 23229,
+          "tigerCount": 23215
+        },
+        {
+          "partitionKey": "2026-02-01",
+          "sourceCount": 29289,
+          "tigerCount": 29264
+        },
+        {
+          "partitionKey": "2026-03-01",
+          "sourceCount": 25882,
+          "tigerCount": 25807
+        },
+        {
+          "partitionKey": "2026-04-01",
+          "sourceCount": 7,
+          "tigerCount": 0
+        }
+      ],
+      "passed": true,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1332010,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1332010,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 772491
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

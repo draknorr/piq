@@ -1,0 +1,178 @@
+{
+  "capturedAt": "2026-04-01T01:54:41.807Z",
+  "mode": "reconcile",
+  "settings": {
+    "eventDayLookback": 3,
+    "newsDayLookback": 7,
+    "projectionDayLookback": 7,
+    "selectedTables": [
+      "steam_news_search_projection"
+    ]
+  },
+  "success": true,
+  "tableSummaries": [
+    {
+      "actions": [
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-04-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11187,
+          "tigerCountAfter": 11187,
+          "tigerCountBefore": 11186,
+          "writtenRows": 11187
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-05-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 11372,
+          "tigerCountAfter": 11372,
+          "tigerCountBefore": 11371,
+          "writtenRows": 11372
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-06-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 13244,
+          "tigerCountAfter": 13244,
+          "tigerCountBefore": 13243,
+          "writtenRows": 13244
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-09-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 12477,
+          "tigerCountAfter": 12477,
+          "tigerCountBefore": 12467,
+          "writtenRows": 12477
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2023-11-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15082,
+          "tigerCountAfter": 15082,
+          "tigerCountBefore": 15081,
+          "writtenRows": 15082
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-01-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 13410,
+          "tigerCountAfter": 13410,
+          "tigerCountBefore": 13408,
+          "writtenRows": 13410
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2024-03-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 15702,
+          "tigerCountAfter": 15702,
+          "tigerCountBefore": 15700,
+          "writtenRows": 15702
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2025-02-01",
+          "reason": "mismatched_month",
+          "replayed": true,
+          "sourceCountBefore": 19306,
+          "tigerCountAfter": 19306,
+          "tigerCountBefore": 19305,
+          "writtenRows": 19306
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-03-01",
+          "reason": "previous_month",
+          "replayed": true,
+          "sourceCountBefore": 25807,
+          "tigerCountAfter": 25807,
+          "tigerCountBefore": 25807,
+          "writtenRows": 25807
+        },
+        {
+          "deletedRows": 0,
+          "partitionKey": "2026-04-01",
+          "reason": "current_month",
+          "replayed": true,
+          "sourceCountBefore": 0,
+          "tigerCountAfter": 0,
+          "tigerCountBefore": 0,
+          "writtenRows": 0
+        }
+      ],
+      "dayMismatchesAfter": [],
+      "dayMismatchesBefore": [],
+      "fullCountMatches": true,
+      "monthMismatchesAfter": [],
+      "monthMismatchesBefore": [
+        {
+          "partitionKey": "2023-04-01",
+          "sourceCount": 11187,
+          "tigerCount": 11186
+        },
+        {
+          "partitionKey": "2023-05-01",
+          "sourceCount": 11372,
+          "tigerCount": 11371
+        },
+        {
+          "partitionKey": "2023-06-01",
+          "sourceCount": 13244,
+          "tigerCount": 13243
+        },
+        {
+          "partitionKey": "2023-09-01",
+          "sourceCount": 12477,
+          "tigerCount": 12467
+        },
+        {
+          "partitionKey": "2023-11-01",
+          "sourceCount": 15082,
+          "tigerCount": 15081
+        },
+        {
+          "partitionKey": "2024-01-01",
+          "sourceCount": 13410,
+          "tigerCount": 13408
+        },
+        {
+          "partitionKey": "2024-03-01",
+          "sourceCount": 15702,
+          "tigerCount": 15700
+        },
+        {
+          "partitionKey": "2025-02-01",
+          "sourceCount": 19306,
+          "tigerCount": 19305
+        }
+      ],
+      "passed": true,
+      "sourceRelation": "public.steam_news_search_projection",
+      "sourceTotalCount": 1331386,
+      "tableName": "steam_news_search_projection",
+      "targetRelation": "docs.steam_news_search_projection",
+      "tigerTotalCount": 1331386,
+      "totalDeletedRows": 0,
+      "totalWrittenRows": 137587
+    }
+  ],
+  "validations": {
+    "duplicateEventIds": 0,
+    "orphanedNewsItemGids": 0,
+    "projectionRowsMissingNewsItems": 0
+  }
+}

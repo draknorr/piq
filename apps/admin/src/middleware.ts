@@ -8,6 +8,9 @@ import {
 } from '@/lib/supabase/middleware';
 
 const AUTH_DEBUG = process.env.NEXT_PUBLIC_AUTH_DEBUG === 'true';
+const CHAT_EVAL_SECRET = process.env.CHAT_EVAL_SECRET;
+const CHAT_EVAL_LOCAL_BYPASS_ENABLED = process.env.CHAT_EVAL_LOCAL_BYPASS_ENABLED === 'true';
+const LOCAL_BYPASS_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
 // Public paths - no auth required
 const PUBLIC_PATHS = [
@@ -50,6 +53,32 @@ function isApiPath(pathname: string): boolean {
   return pathname.startsWith('/api/');
 }
 
+function isChatEvalPath(pathname: string): boolean {
+  return pathname === '/api/chat/eval' || pathname === '/api/chat/stream';
+}
+
+function isLocalChatEvalBypassRequest(request: NextRequest): boolean {
+  if (!CHAT_EVAL_LOCAL_BYPASS_ENABLED || !CHAT_EVAL_SECRET) {
+    return false;
+  }
+
+  if (!isChatEvalPath(request.nextUrl.pathname)) {
+    return false;
+  }
+
+  if (request.headers.get('x-chat-eval-secret') !== CHAT_EVAL_SECRET) {
+    return false;
+  }
+
+  const hostHeader = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const hostCandidates = [request.nextUrl.hostname, hostHeader]
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim().replace(/:\d+$/, '').toLowerCase())
+    .filter(Boolean);
+
+  return hostCandidates.some((hostname) => LOCAL_BYPASS_HOSTS.has(hostname));
+}
+
 function logAuthDebug(event: string, details: Record<string, unknown>): void {
   if (!AUTH_DEBUG) {
     return;
@@ -87,6 +116,10 @@ export async function middleware(request: NextRequest) {
 
   // Skip static assets
   if (isStaticAsset(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (isLocalChatEvalBypassRequest(request)) {
     return NextResponse.next();
   }
 
