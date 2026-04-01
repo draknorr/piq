@@ -94,8 +94,15 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
   {
     name: 'semanticSearch',
     endpoint: '/v1/contracts/semantic-search',
-    status: 'planned',
-    requiredRelations: [],
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'latest_daily_metrics',
+      'publishers',
+      'developers',
+      'app_publishers',
+      'app_developers',
+    ],
     description:
       'Resolve concept- and similarity-driven prompts against entity-linked embeddings.',
     naturalLanguageStrength: ['games like X', 'concept search'],

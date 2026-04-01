@@ -1,3 +1,14 @@
+import type { SemanticSearchEngineResult } from '@publisheriq/semantic-search';
+
+export type {
+  SemanticSearchCandidate,
+  SemanticSearchDebugInfo,
+  SemanticSearchFilters,
+  SemanticSearchReference,
+  SemanticSearchRequest,
+  SemanticSearchResultItem,
+} from '@publisheriq/semantic-search';
+
 export type EntityKind = 'game' | 'publisher' | 'developer';
 export type EntityPlatform = 'steam' | 'publisheriq';
 export type DataPlaneSource = 'supabase-postgres' | 'tiger';
@@ -337,6 +348,10 @@ export interface SearchDocumentsResponse {
   items: SearchDocumentItem[];
   provenance: QueryProvenance;
   sufficientToAnswer: boolean;
+}
+
+export interface SemanticSearchResponse extends SemanticSearchEngineResult {
+  provenance: QueryProvenance;
 }
 
 export interface QueryContractDescriptor {

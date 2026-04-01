@@ -9,6 +9,7 @@ import {
   type ResolveEntitiesRequest,
   type SearchCatalogRequest,
   type SearchDocumentsRequest,
+  type SemanticSearchRequest,
   type TraceMetricHistoryRequest,
 } from '@publisheriq/data-plane';
 import { logger, PublisherIQError } from '@publisheriq/shared';
@@ -130,6 +131,13 @@ async function main(): Promise<void> {
       if (request.method === 'POST' && url.pathname === '/v1/contracts/search-documents') {
         const body = await readJsonBody<SearchDocumentsRequest>(request);
         const result = await dataPlane.searchDocuments(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/semantic-search') {
+        const body = await readJsonBody<SemanticSearchRequest>(request);
+        const result = await dataPlane.semanticSearch(body);
         sendJson(response, 200, result);
         return;
       }

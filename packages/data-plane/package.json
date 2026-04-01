@@ -24,7 +24,10 @@
     "reconcile-events-news": "tsx src/scripts/reconcile-events-news.ts"
   },
   "dependencies": {
+    "@publisheriq/qdrant": "workspace:*",
+    "@publisheriq/semantic-search": "workspace:*",
     "@publisheriq/shared": "workspace:*",
+    "openai": "^4.77.0",
     "pg": "^8.16.3"
   },
   "devDependencies": {

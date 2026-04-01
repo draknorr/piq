@@ -1,6 +1,14 @@
 import type { QueryResultRow } from 'pg';
+import OpenAI from 'openai';
 
+import {
+  runSemanticSearch,
+  type ResolveReferenceResult,
+  type ResolvedReferenceEntity,
+  type SemanticSearchDependencies,
+} from '@publisheriq/semantic-search';
 import { logger, PublisherIQError } from '@publisheriq/shared';
+import { EMBEDDING_CONFIG } from '@publisheriq/qdrant';
 
 import type {
   DataPlaneReadiness,
@@ -26,6 +34,8 @@ import type {
   SearchDocumentItem,
   SearchDocumentsRequest,
   SearchDocumentsResponse,
+  SemanticSearchRequest,
+  SemanticSearchResponse,
   TraceMetric,
   TraceMetricHistoryRequest,
   TraceMetricHistoryResponse,
@@ -108,6 +118,23 @@ interface ChangeEventRow extends QueryResultRow {
   source: string;
 }
 
+interface SemanticGameReferenceRow extends QueryResultRow {
+  appid: number;
+  current_price_cents: number | null;
+  developer_ids: number[] | null;
+  name: string;
+  pics_review_percentage: number | null;
+  publisher_ids: number[] | null;
+  total_reviews: number | null;
+  type: string | null;
+}
+
+interface SemanticCompanyReferenceRow extends QueryResultRow {
+  game_count: number | null;
+  id: number;
+  name: string;
+}
+
 interface ExplainNewsRow extends QueryResultRow {
   feed_scope: string | null;
   feedlabel: string | null;
@@ -175,7 +202,7 @@ const EXPLAIN_CHANGE_MOMENT_GAP_MS = 6 * 60 * 60 * 1000;
 const EXPLAIN_NEWS_PROXIMITY_MS = 24 * 60 * 60 * 1000;
 const READINESS_GATE_CONTRACTS = new Set<
   RuntimeQueryContractDescriptor['name']
->(['resolveEntities', 'searchCatalog', 'rankEntities']);
+>(['resolveEntities', 'searchCatalog', 'rankEntities', 'semanticSearch']);
 const ISO_DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -196,6 +223,7 @@ const GAME_TYPE_PREDICATE: Record<DataPlaneConfig['source'], string> = {
   tiger: "a.type = 'game'",
   'supabase-postgres': "a.type = 'game'::public.app_type",
 };
+let openaiClient: OpenAI | null = null;
 const RELATION_LOCATIONS: Record<
   DataPlaneConfig['source'],
   Record<DataPlaneRelationKey, RelationLocation>
@@ -422,6 +450,20 @@ function buildProvenance(source: DataPlaneConfig['source'], tables: string[]): Q
   };
 }
 
+function getOpenAI(): OpenAI {
+  if (openaiClient) {
+    return openaiClient;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY environment variable');
+  }
+
+  openaiClient = new OpenAI({ apiKey });
+  return openaiClient;
+}
+
 function encodeContinuationToken(payload: ContinuationTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
@@ -456,8 +498,11 @@ export class DataPlaneService {
       CONTRACT_REGISTRY.map(async (contract) => {
         const blockingTables =
           contract.status === 'ready'
-            ? await this.getBlockingTables(contract.requiredRelations)
-            : contract.requiredRelations.map((relationKey) => this.relation(relationKey).sql);
+            ? await this.getContractBlockers(contract)
+            : [
+                ...contract.requiredRelations.map((relationKey) => this.relation(relationKey).sql),
+                ...this.getAdditionalContractBlockers(contract.name),
+              ];
 
         return {
           ...contract,
@@ -1137,7 +1182,7 @@ export class DataPlaneService {
       }
     }
 
-    const rows = await this.querySearchDocumentRows({
+    let rows = await this.querySearchDocumentRows({
       appidFilter,
       endTime,
       feedScopes,
@@ -1145,6 +1190,16 @@ export class DataPlaneService {
       query,
       startTime,
     });
+
+    if (rows.length === 0 && appidFilter !== null) {
+      rows = await this.queryLatestEntityDocumentRows({
+        appidFilter,
+        endTime,
+        feedScopes,
+        limit,
+        startTime,
+      });
+    }
 
     const items: SearchDocumentItem[] = rows.map((row) => ({
       appid: row.appid,
@@ -1186,6 +1241,212 @@ export class DataPlaneService {
         this.relation('docs_steam_news_search_projection').sql,
       ]),
       sufficientToAnswer: items.length > 0,
+    };
+  }
+
+  async semanticSearch(
+    request: SemanticSearchRequest
+  ): Promise<SemanticSearchResponse> {
+    await this.assertContractRuntime('semanticSearch');
+
+    const result = await runSemanticSearch(
+      request,
+      this.buildSemanticSearchDependencies()
+    );
+
+    return {
+      ...result,
+      provenance: buildProvenance(
+        this.config.source,
+        request.entityKind === 'game'
+          ? [
+              this.relation('apps').sql,
+              this.relation('latest_daily_metrics').sql,
+              this.relation('app_publishers').sql,
+              this.relation('app_developers').sql,
+              'qdrant:publisheriq_games',
+            ]
+          : [
+              this.relation(request.entityKind === 'publisher' ? 'publishers' : 'developers').sql,
+              request.entityKind === 'publisher'
+                ? 'qdrant:publisheriq_publishers_portfolio'
+                : 'qdrant:publisheriq_developers_portfolio',
+              request.entityKind === 'publisher'
+                ? 'qdrant:publisheriq_publishers_identity'
+                : 'qdrant:publisheriq_developers_identity',
+            ]
+      ),
+    };
+  }
+
+  private buildSemanticSearchDependencies(): SemanticSearchDependencies {
+    return {
+      embedText: async (text: string) => this.generateSemanticQueryEmbedding(text),
+      resolveReference: async (params) => this.resolveSemanticReference(params),
+    };
+  }
+
+  private async generateSemanticQueryEmbedding(text: string): Promise<number[]> {
+    const openai = getOpenAI();
+    const response = await openai.embeddings.create({
+      dimensions: EMBEDDING_CONFIG.DIMENSIONS,
+      input: text,
+      model: EMBEDDING_CONFIG.MODEL,
+    });
+
+    const embedding = response.data[0]?.embedding;
+    if (!embedding) {
+      throw new Error('OpenAI did not return an embedding vector.');
+    }
+
+    return embedding;
+  }
+
+  private async resolveSemanticReference(params: {
+    entityKind: EntityKind;
+    referencePlatformEntityId?: string | null;
+    referenceQuery?: string | null;
+  }): Promise<ResolveReferenceResult> {
+    const { entityKind, referencePlatformEntityId, referenceQuery } = params;
+
+    if (referencePlatformEntityId?.trim()) {
+      const id = Number(referencePlatformEntityId.trim());
+      if (!Number.isInteger(id) || id <= 0) {
+        return {
+          error: `Invalid ${entityKind} id "${referencePlatformEntityId}".`,
+        };
+      }
+
+      return entityKind === 'game'
+        ? { entity: await this.lookupSemanticGameById(id) }
+        : { entity: await this.lookupSemanticCompanyById(entityKind, id) };
+    }
+
+    const query = referenceQuery?.trim();
+    if (!query) {
+      return {
+        error: `A ${entityKind} reference is required for similarity search.`,
+      };
+    }
+
+    const resolved = await this.resolveEntities({
+      entityKinds: [entityKind],
+      includeMetrics: true,
+      limit: 5,
+      query,
+    });
+
+    if (resolved.entities.length === 0) {
+      return {
+        error: `Could not find ${entityKind} named "${query}". Try a different name or check spelling.`,
+      };
+    }
+
+    if (entityKind !== 'game' && resolved.ambiguity.requiresClarification) {
+      return {
+        candidates: resolved.entities.slice(0, 5).map((entity) => ({
+          id: Number(entity.platformEntityId),
+          name: entity.displayName,
+        })),
+        error: resolved.ambiguity.message ?? `The ${entityKind} name "${query}" is ambiguous.`,
+      };
+    }
+
+    const selected = resolved.entities[0];
+    const id = Number(selected.platformEntityId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return {
+        error: `Resolved ${entityKind} "${selected.displayName}" does not have a valid platform id.`,
+      };
+    }
+
+    return entityKind === 'game'
+      ? { entity: await this.lookupSemanticGameById(id) }
+      : { entity: await this.lookupSemanticCompanyById(entityKind, id) };
+  }
+
+  private async lookupSemanticGameById(
+    appid: number
+  ): Promise<ResolvedReferenceEntity | null> {
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appPublishersTable = this.relation('app_publishers').sql;
+    const appDevelopersTable = this.relation('app_developers').sql;
+
+    const result = await runQuery<SemanticGameReferenceRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.type::text AS type,
+          a.current_price_cents,
+          a.pics_review_percentage,
+          ldm.total_reviews,
+          COALESCE((
+            SELECT array_agg(DISTINCT ap.publisher_id ORDER BY ap.publisher_id)
+            FROM ${appPublishersTable} ap
+            WHERE ap.appid = a.appid
+          ), ARRAY[]::int[]) AS publisher_ids,
+          COALESCE((
+            SELECT array_agg(DISTINCT ad.developer_id ORDER BY ad.developer_id)
+            FROM ${appDevelopersTable} ad
+            WHERE ad.appid = a.appid
+          ), ARRAY[]::int[]) AS developer_ids
+        FROM ${appsTable} a
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE a.appid = $1
+          AND a.is_delisted = false
+          AND ${GAME_TYPE_PREDICATE[this.config.source]}
+        LIMIT 1
+      `,
+      [appid],
+      this.config
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.appid,
+      metrics: {
+        developer_ids: row.developer_ids ?? [],
+        price_cents: row.current_price_cents,
+        publisher_ids: row.publisher_ids ?? [],
+        review_percentage: row.pics_review_percentage,
+        total_reviews: row.total_reviews,
+      },
+      name: row.name,
+      type: row.type ?? 'game',
+    };
+  }
+
+  private async lookupSemanticCompanyById(
+    entityKind: Extract<EntityKind, 'publisher' | 'developer'>,
+    id: number
+  ): Promise<ResolvedReferenceEntity | null> {
+    const table = this.relation(entityKind === 'publisher' ? 'publishers' : 'developers').sql;
+    const result = await runQuery<SemanticCompanyReferenceRow>(
+      `
+        SELECT id, name, game_count
+        FROM ${table}
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id],
+      this.config
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      type: entityKind,
     };
   }
 
@@ -1477,6 +1738,61 @@ export class DataPlaneService {
         ORDER BY
           title_phrase_hit DESC,
           rank DESC,
+          projection.sort_time DESC,
+          projection.gid DESC
+        LIMIT $${sqlParams.length}
+      `,
+      sqlParams,
+      this.config
+    );
+
+    return result.rows;
+  }
+
+  private async queryLatestEntityDocumentRows(params: {
+    appidFilter: number;
+    endTime: string;
+    feedScopes: string[];
+    limit: number;
+    startTime: string;
+  }): Promise<SearchDocumentRow[]> {
+    const projectionTable = this.relation('docs_steam_news_search_projection').sql;
+    const newsItemsTable = this.relation('docs_steam_news_items').sql;
+    const appsTable = this.relation('apps').sql;
+    const sqlParams: unknown[] = [params.appidFilter, params.startTime, params.endTime];
+    const conditions = [
+      'projection.appid = $1',
+      'projection.sort_time BETWEEN $2::timestamptz AND $3::timestamptz',
+    ];
+
+    if (params.feedScopes.length > 0) {
+      sqlParams.push(params.feedScopes);
+      conditions.push(`lower(projection.feed_scope) = ANY($${sqlParams.length}::text[])`);
+    }
+
+    sqlParams.push(params.limit);
+
+    const result = await runQuery<SearchDocumentRow>(
+      `
+        SELECT
+          projection.gid,
+          projection.appid,
+          apps.name AS app_name,
+          projection.published_at::text,
+          projection.first_seen_at::text,
+          projection.sort_time::text,
+          projection.feed_scope,
+          projection.title,
+          news.feedlabel,
+          news.feedname,
+          news.url,
+          0::double precision AS rank,
+          false AS title_phrase_hit
+        FROM ${projectionTable} projection
+        JOIN ${newsItemsTable} news ON news.gid = projection.gid
+        JOIN ${appsTable} apps ON apps.appid = projection.appid
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY
           projection.sort_time DESC,
           projection.gid DESC
         LIMIT $${sqlParams.length}
@@ -1986,7 +2302,7 @@ export class DataPlaneService {
       return;
     }
 
-    const blockingTables = await this.getBlockingTables(contract.requiredRelations);
+    const blockingTables = await this.getContractBlockers(contract);
     if (blockingTables.length > 0) {
       throw new ContractRuntimeUnavailableError(
         `${contractName} is not ready on ${this.config.source} until the required tables are present and backfilled.`,
@@ -2026,6 +2342,34 @@ export class DataPlaneService {
     }
 
     return blockingTables;
+  }
+
+  private async getContractBlockers(
+    contract: Pick<RuntimeQueryContractDescriptor, 'name' | 'requiredRelations'>
+  ): Promise<string[]> {
+    const blockingTables = await this.getBlockingTables(contract.requiredRelations);
+    return [...blockingTables, ...this.getAdditionalContractBlockers(contract.name)];
+  }
+
+  private getAdditionalContractBlockers(
+    contractName: RuntimeQueryContractDescriptor['name']
+  ): string[] {
+    if (contractName !== 'semanticSearch') {
+      return [];
+    }
+
+    const blockers: string[] = [];
+    if (!process.env.QDRANT_URL) {
+      blockers.push('env:QDRANT_URL');
+    }
+    if (!process.env.QDRANT_API_KEY) {
+      blockers.push('env:QDRANT_API_KEY');
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      blockers.push('env:OPENAI_API_KEY');
+    }
+
+    return blockers;
   }
 
   private relation(relationKey: DataPlaneRelationKey): RelationLocation {
