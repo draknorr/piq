@@ -39,6 +39,7 @@ import {
 } from '@/lib/chat/company-answer-policy';
 import { normalizeTrendToolCall } from '@/lib/chat/trend-tool-policy';
 import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
+import { tryTigerQueryAnalyticsCompat } from '@/lib/chat/query-analytics-tiger-compat';
 import { buildRedundantNewsToolSkipResult } from '@/lib/chat/news-tool-guardrails';
 import {
   compareChangeBeforeAfter,
@@ -187,7 +188,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
             result = await executeQuery(args.sql);
           } else if (routedToolCall.name === 'query_analytics') {
             const args = routedToolCall.arguments as unknown as QueryAnalyticsArgs;
-            result = await executeCubeQuery({
+            result = await tryTigerQueryAnalyticsCompat(args) ?? await executeCubeQuery({
               cube: args.cube,
               dimensions: args.dimensions,
               measures: args.measures,
@@ -225,28 +226,28 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
             result = await screenGames(args);
           } else if (routedToolCall.name === 'query_change_activity') {
             const args = routedToolCall.arguments as unknown as QueryChangeActivityArgs;
-            result = await queryChangeActivity(args);
+            result = await queryChangeActivity(args) as typeof result;
           } else if (routedToolCall.name === 'get_game_change_timeline') {
             const args = routedToolCall.arguments as unknown as GetGameChangeTimelineArgs;
-            result = await getGameChangeTimeline(args);
+            result = await getGameChangeTimeline(args) as typeof result;
           } else if (routedToolCall.name === 'get_recent_news_detail') {
             const args = routedToolCall.arguments as unknown as GetRecentNewsDetailArgs;
-            result = await getRecentNewsDetail(args);
+            result = await getRecentNewsDetail(args) as typeof result;
           } else if (routedToolCall.name === 'get_recent_news_digest') {
             const args = routedToolCall.arguments as unknown as GetRecentNewsDigestArgs;
-            result = await getRecentNewsDigest(args);
+            result = await getRecentNewsDigest(args) as typeof result;
           } else if (routedToolCall.name === 'search_recent_news_topics') {
             const args = routedToolCall.arguments as unknown as SearchRecentNewsTopicsArgs;
-            result = await searchRecentNewsTopics(args);
+            result = await searchRecentNewsTopics(args) as typeof result;
           } else if (routedToolCall.name === 'get_change_activity_detail') {
             const args = routedToolCall.arguments as unknown as GetChangeActivityDetailArgs;
-            result = await getChangeActivityDetail(args);
+            result = await getChangeActivityDetail(args) as typeof result;
           } else if (routedToolCall.name === 'compare_change_before_after') {
             const args = routedToolCall.arguments as unknown as CompareChangeBeforeAfterArgs;
-            result = await compareChangeBeforeAfter(args);
+            result = await compareChangeBeforeAfter(args) as typeof result;
           } else if (routedToolCall.name === 'find_change_patterns') {
             const args = routedToolCall.arguments as unknown as FindChangePatternsArgs;
-            result = await findChangePatterns(args);
+            result = await findChangePatterns(args) as typeof result;
           } else {
             result = { success: false, error: `Unknown tool: ${routedToolCall.name}` };
           }

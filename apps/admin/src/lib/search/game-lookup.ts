@@ -5,6 +5,11 @@
  * Prefers the trigram-backed fuzzy search RPC and falls back to ILIKE.
  */
 
+import {
+  attachToolExecutionProvenance,
+  type ChatExecutionProvenanceOverride,
+} from '@/lib/chat/execution-trace';
+import { postToQueryApi } from '@/lib/query-api-client';
 import { getServiceSupabase } from '@/lib/supabase-service';
 
 /**
@@ -31,6 +36,41 @@ export interface LookupGamesResult {
   error?: string;
 }
 
+interface ResolveEntitiesResponse {
+  entities?: Array<{
+    confidence: number;
+    displayName: string;
+    entityKind: 'developer' | 'game' | 'publisher';
+    matchQuality: 'exact' | 'prefix' | 'substring';
+    platformEntityId: string;
+    releaseYear?: number | null;
+  }>;
+}
+
+const TIGER_GAME_LOOKUP_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:resolveEntities',
+    'relation:apps',
+    'relation:latest_daily_metrics',
+    'relation:publishers',
+    'relation:developers',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'lookup_games now uses the Tiger resolve-entities contract before falling back to legacy fuzzy lookup.',
+  recommendedTigerContracts: ['resolveEntities'],
+};
+
+function parseAppId(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+
+  const appid = Number.parseInt(value, 10);
+  return Number.isFinite(appid) ? appid : null;
+}
+
 /**
  * Search for matching game names using direct database query
  */
@@ -47,8 +87,50 @@ export async function lookupGames(args: LookupGamesArgs): Promise<LookupGamesRes
   }
 
   try {
-    const supabase = getServiceSupabase();
     const maxResults = Math.min(limit, 20); // Hard cap at 20
+    const trimmedQuery = query.trim();
+
+    const tigerResponse = await postToQueryApi<ResolveEntitiesResponse>(
+      '/v1/contracts/resolve-entities',
+      {
+        entityKinds: ['game'],
+        limit: maxResults,
+        query: trimmedQuery,
+      }
+    );
+
+    if (tigerResponse.ok && tigerResponse.data) {
+      const tigerResults = (tigerResponse.data.entities ?? [])
+        .filter((entity) => entity.entityKind === 'game')
+        .map((entity): LookupGamesResult['results'][number] | null => {
+          const appid = parseAppId(entity.platformEntityId);
+          if (appid == null) {
+            return null;
+          }
+
+          return {
+            appid,
+            isExactMatch: entity.matchQuality === 'exact',
+            name: entity.displayName,
+            releaseYear: entity.releaseYear ?? null,
+            similarityScore: entity.confidence,
+          };
+        })
+        .filter((entity): entity is LookupGamesResult['results'][number] => entity != null);
+
+      if (tigerResults.length > 0) {
+        return attachToolExecutionProvenance(
+          {
+            success: true,
+            query,
+            results: tigerResults,
+          },
+          TIGER_GAME_LOOKUP_PROVENANCE
+        );
+      }
+    }
+
+    const supabase = getServiceSupabase();
 
     // Exact case-insensitive title matches should win immediately, even for
     // delisted apps, so historical/news queries do not degrade into fuzzy ambiguity.
@@ -56,7 +138,7 @@ export async function lookupGames(args: LookupGamesArgs): Promise<LookupGamesRes
       .from('apps')
       .select('appid, name, release_date')
       .eq('type', 'game')
-      .ilike('name', query.trim())
+      .ilike('name', trimmedQuery)
       .order('release_date', { ascending: false, nullsFirst: false })
       .limit(maxResults);
 
@@ -111,7 +193,7 @@ export async function lookupGames(args: LookupGamesArgs): Promise<LookupGamesRes
       .select('appid, name, release_date')
       .eq('type', 'game')
       .eq('is_delisted', false)
-      .ilike('name', `%${query.trim()}%`)
+      .ilike('name', `%${trimmedQuery}%`)
       .order('name')
       .limit(maxResults);
 

@@ -3,10 +3,14 @@ export type TigerPrimaryMode = 'off' | 'eval' | 'canary' | 'all';
 export type TigerRolloutCohort = 'canary' | 'default';
 export type TigerShadowMatchedIntent =
   | 'catalog_search'
+  | 'change_discovery'
   | 'change_explanation'
+  | 'entity_overview'
   | 'entity_ranking'
+  | 'entity_compare'
   | 'metric_history'
   | 'news_search'
+  | 'semantic_search'
   | null;
 export type TigerShadowRoute =
   | 'disabled'
@@ -22,10 +26,13 @@ export type TigerPrimaryRoute =
   | 'error';
 export type TigerShadowContractName =
   | 'resolveEntities'
+  | 'getEntityOverview'
   | 'rankEntities'
+  | 'compareEntities'
   | 'searchCatalog'
   | 'searchDocuments'
   | 'explainChanges'
+  | 'semanticSearch'
   | 'traceMetricHistory';
 export type TigerShadowAttemptStatus = 'success' | 'error' | 'skipped';
 

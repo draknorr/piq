@@ -28,6 +28,11 @@ import {
   type JsonValue,
 } from '@/app/(main)/changes/lib';
 import type { ToolCall } from '@/lib/llm/types';
+import {
+  attachToolExecutionProvenance,
+  type ChatExecutionProvenanceOverride,
+} from '@/lib/chat/execution-trace';
+import { postToQueryApi } from '@/lib/query-api-client';
 import { lookupGames, type LookupGamesArgs } from '@/lib/search/game-lookup';
 import { getServiceSupabase } from '@/lib/supabase-service';
 
@@ -259,6 +264,56 @@ interface CheckedDateWindow {
   windowStart: string;
   windowEnd: string;
 }
+
+interface TigerResolveEntitiesResponse {
+  ambiguity?: {
+    message: string | null;
+    requiresClarification: boolean;
+  };
+  entities?: Array<{
+    displayName: string;
+    entityKind: 'developer' | 'game' | 'publisher';
+    entityUid: string;
+    matchQuality: 'exact' | 'prefix' | 'substring';
+    platformEntityId: string;
+  }>;
+}
+
+interface TigerExplainChangesResponse {
+  entity: {
+    displayName: string;
+    entityUid: string;
+    platformEntityId: string;
+  };
+  moments?: Array<{
+    events?: Array<{
+      afterValue: unknown | null;
+      beforeValue: unknown | null;
+      changeType: string;
+      context: unknown;
+      id: string;
+      occurredAt: string;
+      source: string;
+    }>;
+  }>;
+  sufficientToAnswer: boolean;
+}
+
+const TIGER_GAME_TIMELINE_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:resolveEntities',
+    'query_api:explainChanges',
+    'relation:core_entities',
+    'relation:events_app_change_events',
+    'relation:docs_steam_news_items',
+    'relation:docs_steam_news_search_projection',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'get_game_change_timeline now uses Tiger resolve-entities plus explain-changes when the request can be mapped safely.',
+  recommendedTigerContracts: ['resolveEntities', 'explainChanges'],
+};
 
 const NEWS_TOPIC_DEFINITIONS: NewsTopicDefinition[] = [
   {
@@ -1223,6 +1278,178 @@ export async function normalizeChangeIntelToolCall(
   };
 }
 
+function parseTigerAppId(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+
+  const appid = Number.parseInt(value, 10);
+  return Number.isFinite(appid) ? appid : null;
+}
+
+function normalizeTimelineChangeText(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return null;
+}
+
+async function tryTigerGameChangeTimeline(
+  args: GetGameChangeTimelineArgs
+): Promise<Record<string, unknown> | null> {
+  if ((args.signal_families?.length ?? 0) > 0) {
+    return null;
+  }
+
+  const query = normalizeSearch(args.app_name);
+  if (!query) {
+    return null;
+  }
+
+  const days = clamp(args.days, DEFAULT_TIMELINE_DAYS, 1, MAX_TIMELINE_DAYS);
+  const limit = clamp(args.limit, DEFAULT_TIMELINE_LIMIT, 1, MAX_TIMELINE_LIMIT);
+  const resolveResponse = await postToQueryApi<TigerResolveEntitiesResponse>(
+    '/v1/contracts/resolve-entities',
+    {
+      entityKinds: ['game'],
+      limit: 5,
+      query,
+    }
+  );
+
+  if (!resolveResponse.ok || !resolveResponse.data) {
+    return null;
+  }
+
+  const entities = (resolveResponse.data.entities ?? []).filter(
+    (entity) => entity.entityKind === 'game'
+  );
+
+  const resolvedEntity =
+    (typeof args.appid === 'number'
+      ? entities.find((entity) => parseTigerAppId(entity.platformEntityId) === args.appid)
+      : undefined) ?? entities[0];
+
+  if (!resolvedEntity || resolveResponse.data.ambiguity?.requiresClarification === true) {
+    return null;
+  }
+
+  const appid = parseTigerAppId(resolvedEntity.platformEntityId);
+  if (appid == null) {
+    return null;
+  }
+
+  const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const to = new Date().toISOString();
+  const explainResponse = await postToQueryApi<TigerExplainChangesResponse>(
+    '/v1/contracts/explain-changes',
+    {
+      endTime: to,
+      entityUid: resolvedEntity.entityUid,
+      includeNews: true,
+      limit,
+      startTime: from,
+    }
+  );
+
+  if (!explainResponse.ok || !explainResponse.data) {
+    return null;
+  }
+
+  const events = (explainResponse.data.moments ?? [])
+    .flatMap((moment) => moment.events ?? [])
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+    .slice(0, limit)
+    .map((event) => ({
+      added: [],
+      afterImageUrl: null,
+      afterText: normalizeTimelineChangeText(event.afterValue),
+      baseline30d: null,
+      baseline7d: null,
+      beforeImageUrl: null,
+      beforeText: normalizeTimelineChangeText(event.beforeValue),
+      changeType: event.changeType,
+      eventId: event.id,
+      kind: 'note',
+      label: formatChangeLabel(event.changeType),
+      note: null,
+      occurredAt: event.occurredAt,
+      removed: [],
+      response1d: null,
+      response30d: null,
+      response7d: null,
+      signalFamily: familyForChangeType(event.changeType),
+      source: event.source,
+    }));
+
+  const app = {
+    appType: 'game',
+    appid,
+    isExactMatch: resolvedEntity.matchQuality === 'exact',
+    name: explainResponse.data.entity.displayName,
+    releaseYear: null,
+    similarityScore: 1,
+  };
+
+  const result = events.length === 0
+    ? {
+        success: true,
+        app,
+        total_found: 0,
+        selected_change_surface: 'per_app_timeline',
+        no_match: true,
+        sufficient_to_answer: true,
+        sufficiency_reason: 'No title-specific change events were found in the requested window.',
+        required_answer_fields: ['what window was checked', 'why no qualifying title-specific changes were found'],
+        response_guidance: 'State the checked title and time window. Do not imply changes happened when no events were found.',
+        events: [],
+        meta: {
+          days,
+          limit,
+          signalFamilies: null,
+        },
+      }
+    : {
+        success: true,
+        app,
+        total_found: events.length,
+        selected_change_surface: 'per_app_timeline',
+        sufficient_to_answer: explainResponse.data.sufficientToAnswer,
+        sufficiency_reason: 'The timeline events are sufficient to answer directly when you stay grounded in concrete changes and dates.',
+        required_answer_fields: ['dates', 'concrete changes', 'before/after values when available'],
+        response_guidance: 'Lead with the most material title-specific changes and dates. Use before/after text when it exists.',
+        events,
+        presentation_hints: {
+          format: 'game_change_timeline',
+          proof_field: 'events',
+        },
+        answer_payload: {
+          app,
+          events: events.map((event) => ({
+            occurredAt: event.occurredAt,
+            label: event.label,
+            beforeText: event.beforeText,
+            afterText: event.afterText,
+            added: event.added,
+            removed: event.removed,
+            note: event.note,
+          })),
+        },
+        meta: {
+          days,
+          limit,
+          signalFamilies: null,
+        },
+      };
+
+  return attachToolExecutionProvenance(result, TIGER_GAME_TIMELINE_PROVENANCE);
+}
+
 async function fetchWindowMetrics(
   appid: number,
   start: string,
@@ -1612,6 +1839,11 @@ export async function queryChangeActivity(args: QueryChangeActivityArgs) {
 }
 
 export async function getGameChangeTimeline(args: GetGameChangeTimelineArgs) {
+  const tigerResult = await tryTigerGameChangeTimeline(args);
+  if (tigerResult) {
+    return tigerResult;
+  }
+
   const days = clamp(args.days, DEFAULT_TIMELINE_DAYS, 1, MAX_TIMELINE_DAYS);
   const limit = clamp(args.limit, DEFAULT_TIMELINE_LIMIT, 1, MAX_TIMELINE_LIMIT);
   const resolved = await resolveAppReference({

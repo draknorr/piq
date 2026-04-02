@@ -323,8 +323,9 @@ export function buildSessionContextPrompt(context: SessionChatContext | null | u
   }
 
   if (context.resultSet) {
+    const sourceLabel = context.resultSet.sourceContract ?? context.resultSet.sourceTool;
     sections.push(
-      `Most recent continuable result set (${context.resultSet.itemKind} via ${context.resultSet.sourceTool}): shown ${context.resultSet.shownIds.length}${typeof context.resultSet.totalFound === 'number' ? ` of ${context.resultSet.totalFound}` : ''}`
+      `Most recent continuable result set (${context.resultSet.itemKind} via ${sourceLabel}): shown ${context.resultSet.shownIds.length}${typeof context.resultSet.totalFound === 'number' ? ` of ${context.resultSet.totalFound}` : ''}`
     );
   }
 
@@ -441,12 +442,14 @@ export function summarizeSessionContextForLog(context: SessionChatContext | null
     resultSet: context.resultSet
       ? {
           family: context.resultSet.family,
+          sourceContract: context.resultSet.sourceContract ?? null,
           sourceTool: context.resultSet.sourceTool,
           itemKind: context.resultSet.itemKind,
           shownIds: context.resultSet.shownIds.slice(0, 25),
           lastPageSize: context.resultSet.lastPageSize,
           totalFound: context.resultSet.totalFound ?? null,
           continuable: context.resultSet.continuable,
+          continuationToken: context.resultSet.continuationToken ?? null,
         }
       : null,
     lastAnswer: context.lastAnswer ?? null,

@@ -8,8 +8,14 @@
  */
 
 import { getServiceSupabase } from '@/lib/supabase-service';
+import {
+  attachToolExecutionProvenance,
+  type ChatExecutionProvenanceOverride,
+} from '@/lib/chat/execution-trace';
 import { buildSearchGamesSufficiencyMetadata } from '@/lib/chat/discovery-guardrails';
+import { buildTigerPrimaryResultSet } from '@/lib/chat/result-set-continuation';
 import type { ToolSufficiencyMetadata } from '@/lib/llm/types';
+import { postToQueryApi } from '@/lib/query-api-client';
 
 /**
  * Common tag/category name normalizations
@@ -156,6 +162,227 @@ interface AppidFetchResult {
   pagesFetched: number;
 }
 
+interface TigerSearchCatalogResponse {
+  continuationToken: string | null;
+  items?: Array<{
+    appid: number;
+    developers?: string[];
+    isFree: boolean;
+    name: string;
+    platforms?: string[];
+    publishers?: string[];
+    releaseDate: string | null;
+    releaseYear: number | null;
+    reviewScore: number | null;
+    totalReviews: number | null;
+  }>;
+}
+
+const TIGER_SEARCH_GAMES_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:searchCatalog',
+    'relation:apps',
+    'relation:latest_daily_metrics',
+    'relation:app_publishers',
+    'relation:publishers',
+    'relation:app_developers',
+    'relation:developers',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'search_games now uses Tiger search-catalog when the tool arguments stay within the supported typed filter set.',
+  recommendedTigerContracts: ['searchCatalog'],
+};
+
+function getStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const items = value.filter(
+    (item): item is string => typeof item === 'string' && item.trim().length > 0
+  );
+
+  return items.length > 0 ? items : null;
+}
+
+function buildTigerSearchGamesRequest(
+  args: SearchGamesArgs,
+  limit: number
+): Record<string, unknown> | null {
+  const unsupported: string[] = [];
+
+  if (getStringArray(args.categories)) unsupported.push('categories');
+  if (typeof args.controller_support === 'string') unsupported.push('controller_support');
+  if (getStringArray(args.steam_deck)) unsupported.push('steam_deck');
+  if (typeof args.metacritic_score?.gte === 'number') unsupported.push('metacritic_score');
+  if (Array.isArray(args.excludeAppIds) && args.excludeAppIds.length > 0) unsupported.push('excludeAppIds');
+  const orderBy = typeof args.order_by === 'string' ? args.order_by : undefined;
+  const sortBy =
+    orderBy === 'reviews'
+      ? 'reviews'
+      : orderBy === 'owners'
+        ? 'owners'
+        : orderBy === 'release_date'
+          ? 'release_date'
+          : undefined;
+
+  if (orderBy && !sortBy) {
+    unsupported.push(`order_by:${orderBy}`);
+  }
+
+  if (unsupported.length > 0) {
+    return null;
+  }
+
+  return {
+    ...(getStringArray(args.tags) ? { tags: getStringArray(args.tags) } : {}),
+    ...(getStringArray(args.genres) ? { genres: getStringArray(args.genres) } : {}),
+    ...(getStringArray(args.platforms) ? { platforms: getStringArray(args.platforms) } : {}),
+    ...(typeof args.is_free === 'boolean' ? { isFree: args.is_free } : {}),
+    ...(typeof args.min_reviews === 'number' ? { minReviews: args.min_reviews } : {}),
+    ...(typeof args.review_percentage?.gte === 'number'
+      ? { minReviewScore: args.review_percentage.gte }
+      : {}),
+    ...(typeof args.min_price_cents === 'number' ? { minPriceCents: args.min_price_cents } : {}),
+    ...(typeof args.max_price_cents === 'number' ? { maxPriceCents: args.max_price_cents } : {}),
+    ...(args.on_sale === true ? { onSale: true } : {}),
+    ...(typeof args.min_discount_percent === 'number'
+      ? { minDiscountPercent: args.min_discount_percent }
+      : {}),
+    ...(args.release_year
+      ? {
+          releaseYear: {
+            ...(typeof args.release_year.gte === 'number' ? { gte: args.release_year.gte } : {}),
+            ...(typeof args.release_year.lte === 'number' ? { lte: args.release_year.lte } : {}),
+          },
+        }
+      : {}),
+    ...(sortBy ? { sortBy, sortDirection: 'desc' } : {}),
+    limit,
+  };
+}
+
+function buildSearchGamesFiltersApplied(args: SearchGamesArgs): string[] {
+  const filtersApplied: string[] = [];
+
+  if (args.tags && args.tags.length > 0) {
+    filtersApplied.push(`tags: ${args.tags.join(', ')}`);
+  }
+  if (args.genres && args.genres.length > 0) {
+    filtersApplied.push(`genres: ${args.genres.join(', ')}`);
+  }
+  if (args.platforms && args.platforms.length > 0) {
+    filtersApplied.push(`platforms: ${args.platforms.join(', ')}`);
+  }
+  if (args.release_year?.gte !== undefined) {
+    filtersApplied.push(`release_year >= ${args.release_year.gte}`);
+  }
+  if (args.release_year?.lte !== undefined) {
+    filtersApplied.push(`release_year <= ${args.release_year.lte}`);
+  }
+  if (args.review_percentage?.gte !== undefined) {
+    filtersApplied.push(`review_percentage >= ${args.review_percentage.gte}`);
+  }
+  if (args.min_reviews !== undefined) {
+    filtersApplied.push(`min_reviews >= ${args.min_reviews}`);
+  }
+  if (args.is_free !== undefined) {
+    filtersApplied.push(`is_free: ${args.is_free}`);
+  }
+
+  return filtersApplied;
+}
+
+async function tryTigerSearchGames(
+  args: SearchGamesArgs,
+  actualLimit: number
+): Promise<SearchGamesResult | null> {
+  const request = buildTigerSearchGamesRequest(args, actualLimit);
+  if (!request) {
+    return null;
+  }
+
+  const response = await postToQueryApi<TigerSearchCatalogResponse>(
+    '/v1/contracts/search-catalog',
+    request
+  );
+
+  if (!response.ok || !response.data) {
+    return null;
+  }
+
+  const results: GameSearchResult[] = (response.data.items ?? []).map((item) => ({
+    appid: item.appid,
+    controller_support: null,
+    developerId: null,
+    developerName: item.developers?.[0] ?? null,
+    discountPercent: null,
+    is_free: item.isFree,
+    metacritic_score: null,
+    name: item.name,
+    platforms: item.platforms?.join(', ') ?? null,
+    priceDollars: null,
+    publisherId: null,
+    publisherName: item.publishers?.[0] ?? null,
+    release_date: item.releaseDate,
+    release_state: null,
+    release_year: item.releaseYear,
+    review_percentage: item.reviewScore,
+    steam_deck_category: null,
+    total_reviews: item.totalReviews,
+  }));
+
+  const coverageComplete = response.data.continuationToken == null;
+  const sparseResult = coverageComplete && results.length > 0 && results.length <= 5;
+  const sufficiency = buildSearchGamesSufficiencyMetadata(
+    args,
+    results.length,
+    coverageComplete,
+    sparseResult
+  );
+  const tigerResultSet = buildTigerPrimaryResultSet({
+    family: 'discovery',
+    result: response.data,
+    sourceArgs: request,
+    sourceContract: 'searchCatalog',
+  });
+
+  return attachToolExecutionProvenance(
+    {
+      success: true,
+      results,
+      total_found: results.length,
+      filters_applied: buildSearchGamesFiltersApplied(args),
+      coverage_complete: coverageComplete,
+      sparse_result: sparseResult,
+      debug: {
+        input_args: args,
+        steps: [
+          'Tiger compatibility wrapper routed search_games to searchCatalog.',
+          `Tiger returned ${results.length} row(s).`,
+          `Coverage complete: ${coverageComplete}`,
+        ],
+        coverage_complete: coverageComplete,
+        sparse_result: sparseResult,
+        resultShape: sufficiency.result_shape,
+        sufficientToAnswer: sufficiency.sufficient_to_answer,
+        sufficiencyReason: sufficiency.sufficiency_reason,
+      },
+      ...(tigerResultSet
+        ? {
+            continuation_meta: {
+              resultSet: tigerResultSet,
+            },
+          }
+        : {}),
+      ...sufficiency,
+    },
+    TIGER_SEARCH_GAMES_PROVENANCE
+  );
+}
+
 /**
  * Search for games matching the specified criteria
  */
@@ -193,6 +420,11 @@ export async function searchGames(args: SearchGamesArgs): Promise<SearchGamesRes
   debug.steps.push(`Starting search with limit=${actualLimit}`);
 
   try {
+    const tigerResult = await tryTigerSearchGames(args, actualLimit);
+    if (tigerResult) {
+      return tigerResult;
+    }
+
     const supabase = getServiceSupabase();
 
     if (tags && tags.length > 0) {

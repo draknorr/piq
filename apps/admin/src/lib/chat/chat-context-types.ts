@@ -66,8 +66,10 @@ export interface SessionChatLastAnswer {
 }
 
 export interface SessionChatResultSet {
+  continuationToken?: string | null;
   family: string;
   sourceTool: string;
+  sourceContract?: 'searchCatalog' | 'semanticSearch';
   itemKind: SessionResultSetItemKind;
   sourceArgs: Record<string, unknown>;
   shownIds: Array<number | string>;

@@ -22,19 +22,33 @@ const NEWS_TOOL_NAMES = new Set([
   'get_recent_news_digest',
   'search_recent_news_topics',
 ]);
-const CHANGE_TOOL_NAMES = new Set([
+const CHANGE_DISCOVERY_TOOL_NAMES = new Set([
   'query_change_activity',
-  'get_game_change_timeline',
   'get_change_activity_detail',
-  'compare_change_before_after',
   'find_change_patterns',
+]);
+const CHANGE_EXPLANATION_TOOL_NAMES = new Set([
+  'get_game_change_timeline',
+  'compare_change_before_after',
 ]);
 const NEWS_PROMPT_PATTERN =
   /\b(news|announcement|announcements|patch notes?|devlog|roadmap|update notes?|recent updates?)\b/i;
 const CHANGE_PROMPT_PATTERN =
   /\b(what changed|changed recently|why did .* spike|recent changes|change timeline|timeline of changes)\b/i;
+const CHANGE_DISCOVERY_PROMPT_PATTERN =
+  /\b(biggest steam page refreshes?|store-?page changes?|release timing changes?|changed tags?(?: or genres?)?|marketing push|relaunch pattern|teasing a big update|sustained response|under-marketed|signable indie games|agency leads|without an announcement)\b/i;
 const COMPANY_GAME_LIST_PROMPT_PATTERN =
-  /\b(?:show|list|find|give)\b.*\bgames?\b.*\b(?:by|from)\b/i;
+  /\b(?:show|list|find|give|top|best)\b.*\bgames?\b.*\b(?:by|from)\b|\bgames?\b.*\b(?:by|from)\b/i;
+const ENTITY_OVERVIEW_PROMPT_PATTERN =
+  /\b(?:tell me about|what can you tell me about|give me an overview of|overview of)\b/i;
+const COMPANY_COUNT_PROMPT_PATTERN =
+  /\bhow many\s+(?:games|titles)\s+has\s+(.+?)\s+(?:published|developed)\b/i;
+const SEMANTIC_SIMILARITY_PROMPT_PATTERN =
+  /\b(?:games?|publishers?|developers?|studios?)\b.*\b(?:like|similar to)\b|\b(?:similar to|like)\b.*\b(?:games?|publishers?|developers?|studios?)\b/i;
+const CONCEPT_DISCOVERY_PROMPT_PATTERN =
+  /\b(?:recommend|find|show|give)\b.*\bgames?\b/i;
+const COMPARE_PROMPT_PATTERN =
+  /\bcompare\b|\bvs\.?\b|\bversus\b|\bstack up\b/i;
 const METRIC_HISTORY_PROMPT_PATTERN =
   /\b(?:how have|show|track|history of|over time|trend of)\b.*\b(?:reviews?|review score|sentiment|owners?|sales|ccu|concurrent players?|price|discount|playtime)\b/i;
 const RANKING_BASE_PROMPT_PATTERN =
@@ -52,21 +66,83 @@ const ENTITY_QUERY_PATTERNS = [
 ];
 
 interface ResolveEntitiesResponse {
+  ambiguity?: {
+    requiresClarification?: boolean;
+  };
   entities?: Array<{
+    confidence?: number;
     displayName: string;
     entityKind: string;
     entityUid: string;
     platform: string;
+    platformEntityId?: string;
+    signals?: {
+      gameCount?: number | null;
+    };
   }>;
 }
 
+type ResolvedCompareEntity = NonNullable<ResolveEntitiesResponse['entities']>[number];
+type CompareMetricName =
+  | 'ccu_peak'
+  | 'game_count'
+  | 'owners_midpoint'
+  | 'review_score'
+  | 'total_reviews';
+
+interface GetEntityOverviewResponse {
+  entity: {
+    details: {
+      appType?: string | null;
+      developers?: string[];
+      discountPercent?: number | null;
+      isFree?: boolean | null;
+      isReleased?: boolean | null;
+      platforms?: string[];
+      priceCents?: number | null;
+      publishers?: string[];
+      releaseDate?: string | null;
+      releaseState?: string | null;
+      releaseYear?: number | null;
+    };
+    displayName: string;
+    entityKind: 'developer' | 'game' | 'publisher';
+    metrics: {
+      ccuPeak: number | null;
+      gameCount: number | null;
+      ownersMidpoint: number | null;
+      reviewScore: number | null;
+      totalReviews: number | null;
+    };
+    platformEntityId: string;
+  };
+  games: Array<{
+    appid: number;
+    name: string;
+    ownersMidpoint: number | null;
+    releaseDate: string | null;
+    releaseYear: number | null;
+    reviewScore: number | null;
+    totalReviews: number | null;
+  }>;
+  sufficientToAnswer?: boolean;
+}
+
 interface SearchCatalogResponse {
-  items?: unknown[];
+  continuationToken?: string | null;
+  items?: Array<{
+    appid?: number;
+    entityUid?: string;
+    name?: string;
+  }>;
   sufficientToAnswer?: boolean;
 }
 
 interface RankEntitiesResponse {
-  items?: unknown[];
+  items?: Array<{
+    displayName?: string;
+    entityUid?: string;
+  }>;
   sufficientToAnswer?: boolean;
 }
 
@@ -86,6 +162,29 @@ interface ExplainChangesResponse {
   summary?: {
     eventCount?: number;
   };
+}
+
+interface SemanticSearchResponse {
+  continuation_token?: string | null;
+  entityType?: 'developer' | 'publisher';
+  query_description?: string;
+  reference?: {
+    id: number;
+    name: string;
+    type: string;
+  };
+  results?: unknown[];
+  sufficientToAnswer?: boolean;
+  sufficient_to_answer?: boolean;
+}
+
+interface CompareEntitiesResponse {
+  entityKind?: 'developer' | 'game' | 'publisher';
+  highlights?: unknown[];
+  items?: unknown[];
+  metrics?: CompareMetricName[];
+  platform?: 'publisheriq' | 'steam';
+  sufficientToAnswer?: boolean;
 }
 
 interface QueryApiResponse<T> {
@@ -123,6 +222,27 @@ interface RankEntitiesShadowRequest {
   sortDirection?: 'asc' | 'desc';
 }
 
+interface SemanticSearchShadowRequest {
+  continuationToken?: string | null;
+  description?: string | null;
+  entityKind: 'developer' | 'game' | 'publisher';
+  filters?: {
+    is_free?: boolean;
+    max_price_cents?: number;
+    platforms?: Array<'windows' | 'macos' | 'linux'>;
+    steam_deck?: Array<'verified' | 'playable'>;
+  };
+  limit?: number;
+  mode: 'concept' | 'similarity';
+  referencePlatformEntityId?: string | null;
+  referenceQuery?: string | null;
+}
+
+interface CompareEntitiesShadowRequest {
+  entityUids: string[];
+  metrics?: CompareMetricName[];
+}
+
 interface TraceMetricHistoryShadowRequest {
   endDate: string;
   entityUid: string;
@@ -151,14 +271,42 @@ interface CatalogPrimaryBuildResult {
 }
 
 interface TigerPrimaryEvaluationResult {
+  contractResult?: {
+    contractName: 'compareEntities' | 'getEntityOverview' | 'searchCatalog' | 'semanticSearch';
+    request: Record<string, unknown>;
+    response: unknown;
+  } | null;
   info: TigerPrimaryInfo;
   renderedText: string | null;
 }
 
-type TigerPrimaryMatchedIntent =
-  | 'catalog_search'
-  | 'entity_ranking'
-  | 'metric_history';
+interface CompareResolutionGroup {
+  entityKind: 'developer' | 'game' | 'publisher';
+  platform: string;
+}
+
+interface CompareRequestBuildResult {
+  attempts: TigerShadowAttempt[];
+  request: CompareEntitiesShadowRequest | null;
+}
+
+function compareResolutionStrength(entity: ResolvedCompareEntity): number {
+  const confidence = typeof entity.confidence === 'number' ? entity.confidence : 0;
+  const gameCount =
+    typeof entity.signals?.gameCount === 'number' && Number.isFinite(entity.signals.gameCount)
+      ? entity.signals.gameCount
+      : 0;
+
+  return (confidence * 100) + Math.min(gameCount, 25);
+}
+
+type TigerPrimaryMatchedIntent = Exclude<TigerShadowMatchedIntent, null>;
+
+function isTigerPrimaryRenderableIntent(
+  intent: TigerPrimaryMatchedIntent
+): intent is Exclude<TigerPrimaryMatchedIntent, 'change_discovery'> {
+  return intent !== 'change_discovery';
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -234,11 +382,22 @@ function hasAnyToolCall(toolCalls: ChatToolCall[], names: Set<string>): boolean 
 }
 
 function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerShadowMatchedIntent {
+  if (inferCompareIntent(prompt)) {
+    return 'entity_compare';
+  }
+
   if (inferMetricHistoryIntent(prompt)) {
     return 'metric_history';
   }
 
-  if (hasAnyToolCall(toolCalls, CHANGE_TOOL_NAMES) || CHANGE_PROMPT_PATTERN.test(prompt)) {
+  if (
+    hasAnyToolCall(toolCalls, CHANGE_DISCOVERY_TOOL_NAMES)
+    || CHANGE_DISCOVERY_PROMPT_PATTERN.test(prompt)
+  ) {
+    return 'change_discovery';
+  }
+
+  if (hasAnyToolCall(toolCalls, CHANGE_EXPLANATION_TOOL_NAMES) || CHANGE_PROMPT_PATTERN.test(prompt)) {
     return 'change_explanation';
   }
 
@@ -246,8 +405,16 @@ function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerSha
     return 'news_search';
   }
 
+  if (inferEntityOverviewIntent(prompt)) {
+    return 'entity_overview';
+  }
+
   if (inferCatalogSearchIntent(prompt, toolCalls)) {
     return 'catalog_search';
+  }
+
+  if (inferSemanticIntent(prompt, toolCalls)) {
+    return 'semantic_search';
   }
 
   if (inferRankingIntent(prompt)) {
@@ -258,12 +425,36 @@ function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerSha
 }
 
 function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | null {
+  if (inferCompareIntent(prompt)) {
+    return 'entity_compare';
+  }
+
   if (inferMetricHistoryIntent(prompt)) {
     return 'metric_history';
   }
 
+  if (CHANGE_DISCOVERY_PROMPT_PATTERN.test(prompt)) {
+    return 'change_discovery';
+  }
+
+  if (CHANGE_PROMPT_PATTERN.test(prompt)) {
+    return 'change_explanation';
+  }
+
+  if (NEWS_PROMPT_PATTERN.test(prompt)) {
+    return 'news_search';
+  }
+
+  if (inferEntityOverviewIntent(prompt)) {
+    return 'entity_overview';
+  }
+
   if (inferPrimaryCatalogSearchIntent(prompt)) {
     return 'catalog_search';
+  }
+
+  if (inferPrimarySemanticIntent(prompt)) {
+    return 'semantic_search';
   }
 
   if (inferRankingIntent(prompt)) {
@@ -271,6 +462,58 @@ function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | 
   }
 
   return null;
+}
+
+function inferCompareIntent(prompt: string): boolean {
+  return COMPARE_PROMPT_PATTERN.test(prompt)
+    && !METRIC_HISTORY_PROMPT_PATTERN.test(prompt)
+    && !CHANGE_DISCOVERY_PROMPT_PATTERN.test(prompt)
+    && !CHANGE_PROMPT_PATTERN.test(prompt)
+    && !NEWS_PROMPT_PATTERN.test(prompt);
+}
+
+function inferEntityOverviewIntent(prompt: string): boolean {
+  if (ENTITY_OVERVIEW_PROMPT_PATTERN.test(prompt)) {
+    return true;
+  }
+
+  return COMPANY_COUNT_PROMPT_PATTERN.test(prompt);
+}
+
+function inferSemanticIntent(prompt: string, toolCalls: ChatToolCall[]): boolean {
+  if (toolCalls.some((toolCall) => toolCall.name === 'find_similar' || toolCall.name === 'search_by_concept')) {
+    return true;
+  }
+
+  return inferPrimarySemanticIntent(prompt);
+}
+
+function inferPrimarySemanticIntent(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+
+  if (SEMANTIC_SIMILARITY_PROMPT_PATTERN.test(prompt)) {
+    return true;
+  }
+
+  if (!CONCEPT_DISCOVERY_PROMPT_PATTERN.test(prompt)) {
+    return false;
+  }
+
+  if (
+    normalized.includes('games by') ||
+    normalized.includes('games from') ||
+    normalized.includes('top games') ||
+    normalized.includes('best games') ||
+    normalized.includes('show me linux games')
+  ) {
+    return false;
+  }
+
+  return /\bunder\s+\$?\d+/i.test(prompt)
+    || /\bsteam deck\b/i.test(prompt)
+    || /\bfree(?:\s+to\s+play)?\b/i.test(prompt)
+    || /\bcozy\b/i.test(prompt)
+    || /\bfarming\b/i.test(prompt);
 }
 
 function inferCatalogSearchIntent(prompt: string, toolCalls: ChatToolCall[]): boolean {
@@ -292,20 +535,34 @@ function inferCatalogSearchIntent(prompt: string, toolCalls: ChatToolCall[]): bo
 function inferPrimaryCatalogSearchIntent(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
 
-  if (/\b(?:games like|similar to|compare|breaking out|trending up|accelerating|declining|steam deck|controller support|co-op|coop|on sale)\b/.test(normalized)) {
+  if (/\b(?:games like|similar to|compare|breaking out|trending up|accelerating|declining|steam deck|controller support|co-op|coop)\b/.test(normalized)) {
     return false;
   }
 
-  if (COMPANY_GAME_LIST_PROMPT_PATTERN.test(prompt)) {
+  if (extractCompanyQueryFromPrompt(prompt)) {
     return true;
   }
 
   const hasPlatform = /\b(?:windows|macos|mac|linux)\b/i.test(prompt);
   const hasIndie = /\bindie\b/i.test(prompt);
-  const hasReviewConstraint = /\boverwhelmingly positive\b/i.test(prompt);
+  const hasReviewConstraint =
+    /\boverwhelmingly positive\b/i.test(prompt)
+    || /\bhighly rated\b/i.test(prompt)
+    || /\bgreat reviews?\b/i.test(prompt);
   const hasReleaseYear = /\bthis year\b/i.test(prompt) || /\b20\d{2}\b/.test(prompt);
+  const hasRollingReleaseWindow = /\b(?:past|last)\s+year\b/i.test(prompt);
+  const hasPriceConstraint = /\b(?:under|over|above)\s+\$?\d+/i.test(prompt);
+  const hasSaleConstraint = /\bon sale\b/i.test(prompt);
+  const hasPremiumConstraint = /\bpremium games?\b/i.test(prompt);
 
-  return hasPlatform || hasIndie || hasReviewConstraint || hasReleaseYear;
+  return hasPlatform
+    || hasIndie
+    || hasReviewConstraint
+    || hasReleaseYear
+    || hasRollingReleaseWindow
+    || hasPriceConstraint
+    || hasSaleConstraint
+    || hasPremiumConstraint;
 }
 
 function inferRankingIntent(prompt: string): boolean {
@@ -383,14 +640,74 @@ function extractEntityQueryFromPrompt(prompt: string): string | null {
   return null;
 }
 
-function buildNewsTopicQuery(prompt: string): string {
-  const normalized = prompt
+function extractEntityOverviewQuery(prompt: string): string | null {
+  const countMatch = prompt.match(COMPANY_COUNT_PROMPT_PATTERN);
+  const countQuery = normalizeEntityQuery(countMatch?.[1] ?? null);
+  if (countQuery) {
+    return countQuery;
+  }
+
+  const overviewMatch =
+    prompt.match(/(?:tell me about|what can you tell me about|give me an overview of|overview of)\s+(.+?)(?:[?!.]|$)/i)
+    ?? prompt.match(/(?:what is|who is)\s+(.+?)(?:[?!.]|$)/i);
+  const overviewQuery = normalizeEntityQuery(overviewMatch?.[1] ?? null);
+  if (overviewQuery) {
+    return overviewQuery;
+  }
+
+  return extractEntityQueryFromPrompt(prompt);
+}
+
+function inferEntityOverviewKindHint(
+  prompt: string
+): 'developer' | 'game' | 'publisher' | null {
+  if (/\b(?:published|publisher|published by)\b/i.test(prompt)) {
+    return 'publisher';
+  }
+
+  if (/\b(?:developed|developer|studio)\b/i.test(prompt)) {
+    return 'developer';
+  }
+
+  return null;
+}
+
+function inferEntityOverviewViewMode(
+  prompt: string,
+  entityKind: 'developer' | 'game' | 'publisher'
+): 'company_count' | 'company_games' | 'game_overview' {
+  if (entityKind === 'game') {
+    return 'game_overview';
+  }
+
+  if (COMPANY_COUNT_PROMPT_PATTERN.test(prompt)) {
+    return 'company_count';
+  }
+
+  return 'company_games';
+}
+
+function buildNewsTopicQuery(prompt: string, entityQuery?: string | null): string {
+  let normalized = prompt
     .replace(/^(find|show|give|tell)\s+me\s+/i, '')
-    .replace(/\b(any|recent|noteworthy)\b/gi, '')
+    .replace(/\b(any|recent|noteworthy|announcements?|news|updates?)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 
-  return normalized.length > 0 ? normalized : prompt.trim();
+  if (entityQuery) {
+    const escapedEntity = entityQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    normalized = normalized
+      .replace(new RegExp(`\\b(?:about|for|on)\\s+${escapedEntity}\\b`, 'i'), '')
+      .replace(new RegExp(`\\b${escapedEntity}\\b`, 'i'), '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return entityQuery?.trim() || prompt.trim();
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
@@ -424,6 +741,24 @@ function normalizeLimit(value: unknown, fallback: number): number {
   }
 
   return Math.max(1, Math.min(Math.trunc(normalized), 25));
+}
+
+function extractRequestedTopCount(
+  prompt: string,
+  fallback: number,
+  max = 25
+): number {
+  const explicitTop = prompt.match(/\btop\s+(\d{1,2})\b/i);
+  if (!explicitTop) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(explicitTop[1] ?? '', 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(2, Math.min(parsed, max));
 }
 
 function normalizeYearRange(value: unknown): { gte?: number; lte?: number } | undefined {
@@ -479,10 +814,6 @@ function buildCatalogRequestFromSearchGames(toolCalls: ChatToolCall[]): CatalogS
   if (typeof args.controller_support === 'string') unsupported.push('controller_support');
   if (normalizeStringArray(args.steam_deck)) unsupported.push('steam_deck');
   if (isRecord(args.metacritic_score)) unsupported.push('metacritic_score');
-  if (normalizeNumber(args.min_price_cents) != null) unsupported.push('min_price_cents');
-  if (normalizeNumber(args.max_price_cents) != null) unsupported.push('max_price_cents');
-  if (normalizeBoolean(args.on_sale) === true) unsupported.push('on_sale');
-  if (normalizeNumber(args.min_discount_percent) != null) unsupported.push('min_discount_percent');
   if (Array.isArray(args.excludeAppIds) && args.excludeAppIds.length > 0) unsupported.push('excludeAppIds');
 
   const orderBy = typeof args.order_by === 'string' ? args.order_by : undefined;
@@ -513,6 +844,12 @@ function buildCatalogRequestFromSearchGames(toolCalls: ChatToolCall[]): CatalogS
       ...(normalizeNumber(args.min_reviews) != null ? { minReviews: normalizeNumber(args.min_reviews) } : {}),
       ...(isRecord(args.review_percentage) && normalizeNumber(args.review_percentage.gte) != null
         ? { minReviewScore: normalizeNumber(args.review_percentage.gte) }
+        : {}),
+      ...(normalizeNumber(args.min_price_cents) != null ? { minPriceCents: normalizeNumber(args.min_price_cents) } : {}),
+      ...(normalizeNumber(args.max_price_cents) != null ? { maxPriceCents: normalizeNumber(args.max_price_cents) } : {}),
+      ...(normalizeBoolean(args.on_sale) === true ? { onSale: true } : {}),
+      ...(normalizeNumber(args.min_discount_percent) != null
+        ? { minDiscountPercent: normalizeNumber(args.min_discount_percent) }
         : {}),
       ...(normalizeYearRange(args.release_year) ? { releaseYear: normalizeYearRange(args.release_year) } : {}),
       ...(sortBy ? { sortBy, sortDirection: 'desc' as const } : {}),
@@ -646,6 +983,11 @@ function extractPrimaryPlatforms(prompt: string): string[] {
 }
 
 function extractPrimaryReleaseYear(prompt: string): { gte?: number; lte?: number } | undefined {
+  if (/\b(?:past|last)\s+year\b/i.test(prompt)) {
+    const currentYear = new Date().getFullYear();
+    return { gte: currentYear - 1, lte: currentYear };
+  }
+
   if (/\bthis year\b/i.test(prompt)) {
     const currentYear = new Date().getFullYear();
     return { gte: currentYear, lte: currentYear };
@@ -662,7 +1004,8 @@ function extractPrimaryReleaseYear(prompt: string): { gte?: number; lte?: number
 
 function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildResult {
   const normalized = prompt.toLowerCase();
-  if (/\b(?:games like|similar to|compare|breaking out|trending up|accelerating|declining|steam deck|controller support|co-op|coop|on sale)\b/.test(normalized)) {
+  const limit = extractRequestedTopCount(prompt, 20);
+  if (/\b(?:games like|similar to|compare|breaking out|trending up|accelerating|declining|steam deck|controller support|co-op|coop)\b/.test(normalized)) {
     return {
       reason: 'Tiger primary catalog routing does not support that discovery constraint yet.',
       requests: [],
@@ -671,18 +1014,19 @@ function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildR
 
   const companyQuery = extractCompanyQueryFromPrompt(prompt);
   if (companyQuery) {
+    const sortBy = /\b(?:top|best)\b/i.test(prompt) ? 'reviews' : 'release_date';
     return {
       requests: [
         {
           developerQuery: companyQuery,
-          limit: 25,
-          sortBy: 'release_date',
+          limit,
+          sortBy,
           sortDirection: 'desc',
         },
         {
           publisherQuery: companyQuery,
-          limit: 25,
-          sortBy: 'release_date',
+          limit,
+          sortBy,
           sortDirection: 'desc',
         },
       ],
@@ -692,9 +1036,36 @@ function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildR
   const platforms = extractPrimaryPlatforms(prompt);
   const releaseYear = extractPrimaryReleaseYear(prompt);
   const tags = /\bindie\b/i.test(prompt) ? ['Indie'] : undefined;
-  const hasReviewConstraint = /\boverwhelmingly positive\b/i.test(prompt);
+  const minReviewScore =
+    /\boverwhelmingly positive\b/i.test(prompt)
+      ? 95
+      : /\bhighly rated\b/i.test(prompt)
+        ? 85
+        : /\bgreat reviews?\b/i.test(prompt)
+          ? 80
+          : undefined;
+  const minReviews = minReviewScore != null ? 1000 : undefined;
+  const maxPriceMatch = prompt.match(/\bunder\s+\$?(\d{1,4})(?:\.\d{1,2})?\b/i);
+  const minPriceMatch = prompt.match(/\b(?:over|above)\s+\$?(\d{1,4})(?:\.\d{1,2})?\b/i);
+  const maxPriceCents = maxPriceMatch
+    ? Math.round(Number.parseFloat(maxPriceMatch[1] ?? '0') * 100)
+    : undefined;
+  const minPriceCents = minPriceMatch
+    ? Math.round(Number.parseFloat(minPriceMatch[1] ?? '0') * 100)
+    : undefined;
+  const onSale = /\bon sale\b/i.test(prompt) ? true : undefined;
+  const isFree = /\bpremium games?\b/i.test(prompt) ? false : undefined;
 
-  if (!platforms.length && !releaseYear && !tags && !hasReviewConstraint) {
+  if (
+    !platforms.length
+    && !releaseYear
+    && !tags
+    && minReviewScore == null
+    && maxPriceCents == null
+    && minPriceCents == null
+    && !onSale
+    && isFree == null
+  ) {
     return {
       reason: 'Tiger primary catalog routing could not infer a supported search request from the prompt.',
       requests: [],
@@ -706,12 +1077,365 @@ function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildR
       ...(platforms.length > 0 ? { platforms } : {}),
       ...(releaseYear ? { releaseYear } : {}),
       ...(tags ? { tags } : {}),
-      ...(hasReviewConstraint ? { minReviewScore: 95, minReviews: 1000 } : {}),
-      limit: 20,
+      ...(minReviewScore != null ? { minReviewScore, minReviews } : {}),
+      ...(maxPriceCents != null ? { maxPriceCents } : {}),
+      ...(minPriceCents != null ? { minPriceCents } : {}),
+      ...(onSale ? { onSale } : {}),
+      ...(isFree != null ? { isFree } : {}),
+      limit,
       sortBy: 'reviews',
       sortDirection: 'desc',
     }],
   };
+}
+
+function normalizeEntityKindHint(
+  prompt: string
+): SemanticSearchShadowRequest['entityKind'] | null {
+  const normalized = prompt.toLowerCase();
+  if (/\bpublishers?\b/.test(normalized)) {
+    return 'publisher';
+  }
+  if (/\bdevelopers?\b|\bstudios?\b/.test(normalized)) {
+    return 'developer';
+  }
+  if (/\bgames?\b/.test(normalized)) {
+    return 'game';
+  }
+
+  return null;
+}
+
+function extractSemanticFilters(prompt: string): SemanticSearchShadowRequest['filters'] | undefined {
+  const filters: NonNullable<SemanticSearchShadowRequest['filters']> = {};
+  const platforms = extractPrimaryPlatforms(prompt) as Array<'windows' | 'macos' | 'linux'>;
+
+  if (platforms.length > 0) {
+    filters.platforms = platforms;
+  }
+
+  const maxPriceMatch = prompt.match(/\bunder\s+\$?(\d{1,4})(?:\.\d{1,2})?\b/i);
+  if (maxPriceMatch) {
+    filters.max_price_cents = Math.round(Number.parseFloat(maxPriceMatch[1] ?? '0') * 100);
+  }
+
+  if (/\bsteam deck verified\b/i.test(prompt)) {
+    filters.steam_deck = ['verified'];
+  } else if (/\bsteam deck playable\b/i.test(prompt)) {
+    filters.steam_deck = ['playable'];
+  }
+
+  if (/\bfree to play\b|\bfree games?\b/i.test(prompt)) {
+    filters.is_free = true;
+  }
+
+  return Object.keys(filters).length > 0 ? filters : undefined;
+}
+
+function stripSemanticLeadIn(prompt: string): string {
+  return prompt
+    .replace(/^(?:show|find|give|recommend)\s+me\s+/i, '')
+    .replace(/^(?:show|find|give|recommend)\s+/i, '')
+    .replace(/[?!.]+$/, '')
+    .trim();
+}
+
+function extractSemanticReferenceQuery(prompt: string): string | null {
+  const match =
+    prompt.match(/\bgames?\s+(?:like|similar to)\s+(.+?)(?:\s+with\b|[?!.]|$)/i) ??
+    prompt.match(/\b(?:publishers?|developers?|studios?)\s+(?:like|similar to)\s+(.+?)(?:\s+with\b|[?!.]|$)/i) ??
+    prompt.match(/\b(?:like|similar to)\s+(.+?)(?:\s+with\b|[?!.]|$)/i);
+
+  return normalizeEntityQuery(match?.[1] ?? null);
+}
+
+function buildSemanticRequestFromPrompt(
+  prompt: string
+): { reason?: string; request: SemanticSearchShadowRequest | null } {
+  const entityKindHint = normalizeEntityKindHint(prompt);
+  const filters = extractSemanticFilters(prompt);
+
+  if (SEMANTIC_SIMILARITY_PROMPT_PATTERN.test(prompt)) {
+    const referenceQuery = extractSemanticReferenceQuery(prompt);
+    if (!referenceQuery) {
+      return {
+        request: null,
+        reason: 'Tiger semantic routing could not infer a stable similarity reference from the prompt.',
+      };
+    }
+
+    return {
+      request: {
+        entityKind: entityKindHint ?? 'game',
+        filters,
+        limit: 6,
+        mode: 'similarity',
+        referenceQuery,
+      },
+    };
+  }
+
+  if (!inferPrimarySemanticIntent(prompt)) {
+    return {
+      request: null,
+      reason: 'Tiger semantic routing could not infer a supported concept request from the prompt.',
+    };
+  }
+
+  const description = stripSemanticLeadIn(prompt);
+  return {
+    request: {
+      description,
+      entityKind: 'game',
+      filters,
+      limit: 8,
+      mode: 'concept',
+    },
+  };
+}
+
+function buildSemanticSearchShadowRequest(params: {
+  prompt: string;
+  toolCalls: ChatToolCall[];
+}): { reason?: string; request: SemanticSearchShadowRequest | null } {
+  const lastSemanticToolCall = pickLastToolCall(params.toolCalls, ['find_similar', 'search_by_concept']);
+  const args = isRecord(lastSemanticToolCall?.arguments) ? lastSemanticToolCall.arguments : null;
+
+  if (lastSemanticToolCall?.name === 'find_similar' && args) {
+    const entityType = typeof args.entity_type === 'string' ? args.entity_type : 'game';
+    if (entityType !== 'game' && entityType !== 'publisher' && entityType !== 'developer') {
+      return buildSemanticRequestFromPrompt(params.prompt);
+    }
+
+    return {
+      request: {
+        entityKind: entityType,
+        filters: isRecord(args.filters) ? args.filters as SemanticSearchShadowRequest['filters'] : undefined,
+        limit: normalizeLimit(normalizeNumber(args.limit) ?? undefined, 6),
+        mode: 'similarity',
+        referencePlatformEntityId:
+          normalizeNumber(args.reference_id) != null
+            ? String(normalizeNumber(args.reference_id))
+            : null,
+        referenceQuery: typeof args.reference_name === 'string' ? args.reference_name.trim() : null,
+      },
+    };
+  }
+
+  if (lastSemanticToolCall?.name === 'search_by_concept' && args && typeof args.description === 'string') {
+    return {
+      request: {
+        description: args.description.trim(),
+        entityKind: 'game',
+        filters: isRecord(args.filters) ? args.filters as SemanticSearchShadowRequest['filters'] : undefined,
+        limit: normalizeLimit(normalizeNumber(args.limit) ?? undefined, 8),
+        mode: 'concept',
+      },
+    };
+  }
+
+  return buildSemanticRequestFromPrompt(params.prompt);
+}
+
+function normalizeCompareToken(value: string): string {
+  return value
+    .replace(/^(?:games?|publishers?|developers?|studios?)\s+/i, '')
+    .replace(/\s+(?:game|publisher|developer|studio)s?$/i, '')
+    .replace(/\b(?:stack up|head to head)\b/gi, '')
+    .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, '')
+    .trim();
+}
+
+function stripCompareLeadIn(prompt: string): string {
+  return prompt
+    .replace(/[?!.]+$/, '')
+    .replace(/^compare\s+/i, '')
+    .replace(/^how do(?:es)?\s+(?:the\s+)?/i, '')
+    .replace(/\s+\bcompare\b$/i, '')
+    .replace(/\b(?:stack up|head to head)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findCompareMetricClauseStart(prompt: string): number | null {
+  const match = /\s+(?:by|on|for)\s+(.+)$/i.exec(prompt);
+  if (!match || typeof match.index !== 'number') {
+    return null;
+  }
+
+  const metricText = (match[1] ?? '').trim();
+  if (!metricText) {
+    return null;
+  }
+
+  if (
+    /\b(?:reviews?|review count|review score|rating|ratings|owners?|audience size|player base|ccu|concurrent players?|players right now|game count|catalog size|how many games|most games|review velocity|reviews? added|momentum|accelerating|declining|sustained response|before and after)\b/i.test(
+      metricText
+    )
+  ) {
+    return match.index;
+  }
+
+  return null;
+}
+
+function parseCompareEntities(prompt: string): string[] {
+  const compareBody = stripCompareLeadIn(prompt);
+  const metricClauseStart = findCompareMetricClauseStart(compareBody);
+  const explicitBody = (
+    metricClauseStart == null ? compareBody : compareBody.slice(0, metricClauseStart)
+  ).trim();
+
+  if (/^top\s+\d{1,2}\b/i.test(explicitBody)) {
+    return [];
+  }
+
+  const separatorsPattern = /\s+vs\.?\s+|\s+versus\s+|\s+and\s+|,\s*/i;
+  if (!separatorsPattern.test(explicitBody)) {
+    const single = normalizeCompareToken(explicitBody);
+    return single ? [single] : [];
+  }
+
+  return explicitBody
+    .replace(/\s+vs\.?\s+/gi, ',')
+    .replace(/\s+versus\s+/gi, ',')
+    .replace(/\s+and\s+/gi, ',')
+    .split(',')
+    .map((part) => normalizeCompareToken(part))
+    .filter((part) => part.length > 0)
+    .slice(0, 5);
+}
+
+function inferUnsupportedCompareReason(prompt: string): string | null {
+  if (/\breview velocity\b|\breviews?\s+added\b|\brecent reviews?\b/i.test(prompt)) {
+    return 'Tiger compare does not support review-velocity or recent-review-window comparisons yet.';
+  }
+
+  if (/\b(momentum|accelerating|declining|breaking out|trending up|sustained response)\b/i.test(prompt)) {
+    return 'Tiger compare does not support momentum or post-change response comparisons yet.';
+  }
+
+  if (/\bbefore and after\b|\bbefore\/after\b/i.test(prompt)) {
+    return 'Tiger compare does not support before/after change comparisons yet.';
+  }
+
+  return null;
+}
+
+function extractCompareMetrics(prompt: string): CompareMetricName[] {
+  const compareBody = stripCompareLeadIn(prompt);
+  const metricClauseStart = findCompareMetricClauseStart(compareBody);
+  const metricText = metricClauseStart == null
+    ? ''
+    : compareBody.slice(metricClauseStart).replace(/^\s*(?:by|on|for)\s+/i, '').trim();
+
+  if (!metricText) {
+    return [];
+  }
+
+  const candidates: Array<{ index: number; metric: CompareMetricName }> = [];
+  const metricMatchers: Array<{
+    metric: CompareMetricName;
+    patterns: RegExp[];
+  }> = [
+    {
+      metric: 'review_score',
+      patterns: [
+        /\breview score\b/i,
+        /\brating\b/i,
+        /\bratings\b/i,
+        /\bhighest rated\b/i,
+        /\bbest rated\b/i,
+        /\bbest-reviewed\b/i,
+        /\bbest reviewed\b/i,
+      ],
+    },
+    {
+      metric: 'total_reviews',
+      patterns: [
+        /\btotal reviews\b/i,
+        /\breview count\b/i,
+        /\bmost reviews\b/i,
+        /\breviews\b/i,
+      ],
+    },
+    {
+      metric: 'owners_midpoint',
+      patterns: [
+        /\bowners?\b/i,
+        /\baudience size\b/i,
+        /\bplayer base\b/i,
+      ],
+    },
+    {
+      metric: 'ccu_peak',
+      patterns: [
+        /\bccu\b/i,
+        /\bconcurrent players?\b/i,
+        /\bplayers right now\b/i,
+      ],
+    },
+    {
+      metric: 'game_count',
+      patterns: [
+        /\bgame count\b/i,
+        /\bcatalog size\b/i,
+        /\bhow many games\b/i,
+        /\bmost games\b/i,
+      ],
+    },
+  ];
+
+    for (const { metric, patterns } of metricMatchers) {
+    const index = patterns.reduce<number | null>((current, pattern) => {
+      const match = pattern.exec(metricText);
+      if (typeof match?.index !== 'number') {
+        return current;
+      }
+
+      return current == null ? match.index : Math.min(current, match.index);
+    }, null);
+
+    if (index != null) {
+      candidates.push({ index, metric });
+    }
+  }
+
+  return candidates
+    .sort((left, right) => left.index - right.index)
+    .map((candidate) => candidate.metric)
+    .filter((metric, index, values) => values.indexOf(metric) === index);
+}
+
+function validateCompareMetricsForEntityKind(
+  entityKind: 'developer' | 'game' | 'publisher' | null,
+  metrics: CompareMetricName[]
+): string | null {
+  if (entityKind === 'game' && metrics.includes('game_count')) {
+    return 'Tiger compare does not support game-count comparisons for game peers.';
+  }
+
+  return null;
+}
+
+function extractEntityUidsFromCatalogResponse(
+  response: SearchCatalogResponse | null | undefined,
+  limit: number
+): string[] {
+  return (response?.items ?? [])
+    .map((item) => (typeof item?.entityUid === 'string' ? item.entityUid : null))
+    .filter((entityUid): entityUid is string => Boolean(entityUid))
+    .slice(0, limit);
+}
+
+function extractEntityUidsFromRankResponse(
+  response: RankEntitiesResponse | null | undefined,
+  limit: number
+): string[] {
+  return (response?.items ?? [])
+    .map((item) => (typeof item?.entityUid === 'string' ? item.entityUid : null))
+    .filter((entityUid): entityUid is string => Boolean(entityUid))
+    .slice(0, limit);
 }
 
 function buildRankingShadowRequest(prompt: string): { reason?: string; request: RankEntitiesShadowRequest | null } {
@@ -723,6 +1447,7 @@ function buildRankingShadowRequest(prompt: string): { reason?: string; request: 
   }
 
   const normalized = prompt.toLowerCase();
+  const limit = extractRequestedTopCount(prompt, 10);
   const entityKind = /\bpublisher(s)?\b/.test(normalized)
     ? 'publisher'
     : /\bdeveloper(s)?\b|\bstudios?\b/.test(normalized)
@@ -730,7 +1455,7 @@ function buildRankingShadowRequest(prompt: string): { reason?: string; request: 
       : 'game';
 
   let metric: RankEntitiesShadowRequest['metric'] | null = null;
-  if (entityKind !== 'game' && /\bmost games\b|\bhas the most games\b/.test(normalized)) {
+  if (entityKind !== 'game' && /\b(?:most games|has the most games|game count|catalog size)\b/.test(normalized)) {
     metric = 'game_count';
   } else if (/\bmost reviews\b|\bby reviews\b/.test(normalized)) {
     metric = 'total_reviews';
@@ -752,7 +1477,7 @@ function buildRankingShadowRequest(prompt: string): { reason?: string; request: 
   return {
     request: {
       entityKind,
-      limit: 10,
+      limit,
       metric,
       sortDirection: 'desc',
     },
@@ -932,6 +1657,97 @@ function buildSkippedAttempt(
   };
 }
 
+function pickResolvedPrimaryEntity(params: {
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  response: ResolveEntitiesResponse | undefined;
+}): ResolvedCompareEntity | null {
+  const entities = params.response?.entities ?? [];
+
+  if (params.expectedEntityKind) {
+    const exactKind = entities.find((entity) => entity.entityKind === params.expectedEntityKind);
+    if (exactKind) {
+      return exactKind;
+    }
+  }
+
+  return entities[0] ?? null;
+}
+
+async function resolvePrimaryEntityAttempt(params: {
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  query: string | null;
+}): Promise<{
+  attempt: TigerShadowAttempt;
+  entity: ResolvedCompareEntity | null;
+}> {
+  if (!params.query) {
+    return {
+      attempt: buildSkippedAttempt(
+        'resolveEntities',
+        'No resolvable entity reference was available for Tiger overview routing.'
+      ),
+      entity: null,
+    };
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<ResolveEntitiesResponse>('/v1/contracts/resolve-entities', {
+    entityKinds: params.expectedEntityKind
+      ? [params.expectedEntityKind]
+      : ['game', 'publisher', 'developer'],
+    includeMetrics: false,
+    limit: 5,
+    query: params.query,
+  });
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    return {
+      attempt: {
+        contractName: 'resolveEntities',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      },
+      entity: null,
+    };
+  }
+
+  const entity = pickResolvedPrimaryEntity({
+    expectedEntityKind: params.expectedEntityKind,
+    response: response.data,
+  });
+
+  if (!entity?.entityUid || !entity.platformEntityId) {
+    return {
+      attempt: {
+        contractName: 'resolveEntities',
+        httpStatus: response.httpStatus,
+        reason: 'Tiger overview routing could not resolve the prompt to a stable entity.',
+        resultCount: response.data?.entities?.length ?? 0,
+        status: 'error',
+        sufficientToAnswer: false,
+        timingMs,
+      },
+      entity: null,
+    };
+  }
+
+  return {
+    attempt: {
+      contractName: 'resolveEntities',
+      httpStatus: response.httpStatus,
+      resultCount: response.data?.entities?.length ?? 0,
+      status: 'success',
+      sufficientToAnswer: true,
+      timingMs,
+    },
+    entity,
+  };
+}
+
 async function resolveGameEntityAttempt(query: string | null): Promise<{
   attempt: TigerShadowAttempt;
   entityUid: string | null;
@@ -997,6 +1813,394 @@ async function resolveGameEntityAttempt(query: string | null): Promise<{
   };
 }
 
+function pickCompareResolutionGroup(params: {
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  responses: Array<{ entities: ResolvedCompareEntity[] }>;
+}): CompareResolutionGroup | null {
+  const comboScores = new Map<string, { count: number; group: CompareResolutionGroup; score: number }>();
+
+  for (const response of params.responses) {
+    const bestScoresForResponse = new Map<string, number>();
+
+    for (const entity of response.entities) {
+      if (params.expectedEntityKind && entity.entityKind !== params.expectedEntityKind) {
+        continue;
+      }
+
+      if (!entity.entityKind || !entity.platform) {
+        continue;
+      }
+
+      const key = `${entity.entityKind}:${entity.platform}`;
+      const score = compareResolutionStrength(entity);
+      const currentBest = bestScoresForResponse.get(key) ?? -1;
+      if (score > currentBest) {
+        bestScoresForResponse.set(key, score);
+      }
+    }
+
+    for (const [key, score] of bestScoresForResponse.entries()) {
+      const [entityKind, platform] = key.split(':');
+      if (
+        entityKind !== 'developer'
+        && entityKind !== 'game'
+        && entityKind !== 'publisher'
+      ) {
+        continue;
+      }
+
+      const existing = comboScores.get(key);
+      comboScores.set(key, {
+        count: (existing?.count ?? 0) + 1,
+        group: { entityKind, platform },
+        score: (existing?.score ?? 0) + score,
+      });
+    }
+  }
+
+  return [...comboScores.values()]
+    .filter((candidate) => candidate.count === params.responses.length)
+    .sort((left, right) => right.score - left.score)[0]?.group ?? null;
+}
+
+function pickResolvedCompareEntityForGroup(params: {
+  group: CompareResolutionGroup;
+  response: ResolveEntitiesResponse | undefined;
+}): ResolvedCompareEntity | null {
+  const entities = params.response?.entities ?? [];
+  return entities
+    .filter((entity) => entity.entityKind === params.group.entityKind && entity.platform === params.group.platform)
+    .sort((left, right) => compareResolutionStrength(right) - compareResolutionStrength(left))[0] ?? null;
+}
+
+async function resolveExplicitCompareEntitiesAttempt(params: {
+  entityNames: string[];
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  timeoutMs: number;
+}): Promise<{
+  attempts: TigerShadowAttempt[];
+  entityKind: 'developer' | 'game' | 'publisher' | null;
+  entityUids: string[];
+}> {
+  if (params.entityNames.length < 2) {
+    return {
+      attempts: [
+        buildSkippedAttempt(
+          'resolveEntities',
+          'Tiger compare routing could not infer two resolvable entities from the prompt.'
+        ),
+      ],
+      entityKind: null,
+      entityUids: [],
+    };
+  }
+
+  const attempts: TigerShadowAttempt[] = [];
+  const responses: Array<{
+    entities: ResolvedCompareEntity[];
+    entityName: string;
+    response: ResolveEntitiesResponse | undefined;
+  }> = [];
+
+  for (const entityName of params.entityNames) {
+    const startedAt = performance.now();
+    const response = await postToQueryApi<ResolveEntitiesResponse>('/v1/contracts/resolve-entities', {
+      entityKinds: params.expectedEntityKind ? [params.expectedEntityKind] : ['game', 'publisher', 'developer'],
+      includeMetrics: false,
+      limit: 5,
+      query: entityName,
+    }, { timeoutMs: params.timeoutMs });
+    const timingMs = Math.round(performance.now() - startedAt);
+
+    if (!response.ok) {
+      attempts.push({
+        contractName: 'resolveEntities',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      });
+      return { attempts, entityKind: null, entityUids: [] };
+    }
+
+    attempts.push({
+      contractName: 'resolveEntities',
+      httpStatus: response.httpStatus,
+      resultCount: response.data?.entities?.length ?? 0,
+      status: 'success',
+      sufficientToAnswer: true,
+      timingMs,
+    });
+    responses.push({
+      entities: response.data?.entities ?? [],
+      entityName,
+      response: response.data,
+    });
+  }
+
+  const group = pickCompareResolutionGroup({
+    expectedEntityKind: params.expectedEntityKind,
+    responses,
+  });
+
+  if (!group) {
+    attempts.push(
+      buildSkippedAttempt(
+        'resolveEntities',
+        'Tiger compare routing could not resolve all peers to the same entity kind and platform.'
+      )
+    );
+    return { attempts, entityKind: null, entityUids: [] };
+  }
+
+  const entityUids = responses.map((response) =>
+    pickResolvedCompareEntityForGroup({
+      group,
+      response: response.response,
+    })?.entityUid ?? null
+  );
+
+  if (entityUids.some((entityUid) => !entityUid)) {
+    attempts.push(
+      buildSkippedAttempt(
+        'resolveEntities',
+        'Tiger compare routing could not resolve every peer to a stable shared entity type.'
+      )
+    );
+    return { attempts, entityKind: null, entityUids: [] };
+  }
+
+  const uniqueEntityUids = [...new Set(entityUids.filter((entityUid): entityUid is string => Boolean(entityUid)))];
+  if (uniqueEntityUids.length < 2) {
+    attempts.push(
+      buildSkippedAttempt(
+        'resolveEntities',
+        'Tiger compare routing collapsed to fewer than two distinct peers.'
+      )
+    );
+    return { attempts, entityKind: null, entityUids: [] };
+  }
+
+  return { attempts, entityKind: group.entityKind, entityUids: uniqueEntityUids };
+}
+
+async function resolveDerivedCompareEntitiesAttempt(params: {
+  metrics: CompareMetricName[];
+  prompt: string;
+  timeoutMs: number;
+}): Promise<{
+  attempts: TigerShadowAttempt[];
+  entityKind: 'developer' | 'game' | 'publisher' | null;
+  entityUids: string[];
+}> {
+  const compareSeedPrompt = stripCompareLeadIn(params.prompt);
+  const topCount = extractRequestedTopCount(compareSeedPrompt, 5, 5);
+  const rankingAttempt = buildRankingShadowRequest(compareSeedPrompt);
+
+  if (rankingAttempt.request) {
+    const startedAt = performance.now();
+    const response = await postToQueryApi<RankEntitiesResponse>(
+      '/v1/contracts/rank-entities',
+      rankingAttempt.request,
+      { timeoutMs: params.timeoutMs }
+    );
+    const timingMs = Math.round(performance.now() - startedAt);
+    const attempts: TigerShadowAttempt[] = [];
+
+    if (!response.ok) {
+      attempts.push({
+        contractName: 'rankEntities',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      });
+      return { attempts, entityKind: rankingAttempt.request.entityKind, entityUids: [] };
+    }
+
+    attempts.push({
+      contractName: 'rankEntities',
+      httpStatus: response.httpStatus,
+      resultCount: response.data?.items?.length ?? 0,
+      status: 'success',
+      sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+      timingMs,
+    });
+
+    const invalidMetricReason = validateCompareMetricsForEntityKind(
+      rankingAttempt.request.entityKind,
+      params.metrics
+    );
+    if (invalidMetricReason) {
+      attempts.push(buildSkippedAttempt('compareEntities', invalidMetricReason));
+      return { attempts, entityKind: rankingAttempt.request.entityKind, entityUids: [] };
+    }
+
+    const entityUids = extractEntityUidsFromRankResponse(response.data, Math.min(topCount, 5));
+    if (entityUids.length < 2) {
+      attempts.push(
+        buildSkippedAttempt(
+          'compareEntities',
+          'Tiger compare could not derive a stable peer set from the ranking results.'
+        )
+      );
+      return { attempts, entityKind: rankingAttempt.request.entityKind, entityUids: [] };
+    }
+
+    return {
+      attempts,
+      entityKind: rankingAttempt.request.entityKind,
+      entityUids,
+    };
+  }
+
+  const { reason, requests } = buildCatalogSearchPrimaryRequests(compareSeedPrompt);
+  if (requests.length === 0) {
+    return {
+      attempts: [
+        buildSkippedAttempt(
+          'searchCatalog',
+          reason ?? 'Tiger compare could not derive a supported catalog peer set from the prompt.'
+        ),
+        buildSkippedAttempt(
+          'compareEntities',
+          'Tiger compare did not find a supported derived peer-set strategy for this prompt.'
+        ),
+      ],
+      entityKind: null,
+      entityUids: [],
+    };
+  }
+
+  const invalidMetricReason = validateCompareMetricsForEntityKind('game', params.metrics);
+  if (invalidMetricReason) {
+    return {
+      attempts: [buildSkippedAttempt('compareEntities', invalidMetricReason)],
+      entityKind: 'game',
+      entityUids: [],
+    };
+  }
+
+  const attempts: TigerShadowAttempt[] = [];
+  for (const request of requests) {
+    const catalogRequest: SearchCatalogShadowRequest = {
+      ...request,
+      limit: Math.min(request.limit ?? topCount, 5),
+    };
+    const startedAt = performance.now();
+    const response = await postToQueryApi<SearchCatalogResponse>(
+      '/v1/contracts/search-catalog',
+      catalogRequest,
+      { timeoutMs: params.timeoutMs }
+    );
+    const timingMs = Math.round(performance.now() - startedAt);
+
+    if (!response.ok) {
+      attempts.push({
+        contractName: 'searchCatalog',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      });
+      return { attempts, entityKind: 'game', entityUids: [] };
+    }
+
+    attempts.push({
+      contractName: 'searchCatalog',
+      httpStatus: response.httpStatus,
+      resultCount: response.data?.items?.length ?? 0,
+      status: 'success',
+      sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+      timingMs,
+    });
+
+    const entityUids = extractEntityUidsFromCatalogResponse(response.data, Math.min(topCount, 5));
+    if (entityUids.length >= 2) {
+      return { attempts, entityKind: 'game', entityUids };
+    }
+  }
+
+  attempts.push(
+    buildSkippedAttempt(
+      'compareEntities',
+      'Tiger compare could not derive at least two comparable peers from the current catalog results.'
+    )
+  );
+  return { attempts, entityKind: 'game', entityUids: [] };
+}
+
+async function buildCompareRequestFromPrompt(params: {
+  prompt: string;
+  timeoutMs: number;
+}): Promise<CompareRequestBuildResult> {
+  const unsupportedReason = inferUnsupportedCompareReason(params.prompt);
+  if (unsupportedReason) {
+    return {
+      attempts: [buildSkippedAttempt('compareEntities', unsupportedReason)],
+      request: null,
+    };
+  }
+
+  const metrics = extractCompareMetrics(params.prompt);
+  const explicitEntityNames = parseCompareEntities(params.prompt);
+  const expectedEntityKind = normalizeEntityKindHint(params.prompt);
+
+  if (explicitEntityNames.length >= 2) {
+    const resolved = await resolveExplicitCompareEntitiesAttempt({
+      entityNames: explicitEntityNames,
+      expectedEntityKind,
+      timeoutMs: params.timeoutMs,
+    });
+    const invalidMetricReason = validateCompareMetricsForEntityKind(resolved.entityKind, metrics);
+    if (invalidMetricReason) {
+      return {
+        attempts: [...resolved.attempts, buildSkippedAttempt('compareEntities', invalidMetricReason)],
+        request: null,
+      };
+    }
+
+    return {
+      attempts:
+        resolved.entityUids.length >= 2
+          ? resolved.attempts
+          : [
+              ...resolved.attempts,
+              buildSkippedAttempt(
+                'compareEntities',
+                'Tiger compare routing skipped this prompt because it did not resolve to a stable peer set.'
+              ),
+            ],
+      request:
+        resolved.entityUids.length >= 2
+          ? {
+              entityUids: resolved.entityUids,
+              ...(metrics.length > 0 ? { metrics } : {}),
+            }
+          : null,
+    };
+  }
+
+  const derived = await resolveDerivedCompareEntitiesAttempt({
+    metrics,
+    prompt: params.prompt,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    attempts: derived.attempts,
+    request:
+      derived.entityUids.length >= 2
+        ? {
+            entityUids: derived.entityUids,
+            ...(metrics.length > 0 ? { metrics } : {}),
+          }
+        : null,
+  };
+}
+
 async function runExplainChangesShadow(entityQuery: string | null): Promise<TigerShadowAttempt[]> {
   const { attempt: resolveAttempt, entityUid } = await resolveGameEntityAttempt(entityQuery);
   const attempts: TigerShadowAttempt[] = [resolveAttempt];
@@ -1042,6 +2246,61 @@ async function runExplainChangesShadow(entityQuery: string | null): Promise<Tige
   return attempts;
 }
 
+async function runExplainChangesPrimary(entityQuery: string | null): Promise<{
+  attempts: TigerShadowAttempt[];
+  response: ExplainChangesResponse | null;
+}> {
+  const { attempt: resolveAttempt, entityUid } = await resolveGameEntityAttempt(entityQuery);
+  const attempts: TigerShadowAttempt[] = [resolveAttempt];
+
+  if (!entityUid) {
+    attempts.push(
+      buildSkippedAttempt(
+        'explainChanges',
+        'The Tiger primary explainChanges path was skipped because no game entity could be resolved.'
+      )
+    );
+    return { attempts, response: null };
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<ExplainChangesResponse>('/v1/contracts/explain-changes', {
+    entityUid,
+    includeNews: true,
+    limit: 10,
+  });
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'explainChanges',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return { attempts, response: null };
+  }
+
+  attempts.push({
+    contractName: 'explainChanges',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.summary?.eventCount ?? response.data?.moments?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+
+  return {
+    attempts,
+    response:
+      (response.data?.moments?.length ?? 0) > 0 && response.data?.sufficientToAnswer
+        ? response.data ?? null
+        : null,
+  };
+}
+
 async function runSearchDocumentsShadow(params: {
   entityQuery: string | null;
   prompt: string;
@@ -1066,7 +2325,7 @@ async function runSearchDocumentsShadow(params: {
   const response = await postToQueryApi<SearchDocumentsResponse>('/v1/contracts/search-documents', {
     entityUid,
     limit: 6,
-    query: buildNewsTopicQuery(params.prompt),
+    query: buildNewsTopicQuery(params.prompt, params.entityQuery),
   });
   const timingMs = Math.round(performance.now() - startedAt);
 
@@ -1091,6 +2350,67 @@ async function runSearchDocumentsShadow(params: {
     timingMs,
   });
   return attempts;
+}
+
+async function runSearchDocumentsPrimary(params: {
+  entityQuery: string | null;
+  prompt: string;
+}): Promise<{
+  attempts: TigerShadowAttempt[];
+  response: SearchDocumentsResponse | null;
+}> {
+  const attempts: TigerShadowAttempt[] = [];
+  let entityUid: string | null = null;
+
+  if (params.entityQuery) {
+    const resolved = await resolveGameEntityAttempt(params.entityQuery);
+    attempts.push(resolved.attempt);
+    entityUid = resolved.entityUid;
+  } else {
+    attempts.push(
+      buildSkippedAttempt(
+        'resolveEntities',
+        'No game entity hint was available, so Tiger primary news routing ran without an entity filter.'
+      )
+    );
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<SearchDocumentsResponse>('/v1/contracts/search-documents', {
+    entityUid,
+    limit: 6,
+    query: buildNewsTopicQuery(params.prompt, params.entityQuery),
+  });
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'searchDocuments',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return { attempts, response: null };
+  }
+
+  attempts.push({
+    contractName: 'searchDocuments',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.items?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+
+  return {
+    attempts,
+    response:
+      (response.data?.items?.length ?? 0) > 0 && response.data?.sufficientToAnswer
+        ? response.data ?? null
+        : null,
+  };
 }
 
 async function runCatalogSearchShadow(params: {
@@ -1128,6 +2448,41 @@ async function runCatalogSearchShadow(params: {
   }];
 }
 
+async function runSemanticSearchShadow(params: {
+  prompt: string;
+  toolCalls: ChatToolCall[];
+}): Promise<TigerShadowAttempt[]> {
+  const { request, reason } = buildSemanticSearchShadowRequest(params);
+
+  if (!request) {
+    return [buildSkippedAttempt('semanticSearch', reason ?? 'Tiger semantic shadow could not build a supported request.')];
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<SemanticSearchResponse>('/v1/contracts/semantic-search', request);
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    return [{
+      contractName: 'semanticSearch',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    }];
+  }
+
+  return [{
+    contractName: 'semanticSearch',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.results?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? response.data?.sufficient_to_answer ?? false,
+    timingMs,
+  }];
+}
+
 async function runRankEntitiesShadow(prompt: string): Promise<TigerShadowAttempt[]> {
   const { request, reason } = buildRankingShadowRequest(prompt);
   if (!request) {
@@ -1157,6 +2512,48 @@ async function runRankEntitiesShadow(prompt: string): Promise<TigerShadowAttempt
     sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
     timingMs,
   }];
+}
+
+async function runCompareEntitiesShadow(prompt: string): Promise<TigerShadowAttempt[]> {
+  const builtRequest = await buildCompareRequestFromPrompt({
+    prompt,
+    timeoutMs: readShadowTimeoutMs(),
+  });
+  const attempts = [...builtRequest.attempts];
+
+  if (!builtRequest.request || builtRequest.request.entityUids.length < 2) {
+    return attempts;
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<CompareEntitiesResponse>(
+    '/v1/contracts/compare-entities',
+    builtRequest.request,
+    { timeoutMs: readShadowTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'compareEntities',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return attempts;
+  }
+
+  attempts.push({
+    contractName: 'compareEntities',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.items?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+  return attempts;
 }
 
 async function runMetricHistoryShadow(params: {
@@ -1209,14 +2606,152 @@ async function runMetricHistoryShadow(params: {
   return attempts;
 }
 
+async function runEntityOverviewShadow(prompt: string): Promise<TigerShadowAttempt[]> {
+  const query = extractEntityOverviewQuery(prompt);
+  const expectedEntityKind = inferEntityOverviewKindHint(prompt);
+  const { attempt: resolveAttempt, entity } = await resolvePrimaryEntityAttempt({
+    expectedEntityKind,
+    query,
+  });
+  const attempts: TigerShadowAttempt[] = [resolveAttempt];
+
+  if (!entity?.platformEntityId || !entity.entityKind) {
+    attempts.push(
+      buildSkippedAttempt(
+        'getEntityOverview',
+        'The Tiger entity overview shadow path was skipped because no stable entity could be resolved.'
+      )
+    );
+    return attempts;
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<GetEntityOverviewResponse>(
+    '/v1/contracts/get-entity-overview',
+    {
+      entityKind: entity.entityKind,
+      gamesLimit: entity.entityKind === 'game' ? 0 : 5,
+      gamesSortBy: /\b(?:top|best)\b/i.test(prompt) ? 'reviews' : 'release_date',
+      platformEntityId: entity.platformEntityId,
+    },
+    { timeoutMs: readShadowTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'getEntityOverview',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return attempts;
+  }
+
+  attempts.push({
+    contractName: 'getEntityOverview',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.games?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+  return attempts;
+}
+
+async function runEntityOverviewPrimary(prompt: string): Promise<{
+  attempts: TigerShadowAttempt[];
+  request: {
+    entityKind: 'developer' | 'game' | 'publisher';
+    gamesLimit: number;
+    gamesSortBy: 'release_date' | 'reviews';
+    platformEntityId: string;
+  } | null;
+  response: (GetEntityOverviewResponse & {
+    viewMode: 'company_count' | 'company_games' | 'game_overview';
+  }) | null;
+}> {
+  const query = extractEntityOverviewQuery(prompt);
+  const expectedEntityKind = inferEntityOverviewKindHint(prompt);
+  const { attempt: resolveAttempt, entity } = await resolvePrimaryEntityAttempt({
+    expectedEntityKind,
+    query,
+  });
+  const attempts: TigerShadowAttempt[] = [resolveAttempt];
+
+  if (!entity?.platformEntityId || !entity.entityKind) {
+    attempts.push(
+      buildSkippedAttempt(
+        'getEntityOverview',
+        'The Tiger primary entity overview path was skipped because the prompt did not resolve to a stable entity.'
+      )
+    );
+    return { attempts, request: null, response: null };
+  }
+
+  const request = {
+    entityKind: entity.entityKind as 'developer' | 'game' | 'publisher',
+    gamesLimit: entity.entityKind === 'game' ? 0 : 5,
+    gamesSortBy: /\b(?:top|best)\b/i.test(prompt) ? 'reviews' as const : 'release_date' as const,
+    platformEntityId: entity.platformEntityId,
+  };
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<GetEntityOverviewResponse>(
+    '/v1/contracts/get-entity-overview',
+    request,
+    { timeoutMs: readPrimaryTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'getEntityOverview',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return { attempts, request, response: null };
+  }
+
+  const data = response.data;
+  attempts.push({
+    contractName: 'getEntityOverview',
+    httpStatus: response.httpStatus,
+    resultCount: data?.games?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+
+  if (!data?.sufficientToAnswer) {
+    return { attempts, request, response: null };
+  }
+
+  return {
+    attempts,
+    request,
+    response: {
+      ...data,
+      viewMode: inferEntityOverviewViewMode(prompt, data.entity.entityKind),
+    },
+  };
+}
+
 async function runCatalogSearchPrimary(prompt: string): Promise<{
   attempts: TigerShadowAttempt[];
+  request: SearchCatalogShadowRequest | null;
   response: SearchCatalogResponse | null;
 }> {
   const { reason, requests } = buildCatalogSearchPrimaryRequests(prompt);
   if (requests.length === 0) {
     return {
       attempts: [buildSkippedAttempt('searchCatalog', reason ?? 'Tiger primary catalog routing could not build a request.')],
+      request: null,
       response: null,
     };
   }
@@ -1240,7 +2775,7 @@ async function runCatalogSearchPrimary(prompt: string): Promise<{
         status: 'error',
         timingMs,
       });
-      return { attempts, response: null };
+      return { attempts, request, response: null };
     }
 
     attempts.push({
@@ -1253,11 +2788,66 @@ async function runCatalogSearchPrimary(prompt: string): Promise<{
     });
 
     if ((response.data?.items?.length ?? 0) > 0 && response.data?.sufficientToAnswer) {
-      return { attempts, response: response.data ?? null };
+      return { attempts, request, response: response.data ?? null };
     }
   }
 
-  return { attempts, response: null };
+  return { attempts, request: null, response: null };
+}
+
+async function runSemanticSearchPrimary(prompt: string): Promise<{
+  attempts: TigerShadowAttempt[];
+  request: SemanticSearchShadowRequest | null;
+  response: SemanticSearchResponse | null;
+}> {
+  const { request, reason } = buildSemanticRequestFromPrompt(prompt);
+  if (!request) {
+    return {
+      attempts: [buildSkippedAttempt('semanticSearch', reason ?? 'Tiger primary semantic routing could not build a request.')],
+      request: null,
+      response: null,
+    };
+  }
+
+  const startedAt = performance.now();
+  const response = await postToQueryApi<SemanticSearchResponse>(
+    '/v1/contracts/semantic-search',
+    request,
+    { timeoutMs: readPrimaryTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    return {
+      attempts: [{
+        contractName: 'semanticSearch',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      }],
+      request,
+      response: null,
+    };
+  }
+
+  return {
+    attempts: [{
+      contractName: 'semanticSearch',
+      httpStatus: response.httpStatus,
+      resultCount: response.data?.results?.length ?? 0,
+      status: 'success',
+      sufficientToAnswer: response.data?.sufficientToAnswer ?? response.data?.sufficient_to_answer ?? false,
+      timingMs,
+    }],
+    request,
+    response:
+      (response.data?.results?.length ?? 0) > 0 &&
+      (response.data?.sufficientToAnswer ?? response.data?.sufficient_to_answer)
+        ? response.data ?? null
+        : null,
+  };
 }
 
 async function runRankEntitiesPrimary(prompt: string): Promise<{
@@ -1305,6 +2895,61 @@ async function runRankEntitiesPrimary(prompt: string): Promise<{
     }],
     response:
       (response.data?.items?.length ?? 0) > 0 && response.data?.sufficientToAnswer
+        ? response.data ?? null
+        : null,
+  };
+}
+
+async function runCompareEntitiesPrimary(prompt: string): Promise<{
+  attempts: TigerShadowAttempt[];
+  request: CompareEntitiesShadowRequest | null;
+  response: CompareEntitiesResponse | null;
+}> {
+  const builtRequest = await buildCompareRequestFromPrompt({
+    prompt,
+    timeoutMs: readPrimaryTimeoutMs(),
+  });
+  const attempts = [...builtRequest.attempts];
+
+  if (!builtRequest.request || builtRequest.request.entityUids.length < 2) {
+    return { attempts, request: null, response: null };
+  }
+
+  const request: CompareEntitiesShadowRequest = builtRequest.request;
+  const startedAt = performance.now();
+  const response = await postToQueryApi<CompareEntitiesResponse>(
+    '/v1/contracts/compare-entities',
+    request,
+    { timeoutMs: readPrimaryTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    attempts.push({
+      contractName: 'compareEntities',
+      errorCode: response.errorCode,
+      httpStatus: response.httpStatus,
+      reason: response.reason,
+      status: 'error',
+      timingMs,
+    });
+    return { attempts, request, response: null };
+  }
+
+  attempts.push({
+    contractName: 'compareEntities',
+    httpStatus: response.httpStatus,
+    resultCount: response.data?.items?.length ?? 0,
+    status: 'success',
+    sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
+    timingMs,
+  });
+
+  return {
+    attempts,
+    request,
+    response:
+      (response.data?.items?.length ?? 0) >= 2 && response.data?.sufficientToAnswer
         ? response.data ?? null
         : null,
   };
@@ -1384,6 +3029,7 @@ export async function runTigerPrimaryEvaluation(params: {
   const cohort = classifyTigerRolloutCohort(params.userId);
   if (!shouldRunPrimary(mode, params.isEvalRequest, cohort)) {
     return {
+      contractResult: null,
       info: {
         attempts: [],
         cohort,
@@ -1400,6 +3046,7 @@ export async function runTigerPrimaryEvaluation(params: {
   const matchedIntent = inferPrimaryMatchedIntent(params.prompt);
   if (!matchedIntent) {
     return {
+      contractResult: null,
       info: {
         attempts: [],
         cohort,
@@ -1418,17 +3065,33 @@ export async function runTigerPrimaryEvaluation(params: {
     extractEntityQueryFromPrompt(params.prompt);
 
   try {
-    const outcome = matchedIntent === 'catalog_search'
+    const outcome = matchedIntent === 'change_discovery'
+      ? { attempts: [], response: null }
+      : matchedIntent === 'entity_overview'
+      ? await runEntityOverviewPrimary(params.prompt)
+      : matchedIntent === 'catalog_search'
       ? await runCatalogSearchPrimary(params.prompt)
       : matchedIntent === 'entity_ranking'
         ? await runRankEntitiesPrimary(params.prompt)
-        : await runMetricHistoryPrimary({
-            entityQuery,
-            prompt: params.prompt,
-          });
+        : matchedIntent === 'entity_compare'
+          ? await runCompareEntitiesPrimary(params.prompt)
+          : matchedIntent === 'metric_history'
+            ? await runMetricHistoryPrimary({
+                entityQuery,
+                prompt: params.prompt,
+              })
+            : matchedIntent === 'news_search'
+              ? await runSearchDocumentsPrimary({
+                  entityQuery,
+                  prompt: params.prompt,
+                })
+              : matchedIntent === 'semantic_search'
+                ? await runSemanticSearchPrimary(params.prompt)
+                : await runExplainChangesPrimary(entityQuery);
 
     if (!outcome.response) {
       return {
+        contractResult: null,
         info: {
           attempts: outcome.attempts,
           cohort,
@@ -1444,23 +3107,30 @@ export async function runTigerPrimaryEvaluation(params: {
       };
     }
 
-    const renderedText = matchedIntent === 'catalog_search'
-      ? renderTigerPrimaryResult({
+    if (!isTigerPrimaryRenderableIntent(matchedIntent)) {
+      return {
+        contractResult: null,
+        info: {
+          attempts: outcome.attempts,
+          cohort,
+          enabled: true,
           matchedIntent,
-          response: outcome.response as SearchCatalogResponse,
-        })
-      : matchedIntent === 'entity_ranking'
-        ? renderTigerPrimaryResult({
-            matchedIntent,
-            response: outcome.response as RankEntitiesResponse,
-          })
-        : renderTigerPrimaryResult({
-            matchedIntent,
-            response: outcome.response as TraceMetricHistoryResponse,
-          });
+          mode,
+          renderMode: 'deterministic',
+          route: 'fallback_to_legacy',
+        },
+        renderedText: null,
+      };
+    }
+
+    const renderedText = renderTigerPrimaryResult({
+      matchedIntent,
+      response: outcome.response,
+    });
 
     if (!renderedText.trim()) {
       return {
+        contractResult: null,
         info: {
           attempts: outcome.attempts,
           cohort,
@@ -1475,6 +3145,32 @@ export async function runTigerPrimaryEvaluation(params: {
     }
 
     return {
+      contractResult:
+        matchedIntent === 'entity_overview' && 'request' in outcome && outcome.request
+          ? {
+              contractName: 'getEntityOverview',
+              request: outcome.request as unknown as Record<string, unknown>,
+              response: outcome.response,
+            }
+          : matchedIntent === 'catalog_search' && 'request' in outcome && outcome.request
+          ? {
+              contractName: 'searchCatalog',
+              request: outcome.request as unknown as Record<string, unknown>,
+              response: outcome.response,
+            }
+          : matchedIntent === 'semantic_search' && 'request' in outcome && outcome.request
+            ? {
+                contractName: 'semanticSearch',
+                request: outcome.request as unknown as Record<string, unknown>,
+                response: outcome.response,
+              }
+            : matchedIntent === 'entity_compare' && 'request' in outcome && outcome.request
+              ? {
+                  contractName: 'compareEntities',
+                  request: outcome.request as unknown as Record<string, unknown>,
+                  response: outcome.response,
+                }
+              : null,
       info: {
         attempts: outcome.attempts,
         cohort,
@@ -1488,13 +3184,24 @@ export async function runTigerPrimaryEvaluation(params: {
     };
   } catch (error) {
     return {
+      contractResult: null,
       info: {
         attempts: [{
-          contractName: matchedIntent === 'entity_ranking'
+          contractName: matchedIntent === 'entity_overview'
+            ? 'getEntityOverview'
+            : matchedIntent === 'entity_ranking'
             ? 'rankEntities'
+            : matchedIntent === 'entity_compare'
+              ? 'compareEntities'
             : matchedIntent === 'metric_history'
               ? 'traceMetricHistory'
-              : 'searchCatalog',
+              : matchedIntent === 'news_search'
+                ? 'searchDocuments'
+                : matchedIntent === 'semantic_search'
+                  ? 'semanticSearch'
+                : matchedIntent === 'change_explanation'
+                  ? 'explainChanges'
+                  : 'searchCatalog',
           reason: error instanceof Error ? error.message : 'Unknown Tiger primary error',
           status: 'error',
         }],
@@ -1547,18 +3254,29 @@ export async function runTigerShadowEvaluation(params: {
     extractGameNameFromToolCalls(params.toolCalls) ??
     extractEntityQueryFromPrompt(params.prompt);
 
-  const attempts = matchedIntent === 'change_explanation'
+  const attempts = matchedIntent === 'change_discovery'
+    ? []
+    : matchedIntent === 'entity_overview'
+    ? await runEntityOverviewShadow(params.prompt)
+    : matchedIntent === 'change_explanation'
     ? await runExplainChangesShadow(entityQuery)
     : matchedIntent === 'news_search'
       ? await runSearchDocumentsShadow({
           entityQuery,
           prompt: params.prompt,
         })
+      : matchedIntent === 'semantic_search'
+        ? await runSemanticSearchShadow({
+            prompt: params.prompt,
+            toolCalls: params.toolCalls,
+          })
       : matchedIntent === 'catalog_search'
         ? await runCatalogSearchShadow({
             prompt: params.prompt,
             toolCalls: params.toolCalls,
           })
+        : matchedIntent === 'entity_compare'
+          ? await runCompareEntitiesShadow(params.prompt)
         : matchedIntent === 'entity_ranking'
           ? await runRankEntitiesShadow(params.prompt)
           : await runMetricHistoryShadow({
@@ -1570,9 +3288,12 @@ export async function runTigerShadowEvaluation(params: {
     (attempt) =>
       (
         attempt.contractName === 'explainChanges'
+        || attempt.contractName === 'getEntityOverview'
+        || attempt.contractName === 'compareEntities'
         || attempt.contractName === 'rankEntities'
         || attempt.contractName === 'searchCatalog'
         || attempt.contractName === 'searchDocuments'
+        || attempt.contractName === 'semanticSearch'
         || attempt.contractName === 'traceMetricHistory'
       )
       && attempt.status === 'success'

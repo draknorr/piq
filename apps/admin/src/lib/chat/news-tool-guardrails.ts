@@ -97,6 +97,26 @@ function priorResultIsUsable(prior: ChatToolCall): boolean {
   );
 }
 
+function findEquivalentPriorNewsCall(
+  previousToolCalls: ChatToolCall[],
+  toolCall: ToolCall
+): ChatToolCall | null {
+  const currentKey = buildRecentNewsSemanticKey(toolCall);
+  if (!currentKey) {
+    return null;
+  }
+
+  return (
+    previousToolCalls.find((prior) => {
+      if (!RECENT_NEWS_TOOL_NAMES.has(prior.name)) {
+        return false;
+      }
+
+      return buildRecentNewsSemanticKey(prior) === currentKey;
+    }) ?? null
+  );
+}
+
 export function buildRedundantNewsToolSkipResult(
   previousToolCalls: ChatToolCall[],
   toolCall: ToolCall
@@ -105,29 +125,31 @@ export function buildRedundantNewsToolSkipResult(
     return null;
   }
 
-  const currentKey = buildRecentNewsSemanticKey(toolCall);
-  if (!currentKey) {
+  const priorEquivalentCall = findEquivalentPriorNewsCall(previousToolCalls, toolCall);
+  if (!priorEquivalentCall) {
     return null;
   }
 
-  const hasEquivalentPriorNewsResult = previousToolCalls.some((prior) => {
-    if (!RECENT_NEWS_TOOL_NAMES.has(prior.name)) {
-      return false;
-    }
-
-    return priorResultIsUsable(prior) && buildRecentNewsSemanticKey(prior) === currentKey;
-  });
-
-  if (!hasEquivalentPriorNewsResult) {
-    return null;
+  if (priorResultIsUsable(priorEquivalentCall)) {
+    return {
+      success: true,
+      skipped_redundant_news_query: true,
+      sufficient_to_answer: true,
+      sufficiency_reason:
+        'A recent-news result for this same title set or topic already ran in this turn. Respond from that evidence instead of running another adjacent recent-news query.',
+      debug: {
+        redundantNewsQueryBlocked: true,
+        redundantNewsTool: toolCall.name,
+      },
+    };
   }
 
   return {
-    success: true,
+    success: false,
     skipped_redundant_news_query: true,
-    sufficient_to_answer: true,
-    sufficiency_reason:
-      'A recent-news result for this same title set or topic already ran in this turn. Respond from that evidence instead of running another adjacent recent-news query.',
+    failure_kind: 'duplicate_recent_news_query_blocked',
+    error:
+      'This exact recent-news query already ran in this turn and did not succeed. Do not rerun it; answer from the earlier failure or ask the user to narrow the scope.',
     debug: {
       redundantNewsQueryBlocked: true,
       redundantNewsTool: toolCall.name,

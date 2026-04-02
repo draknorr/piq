@@ -29,6 +29,7 @@ import { discoverTrending, type DiscoverTrendingArgs } from '@/lib/search/trend-
 import { screenGames, type ScreenGamesArgs } from '@/lib/search/screen-games';
 import { formatResultWithEntityLinks } from '@/lib/llm/format-entity-links';
 import { normalizeTrendToolCall } from '@/lib/chat/trend-tool-policy';
+import { tryTigerQueryAnalyticsCompat } from '@/lib/chat/query-analytics-tiger-compat';
 import {
   compareChangeBeforeAfter,
   findChangePatterns,
@@ -122,16 +123,17 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
         if (toolCall.name === 'query_analytics') {
           const args = toolCall.arguments as unknown as QueryAnalyticsArgs;
 
-          // Execute the Cube.dev query
-          const queryResult = await executeCubeQuery({
-            cube: args.cube,
-            dimensions: args.dimensions,
-            measures: args.measures,
-            filters: args.filters,
-            segments: args.segments,
-            order: args.order,
-            limit: args.limit,
-          });
+          const queryResult =
+            await tryTigerQueryAnalyticsCompat(args)
+            ?? await executeCubeQuery({
+              cube: args.cube,
+              dimensions: args.dimensions,
+              measures: args.measures,
+              filters: args.filters,
+              segments: args.segments,
+              order: args.order,
+              limit: args.limit,
+            });
 
           // Track the tool call
           executedToolCalls.push({
@@ -348,7 +350,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: changeResult,
+            result: changeResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -369,7 +371,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: timelineResult,
+            result: timelineResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -390,7 +392,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: newsDetailResult,
+            result: newsDetailResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -411,7 +413,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: newsDigestResult,
+            result: newsDigestResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -432,7 +434,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: newsTopicResult,
+            result: newsTopicResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -453,7 +455,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: detailResult,
+            result: detailResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -474,7 +476,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: comparisonResult,
+            result: comparisonResult as ChatToolCall['result'],
           });
 
           messages.push({
@@ -495,7 +497,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
           executedToolCalls.push({
             name: toolCall.name,
             arguments: args as unknown as Record<string, unknown>,
-            result: patternResult,
+            result: patternResult as ChatToolCall['result'],
           });
 
           messages.push({

@@ -5,12 +5,17 @@
  */
 
 import {
+  type ResolutionConfidence,
   resolveCompanyReference,
   type CompanyEntityType,
   type CompanyResolutionCandidate,
-  type ResolutionConfidence,
 } from '@/lib/search/company-resolution';
+import {
+  attachToolExecutionProvenance,
+  type ChatExecutionProvenanceOverride,
+} from '@/lib/chat/execution-trace';
 import type { ToolSufficiencyMetadata } from '@/lib/llm/types';
+import { postToQueryApi } from '@/lib/query-api-client';
 
 interface LookupCompanyCandidate {
   id: number;
@@ -25,6 +30,52 @@ interface CanonicalCompanySummary {
   avgReviewScore?: number;
   positiveReviews?: number;
 }
+
+interface ResolveEntitiesResponse {
+  ambiguity?: {
+    message: string | null;
+    requiresClarification: boolean;
+  };
+  entities?: Array<{
+    confidence: number;
+    displayName: string;
+    entityKind: 'developer' | 'game' | 'publisher';
+    latestMetrics?: {
+      reviewScore: number | null;
+      totalReviews: number | null;
+    };
+    matchQuality: 'exact' | 'prefix' | 'substring';
+    platformEntityId: string;
+    signals?: {
+      gameCount?: number | null;
+    };
+  }>;
+}
+
+interface TigerLookupCompanyCandidate {
+  avgReviewScore?: number;
+  gameCount?: number;
+  id: number;
+  matchKind: CompanyResolutionCandidate['matchKind'];
+  name: string;
+  resolutionScore: number;
+  totalReviews?: number;
+}
+
+const TIGER_COMPANY_LOOKUP_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:resolveEntities',
+    'relation:apps',
+    'relation:latest_daily_metrics',
+    'relation:publishers',
+    'relation:developers',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'Company lookup now uses the Tiger resolve-entities contract before falling back to the legacy resolver.',
+  recommendedTigerContracts: ['resolveEntities'],
+};
 
 /**
  * Arguments for lookup_publishers tool
@@ -115,6 +166,136 @@ function stripCandidate(candidate: CompanyResolutionCandidate): LookupCompanyCan
   };
 }
 
+function inferResolutionConfidence(score: number | undefined): ResolutionConfidence {
+  if (typeof score !== 'number' || !Number.isFinite(score)) {
+    return 'low';
+  }
+
+  if (score >= 0.9) {
+    return 'high';
+  }
+
+  if (score >= 0.75) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function mapMatchKind(
+  matchQuality: 'exact' | 'prefix' | 'substring'
+): CompanyResolutionCandidate['matchKind'] {
+  if (matchQuality === 'exact') {
+    return 'exact';
+  }
+
+  if (matchQuality === 'prefix') {
+    return 'prefix';
+  }
+
+  return 'substring';
+}
+
+function parseCompanyId(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+
+  const id = Number.parseInt(value, 10);
+  return Number.isFinite(id) ? id : null;
+}
+
+async function lookupCompanyViaTiger(
+  entityType: CompanyEntityType,
+  query: string,
+  limit: number
+): Promise<LookupPublishersResult | LookupDevelopersResult | null> {
+  const response = await postToQueryApi<ResolveEntitiesResponse>(
+    '/v1/contracts/resolve-entities',
+    {
+      entityKinds: [entityType],
+      includeMetrics: true,
+      limit,
+      query,
+    }
+  );
+
+  if (!response.ok || !response.data) {
+    return null;
+  }
+
+  const rawCandidates = (response.data.entities ?? [])
+    .filter((entity) => entity.entityKind === entityType)
+    .map((entity): TigerLookupCompanyCandidate | null => {
+      const id = parseCompanyId(entity.platformEntityId);
+      if (id == null) {
+        return null;
+      }
+
+      return {
+        avgReviewScore: entity.latestMetrics?.reviewScore ?? undefined,
+        gameCount: entity.signals?.gameCount ?? undefined,
+        id,
+        matchKind: mapMatchKind(entity.matchQuality),
+        name: entity.displayName,
+        resolutionScore: entity.confidence,
+        totalReviews: entity.latestMetrics?.totalReviews ?? undefined,
+      };
+    })
+    .filter((candidate): candidate is TigerLookupCompanyCandidate => candidate != null);
+
+  if (rawCandidates.length === 0) {
+    return null;
+  }
+
+  const topCandidate = rawCandidates[0];
+  const needsDisambiguation = response.data.ambiguity?.requiresClarification === true;
+  const resolutionConfidence = inferResolutionConfidence(topCandidate?.resolutionScore);
+  const ambiguityMessage = response.data.ambiguity?.message ?? null;
+
+  const result = {
+    result_shape: 'lookup' as const,
+    success: true,
+    entityType,
+    query,
+    results: rawCandidates.map((candidate) => ({
+      id: candidate.id,
+      matchKind: candidate.matchKind,
+      name: candidate.name,
+      resolutionScore: candidate.resolutionScore,
+    })),
+    canonicalResult: topCandidate
+      ? {
+          confidence: resolutionConfidence,
+          id: topCandidate.id,
+          name: topCandidate.name,
+        }
+      : undefined,
+    summary: topCandidate
+      ? {
+          avgReviewScore: topCandidate.avgReviewScore,
+          gameCount: topCandidate.gameCount,
+          totalReviews: topCandidate.totalReviews,
+        }
+      : undefined,
+    resolutionConfidence,
+    needsDisambiguation,
+    sufficient_to_answer: needsDisambiguation,
+    sufficiency_reason: needsDisambiguation
+      ? ambiguityMessage ?? `The ${entityType} name "${query}" is ambiguous and needs clarification.`
+      : 'Identity resolved only. For company counts, rankings, comparisons, or top-title answers, run one analytics query before responding.',
+    ...(needsDisambiguation
+      ? {
+          error:
+            ambiguityMessage ??
+            `The ${entityType} name "${query}" is ambiguous and needs clarification.`,
+        }
+      : {}),
+  };
+
+  return attachToolExecutionProvenance(result, TIGER_COMPANY_LOOKUP_PROVENANCE);
+}
+
 /**
  * Search for matching developer names using the canonical company resolver
  */
@@ -142,6 +323,12 @@ async function lookupCompany(
   }
 
   try {
+    const maxResults = Math.min(limit, 10);
+    const tigerResult = await lookupCompanyViaTiger(entityType, query.trim(), maxResults);
+    if (tigerResult) {
+      return tigerResult;
+    }
+
     const resolution = await resolveCompanyReference(entityType, query, limit);
     const canonicalCandidate = resolution.canonicalResult
       ? resolution.results.find((candidate) => candidate.id === resolution.canonicalResult?.id)

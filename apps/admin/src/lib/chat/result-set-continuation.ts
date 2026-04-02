@@ -18,6 +18,8 @@ type ContinuationIntent =
   | 'continue_with_constraint_delta'
   | 'not_continuation';
 
+type ContinuableContractName = 'searchCatalog' | 'semanticSearch';
+
 interface ParsedContinuationDelta {
   maxPriceCents?: number;
   steamDeck?: Array<'verified' | 'playable'>;
@@ -30,12 +32,38 @@ interface ContinuationCue {
 }
 
 export interface ResultSetContinuationResolution {
+  continuationToken?: string | null;
   intent: Exclude<ContinuationIntent, 'not_continuation'>;
   requestedCount: number;
-  sourceTool: ContinuableToolName;
+  sourceContract?: ContinuableContractName;
+  sourceTool: string;
   sourceArgs: Record<string, unknown>;
   excludedCount: number;
   resultSet: SessionChatResultSet;
+}
+
+interface TigerSearchCatalogResult {
+  continuationToken: string | null;
+  items?: Array<{
+    appid: number;
+    name?: string;
+  }>;
+}
+
+interface TigerSemanticSearchResult {
+  continuation_token?: string | null;
+  results?: Array<{
+    id: number;
+    name?: string;
+  }>;
+}
+
+export interface TigerContractContinuationResult {
+  continuationToken: string | null;
+  effectiveArgs: Record<string, unknown>;
+  exhausted: boolean;
+  result: TigerSearchCatalogResult | TigerSemanticSearchResult;
+  sourceContract: ContinuableContractName;
 }
 
 interface ContinuationAdapter {
@@ -274,6 +302,10 @@ function uniqueIds(ids: Array<number | string>): Array<number | string> {
   return Array.from(new Set(ids));
 }
 
+function toContinuableContractName(value: string | undefined): ContinuableContractName | null {
+  return value === 'searchCatalog' || value === 'semanticSearch' ? value : null;
+}
+
 function toContinuableToolName(value: string): ContinuableToolName | null {
   return value in CONTINUATION_ADAPTERS ? (value as ContinuableToolName) : null;
 }
@@ -287,6 +319,13 @@ function sanitizeSourceArgs(toolName: ContinuableToolName, args: Record<string, 
     delete nextArgs.cursor;
   }
 
+  return nextArgs;
+}
+
+function sanitizeContractSourceArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const nextArgs = cloneArgs(args);
+  delete nextArgs.limit;
+  delete nextArgs.continuationToken;
   return nextArgs;
 }
 
@@ -411,6 +450,7 @@ function parseStoredResultSet(value: unknown): SessionChatResultSet | null {
 
   const family = getString(value.family);
   const sourceTool = getString(value.sourceTool);
+  const sourceContract = toContinuableContractName(getString(value.sourceContract) ?? undefined);
   const itemKind = getString(value.itemKind);
   const updatedAt = getString(value.updatedAt);
 
@@ -431,6 +471,8 @@ function parseStoredResultSet(value: unknown): SessionChatResultSet | null {
 
   return {
     family,
+    continuationToken: getString(value.continuationToken) ?? null,
+    sourceContract: sourceContract ?? undefined,
     sourceTool,
     itemKind,
     sourceArgs,
@@ -480,17 +522,65 @@ export function buildResultSetFromToolExecution(params: {
   };
 }
 
+function buildTigerResultSet(params: {
+  family: string;
+  sourceArgs: Record<string, unknown>;
+  sourceContract: ContinuableContractName;
+  sourceTool?: string;
+  result: TigerSearchCatalogResult | TigerSemanticSearchResult;
+  timestamp?: string;
+}): SessionChatResultSet | null {
+  const { family, result, sourceArgs, sourceContract, sourceTool = sourceContract, timestamp = new Date().toISOString() } = params;
+  const shownIds =
+    sourceContract === 'searchCatalog'
+      ? ((result as TigerSearchCatalogResult).items ?? [])
+          .map((item) => item.appid)
+          .filter((appid): appid is number => Number.isFinite(appid))
+      : ((result as TigerSemanticSearchResult).results ?? [])
+          .map((item) => item.id)
+          .filter((id): id is number => Number.isFinite(id));
+
+  if (shownIds.length === 0) {
+    return null;
+  }
+
+  return {
+    family,
+    continuationToken:
+      sourceContract === 'searchCatalog'
+        ? (result as TigerSearchCatalogResult).continuationToken
+        : (result as TigerSemanticSearchResult).continuation_token ?? null,
+    sourceContract,
+    sourceTool,
+    itemKind: 'games',
+    sourceArgs: sanitizeContractSourceArgs(sourceArgs),
+    shownIds: uniqueIds(shownIds).slice(0, MAX_TRACKED_SHOWN_IDS),
+    lastPageSize: shownIds.length,
+    totalFound: null,
+    continuable:
+      sourceContract === 'searchCatalog'
+        ? (result as TigerSearchCatalogResult).continuationToken != null
+        : ((result as TigerSemanticSearchResult).continuation_token ?? null) != null,
+    updatedAt: timestamp,
+  };
+}
+
+export function buildTigerPrimaryResultSet(params: {
+  family: string;
+  sourceArgs: Record<string, unknown>;
+  sourceContract: ContinuableContractName;
+  result: TigerSearchCatalogResult | TigerSemanticSearchResult;
+  timestamp?: string;
+}): SessionChatResultSet | null {
+  return buildTigerResultSet(params);
+}
+
 export function resolveResultSetContinuation(
   userMessage: string,
   context: SessionChatContext | null | undefined
 ): ResultSetContinuationResolution | null {
   const resultSet = context?.resultSet;
   if (!resultSet?.continuable) {
-    return null;
-  }
-
-  const toolName = toContinuableToolName(resultSet.sourceTool);
-  if (!toolName) {
     return null;
   }
 
@@ -514,6 +604,42 @@ export function resolveResultSetContinuation(
     ),
     MAX_CONTINUATION_COUNT
   );
+
+  if (resultSet.sourceContract) {
+    if (resultSet.itemKind !== 'games') {
+      return null;
+    }
+
+    if (
+      resultSet.sourceContract === 'searchCatalog' &&
+      (delta.maxPriceCents != null || Boolean(delta.steamDeck?.length) || delta.days != null)
+    ) {
+      return null;
+    }
+
+    if (
+      resultSet.sourceContract === 'semanticSearch' &&
+      delta.days != null
+    ) {
+      return null;
+    }
+
+    return {
+      continuationToken: resultSet.continuationToken ?? null,
+      intent: cue.intent,
+      requestedCount,
+      sourceContract: resultSet.sourceContract,
+      sourceTool: resultSet.sourceTool,
+      sourceArgs: applyContractDeltaToArgs(resultSet.sourceContract, resultSet.sourceArgs, delta),
+      excludedCount: resultSet.shownIds.length,
+      resultSet,
+    };
+  }
+
+  const toolName = toContinuableToolName(resultSet.sourceTool);
+  if (!toolName) {
+    return null;
+  }
   const sourceArgs = applyDeltaToArgs(toolName, resultSet.sourceArgs, delta, resultSet);
   if (!sourceArgs) {
     return null;
@@ -529,6 +655,34 @@ export function resolveResultSetContinuation(
     excludedCount: resultSet.shownIds.length,
     resultSet,
   };
+}
+
+function applyContractDeltaToArgs(
+  sourceContract: ContinuableContractName,
+  sourceArgs: Record<string, unknown>,
+  delta: ParsedContinuationDelta
+): Record<string, unknown> {
+  const nextArgs = sanitizeContractSourceArgs(sourceArgs);
+
+  if (sourceContract !== 'semanticSearch') {
+    return nextArgs;
+  }
+
+  const filters = isRecord(nextArgs.filters) ? { ...nextArgs.filters } : {};
+  if (delta.maxPriceCents != null) {
+    const currentMaxPrice = getNumber(filters.max_price_cents);
+    filters.max_price_cents =
+      currentMaxPrice == null
+        ? delta.maxPriceCents
+        : Math.min(currentMaxPrice, delta.maxPriceCents);
+  }
+
+  if (delta.steamDeck?.length) {
+    filters.steam_deck = [...new Set(delta.steamDeck)];
+  }
+
+  nextArgs.filters = filters;
+  return nextArgs;
 }
 
 export function buildContinuationResultSet(params: {
@@ -547,8 +701,9 @@ export function buildContinuationResultSet(params: {
     terminalContract,
     timestamp = new Date().toISOString(),
   } = params;
+  const sourceTool = resolution.sourceTool as ContinuableToolName;
 
-  const rowIds = extractRowIds(resolution.sourceTool, result);
+  const rowIds = extractRowIds(sourceTool, result);
   const returnedIds = rowIds.filter((id) => !resolution.resultSet.shownIds.includes(id));
   const nextShownIds = uniqueIds([...resolution.resultSet.shownIds, ...returnedIds]).slice(
     0,
@@ -564,9 +719,9 @@ export function buildContinuationResultSet(params: {
   return {
     resultSet: {
       family: terminalContract?.family ?? resolution.resultSet.family,
-      sourceTool: resolution.sourceTool,
+      sourceTool,
       itemKind: resolution.resultSet.itemKind,
-      sourceArgs: sanitizeSourceArgs(resolution.sourceTool, resolution.sourceArgs),
+      sourceArgs: sanitizeSourceArgs(sourceTool, resolution.sourceArgs),
       shownIds: nextShownIds,
       lastPageSize: returnedIds.length,
       totalFound,
@@ -575,6 +730,55 @@ export function buildContinuationResultSet(params: {
     },
     returnedIds,
     exhausted: returnedIds.length === 0,
+  };
+}
+
+export function buildTigerContinuationResultSet(params: {
+  resolution: ResultSetContinuationResolution;
+  response: TigerContractContinuationResult;
+  timestamp?: string;
+}): {
+  resultSet: SessionChatResultSet;
+  returnedIds: Array<number | string>;
+  exhausted: boolean;
+} {
+  const {
+    resolution,
+    response,
+    timestamp = new Date().toISOString(),
+  } = params;
+
+  const nextPageResultSet = buildTigerResultSet({
+    family: resolution.resultSet.family,
+    result: response.result,
+    sourceArgs: response.effectiveArgs,
+    sourceContract: response.sourceContract,
+    sourceTool: response.sourceContract,
+    timestamp,
+  });
+
+  const returnedIds = nextPageResultSet?.shownIds ?? [];
+  const nextShownIds = uniqueIds([
+    ...resolution.resultSet.shownIds,
+    ...returnedIds,
+  ]).slice(0, MAX_TRACKED_SHOWN_IDS);
+
+  return {
+    resultSet: {
+      family: resolution.resultSet.family,
+      continuationToken: response.continuationToken,
+      sourceContract: response.sourceContract,
+      sourceTool: response.sourceContract,
+      itemKind: 'games',
+      sourceArgs: sanitizeContractSourceArgs(response.effectiveArgs),
+      shownIds: nextShownIds,
+      lastPageSize: returnedIds.length,
+      totalFound: null,
+      continuable: !response.exhausted,
+      updatedAt: timestamp,
+    },
+    returnedIds,
+    exhausted: response.exhausted || returnedIds.length === 0,
   };
 }
 
