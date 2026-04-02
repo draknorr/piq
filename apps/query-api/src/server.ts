@@ -1,9 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { pathToFileURL } from 'node:url';
 
 import {
+  type CompareEntitiesRequest,
   ContractRuntimeUnavailableError,
+  type ContinueResultSetRequest,
   DataPlaneService,
   type ExplainChangesRequest,
+  type GetEntityOverviewRequest,
   loadQueryApiConfig,
   type RankEntitiesRequest,
   type ResolveEntitiesRequest,
@@ -13,6 +17,22 @@ import {
   type TraceMetricHistoryRequest,
 } from '@publisheriq/data-plane';
 import { logger, PublisherIQError } from '@publisheriq/shared';
+
+interface QueryApiService {
+  compareEntities: DataPlaneService['compareEntities'];
+  describeContracts: DataPlaneService['describeContracts'];
+  continueResultSet: DataPlaneService['continueResultSet'];
+  explainChanges: DataPlaneService['explainChanges'];
+  getEntityOverview: DataPlaneService['getEntityOverview'];
+  healthCheck: DataPlaneService['healthCheck'];
+  rankEntities: DataPlaneService['rankEntities'];
+  readinessCheck: DataPlaneService['readinessCheck'];
+  resolveEntities: DataPlaneService['resolveEntities'];
+  searchCatalog: DataPlaneService['searchCatalog'];
+  searchDocuments: DataPlaneService['searchDocuments'];
+  semanticSearch: DataPlaneService['semanticSearch'];
+  traceMetricHistory: DataPlaneService['traceMetricHistory'];
+}
 
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
@@ -60,17 +80,19 @@ function routeRequiresAuthorization(
   return !(request.method === 'GET' && url.pathname === '/healthz');
 }
 
-async function main(): Promise<void> {
-  const config = loadQueryApiConfig();
-  const dataPlane = new DataPlaneService(config);
+export function createQueryApiRequestHandler(params: {
+  bearerToken: string | null;
+  dataPlane: QueryApiService;
+}): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
+  const { bearerToken, dataPlane } = params;
 
-  const server = createServer(async (request, response) => {
+  return async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
       if (
-        routeRequiresAuthorization(request, url, config.bearerToken) &&
-        !authorizeRequest(request, config.bearerToken)
+        routeRequiresAuthorization(request, url, bearerToken) &&
+        !authorizeRequest(request, bearerToken)
       ) {
         sendJson(response, 401, { error: 'Unauthorized' });
         return;
@@ -100,6 +122,13 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-entity-overview') {
+        const body = await readJsonBody<GetEntityOverviewRequest>(request);
+        const result = await dataPlane.getEntityOverview(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/v1/contracts/search-catalog') {
         const body = await readJsonBody<SearchCatalogRequest>(request);
         const result = await dataPlane.searchCatalog(body);
@@ -110,6 +139,13 @@ async function main(): Promise<void> {
       if (request.method === 'POST' && url.pathname === '/v1/contracts/rank-entities') {
         const body = await readJsonBody<RankEntitiesRequest>(request);
         const result = await dataPlane.rankEntities(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/compare-entities') {
+        const body = await readJsonBody<CompareEntitiesRequest>(request);
+        const result = await dataPlane.compareEntities(body);
         sendJson(response, 200, result);
         return;
       }
@@ -138,6 +174,13 @@ async function main(): Promise<void> {
       if (request.method === 'POST' && url.pathname === '/v1/contracts/semantic-search') {
         const body = await readJsonBody<SemanticSearchRequest>(request);
         const result = await dataPlane.semanticSearch(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/continue-result-set') {
+        const body = await readJsonBody<ContinueResultSetRequest>(request);
+        const result = await dataPlane.continueResultSet(body);
         sendJson(response, 200, result);
         return;
       }
@@ -174,7 +217,29 @@ async function main(): Promise<void> {
       });
       sendJson(response, 500, { error: 'Internal server error' });
     }
-  });
+  };
+}
+
+export function createQueryApiServer(params?: {
+  bearerToken?: string | null;
+  dataPlane?: QueryApiService;
+}): ReturnType<typeof createServer> {
+  const config = params?.dataPlane && params?.bearerToken !== undefined
+    ? null
+    : loadQueryApiConfig();
+  const dataPlane = params?.dataPlane ?? new DataPlaneService(config!);
+
+  return createServer(
+    createQueryApiRequestHandler({
+      bearerToken: params?.bearerToken ?? config?.bearerToken ?? null,
+      dataPlane,
+    })
+  );
+}
+
+async function main(): Promise<void> {
+  const config = loadQueryApiConfig();
+  const server = createQueryApiServer();
 
   server.listen(config.port, config.host, () => {
     logger.info('Query API listening', {
@@ -185,7 +250,9 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error) => {
-  logger.error('Failed to start query API', { error });
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    logger.error('Failed to start query API', { error });
+    process.exitCode = 1;
+  });
+}

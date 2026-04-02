@@ -1,13 +1,19 @@
-import type { SemanticSearchEngineResult } from '@publisheriq/semantic-search';
+import type {
+  SemanticSearchCandidate,
+  SemanticSearchDebugInfo,
+  SemanticSearchEngineResult,
+  SemanticSearchFilters,
+  SemanticSearchReference,
+  SemanticSearchResultItem,
+} from '@publisheriq/semantic-search';
 
 export type {
   SemanticSearchCandidate,
   SemanticSearchDebugInfo,
   SemanticSearchFilters,
   SemanticSearchReference,
-  SemanticSearchRequest,
   SemanticSearchResultItem,
-} from '@publisheriq/semantic-search';
+};
 
 export type EntityKind = 'game' | 'publisher' | 'developer';
 export type EntityPlatform = 'steam' | 'publisheriq';
@@ -37,6 +43,7 @@ export type DataPlaneRelationKey =
   | 'apps'
   | 'developers'
   | 'publishers'
+  | 'app_dlc'
   | 'app_developers'
   | 'app_publishers'
   | 'latest_daily_metrics'
@@ -95,16 +102,24 @@ export interface ResolveEntitiesResponse {
 }
 
 export interface SearchCatalogRequest {
+  appids?: number[];
+  developerIds?: number[];
   continuationToken?: string | null;
   developerQuery?: string | null;
   genres?: string[];
+  includeAppTypes?: string[];
   isFree?: boolean | null;
+  isReleased?: boolean | null;
   limit?: number;
   minCcu?: number | null;
+  minDiscountPercent?: number | null;
+  minPriceCents?: number | null;
   minOwners?: number | null;
   minReviewScore?: number | null;
   minReviews?: number | null;
+  onSale?: boolean | null;
   platforms?: string[];
+  publisherIds?: number[];
   publisherQuery?: string | null;
   query?: string | null;
   releaseYear?: {
@@ -114,19 +129,28 @@ export interface SearchCatalogRequest {
   sortBy?: 'relevance' | 'reviews' | 'owners' | 'release_date' | 'ccu_peak';
   sortDirection?: 'asc' | 'desc';
   tags?: string[];
+  maxPriceCents?: number | null;
 }
 
 export interface SearchCatalogItem {
   appid: number;
+  appType: string | null;
   ccuPeak: number | null;
   developers: string[];
+  developerIds: number[];
+  discountPercent: number | null;
   entityUid: string;
   isFree: boolean;
+  isReleased: boolean | null;
   name: string;
   ownersMidpoint: number | null;
+  parentAppid: number | null;
   platforms: string[];
+  priceCents: number | null;
   publishers: string[];
+  publisherIds: number[];
   releaseDate: string | null;
+  releaseState: string | null;
   releaseYear: number | null;
   reviewScore: number | null;
   totalReviews: number | null;
@@ -135,14 +159,22 @@ export interface SearchCatalogItem {
 export interface SearchCatalogResponse {
   continuationToken: string | null;
   interpretedFilters: {
+    appids: number[];
+    developerIds: number[];
     developerQuery: string | null;
     genres: string[];
+    includeAppTypes: string[];
     isFree: boolean | null;
+    isReleased: boolean | null;
     minCcu: number | null;
+    minDiscountPercent: number | null;
+    minPriceCents: number | null;
     minOwners: number | null;
     minReviewScore: number | null;
     minReviews: number | null;
+    onSale: boolean | null;
     platforms: string[];
+    publisherIds: number[];
     publisherQuery: string | null;
     query: string | null;
     releaseYear: {
@@ -152,8 +184,62 @@ export interface SearchCatalogResponse {
     sortBy: SearchCatalogRequest['sortBy'];
     sortDirection: SearchCatalogRequest['sortDirection'];
     tags: string[];
+    maxPriceCents: number | null;
   };
   items: SearchCatalogItem[];
+  provenance: QueryProvenance;
+  sufficientToAnswer: boolean;
+}
+
+export interface GetEntityOverviewRequest {
+  entityKind: EntityKind;
+  gamesLimit?: number;
+  gamesSortBy?: 'release_date' | 'reviews';
+  platformEntityId: string;
+}
+
+export interface EntityOverviewGameItem {
+  appid: number;
+  name: string;
+  ownersMidpoint: number | null;
+  releaseDate: string | null;
+  releaseYear: number | null;
+  reviewScore: number | null;
+  totalReviews: number | null;
+}
+
+export interface GetEntityOverviewResponse {
+  entity: {
+    details: {
+      appType: string | null;
+      developerIds: number[];
+      developers: string[];
+      discountPercent: number | null;
+      isFree: boolean | null;
+      isReleased: boolean | null;
+      parentAppid: number | null;
+      platforms: string[];
+      priceCents: number | null;
+      publisherIds: number[];
+      publishers: string[];
+      releaseDate: string | null;
+      releaseState: string | null;
+      releaseYear: number | null;
+    };
+    displayName: string;
+    entityKind: EntityKind;
+    entityUid: string;
+    metrics: {
+      ccuPeak: number | null;
+      gameCount: number | null;
+      ownersMidpoint: number | null;
+      reviewScore: number | null;
+      totalReviews: number | null;
+    };
+    platform: EntityPlatform;
+    platformEntityId: string;
+  };
+  games: EntityOverviewGameItem[];
   provenance: QueryProvenance;
   sufficientToAnswer: boolean;
 }
@@ -350,8 +436,83 @@ export interface SearchDocumentsResponse {
   sufficientToAnswer: boolean;
 }
 
+export interface SemanticSearchRequest {
+  continuationToken?: string | null;
+  description?: string | null;
+  entityKind: EntityKind;
+  filters?: SemanticSearchFilters;
+  limit?: number;
+  mode: 'concept' | 'similarity';
+  referencePlatformEntityId?: string | null;
+  referenceQuery?: string | null;
+}
+
+export type CompareMetric =
+  | 'ccu_peak'
+  | 'game_count'
+  | 'owners_midpoint'
+  | 'review_score'
+  | 'total_reviews';
+
+export interface CompareEntitiesRequest {
+  entityUids: string[];
+  metrics?: CompareMetric[];
+}
+
+export interface ComparedEntity {
+  displayName: string;
+  entityKind: EntityKind;
+  entityUid: string;
+  metrics: {
+    ccuPeak: number | null;
+    gameCount: number | null;
+    ownersMidpoint: number | null;
+    reviewScore: number | null;
+    totalReviews: number | null;
+  };
+  platform: EntityPlatform;
+  platformEntityId: string;
+  releaseYear?: number | null;
+}
+
+export interface CompareEntitiesResponse {
+  entityKind: EntityKind;
+  highlights: Array<{
+    displayName: string;
+    entityUid: string;
+    metric: CompareMetric;
+    value: number | null;
+  }>;
+  items: ComparedEntity[];
+  metrics: CompareMetric[];
+  platform: EntityPlatform;
+  provenance: QueryProvenance;
+  sufficientToAnswer: boolean;
+}
+
 export interface SemanticSearchResponse extends SemanticSearchEngineResult {
   provenance: QueryProvenance;
+}
+
+export interface ContinueResultSetRequest {
+  continuationToken?: string | null;
+  delta?: {
+    maxPriceCents?: number;
+    steamDeck?: Array<'verified' | 'playable'>;
+  };
+  requestedCount?: number;
+  sourceArgs: SearchCatalogRequest | SemanticSearchRequest;
+  sourceContract: 'searchCatalog' | 'semanticSearch';
+}
+
+export interface ContinueResultSetResponse {
+  continuationToken: string | null;
+  effectiveArgs: SearchCatalogRequest | SemanticSearchRequest;
+  exhausted: boolean;
+  provenance: QueryProvenance;
+  result: SearchCatalogResponse | SemanticSearchResponse;
+  sourceContract: ContinueResultSetRequest['sourceContract'];
+  sufficientToAnswer: boolean;
 }
 
 export interface QueryContractDescriptor {
@@ -359,6 +520,7 @@ export interface QueryContractDescriptor {
   endpoint: string;
   name:
     | 'resolveEntities'
+    | 'getEntityOverview'
     | 'searchCatalog'
     | 'rankEntities'
     | 'compareEntities'

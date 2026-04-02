@@ -15,6 +15,26 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
     ],
   },
   {
+    name: 'getEntityOverview',
+    endpoint: '/v1/contracts/get-entity-overview',
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'latest_daily_metrics',
+      'app_publishers',
+      'publishers',
+      'app_developers',
+      'developers',
+    ],
+    description:
+      'Return a current overview for one game, publisher, or developer plus optional related game rows.',
+    naturalLanguageStrength: [
+      'tell me about X',
+      'games by a company',
+      'how many games has this company published'
+    ],
+  },
+  {
     name: 'searchCatalog',
     endpoint: '/v1/contracts/search-catalog',
     status: 'ready',
@@ -53,8 +73,16 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
   {
     name: 'compareEntities',
     endpoint: '/v1/contracts/compare-entities',
-    status: 'planned',
-    requiredRelations: [],
+    status: 'ready',
+    requiredRelations: [
+      'core_entities',
+      'apps',
+      'latest_daily_metrics',
+      'app_publishers',
+      'publishers',
+      'app_developers',
+      'developers',
+    ],
     description:
       'Compare entities across a fixed set of metrics and derived narrative hints.',
     naturalLanguageStrength: ['A vs B questions', 'peer-set comparison'],
@@ -119,8 +147,15 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
   {
     name: 'continueResultSet',
     endpoint: '/v1/contracts/continue-result-set',
-    status: 'planned',
-    requiredRelations: [],
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'latest_daily_metrics',
+      'app_publishers',
+      'publishers',
+      'app_developers',
+      'developers',
+    ],
     description:
       'Resume a prior result set with offsets, exclusions, and conversational refinements.',
     naturalLanguageStrength: ['show me more', 'same set but only co-op'],

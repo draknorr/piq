@@ -11,6 +11,12 @@ import { logger, PublisherIQError } from '@publisheriq/shared';
 import { EMBEDDING_CONFIG } from '@publisheriq/qdrant';
 
 import type {
+  CompareEntitiesRequest,
+  CompareEntitiesResponse,
+  CompareMetric,
+  ComparedEntity,
+  ContinueResultSetRequest,
+  ContinueResultSetResponse,
   DataPlaneReadiness,
   DataPlaneRelationKey,
   EntityKind,
@@ -18,6 +24,8 @@ import type {
   ExplainChangesMoment,
   ExplainChangesRequest,
   ExplainChangesResponse,
+  GetEntityOverviewRequest,
+  GetEntityOverviewResponse,
   MatchQuality,
   QueryProvenance,
   RankEntitiesRequest,
@@ -35,6 +43,7 @@ import type {
   SearchDocumentsRequest,
   SearchDocumentsResponse,
   SemanticSearchRequest,
+  SemanticSearchResultItem,
   SemanticSearchResponse,
   TraceMetric,
   TraceMetricHistoryRequest,
@@ -59,14 +68,57 @@ interface EntityRow extends QueryResultRow {
 }
 
 interface CatalogRow extends QueryResultRow {
+  app_type: string | null;
   appid: number;
   ccu_peak: number | null;
+  developer_ids: number[] | null;
   developers: string[] | null;
+  discount_percent: number | null;
   is_free: boolean;
+  is_released: boolean | null;
   name: string;
   owners_midpoint: number | null;
+  parent_appid: number | null;
   platforms: string | null;
+  price_cents: number | null;
+  publisher_ids: number[] | null;
   publishers: string[] | null;
+  release_date: string | null;
+  release_state: string | null;
+  release_year: number | null;
+  review_score: number | null;
+  total_reviews: number | null;
+}
+
+interface EntityOverviewRow extends QueryResultRow {
+  app_type: string | null;
+  appid: number | null;
+  ccu_peak: number | null;
+  developer_ids: number[] | null;
+  developers: string[] | null;
+  discount_percent: number | null;
+  display_name: string;
+  entity_id: number;
+  game_count: number | null;
+  is_free: boolean | null;
+  is_released: boolean | null;
+  owners_midpoint: number | null;
+  parent_appid: number | null;
+  platforms: string | null;
+  price_cents: number | null;
+  publisher_ids: number[] | null;
+  publishers: string[] | null;
+  release_date: string | null;
+  release_state: string | null;
+  release_year: number | null;
+  review_score: number | null;
+  total_reviews: number | null;
+}
+
+interface EntityOverviewGameRow extends QueryResultRow {
+  appid: number;
+  name: string;
+  owners_midpoint: number | null;
   release_date: string | null;
   release_year: number | null;
   review_score: number | null;
@@ -183,7 +235,16 @@ interface RelationLocation {
 
 const DEFAULT_ENTITY_LIMIT = 8;
 const DEFAULT_CATALOG_LIMIT = 25;
+const DEFAULT_ENTITY_GAMES_LIMIT = 10;
 const DEFAULT_RANK_LIMIT = 10;
+const DEFAULT_CONTINUE_LIMIT = 5;
+const DEFAULT_COMPARE_METRICS: CompareMetric[] = [
+  'review_score',
+  'total_reviews',
+  'owners_midpoint',
+  'ccu_peak',
+  'game_count',
+];
 const DEFAULT_TRACE_DAYS = 30;
 const DEFAULT_EXPLAIN_CHANGES_DAYS = 14;
 const DEFAULT_EXPLAIN_CHANGES_LIMIT = 20;
@@ -191,7 +252,10 @@ const DEFAULT_DOCUMENT_SEARCH_DAYS = 30;
 const DEFAULT_DOCUMENT_LIMIT = 8;
 const MAX_ENTITY_LIMIT = 15;
 const MAX_CATALOG_LIMIT = 50;
+const MAX_ENTITY_GAMES_LIMIT = 25;
 const MAX_RANK_LIMIT = 25;
+const MAX_CONTINUE_LIMIT = 20;
+const MAX_COMPARE_ENTITY_COUNT = 5;
 const MAX_TRACE_DAYS = 180;
 const MAX_TRACE_METRICS = 4;
 const MAX_EXPLAIN_CHANGES_DAYS = 90;
@@ -202,7 +266,15 @@ const EXPLAIN_CHANGE_MOMENT_GAP_MS = 6 * 60 * 60 * 1000;
 const EXPLAIN_NEWS_PROXIMITY_MS = 24 * 60 * 60 * 1000;
 const READINESS_GATE_CONTRACTS = new Set<
   RuntimeQueryContractDescriptor['name']
->(['resolveEntities', 'searchCatalog', 'rankEntities', 'semanticSearch']);
+>([
+  'resolveEntities',
+  'searchCatalog',
+  'getEntityOverview',
+  'rankEntities',
+  'semanticSearch',
+  'compareEntities',
+  'continueResultSet',
+]);
 const ISO_DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -219,6 +291,13 @@ const TRACE_METRIC_SET = new Set<TraceMetric>([
   'average_playtime_forever',
   'average_playtime_2weeks',
 ]);
+const COMPARE_METRIC_SET = new Set<CompareMetric>([
+  'ccu_peak',
+  'game_count',
+  'owners_midpoint',
+  'review_score',
+  'total_reviews',
+]);
 const GAME_TYPE_PREDICATE: Record<DataPlaneConfig['source'], string> = {
   tiger: "a.type = 'game'",
   'supabase-postgres': "a.type = 'game'::public.app_type",
@@ -229,6 +308,7 @@ const RELATION_LOCATIONS: Record<
   Record<DataPlaneRelationKey, RelationLocation>
 > = {
   'supabase-postgres': {
+    app_dlc: { schema: 'public', sql: 'public.app_dlc', table: 'app_dlc' },
     app_developers: { schema: 'public', sql: 'public.app_developers', table: 'app_developers' },
     app_genres: { schema: 'public', sql: 'public.app_genres', table: 'app_genres' },
     app_publishers: { schema: 'public', sql: 'public.app_publishers', table: 'app_publishers' },
@@ -270,6 +350,7 @@ const RELATION_LOCATIONS: Record<
     steam_tags: { schema: 'public', sql: 'public.steam_tags', table: 'steam_tags' },
   },
   tiger: {
+    app_dlc: { schema: 'legacy', sql: 'legacy.app_dlc', table: 'app_dlc' },
     app_developers: { schema: 'legacy', sql: 'legacy.app_developers', table: 'app_developers' },
     app_genres: { schema: 'legacy', sql: 'legacy.app_genres', table: 'app_genres' },
     app_publishers: { schema: 'legacy', sql: 'legacy.app_publishers', table: 'app_publishers' },
@@ -413,6 +494,21 @@ function metricValueForRow(metric: RankMetric, row: RankRow): number | null {
       return row.review_score;
     case 'total_reviews':
       return row.total_reviews;
+  }
+}
+
+function comparedMetricValue(metric: CompareMetric, item: ComparedEntity): number | null {
+  switch (metric) {
+    case 'ccu_peak':
+      return item.metrics.ccuPeak;
+    case 'game_count':
+      return item.metrics.gameCount;
+    case 'owners_midpoint':
+      return item.metrics.ownersMidpoint;
+    case 'review_score':
+      return item.metrics.reviewScore;
+    case 'total_reviews':
+      return item.metrics.totalReviews;
   }
 }
 
@@ -640,6 +736,114 @@ export class DataPlaneService {
     };
   }
 
+  async getEntityOverview(
+    request: GetEntityOverviewRequest
+  ): Promise<GetEntityOverviewResponse> {
+    await this.assertContractRuntime('getEntityOverview');
+
+    const entityKind = request.entityKind;
+    const platformEntityId = request.platformEntityId.trim();
+    const entityId = Number(platformEntityId);
+    if (!Number.isInteger(entityId) || entityId <= 0) {
+      throw new PublisherIQError(
+        'getEntityOverview requires a numeric platformEntityId.',
+        'INVALID_ENTITY_OVERVIEW_ID',
+        {
+          entityKind,
+          platformEntityId: request.platformEntityId,
+        }
+      );
+    }
+
+    const gamesSortBy = request.gamesSortBy === 'reviews' ? 'reviews' : 'release_date';
+    const requestedGamesLimit = request.gamesLimit ?? (entityKind === 'game' ? 0 : DEFAULT_ENTITY_GAMES_LIMIT);
+    const gamesLimit = Math.max(0, Math.min(Math.trunc(requestedGamesLimit), MAX_ENTITY_GAMES_LIMIT));
+    const overviewRow =
+      entityKind === 'game'
+        ? await this.queryGameOverview(entityId)
+        : await this.queryCompanyOverview(entityKind, entityId);
+
+    if (!overviewRow) {
+      throw new PublisherIQError(
+        `No ${entityKind} was found for platformEntityId ${platformEntityId}.`,
+        'ENTITY_OVERVIEW_NOT_FOUND',
+        {
+          entityKind,
+          platformEntityId,
+        }
+      );
+    }
+
+    const games =
+      entityKind !== 'game' && gamesLimit > 0
+        ? await this.queryEntityOverviewGames(entityKind, entityId, gamesLimit, gamesSortBy)
+        : [];
+    const platform = entityKind === 'game' ? 'steam' : 'publisheriq';
+
+    return {
+      entity: {
+        details: {
+          appType: overviewRow.app_type,
+          developerIds: overviewRow.developer_ids ?? [],
+          developers: overviewRow.developers ?? [],
+          discountPercent: overviewRow.discount_percent,
+          isFree: overviewRow.is_free,
+          isReleased: overviewRow.is_released,
+          parentAppid: overviewRow.parent_appid,
+          platforms: overviewRow.platforms
+            ? overviewRow.platforms.split(',').map((value) => value.trim()).filter(Boolean)
+            : [],
+          priceCents: overviewRow.price_cents,
+          publisherIds: overviewRow.publisher_ids ?? [],
+          publishers: overviewRow.publishers ?? [],
+          releaseDate: overviewRow.release_date,
+          releaseState: overviewRow.release_state,
+          releaseYear: overviewRow.release_year,
+        },
+        displayName: overviewRow.display_name,
+        entityKind,
+        entityUid: buildEntityUid(platform, entityKind, platformEntityId),
+        metrics: {
+          ccuPeak: overviewRow.ccu_peak,
+          gameCount: entityKind === 'game' ? null : overviewRow.game_count,
+          ownersMidpoint: overviewRow.owners_midpoint,
+          reviewScore: overviewRow.review_score,
+          totalReviews: overviewRow.total_reviews,
+        },
+        platform,
+        platformEntityId,
+      },
+      games: games.map((row) => ({
+        appid: row.appid,
+        name: row.name,
+        ownersMidpoint: row.owners_midpoint,
+        releaseDate: row.release_date,
+        releaseYear: row.release_year,
+        reviewScore: row.review_score,
+        totalReviews: row.total_reviews,
+      })),
+      provenance: buildProvenance(
+        this.config.source,
+        entityKind === 'game'
+          ? [
+              this.relation('apps').sql,
+              this.relation('latest_daily_metrics').sql,
+              this.relation('app_publishers').sql,
+              this.relation('publishers').sql,
+              this.relation('app_developers').sql,
+              this.relation('developers').sql,
+            ]
+          : [
+              this.relation(entityKind === 'publisher' ? 'publishers' : 'developers').sql,
+              this.relation(entityKind === 'publisher' ? 'app_publishers' : 'app_developers').sql,
+              this.relation('apps').sql,
+              this.relation('latest_daily_metrics').sql,
+            ]
+      ),
+      sufficientToAnswer: true,
+    };
+  }
+
   async searchCatalog(request: SearchCatalogRequest): Promise<SearchCatalogResponse> {
     await this.assertContractRuntime('searchCatalog');
     await this.assertTigerSearchFiltersSupported(request);
@@ -660,8 +864,19 @@ export class DataPlaneService {
     const params: unknown[] = [];
     const conditions: string[] = [
       "a.is_delisted = false",
-      GAME_TYPE_PREDICATE[this.config.source],
     ];
+
+    if (request.includeAppTypes?.length) {
+      params.push(request.includeAppTypes);
+      conditions.push(`a.type::text = ANY($${params.length}::text[])`);
+    } else {
+      conditions.push(GAME_TYPE_PREDICATE[this.config.source]);
+    }
+
+    if (request.appids?.length) {
+      params.push(request.appids);
+      conditions.push(`a.appid = ANY($${params.length}::int[])`);
+    }
 
     if (request.query?.trim()) {
       params.push(normalizeLikeValue(request.query));
@@ -681,6 +896,18 @@ export class DataPlaneService {
       );
     }
 
+    if (request.publisherIds?.length) {
+      params.push(request.publisherIds);
+      conditions.push(
+        `EXISTS (
+          SELECT 1
+          FROM ${appPublishersTable} ap
+          WHERE ap.appid = a.appid
+            AND ap.publisher_id = ANY($${params.length}::int[])
+        )`
+      );
+    }
+
     if (request.developerQuery?.trim()) {
       params.push(normalizeLikeValue(request.developerQuery));
       conditions.push(
@@ -694,9 +921,26 @@ export class DataPlaneService {
       );
     }
 
+    if (request.developerIds?.length) {
+      params.push(request.developerIds);
+      conditions.push(
+        `EXISTS (
+          SELECT 1
+          FROM ${appDevelopersTable} ad
+          WHERE ad.appid = a.appid
+            AND ad.developer_id = ANY($${params.length}::int[])
+        )`
+      );
+    }
+
     if (typeof request.isFree === 'boolean') {
       params.push(request.isFree);
       conditions.push(`a.is_free = $${params.length}`);
+    }
+
+    if (typeof request.isReleased === 'boolean') {
+      params.push(request.isReleased);
+      conditions.push(`a.is_released = $${params.length}`);
     }
 
     if (request.releaseYear?.gte) {
@@ -721,6 +965,29 @@ export class DataPlaneService {
           ? `COALESCE(ldm.positive_percentage, 0) >= $${params.length}`
           : `COALESCE(ldm.review_score, 0) >= $${params.length}`
       );
+    }
+
+    if (typeof request.minPriceCents === 'number') {
+      params.push(request.minPriceCents);
+      conditions.push(`COALESCE(a.current_price_cents, 0) >= $${params.length}`);
+    }
+
+    if (typeof request.maxPriceCents === 'number') {
+      params.push(request.maxPriceCents);
+      conditions.push(`COALESCE(a.current_price_cents, 0) <= $${params.length}`);
+    }
+
+    if (typeof request.onSale === 'boolean') {
+      conditions.push(
+        request.onSale
+          ? `COALESCE(a.current_discount_percent, 0) > 0`
+          : `COALESCE(a.current_discount_percent, 0) = 0`
+      );
+    }
+
+    if (typeof request.minDiscountPercent === 'number') {
+      params.push(request.minDiscountPercent);
+      conditions.push(`COALESCE(a.current_discount_percent, 0) >= $${params.length}`);
     }
 
     if (typeof request.minOwners === 'number') {
@@ -799,8 +1066,14 @@ export class DataPlaneService {
     const sql = `
       SELECT
         a.appid,
+        a.type::text AS app_type,
         a.name,
         a.is_free,
+        a.is_released,
+        a.release_state,
+        a.parent_appid,
+        a.current_price_cents AS price_cents,
+        a.current_discount_percent AS discount_percent,
         a.platforms,
         a.release_date::text,
         EXTRACT(YEAR FROM a.release_date)::int AS release_year,
@@ -809,11 +1082,21 @@ export class DataPlaneService {
         ldm.owners_midpoint,
         ldm.ccu_peak,
         COALESCE((
+          SELECT array_agg(DISTINCT ap.publisher_id ORDER BY ap.publisher_id)
+          FROM ${appPublishersTable} ap
+          WHERE ap.appid = a.appid
+        ), ARRAY[]::int[]) AS publisher_ids,
+        COALESCE((
           SELECT array_agg(DISTINCT p.name ORDER BY p.name)
           FROM ${appPublishersTable} ap
           JOIN ${publishersTable} p ON p.id = ap.publisher_id
           WHERE ap.appid = a.appid
         ), ARRAY[]::text[]) AS publishers,
+        COALESCE((
+          SELECT array_agg(DISTINCT ad.developer_id ORDER BY ad.developer_id)
+          FROM ${appDevelopersTable} ad
+          WHERE ad.appid = a.appid
+        ), ARRAY[]::int[]) AS developer_ids,
         COALESCE((
           SELECT array_agg(DISTINCT d.name ORDER BY d.name)
           FROM ${appDevelopersTable} ad
@@ -834,18 +1117,26 @@ export class DataPlaneService {
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
     const items: SearchCatalogItem[] = pageRows.map((row) => ({
+      appType: row.app_type,
       appid: row.appid,
       ccuPeak: row.ccu_peak,
+      developerIds: row.developer_ids ?? [],
       developers: row.developers ?? [],
+      discountPercent: row.discount_percent,
       entityUid: buildEntityUid('steam', 'game', String(row.appid)),
       isFree: row.is_free,
+      isReleased: row.is_released,
       name: row.name,
       ownersMidpoint: row.owners_midpoint,
+      parentAppid: row.parent_appid,
       platforms: row.platforms
         ? row.platforms.split(',').map((platform) => platform.trim()).filter(Boolean)
         : [],
+      priceCents: row.price_cents,
+      publisherIds: row.publisher_ids ?? [],
       publishers: row.publishers ?? [],
       releaseDate: row.release_date,
+      releaseState: row.release_state,
       releaseYear: row.release_year,
       reviewScore: row.review_score,
       totalReviews: row.total_reviews,
@@ -856,14 +1147,22 @@ export class DataPlaneService {
         ? encodeContinuationToken({ offset: offset + items.length })
         : null,
       interpretedFilters: {
+        appids: request.appids ?? [],
+        developerIds: request.developerIds ?? [],
         developerQuery: request.developerQuery?.trim() ?? null,
         genres: request.genres ?? [],
+        includeAppTypes: request.includeAppTypes ?? [],
         isFree: request.isFree ?? null,
+        isReleased: request.isReleased ?? null,
         minCcu: request.minCcu ?? null,
+        minDiscountPercent: request.minDiscountPercent ?? null,
+        minPriceCents: request.minPriceCents ?? null,
         minOwners: request.minOwners ?? null,
         minReviewScore: request.minReviewScore ?? null,
         minReviews: request.minReviews ?? null,
+        onSale: request.onSale ?? null,
         platforms: request.platforms ?? [],
+        publisherIds: request.publisherIds ?? [],
         publisherQuery: request.publisherQuery?.trim() ?? null,
         query: request.query?.trim() ?? null,
         releaseYear: request.releaseYear
@@ -875,6 +1174,7 @@ export class DataPlaneService {
         sortBy,
         sortDirection,
         tags: request.tags ?? [],
+        maxPriceCents: request.maxPriceCents ?? null,
       },
       items,
       provenance: buildProvenance(this.config.source, [
@@ -936,6 +1236,102 @@ export class DataPlaneService {
             ]
       ),
       sufficientToAnswer: rows.length > 0,
+    };
+  }
+
+  async compareEntities(
+    request: CompareEntitiesRequest
+  ): Promise<CompareEntitiesResponse> {
+    await this.assertContractRuntime('compareEntities');
+
+    const requestedEntityUids = [...new Set(
+      request.entityUids
+        .map((entityUid) => entityUid.trim())
+        .filter((entityUid) => entityUid.length > 0)
+    )];
+
+    if (requestedEntityUids.length < 2 || requestedEntityUids.length > MAX_COMPARE_ENTITY_COUNT) {
+      throw new PublisherIQError(
+        `compareEntities requires between 2 and ${MAX_COMPARE_ENTITY_COUNT} unique entityUids.`,
+        'INVALID_COMPARE_ENTITY_COUNT',
+        { entityUids: requestedEntityUids }
+      );
+    }
+
+    const entities = await Promise.all(
+      requestedEntityUids.map((entityUid) =>
+        this.resolveCoreEntity(entityUid, {
+          invalidCode: 'INVALID_COMPARE_ENTITY_UID',
+          notFoundCode: 'COMPARE_ENTITY_NOT_FOUND',
+        })
+      )
+    );
+
+    const firstEntity = entities[0]!;
+    if (
+      entities.some(
+        (entity) =>
+          entity.entity_kind !== firstEntity.entity_kind || entity.platform !== firstEntity.platform
+      )
+    ) {
+      throw new PublisherIQError(
+        'compareEntities currently requires all entities to share the same kind and platform.',
+        'INVALID_COMPARE_ENTITY_MIX',
+        {
+          entityKinds: [...new Set(entities.map((entity) => entity.entity_kind))],
+          platforms: [...new Set(entities.map((entity) => entity.platform))],
+        }
+      );
+    }
+
+    const entityKind = firstEntity.entity_kind;
+    const metrics = this.normalizeCompareMetrics(request.metrics, entityKind);
+    const entityIds = entities.map((entity) => Number(entity.platform_entity_id));
+
+    if (entityIds.some((entityId) => !Number.isInteger(entityId) || entityId <= 0)) {
+      throw new PublisherIQError(
+        'One or more compare entities did not resolve to a valid platform entity id.',
+        'INVALID_COMPARE_ENTITY_ID',
+        {
+          entityUids: requestedEntityUids,
+          platformEntityIds: entities.map((entity) => entity.platform_entity_id),
+        }
+      );
+    }
+
+    const rowsById =
+      entityKind === 'game'
+        ? await this.queryComparedGames(entityIds as number[])
+        : await this.queryComparedCompanies(entityKind, entityIds as number[]);
+
+    const items = entities.map((entity) => {
+      const entityId = Number(entity.platform_entity_id);
+      const row = rowsById.get(entityId);
+
+      return this.mapComparedEntity(entity, row ?? null);
+    });
+
+    const highlights = this.buildCompareHighlights(metrics, items);
+
+    return {
+      entityKind,
+      highlights,
+      items,
+      metrics,
+      platform: firstEntity.platform,
+      provenance: buildProvenance(
+        this.config.source,
+        entityKind === 'game'
+          ? [this.relation('core_entities').sql, this.relation('apps').sql, this.relation('latest_daily_metrics').sql]
+          : [
+              this.relation('core_entities').sql,
+              this.relation(entityKind === 'publisher' ? 'publishers' : 'developers').sql,
+              this.relation(entityKind === 'publisher' ? 'app_publishers' : 'app_developers').sql,
+              this.relation('apps').sql,
+              this.relation('latest_daily_metrics').sql,
+            ]
+      ),
+      sufficientToAnswer: items.length >= 2,
     };
   }
 
@@ -1278,6 +1674,73 @@ export class DataPlaneService {
       ),
     };
   }
+
+  async continueResultSet(
+    request: ContinueResultSetRequest
+  ): Promise<ContinueResultSetResponse> {
+    await this.assertContractRuntime('continueResultSet');
+
+    const requestedCount = normalizeLimit(
+      request.requestedCount,
+      DEFAULT_CONTINUE_LIMIT,
+      MAX_CONTINUE_LIMIT
+    );
+
+    if (request.sourceContract === 'searchCatalog') {
+      await this.assertContractRuntime('searchCatalog');
+
+      const sourceArgs = request.sourceArgs as SearchCatalogRequest;
+      const effectiveArgs: SearchCatalogRequest = {
+        ...sourceArgs,
+        continuationToken: request.continuationToken ?? sourceArgs.continuationToken ?? null,
+        limit: requestedCount,
+      };
+
+      const result = await this.searchCatalog(effectiveArgs);
+
+      return {
+        continuationToken: result.continuationToken,
+        effectiveArgs,
+        exhausted: result.continuationToken == null,
+        provenance: result.provenance,
+        result,
+        sourceContract: request.sourceContract,
+        sufficientToAnswer: result.sufficientToAnswer,
+      };
+    }
+
+    await this.assertContractRuntime('semanticSearch');
+
+    const sourceArgs = request.sourceArgs as SemanticSearchRequest;
+    if (sourceArgs.entityKind !== 'game') {
+      throw new PublisherIQError(
+        'continueResultSet currently supports only game semantic search result sets.',
+        'INVALID_CONTINUATION_ENTITY_KIND',
+        {
+          entityKind: sourceArgs.entityKind,
+          sourceContract: request.sourceContract,
+        }
+      );
+    }
+
+    const effectiveArgs = this.applyContinuationDeltaToSemanticSearchArgs(
+      sourceArgs,
+      request.continuationToken ?? sourceArgs.continuationToken ?? null,
+      requestedCount,
+      request.delta
+    );
+    const result = await this.semanticSearch(effectiveArgs);
+
+      return {
+        continuationToken: result.continuation_token ?? null,
+        effectiveArgs,
+        exhausted: (result.continuation_token ?? null) == null,
+        provenance: result.provenance,
+        result,
+        sourceContract: request.sourceContract,
+        sufficientToAnswer: result.sufficient_to_answer === true,
+      };
+    }
 
   private buildSemanticSearchDependencies(): SemanticSearchDependencies {
     return {
@@ -1839,6 +2302,175 @@ export class DataPlaneService {
     return result.rows;
   }
 
+  private async queryGameOverview(appid: number): Promise<EntityOverviewRow | null> {
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appPublishersTable = this.relation('app_publishers').sql;
+    const publishersTable = this.relation('publishers').sql;
+    const appDevelopersTable = this.relation('app_developers').sql;
+    const developersTable = this.relation('developers').sql;
+    const result = await runQuery<EntityOverviewRow>(
+      `
+        SELECT
+          a.appid AS entity_id,
+          a.appid,
+          a.name AS display_name,
+          a.type::text AS app_type,
+          a.is_free,
+          a.is_released,
+          a.release_state,
+          a.parent_appid,
+          a.current_price_cents AS price_cents,
+          a.current_discount_percent AS discount_percent,
+          a.platforms,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ldm.total_reviews,
+          ldm.review_score,
+          ldm.owners_midpoint,
+          ldm.ccu_peak,
+          NULL::int AS game_count,
+          COALESCE((
+            SELECT array_agg(DISTINCT ap.publisher_id ORDER BY ap.publisher_id)
+            FROM ${appPublishersTable} ap
+            WHERE ap.appid = a.appid
+          ), ARRAY[]::int[]) AS publisher_ids,
+          COALESCE((
+            SELECT array_agg(DISTINCT p.name ORDER BY p.name)
+            FROM ${appPublishersTable} ap
+            JOIN ${publishersTable} p ON p.id = ap.publisher_id
+            WHERE ap.appid = a.appid
+          ), ARRAY[]::text[]) AS publishers,
+          COALESCE((
+            SELECT array_agg(DISTINCT ad.developer_id ORDER BY ad.developer_id)
+            FROM ${appDevelopersTable} ad
+            WHERE ad.appid = a.appid
+          ), ARRAY[]::int[]) AS developer_ids,
+          COALESCE((
+            SELECT array_agg(DISTINCT d.name ORDER BY d.name)
+            FROM ${appDevelopersTable} ad
+            JOIN ${developersTable} d ON d.id = ad.developer_id
+            WHERE ad.appid = a.appid
+          ), ARRAY[]::text[]) AS developers
+        FROM ${appsTable} a
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE a.appid = $1
+        LIMIT 1
+      `,
+      [appid],
+      this.config
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async queryCompanyOverview(
+    entityKind: Extract<EntityKind, 'publisher' | 'developer'>,
+    entityId: number
+  ): Promise<EntityOverviewRow | null> {
+    const companyTable = this.relation(entityKind === 'publisher' ? 'publishers' : 'developers').sql;
+    const relationTable = this.relation(
+      entityKind === 'publisher' ? 'app_publishers' : 'app_developers'
+    ).sql;
+    const relationColumn = entityKind === 'publisher' ? 'publisher_id' : 'developer_id';
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const result = await runQuery<EntityOverviewRow>(
+      `
+        SELECT
+          c.id AS entity_id,
+          NULL::int AS appid,
+          c.name AS display_name,
+          NULL::text AS app_type,
+          NULL::boolean AS is_free,
+          NULL::boolean AS is_released,
+          NULL::text AS release_state,
+          NULL::int AS parent_appid,
+          NULL::int AS price_cents,
+          NULL::int AS discount_percent,
+          NULL::text AS platforms,
+          NULL::text AS release_date,
+          NULL::int AS release_year,
+          SUM(COALESCE(ldm.total_reviews, 0))::double precision AS total_reviews,
+          CASE
+            WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
+              THEN ROUND(
+                (
+                  SUM(COALESCE(ldm.review_score, 0) * COALESCE(ldm.total_reviews, 0))::numeric
+                  / NULLIF(SUM(COALESCE(ldm.total_reviews, 0)), 0)
+                ),
+                2
+              )::double precision
+            ELSE NULL
+          END AS review_score,
+          SUM(COALESCE(ldm.owners_midpoint, 0))::double precision AS owners_midpoint,
+          MAX(COALESCE(ldm.ccu_peak, 0))::double precision AS ccu_peak,
+          COUNT(DISTINCT a.appid)::int AS game_count,
+          ARRAY[]::int[] AS publisher_ids,
+          ARRAY[]::text[] AS publishers,
+          ARRAY[]::int[] AS developer_ids,
+          ARRAY[]::text[] AS developers
+        FROM ${companyTable} c
+        LEFT JOIN ${relationTable} rel ON rel.${relationColumn} = c.id
+        LEFT JOIN ${appsTable} a
+          ON a.appid = rel.appid
+          AND a.is_delisted = false
+          AND ${GAME_TYPE_PREDICATE[this.config.source]}
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE c.id = $1
+        GROUP BY c.id, c.name
+        LIMIT 1
+      `,
+      [entityId],
+      this.config
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async queryEntityOverviewGames(
+    entityKind: Extract<EntityKind, 'publisher' | 'developer'>,
+    entityId: number,
+    limit: number,
+    sortBy: 'release_date' | 'reviews'
+  ): Promise<EntityOverviewGameRow[]> {
+    const relationTable = this.relation(
+      entityKind === 'publisher' ? 'app_publishers' : 'app_developers'
+    ).sql;
+    const relationColumn = entityKind === 'publisher' ? 'publisher_id' : 'developer_id';
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const orderClause =
+      sortBy === 'reviews'
+        ? 'COALESCE(ldm.total_reviews, 0) DESC, COALESCE(ldm.review_score, 0) DESC, COALESCE(ldm.owners_midpoint, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC'
+        : 'a.release_date DESC NULLS LAST, COALESCE(ldm.total_reviews, 0) DESC, a.name ASC';
+    const result = await runQuery<EntityOverviewGameRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ldm.total_reviews,
+          ldm.review_score,
+          ldm.owners_midpoint
+        FROM ${relationTable} rel
+        JOIN ${appsTable} a
+          ON a.appid = rel.appid
+          AND a.is_delisted = false
+          AND ${GAME_TYPE_PREDICATE[this.config.source]}
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE rel.${relationColumn} = $1
+        ORDER BY ${orderClause}
+        LIMIT $2
+      `,
+      [entityId, limit],
+      this.config
+    );
+
+    return result.rows;
+  }
+
   private async queryRankedGames(
     metric: Exclude<RankMetric, 'game_count'>,
     query: string,
@@ -1942,6 +2574,151 @@ export class DataPlaneService {
 
     const result = await runQuery<RankRow>(sql, params, this.config);
     return result.rows;
+  }
+
+  private normalizeCompareMetrics(
+    metrics: CompareMetric[] | undefined,
+    entityKind: EntityKind
+  ): CompareMetric[] {
+    const fallback =
+      entityKind === 'game'
+        ? DEFAULT_COMPARE_METRICS.filter((metric) => metric !== 'game_count')
+        : DEFAULT_COMPARE_METRICS;
+
+    if (!Array.isArray(metrics) || metrics.length === 0) {
+      return fallback;
+    }
+
+    const uniqueMetrics: CompareMetric[] = [];
+    for (const metric of metrics) {
+      if (!COMPARE_METRIC_SET.has(metric)) {
+        throw new PublisherIQError(
+          `Unsupported compare metric: ${String(metric)}.`,
+          'INVALID_COMPARE_METRIC',
+          { metric }
+        );
+      }
+
+      if (entityKind === 'game' && metric === 'game_count') {
+        throw new PublisherIQError(
+          'game_count comparisons are only valid for publisher or developer entities.',
+          'INVALID_COMPARE_METRIC',
+          { entityKind, metric }
+        );
+      }
+
+      if (!uniqueMetrics.includes(metric)) {
+        uniqueMetrics.push(metric);
+      }
+    }
+
+    return uniqueMetrics;
+  }
+
+  private async queryComparedGames(entityIds: number[]): Promise<Map<number, RankRow>> {
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const result = await runQuery<RankRow>(
+      `
+        SELECT
+          a.appid AS entity_id,
+          a.name AS display_name,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ldm.total_reviews,
+          ldm.review_score,
+          ldm.owners_midpoint,
+          ldm.ccu_peak,
+          NULL::int AS game_count
+        FROM ${appsTable} a
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE a.appid = ANY($1::int[])
+      `,
+      [entityIds],
+      this.config
+    );
+
+    return new Map(result.rows.map((row) => [row.entity_id, row]));
+  }
+
+  private async queryComparedCompanies(
+    entityKind: Extract<EntityKind, 'publisher' | 'developer'>,
+    entityIds: number[]
+  ): Promise<Map<number, RankRow>> {
+    const companyTable = this.relation(entityKind === 'publisher' ? 'publishers' : 'developers').sql;
+    const relationTable = this.relation(
+      entityKind === 'publisher' ? 'app_publishers' : 'app_developers'
+    ).sql;
+    const relationColumn = entityKind === 'publisher' ? 'publisher_id' : 'developer_id';
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+
+    const result = await runQuery<RankRow>(
+      `
+        SELECT
+          c.id AS entity_id,
+          c.name AS display_name,
+          NULL::int AS release_year,
+          COUNT(DISTINCT a.appid)::int AS game_count,
+          SUM(COALESCE(ldm.total_reviews, 0))::double precision AS total_reviews,
+          SUM(COALESCE(ldm.owners_midpoint, 0))::double precision AS owners_midpoint,
+          MAX(COALESCE(ldm.ccu_peak, 0))::double precision AS ccu_peak,
+          CASE
+            WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
+              THEN ROUND(
+                (
+                  SUM(COALESCE(ldm.review_score, 0) * COALESCE(ldm.total_reviews, 0))::numeric
+                  / NULLIF(SUM(COALESCE(ldm.total_reviews, 0)), 0)
+                ),
+                2
+              )::double precision
+            ELSE NULL
+          END AS review_score
+        FROM ${companyTable} c
+        LEFT JOIN ${relationTable} rel ON rel.${relationColumn} = c.id
+        LEFT JOIN ${appsTable} a
+          ON a.appid = rel.appid
+          AND a.is_delisted = false
+          AND ${GAME_TYPE_PREDICATE[this.config.source]}
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        WHERE c.id = ANY($1::int[])
+        GROUP BY c.id, c.name
+      `,
+      [entityIds],
+      this.config
+    );
+
+    return new Map(result.rows.map((row) => [row.entity_id, row]));
+  }
+
+  private applyContinuationDeltaToSemanticSearchArgs(
+    sourceArgs: SemanticSearchRequest,
+    continuationToken: string | null,
+    requestedCount: number,
+    delta: ContinueResultSetRequest['delta']
+  ): SemanticSearchRequest {
+    const nextFilters = { ...(sourceArgs.filters ?? {}) };
+
+    if (typeof delta?.maxPriceCents === 'number' && Number.isFinite(delta.maxPriceCents)) {
+      const currentMaxPrice =
+        typeof nextFilters.max_price_cents === 'number' && Number.isFinite(nextFilters.max_price_cents)
+          ? nextFilters.max_price_cents
+          : null;
+      nextFilters.max_price_cents =
+        currentMaxPrice == null
+          ? Math.max(0, Math.trunc(delta.maxPriceCents))
+          : Math.min(currentMaxPrice, Math.max(0, Math.trunc(delta.maxPriceCents)));
+    }
+
+    if (Array.isArray(delta?.steamDeck) && delta.steamDeck.length > 0) {
+      nextFilters.steam_deck = [...new Set(delta.steamDeck)];
+    }
+
+    return {
+      ...sourceArgs,
+      continuationToken,
+      filters: nextFilters,
+      limit: requestedCount,
+    };
   }
 
   private buildTraceSeries(
@@ -2415,6 +3192,60 @@ export class DataPlaneService {
       rank,
       releaseYear: row.release_year ?? null,
     };
+  }
+
+  private mapComparedEntity(
+    entity: CoreEntityRow,
+    row: RankRow | null
+  ): ComparedEntity {
+    return {
+      displayName: entity.canonical_name,
+      entityKind: entity.entity_kind,
+      entityUid: entity.entity_uid,
+      metrics: {
+        ccuPeak: row?.ccu_peak ?? null,
+        gameCount: row?.game_count ?? null,
+        ownersMidpoint: row?.owners_midpoint ?? null,
+        reviewScore: row?.review_score ?? null,
+        totalReviews: row?.total_reviews ?? null,
+      },
+      platform: entity.platform,
+      platformEntityId: entity.platform_entity_id,
+      releaseYear: row?.release_year ?? null,
+    };
+  }
+
+  private buildCompareHighlights(
+    metrics: CompareMetric[],
+    items: ComparedEntity[]
+  ): CompareEntitiesResponse['highlights'] {
+    return metrics.flatMap((metric) => {
+      const leader = items.reduce<ComparedEntity | null>((currentLeader, item) => {
+        const value = comparedMetricValue(metric, item);
+        if (value == null) {
+          return currentLeader;
+        }
+
+        if (!currentLeader) {
+          return item;
+        }
+
+        const currentValue = comparedMetricValue(metric, currentLeader);
+        return currentValue == null || value > currentValue ? item : currentLeader;
+      }, null);
+
+      const value = leader ? comparedMetricValue(metric, leader) : null;
+      if (!leader || value == null) {
+        return [];
+      }
+
+      return [{
+        displayName: leader.displayName,
+        entityUid: leader.entityUid,
+        metric,
+        value,
+      }];
+    });
   }
 
   private mapResolvedEntity(

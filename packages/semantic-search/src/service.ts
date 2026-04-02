@@ -43,6 +43,7 @@ export interface SemanticSearchFilters {
 }
 
 export interface SemanticSearchRequest {
+  continuationToken?: string | null;
   description?: string | null;
   entityKind: SemanticSearchEntityKind;
   filters?: SemanticSearchFilters;
@@ -164,6 +165,7 @@ interface CompanyVariantResult {
 const MAX_RESULTS = 50;
 const DEFAULT_RESULTS = 10;
 const DEFAULT_COMPANY_RESULTS = 6;
+const MAX_SEARCH_WINDOW = 120;
 const GAME_SEARCH_PAYLOAD_FIELDS = [
   'name',
   'type',
@@ -253,6 +255,33 @@ const CONCEPT_STOP_WORDS = new Set([
   'like',
   'similar',
 ]);
+
+interface SemanticContinuationTokenPayload {
+  offset: number;
+}
+
+function encodeContinuationToken(payload: SemanticContinuationTokenPayload): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeContinuationToken(token: string | null | undefined): SemanticContinuationTokenPayload {
+  if (!token) {
+    return { offset: 0 };
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as {
+      offset?: unknown;
+    };
+    const offset = Number(parsed.offset);
+
+    return Number.isFinite(offset) && offset >= 0
+      ? { offset: Math.floor(offset) }
+      : { offset: 0 };
+  } catch {
+    return { offset: 0 };
+  }
+}
 
 function asOptionalNullableNumber(value: unknown): number | null | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : value === null ? null : undefined;
@@ -893,6 +922,7 @@ async function runGameSimilarity(
   reference: ResolvedReferenceEntity
 ): Promise<SemanticSearchEngineResult> {
   const requestedLimit = Math.min(Math.max(request.limit ?? DEFAULT_RESULTS, 1), MAX_RESULTS);
+  const { offset } = decodeContinuationToken(request.continuationToken);
   const sourcePoint = await getEntityVectorAndPayload('game', reference.id);
 
   if (!sourcePoint) {
@@ -951,7 +981,7 @@ async function runGameSimilarity(
   const qdrantFilter = buildGameFilter(gameFilters, sourceMetrics);
   const client = getQdrantClient();
   const collection = getCollectionName('game');
-  const searchLimit = Math.min(Math.max(requestedLimit * 5, 30), MAX_RESULTS);
+  const searchLimit = Math.min(Math.max((offset + requestedLimit) * 5, 30), MAX_SEARCH_WINDOW);
 
   const searchResult = await client.search(collection, {
     vector: sourcePoint.vector,
@@ -974,14 +1004,21 @@ async function runGameSimilarity(
       })),
     request.filters
   );
+  const pageResults = boostedResults.slice(offset, offset + requestedLimit);
+  const nextOffset = offset + pageResults.length;
+  const continuationToken =
+    nextOffset < boostedResults.length
+      ? encodeContinuationToken({ offset: nextOffset })
+      : null;
 
   return {
-    continuation_token: null,
+    continuation_token: continuationToken,
     debug: {
       searchParams: {
         collection,
         entityKind: request.entityKind,
         limit: requestedLimit,
+        offset,
         reference_id: reference.id,
       },
       vectorFilter: qdrantFilter as Record<string, unknown> | undefined,
@@ -992,7 +1029,7 @@ async function runGameSimilarity(
       name: reference.name,
       type: reference.type,
     },
-    results: boostedResults.slice(0, requestedLimit).map((result) => ({
+    results: pageResults.map((result) => ({
       genres: asOptionalStringArray(result.payload.genres),
       id: result.id,
       is_free: Boolean(result.payload.is_free),
@@ -1172,6 +1209,7 @@ async function runConceptSearch(
   }
 
   const requestedLimit = Math.min(Math.max(request.limit ?? DEFAULT_RESULTS, 1), MAX_RESULTS);
+  const { offset } = decodeContinuationToken(request.continuationToken);
   const queryVector = await deps.embedText(buildSearchDescription(description));
   const gameFilters = mapGameFilters(request.filters);
 
@@ -1182,7 +1220,7 @@ async function runConceptSearch(
   const qdrantFilter = buildGameFilter(gameFilters);
   const client = getQdrantClient();
   const collection = getCollectionName('game');
-  const searchLimit = Math.min(Math.max(requestedLimit * 5, 30), MAX_RESULTS);
+  const searchLimit = Math.min(Math.max((offset + requestedLimit) * 5, 30), MAX_SEARCH_WINDOW);
   const searchResult = await client.search(collection, {
     vector: queryVector,
     filter: qdrantFilter,
@@ -1205,21 +1243,28 @@ async function runConceptSearch(
     })
     .filter((item) => !item.evidence.hardReject && (item.score >= 0.42 || item.evidence.matchedTerms.length > 0))
     .sort((left, right) => right.score - left.score);
+  const pageResults = rerankedResults.slice(offset, offset + requestedLimit);
+  const nextOffset = offset + pageResults.length;
+  const continuationToken =
+    nextOffset < rerankedResults.length
+      ? encodeContinuationToken({ offset: nextOffset })
+      : null;
 
   return {
-    continuation_token: null,
+    continuation_token: continuationToken,
     debug: {
       searchParams: {
         collection,
         description,
         entityKind: request.entityKind,
         limit: requestedLimit,
+        offset,
       },
       vectorFilter: qdrantFilter as Record<string, unknown> | undefined,
     },
     mode: 'semantic',
     query_description: description,
-    results: rerankedResults.slice(0, requestedLimit).map((result) => ({
+    results: pageResults.map((result) => ({
       genres: asOptionalStringArray(result.payload.genres),
       id: Number(result.payload.appid ?? result.payload.id ?? 0),
       is_free: typeof result.payload.is_free === 'boolean' ? result.payload.is_free : undefined,
