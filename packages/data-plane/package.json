@@ -16,6 +16,7 @@
     "dev": "tsup src/index.ts --format esm --dts --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint src/",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "capture-live-baseline": "tsx src/scripts/capture-live-baseline.ts",
     "capture-target-baseline": "tsx src/scripts/capture-target-baseline.ts",
     "backfill-legacy-compatibility": "tsx src/scripts/backfill-legacy-compatibility.ts",

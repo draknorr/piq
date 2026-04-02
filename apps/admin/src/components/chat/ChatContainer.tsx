@@ -109,7 +109,11 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Messages area */}
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div
+        ref={messagesContainerRef}
+        data-testid="chat-messages"
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+      >
         {messages.length === 0 && !isStreaming && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 rounded-full bg-accent-blue/10 flex items-center justify-center mb-4">
@@ -148,7 +152,10 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
 
         {/* Pending tool calls indicator */}
         {isStreaming && pendingToolCalls.length > 0 && (
-          <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-elevated border border-border-subtle">
+          <div
+            data-testid="chat-pending-tools"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-elevated border border-border-subtle"
+          >
             <div className="w-4 h-4 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
             <Database className="w-4 h-4 text-text-muted" />
             <span className="text-body-sm text-text-secondary">
@@ -158,7 +165,10 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
         )}
 
         {error && (
-          <div className="p-4 rounded-lg bg-accent-red/10 border border-accent-red/20">
+          <div
+            data-testid="chat-error-banner"
+            className="p-4 rounded-lg bg-accent-red/10 border border-accent-red/20"
+          >
             <p className="text-body-sm text-accent-red">{error}</p>
           </div>
         )}
@@ -175,6 +185,7 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
           {isStreaming && (
             <button
               onClick={stopStreaming}
+              data-testid="chat-stop"
               className="h-10 px-4 rounded-lg bg-accent-red/10 hover:bg-accent-red/20 border border-accent-red/20 text-accent-red transition-colors flex items-center gap-2 shrink-0"
               title="Stop generating"
             >

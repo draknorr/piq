@@ -16,10 +16,12 @@ This service is the first step of the Tiger migration runtime split.
 - `POST /v1/contracts/resolve-entities`
 - `POST /v1/contracts/search-catalog`
 - `POST /v1/contracts/rank-entities`
+- `POST /v1/contracts/compare-entities`
 - `POST /v1/contracts/trace-metric-history`
 - `POST /v1/contracts/explain-changes`
 - `POST /v1/contracts/search-documents`
 - `POST /v1/contracts/semantic-search`
+- `POST /v1/contracts/continue-result-set`
 
 `search-documents` is now promoted to `ready` once the Tiger events/news
 validate gate is green. It remains metadata-first and is intended for
@@ -60,8 +62,10 @@ For the first Tiger-primary rollout:
 The chat runtime currently promotes only these prompt families to Tiger-owned visible answers:
 
 - catalog search
+- entity compare
 - entity ranking
 - metric history
+- semantic search
 
 News and change-intel can stay shadow-only while the live ingesting docs/events slice continues to drift.
 

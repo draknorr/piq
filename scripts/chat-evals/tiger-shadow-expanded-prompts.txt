@@ -6,8 +6,13 @@ ranking_publishers|What publisher has the most games on Steam?
 ranking_games_reviews|What are the top games by reviews?
 history_reviews|How have Hades II reviews changed over the last 30 days?
 history_ccu_owners|Show Counter-Strike 2 CCU and owners over the last 30 days
+news_announcements|Any recent announcements about Primeval?
+news_patch_notes|Find patch notes for Primeval
+change_recent|What changed for Primeval this week?
+semantic_similarity|Games like Hades with better reviews
+semantic_concept|Find cozy farming games under $20
+compare_games|Compare Hades and Dead Cells
+compare_companies|Compare Devolver Digital and Annapurna Interactive
 
 # Negative controls that should remain legacy-only or unmatched
 negative_trend|What games are breaking out this week?
-negative_similarity|Games like Hades with better reviews
-negative_compare|Compare Valve and Devolver

@@ -5,6 +5,7 @@ node_modules
 # Build outputs
 dist
 .next
+apps/admin/.next-playwright
 out
 build
 *.tsbuildinfo
@@ -39,6 +40,8 @@ __pycache__/
 # Testing
 coverage
 .nyc_output
+playwright-report
+test-results
 
 # Supabase
 supabase/.branches

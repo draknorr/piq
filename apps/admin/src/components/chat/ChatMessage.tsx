@@ -132,7 +132,11 @@ export function ChatMessage({
   const tigerDebugBadge = getTigerDebugBadge(message);
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+    <div
+      data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
+      data-message-id={message.id}
+      className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}
+    >
       {/* Avatar */}
       <div
         className={`
@@ -163,11 +167,14 @@ export function ChatMessage({
 
           {/* Message text */}
           {isUser ? (
-            <div className="text-body text-text-primary whitespace-pre-wrap">
+            <div
+              data-testid="chat-message-user-content"
+              className="text-body text-text-primary whitespace-pre-wrap"
+            >
               {message.content}
             </div>
           ) : (
-            <div className="pr-8">
+            <div data-testid="chat-message-assistant-content" className="pr-8">
               <EntityLinkProvider toolCalls={message.toolCalls}>
                 <StreamingContent content={message.content} isStreaming={isStreaming} />
               </EntityLinkProvider>

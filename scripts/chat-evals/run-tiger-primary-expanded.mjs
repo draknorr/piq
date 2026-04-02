@@ -191,8 +191,24 @@ function mapExpectedIntent(label) {
     return 'entity_ranking';
   }
 
+  if (label.startsWith('compare_')) {
+    return 'entity_compare';
+  }
+
   if (label.startsWith('history_')) {
     return 'metric_history';
+  }
+
+  if (label.startsWith('news_')) {
+    return 'news_search';
+  }
+
+  if (label.startsWith('change_')) {
+    return 'change_explanation';
+  }
+
+  if (label.startsWith('semantic_')) {
+    return 'semantic_search';
   }
 
   throw new Error(`Unsupported Tiger primary expanded prompt label: ${label}`);

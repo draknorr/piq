@@ -297,6 +297,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
         <textarea
           ref={textareaRef}
+          data-testid="chat-input"
           value={input}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
@@ -322,7 +323,12 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
         />
       </div>
 
-      <Button onClick={handleSubmit} disabled={disabled || !input.trim()} size="lg">
+      <Button
+        data-testid="chat-send"
+        onClick={handleSubmit}
+        disabled={disabled || !input.trim()}
+        size="lg"
+      >
         <Send className="w-4 h-4" />
         <span className="sr-only">Send message</span>
       </Button>

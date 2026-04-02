@@ -4,6 +4,19 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import {
+  authenticateEval,
+  evaluateChatRequest as evaluateEndpointChatRequest,
+  evaluateScenario as evaluateChatScenario,
+  loadEvalEnvFiles,
+  parseSse as parseEvalSse,
+  readEvalBypassEmail as readEvalBypassEmailHelper,
+  serializeCookies as serializeEvalCookies,
+  shouldUseLocalEvalBypass as shouldUseLocalEvalBypassHelper,
+  summarizeScenarioSessionContext as summarizeScenarioContext,
+  validateEvalEnv,
+} from './lib/endpoint-eval.mjs';
+
 const ROOT = process.cwd();
 const PROD_ORIGIN = process.env.CHAT_EVAL_ORIGIN || 'https://www.publisheriq.app';
 const MODE = process.env.CHAT_EVAL_MODE || 'full';
@@ -621,142 +634,23 @@ async function loadResultsFromFile(filePath) {
 }
 
 async function loadEnvFiles(files) {
-  const env = { ...process.env };
-  for (const file of files) {
-    let text = '';
-    try {
-      text = await fs.readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const line of text.split(/\r?\n/)) {
-      if (!line || line.trim().startsWith('#') || !line.includes('=')) continue;
-      const idx = line.indexOf('=');
-      const key = line.slice(0, idx).trim();
-      let value = line.slice(idx + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (!(key in env)) {
-        env[key] = value;
-      }
-    }
-  }
-  return env;
+  return loadEvalEnvFiles(files);
 }
 
 function validateEnv(env) {
-  const requiredKeys = shouldUseLocalEvalBypass(PROD_ORIGIN, env)
-    ? ['CHAT_EVAL_SECRET']
-    : ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL'];
-
-  for (const key of requiredKeys) {
-    if (!env[key]) {
-      throw new Error(`Missing required env var: ${key}`);
-    }
-  }
-
-  if (!readEvalBypassEmail(env)) {
-    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
-  }
+  return validateEvalEnv({ env, origin: PROD_ORIGIN });
 }
 
 async function authenticate(env) {
-  const bypassEmail = readEvalBypassEmail(env);
-  if (!bypassEmail) {
-    throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
-  }
-
-  if (shouldUseLocalEvalBypass(PROD_ORIGIN, env)) {
-    return {
-      cookieJar: new Map(),
-      email: bypassEmail,
-      authMode: 'eval_bypass',
-      evalSecret: env.CHAT_EVAL_SECRET,
-    };
-  }
-
-  const generateResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/generate_link`, {
-    method: 'POST',
-    headers: {
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      type: 'magiclink',
-      email: bypassEmail,
-    }),
-  });
-
-  if (!generateResponse.ok) {
-    throw new Error(`Failed to generate auth link: ${generateResponse.status}`);
-  }
-
-  const generated = await generateResponse.json();
-  if (!generated.hashed_token) {
-    throw new Error('Missing hashed_token from generated auth link');
-  }
-
-  const cookieJar = new Map();
-  const confirmUrl = new URL('/auth/confirm', PROD_ORIGIN);
-  confirmUrl.searchParams.set('token_hash', generated.hashed_token);
-  confirmUrl.searchParams.set('type', 'magiclink');
-  confirmUrl.searchParams.set('next', '/chat');
-
-  const confirmResponse = await fetch(confirmUrl, {
-    method: 'GET',
-    redirect: 'manual',
-  });
-
-  storeResponseCookies(confirmResponse, cookieJar);
-
-  if (confirmResponse.status !== 307 && confirmResponse.status !== 302) {
-    throw new Error(`Unexpected auth confirm status: ${confirmResponse.status}`);
-  }
-
-  const chatResponse = await fetch(new URL('/chat', PROD_ORIGIN), {
-    headers: {
-      Cookie: serializeCookies(cookieJar),
-    },
-    redirect: 'manual',
-  });
-
-  if (chatResponse.status >= 300 && chatResponse.status < 400) {
-    const location = chatResponse.headers.get('location') || '';
-    throw new Error(`Authentication failed, redirected to ${location || 'unknown location'}`);
-  }
-
-  return {
-    cookieJar,
-    email: bypassEmail,
-    authMode: 'magiclink',
-    evalSecret: null,
-  };
+  return authenticateEval({ env, origin: PROD_ORIGIN });
 }
 
 function shouldUseLocalEvalBypass(origin, env) {
-  if (env.CHAT_EVAL_LOCAL_BYPASS_ENABLED !== 'true') {
-    return false;
-  }
-
-  if (!env.CHAT_EVAL_SECRET?.trim()) {
-    return false;
-  }
-
-  try {
-    const url = new URL(origin);
-    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  } catch {
-    return false;
-  }
+  return shouldUseLocalEvalBypassHelper(origin, env);
 }
 
 function readEvalBypassEmail(env) {
-  return env.CHAT_EVAL_BYPASS_EMAIL?.trim() || env.BYPASS_AUTH_EMAIL?.trim() || '';
+  return readEvalBypassEmailHelper(env);
 }
 
 function storeResponseCookies(response, cookieJar) {
@@ -770,7 +664,7 @@ function storeResponseCookies(response, cookieJar) {
 }
 
 function serializeCookies(cookieJar) {
-  return [...cookieJar.entries()].map(([name, value]) => `${name}=${value}`).join('; ');
+  return serializeEvalCookies(cookieJar);
 }
 
 async function buildManifest() {
@@ -1477,263 +1371,30 @@ async function evaluatePromptOnce(promptRow, auth) {
 }
 
 async function evaluateScenario(scenario, auth) {
-  const turns = [];
-  const messages = [];
-  let sessionContext = null;
-  let status = 'success';
-
-  for (let index = 0; index < scenario.turns.length; index += 1) {
-    const turn = scenario.turns[index];
-    const userMessage = { role: 'user', content: turn.user };
-    const requestMessages = [...messages, userMessage];
-    const result = await evaluateChatRequest(
-      {
-        messages: requestMessages,
-        sessionContext,
-      },
-      auth
-    );
-
-    turns.push({
-      turn_index: index + 1,
-      user_prompt: turn.user,
-      expectation: turn.expectation,
-      status: result.status,
-      error_message: result.error_message,
-      assistant_output_raw: result.assistant_output_raw,
-      tool_calls: result.tool_calls,
-      timing: result.timing,
-      iterations: result.iterations,
-      quality: result.quality,
-      session_context_summary: summarizeScenarioSessionContext(result.sessionContext),
-      tiger_primary: result.tigerPrimary,
-      tiger_shadow: result.tigerShadow,
-    });
-
-    if (result.status !== 'success') {
-      status = 'error';
-      break;
-    }
-
-    sessionContext = result.sessionContext ?? sessionContext;
-    messages.push(userMessage, { role: 'assistant', content: result.assistant_output_raw });
-    if (REQUEST_DELAY_MS > 0 && index < scenario.turns.length - 1) {
-      await sleep(REQUEST_DELAY_MS);
-    }
-  }
-
-  return {
-    scenario_id: scenario.id,
-    scenario_name: scenario.name,
-    notes: scenario.notes,
-    status,
-    turns,
-    final_output: turns[turns.length - 1]?.assistant_output_raw || '',
-  };
+  return evaluateChatScenario({
+    auth,
+    delayMs: REQUEST_DELAY_MS,
+    origin: PROD_ORIGIN,
+    scenario,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
 }
 
 async function evaluateChatRequest(requestBody, auth) {
-  try {
-    const headers = {
-      Cookie: serializeCookies(auth.cookieJar),
-      'Content-Type': 'application/json',
-    };
-
-    if (auth.evalSecret) {
-      headers['x-chat-eval-secret'] = auth.evalSecret;
-    }
-
-    const response = await fetch(new URL('/api/chat/stream', PROD_ORIGIN), {
-      method: 'POST',
-      headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const raw = await response.text();
-      const error_message = raw || `HTTP ${response.status}`;
-      return {
-        status: 'error',
-        http_status: response.status,
-        error_message,
-        assistant_output_raw: '',
-        tool_calls: [],
-        timing: null,
-        iterations: null,
-        quality: null,
-        sessionContext: null,
-        tigerPrimary: null,
-        tigerShadow: null,
-        transport_ok: false,
-        message_end_received: false,
-        failure_kind: classifyFailure({
-          httpStatus: response.status,
-          errorMessage: error_message,
-          transportOk: false,
-          messageEndReceived: false,
-        }),
-        raw_sse: raw,
-      };
-    }
-
-    const raw_sse = await response.text();
-    const parsed = parseSse(raw_sse);
-    const error_message =
-      parsed.error_message || (parsed.message_end_received ? null : 'Missing message_end SSE event');
-    return {
-      status: error_message ? 'error' : 'success',
-      http_status: response.status,
-      error_message,
-      assistant_output_raw: parsed.assistant_output_raw,
-      tool_calls: parsed.tool_calls,
-      timing: parsed.timing,
-      iterations: parsed.iterations,
-      quality: parsed.quality,
-      sessionContext: parsed.sessionContext,
-      tigerPrimary: parsed.tigerPrimary,
-      tigerShadow: parsed.tigerShadow,
-      transport_ok: true,
-      message_end_received: parsed.message_end_received,
-      failure_kind: classifyFailure({
-        httpStatus: response.status,
-        errorMessage: error_message,
-        transportOk: true,
-        messageEndReceived: parsed.message_end_received,
-      }),
-      raw_sse,
-    };
-  } catch (error) {
-    const error_message = error instanceof Error ? error.message : String(error);
-    return {
-      status: 'error',
-      http_status: null,
-      error_message,
-      assistant_output_raw: '',
-      tool_calls: [],
-      timing: null,
-      iterations: null,
-      quality: null,
-      sessionContext: null,
-      tigerPrimary: null,
-      tigerShadow: null,
-      transport_ok: false,
-      message_end_received: false,
-      failure_kind: classifyFailure({
-        httpStatus: null,
-        errorMessage: error_message,
-        transportOk: false,
-        messageEndReceived: false,
-      }),
-      raw_sse: '',
-    };
-  }
+  return evaluateEndpointChatRequest({
+    auth,
+    origin: PROD_ORIGIN,
+    requestBody,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
 }
 
 function parseSse(rawSse) {
-  const assistant_output_raw = [];
-  const tool_calls = [];
-  let timing = null;
-  let iterations = null;
-  let error_message = null;
-  let quality = null;
-  let sessionContext = null;
-  let tigerPrimary = null;
-  let tigerShadow = null;
-  let message_end_received = false;
-
-  for (const block of rawSse.split('\n\n')) {
-    const line = block
-      .split('\n')
-      .map((part) => part.trim())
-      .find((part) => part.startsWith('data: '));
-    if (!line) continue;
-    let event;
-    try {
-      event = JSON.parse(line.slice(6));
-    } catch {
-      continue;
-    }
-
-    if (event.type === 'text_delta' && typeof event.delta === 'string') {
-      assistant_output_raw.push(event.delta);
-      continue;
-    }
-
-    if (event.type === 'tool_result') {
-      tool_calls.push({
-        name: event.name,
-        arguments: event.arguments || {},
-        executionMs: event.timing?.executionMs ?? null,
-        success: event.result?.success !== false,
-        unavailable: event.result?.unavailable === true,
-        failure_kind:
-          typeof event.result?.failure_kind === 'string' ? event.result.failure_kind : null,
-        error_message: typeof event.result?.error === 'string' ? event.result.error : null,
-        result_summary: summarizeToolResult(event.result),
-        result_payload: sanitizeToolResultPayload(event.name, event.result),
-      });
-      continue;
-    }
-
-    if (event.type === 'message_end') {
-      timing = event.timing || null;
-      iterations = event.debug?.iterations ?? null;
-      quality = event.quality || null;
-      sessionContext = event.sessionContext || null;
-      tigerPrimary = event.tigerPrimary || null;
-      tigerShadow = event.tigerShadow || null;
-      message_end_received = true;
-      continue;
-    }
-
-    if (event.type === 'error') {
-      error_message = event.message || 'Unknown SSE error';
-    }
-  }
-
-  return {
-    assistant_output_raw: assistant_output_raw.join(''),
-    tool_calls,
-    timing,
-    iterations,
-    error_message,
-    quality,
-    sessionContext,
-    tigerPrimary,
-    tigerShadow,
-    message_end_received,
-  };
+  return parseEvalSse(rawSse);
 }
 
 function summarizeScenarioSessionContext(sessionContext) {
-  if (!sessionContext || typeof sessionContext !== 'object') {
-    return null;
-  }
-
-  const entities = Array.isArray(sessionContext.entities)
-    ? sessionContext.entities
-        .slice(0, 4)
-        .map((entity) => `${entity.kind}:${entity.name}`)
-    : [];
-  const constraints = Array.isArray(sessionContext.constraints)
-    ? sessionContext.constraints
-        .slice(0, 4)
-        .map((constraint) => `${constraint.key}=${constraint.value}`)
-    : [];
-  const candidateSet =
-    sessionContext.candidateSet &&
-    Array.isArray(sessionContext.candidateSet.names) &&
-    sessionContext.candidateSet.names.length > 0
-      ? `${sessionContext.candidateSet.kind}: ${sessionContext.candidateSet.names.slice(0, 5).join(', ')}`
-      : null;
-
-  return {
-    entities,
-    constraints,
-    candidateSet,
-    lastAnswer: sessionContext.lastAnswer?.summary || null,
-  };
+  return summarizeScenarioContext(sessionContext);
 }
 
 function summarizeTigerShadow(tigerShadow) {

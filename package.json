@@ -6,6 +6,9 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
+    "test": "turbo test",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo check-types",
     "query-api:build": "pnpm --filter @publisheriq/query-api build",
@@ -18,6 +21,8 @@
     "tiger:reconcile-events-news": "pnpm --filter @publisheriq/data-plane reconcile-events-news",
     "chat-evals:tiger-primary-expanded": "node scripts/chat-evals/run-tiger-primary-expanded.mjs",
     "chat-evals:tiger-shadow-expanded": "node scripts/chat-evals/run-tiger-shadow-expanded.mjs",
+    "chat-evals:full-blended-endpoint": "node scripts/chat-evals/run-full-blended-endpoint.mjs",
+    "chat-evals:full-blended-ui": "node scripts/chat-evals/run-full-blended-ui.mjs",
     "chat-evals:cycle": "node scripts/chat-evals/run-cycle.mjs",
     "chat-evals:resume": "node scripts/chat-evals/resume-loop.mjs",
     "chat-autolab:start": "node scripts/chat-autolab/start.mjs",
@@ -25,6 +30,7 @@
     "chat-autolab:resume": "node scripts/chat-autolab/resume.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@eslint/js": "^9.39.2",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",

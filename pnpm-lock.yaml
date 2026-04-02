@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: ^9.39.2
         version: 9.39.2
+      '@playwright/test':
+        specifier: ^1.54.2
+        version: 1.59.1
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.50.1
         version: 8.50.1(@typescript-eslint/parser@8.50.1(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3)
@@ -73,7 +76,7 @@ importers:
         version: 11.18.2(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       geist:
         specifier: ^1.5.1
-        version: 1.5.1(next@15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3))
+        version: 1.5.1(next@15.5.9(@playwright/test@1.59.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))
       html-react-parser:
         specifier: ^5.2.11
         version: 5.2.11(@types/react@19.2.7)(react@19.2.3)
@@ -88,7 +91,7 @@ importers:
         version: 11.12.2
       next:
         specifier: ^15.1.3
-        version: 15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+        version: 15.5.9(@playwright/test@1.59.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       openai:
         specifier: ^4.77.0
         version: 4.104.0(ws@8.18.3)
@@ -110,6 +113,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
       shiki:
         specifier: ^3.20.0
         version: 3.20.0
@@ -141,6 +147,9 @@ importers:
       tailwindcss:
         specifier: ^3.4.17
         version: 3.4.19(tsx@4.21.0)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -1755,6 +1764,11 @@ packages:
 
   '@octokit/types@6.41.0':
     resolution: {integrity: sha512-eJ2jbzjdijiL3B4PrSQaSjuF2sPEQPVCPzBvTHJD9Nz+9dw2SGH4K4xeQJ77YfTq5bRQ+bD8wT11JbeDPmxmGg==}
+
+  '@playwright/test@1.59.1':
+    resolution: {integrity: sha512-PG6q63nQg5c9rIi4/Z5lR5IVF7yU5MqmKaPOe0HSc0O2cX1fPi96sUQu5j7eo4gKCkB2AnNGoWt7y4/Xx3Kcqg==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@qdrant/js-client-rest@1.16.2':
     resolution: {integrity: sha512-Zm4wEZURrZ24a+Hmm4l1QQYjiz975Ep3vF0yzWR7ICGcxittNz47YK2iBOk8kb8qseCu8pg7WmO1HOIsO8alvw==}
@@ -3753,6 +3767,11 @@ packages:
   fs.realpath@1.0.0:
     resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
 
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -4843,6 +4862,16 @@ packages:
   pkg-types@1.3.1:
     resolution: {integrity: sha512-/Jm5M4RvtBFVkKWRu2BLUTNP8/M2a+UwuAX+ae4770q1qVGtfjG+WTCupoZixokjmHiry8uI+dlY8KXYV5HVVQ==}
 
+  playwright-core@1.59.1:
+    resolution: {integrity: sha512-HBV/RJg81z5BiiZ9yPzIiClYV/QMsDCKUyogwH9p3MCP6IYjUFu/MActgYAvK0oWyV9NlwM3GLBjADyWgydVyg==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  playwright@1.59.1:
+    resolution: {integrity: sha512-C8oWjPR3F81yljW9o5OxcWzfh6avkVwDD2VYdwIGqTkl+OGFISgypqzfu7dOe4QNLL2aqcWBmI3PMtLIK233lw==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   points-on-curve@0.2.0:
     resolution: {integrity: sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A==}
 
@@ -5220,6 +5249,9 @@ packages:
   serve-static@1.16.3:
     resolution: {integrity: sha512-x0RTqQel6g5SY7Lg6ZreMmsOzncHFU7nhnRWkKgWuMTu5NN0DR5oruckMqRvacAN9d5w6ARnRBXl9xhDCgfMeA==}
     engines: {node: '>= 0.8.0'}
+
+  server-only@0.0.1:
+    resolution: {integrity: sha512-qepMx2JxAa5jjfzxG79yPPq+8BuFToHd1hm7kI+Z4zAq1ftQiP7HcxMhDDItrbtwVeLg/cY2JnKnrcFkmiswNA==}
 
   set-function-length@1.2.2:
     resolution: {integrity: sha512-pgRc4hJ4/sNjWCSS9AmnS40x3bNMDTknHgL5UaMBTMyJnU90EgWh1Rz+MC9eFu4BuN/UwZjKQuY/1v3rM7HMfg==}
@@ -8075,6 +8107,10 @@ snapshots:
     dependencies:
       '@octokit/openapi-types': 12.11.0
 
+  '@playwright/test@1.59.1':
+    dependencies:
+      playwright: 1.59.1
+
   '@qdrant/js-client-rest@1.16.2(typescript@5.9.3)':
     dependencies:
       '@qdrant/openapi-typescript-fetch': 1.2.6
@@ -10311,6 +10347,9 @@ snapshots:
 
   fs.realpath@1.0.0: {}
 
+  fsevents@2.3.2:
+    optional: true
+
   fsevents@2.3.3:
     optional: true
 
@@ -10336,9 +10375,9 @@ snapshots:
       - encoding
       - supports-color
 
-  geist@1.5.1(next@15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3)):
+  geist@1.5.1(next@15.5.9(@playwright/test@1.59.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)):
     dependencies:
-      next: 15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      next: 15.5.9(@playwright/test@1.59.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
 
   generate-object-property@1.2.0:
     dependencies:
@@ -11389,7 +11428,7 @@ snapshots:
 
   next-tick@1.1.0: {}
 
-  next@15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3):
+  next@15.5.9(@playwright/test@1.59.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3):
     dependencies:
       '@next/env': 15.5.9
       '@swc/helpers': 0.5.15
@@ -11407,6 +11446,7 @@ snapshots:
       '@next/swc-linux-x64-musl': 15.5.7
       '@next/swc-win32-arm64-msvc': 15.5.7
       '@next/swc-win32-x64-msvc': 15.5.7
+      '@playwright/test': 1.59.1
       sharp: 0.34.5
     transitivePeerDependencies:
       - '@babel/core'
@@ -11627,6 +11667,14 @@ snapshots:
       confbox: 0.1.8
       mlly: 1.8.0
       pathe: 2.0.3
+
+  playwright-core@1.59.1: {}
+
+  playwright@1.59.1:
+    dependencies:
+      playwright-core: 1.59.1
+    optionalDependencies:
+      fsevents: 2.3.2
 
   points-on-curve@0.2.0: {}
 
@@ -12058,6 +12106,8 @@ snapshots:
       send: 0.19.2
     transitivePeerDependencies:
       - supports-color
+
+  server-only@0.0.1: {}
 
   set-function-length@1.2.2:
     dependencies:

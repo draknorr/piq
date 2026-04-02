@@ -34,17 +34,26 @@ These are implemented and working:
 - `resolveEntities`
 - `searchCatalog`
 - `rankEntities`
+- `compareEntities`
 - `traceMetricHistory`
 - `explainChanges`
 - `searchDocuments`
+- `semanticSearch`
+- `continueResultSet`
 
 ### Chat routing
 Tiger-primary visible answers are working for:
 - catalog search
 - entity ranking
+- entity compare
 - metric history
 - news search
 - change explanation
+- semantic search
+
+Tiger-owned continuation is now working for:
+- `searchCatalog`
+- game `semanticSearch`
 
 Legacy fallback still handles unsupported or unmatched prompts.
 
@@ -70,14 +79,20 @@ Verified successfully on Railway and/or local query-api:
 - `/v1/contracts`
 - `searchCatalog`
 - `rankEntities`
+- `compareEntities`
 - `traceMetricHistory`
 - `explainChanges`
 - `searchDocuments`
+- `semanticSearch`
+- `continueResultSet`
 
 ### Real prompt checks
 These were confirmed as Tiger-primary successes:
 - `Show me all games by FromSoftware`
 - `What are the top games by reviews?`
+- `Games like Hades with better reviews`
+- `Find cozy farming games under $20`
+- `Compare Hades and Dead Cells`
 - `How have Hades II reviews changed over the last 30 days?`
 - `Show Counter-Strike 2 CCU and owners over the last 30 days`
 - `Any recent announcements about Primeval?`
@@ -92,17 +107,13 @@ Tiger is not fully replacing the legacy stack yet. The major remaining work is c
 
 ### Missing chat capabilities
 Still planned / not yet implemented:
-- `semanticSearch`
-- `compareEntities`
-- `continueResultSet`
 - `getUserContext` if portfolio/pins/alerts need Tiger-backed answers
 
 ### Remaining fallback ownership
 These prompt families are still not truly Tiger-complete:
-- similarity prompts like `games like X`
-- compare prompts
-- continuation / follow-up narrowing
 - breakout / momentum style prompts
+- portfolio/pins/alerts prompts
+- broader compare and semantic prompts outside the bounded Tiger parser
 
 ### Full product cutover
 Still remaining:
@@ -147,9 +158,8 @@ If this work needs to be resumed later, check `git status` first before assuming
 Priority order:
 1. Test the current Tiger-backed `/chat` flow locally and in the branch preview.
 2. Finish the missing Tiger chat capabilities:
-   - `semanticSearch`
-   - `compareEntities`
-   - `continueResultSet`
+   - expand bounded semantic/compare coverage beyond the current parser
+   - decide whether `getUserContext` is needed for the next rollout gate
 3. Move remaining supported prompt families from fallback/legacy ownership to Tiger ownership.
 4. Remove legacy read-path dependence and complete the broader product cutover.
 
@@ -157,4 +167,4 @@ Priority order:
 
 If this chat is wiped, the important headline is:
 
-Tiger is already serving real chat answers for rankings, catalog search, metric history, news search, and change explanations. `query-api` is deployed on Railway, localhost `/chat` is usable, and the project is now in the capability-gap-and-cutover phase, not the proof-of-concept phase.
+Tiger is already serving real chat answers for rankings, catalog search, compare, metric history, news search, change explanations, and semantic search. `query-api` is deployed on Railway, localhost `/chat` is usable, and the project is now in the cutover-and-coverage phase rather than the proof-of-concept phase.

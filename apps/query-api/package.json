@@ -10,11 +10,13 @@
     "precheck-types": "pnpm --filter @publisheriq/data-plane build",
     "predev": "pnpm --filter @publisheriq/data-plane build",
     "prestart": "pnpm --filter @publisheriq/data-plane build",
+    "pretest": "pnpm --filter @publisheriq/data-plane build",
     "build": "tsup src/server.ts --format esm --dts",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@publisheriq/data-plane": "workspace:*",

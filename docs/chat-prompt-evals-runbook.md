@@ -10,6 +10,7 @@ This runbook covers the critique-suite workflows for the prompts called out in:
 - `docs/chat-output-user-critique.md` section `6. Change Intelligence and Strategic / Prospecting Answers`
 
 Phase-1 quality work also adds a dedicated multi-turn suite for session-scoped carry-forward behavior.
+The checked-in JSON inventory now feeds both the live eval wrapper and the deterministic admin-route tests in CI.
 
 ## What This Runner Does
 
@@ -33,13 +34,105 @@ Each wrapper:
 
 It does not try to auto-judge user quality. The raw results are machine-captured; the persona scoring in `docs/chat-prompt-evals.md` is curated after the run.
 
+## Endpoint Quality Run
+
+Use the full blended-persona endpoint run when you want the main quality ledger for
+the old prompt inventory against the local Tigerdata-backed stack.
+
+It differs from the wrapper scripts above in two ways:
+
+- it runs the full old critique inventory plus the checked-in multi-turn phase-1 scenarios in one pass
+- it writes draft blended-persona rankings for every old critique prompt and every checked-in multi-turn phase-1 scenario
+
+Run it from the repo root:
+
+```bash
+pnpm chat-evals:full-blended-endpoint
+```
+
+Useful overrides:
+
+```bash
+pnpm chat-evals:full-blended-endpoint -- --max-prompts 3 --max-scenarios 1
+```
+
+```bash
+pnpm chat-evals:full-blended-endpoint -- --manifest-only --out-dir /tmp/publisheriq-chat-evals/full-blended-manifest
+```
+
+Default behavior:
+
+- targets the local admin chat endpoint at `http://127.0.0.1:3001` unless you pass `--origin`
+- reuses the same `POST /api/chat/stream` path the chat UI calls
+- authenticates with the same local bypass or magic-link flow used by the other endpoint eval wrappers
+- scores the normalized final assistant text from SSE `text_delta` output; hidden Tiger metadata is saved only as diagnostics and is not used for ranking
+- does not start `admin` or `query-api` for you in this first pass; if the origin is not reachable it fails fast with a preflight error
+
+Artifacts include:
+
+- `prompt-results.json`
+- `scenario-results.json`
+- `prompt-rankings.json`
+- `scenario-rankings.json`
+- `ledger-run-draft.md`
+- `curation-template.json`
+- `run-summary.json`
+- `prompt-tool-traces.json`
+- `scenario-tool-traces.json`
+- `tool-usage-summary.json`
+- `backend-usage-summary.json`
+- `migration-matrix.json`
+- `migration-matrix.md`
+
+This is now the default quality pass for ranking the old prompt inventory on the new chat stack.
+Keep using the older API/debug wrappers when you want lower-level transport, tool, or Tiger routing diagnostics.
+The endpoint runner now also writes an answer-path audit for Tiger cutover work, including
+which tools/contracts ran, which backends they hit, and which prompts still depend on
+legacy Supabase or Cube reads.
+
+## Browser Quality Run
+
+Use the browser run when you specifically want a smaller user-visible smoke pass
+through the real `/chat` UI.
+
+```bash
+pnpm chat-evals:full-blended-ui
+```
+
+Useful overrides:
+
+```bash
+pnpm chat-evals:full-blended-ui -- --max-prompts 3 --max-scenarios 1 --headed
+```
+
+Default behavior:
+
+- starts its own local admin dev server on `http://127.0.0.1:3003`
+- reuses local `query-api` if it is already healthy, otherwise starts one on the configured local base URL
+- enables Tiger primary/shadow eval mode plus local browser bypass for the spawned admin server
+- scores only the final assistant text rendered in the browser UI
+
+Use this when you want UI-level confirmation. Keep the endpoint runner as the primary full-suite quality harness.
+
+## Deterministic Coverage
+
+The multi-turn phase-1 scenarios also have deterministic route tests under `apps/admin/src/app/api/chat/stream/`.
+Those tests stub provider/tool behavior and assert session-context carry-forward without calling live OpenAI, Supabase, Qdrant, or production chat.
+Keep `scripts/chat-evals/multi-turn-phase1-scenarios.json` as the canonical scenario inventory for both layers.
+
 ## Prerequisites
 
 - Root `.env` must contain:
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_KEY`
   - `BYPASS_AUTH_EMAIL`
-- Network access to `https://www.publisheriq.app`
+- `apps/admin/.env.local` should contain the local Tiger eval settings when you target localhost:
+  - `CHAT_EVAL_LOCAL_BYPASS_ENABLED=true`
+  - `CHAT_EVAL_SECRET`
+  - `CHAT_EVAL_BYPASS_EMAIL` or `BYPASS_AUTH_EMAIL`
+  - `CHAT_TIGER_PRIMARY_MODE=eval`
+  - `QUERY_API_BASE_URL=http://127.0.0.1:4318`
+- Local `admin` and `query-api` should already be running for `pnpm chat-evals:full-blended-endpoint` unless you point `--origin` at another reachable target
 - Node `>=20`
 
 ## Run A Fresh Live Suite
@@ -105,8 +198,11 @@ Use this when you want to validate the current Tiger shadow coverage for:
 
 - catalog search
 - entity ranking
+- entity compare
 - metric history
-- existing news/change shadow families
+- news search
+- change explanation
+- semantic search
 
 This pack stays on the real `/api/chat/stream` route, but it expects the local
 admin app and local `query-api` to be running with Tiger shadow mode enabled.
@@ -177,7 +273,11 @@ Positive prompts should end with Tiger shadow metadata showing:
 
 - `matchedIntent=catalog_search`
 - `matchedIntent=entity_ranking`
+- `matchedIntent=entity_compare`
 - `matchedIntent=metric_history`
+- `matchedIntent=news_search`
+- `matchedIntent=change_explanation`
+- `matchedIntent=semantic_search`
 - `route=shadow_success_legacy_answer`
 
 Negative controls should stay:
@@ -196,7 +296,11 @@ prompt family set:
 
 - catalog search
 - entity ranking
+- entity compare
 - metric history
+- news search
+- change explanation
+- semantic search
 
 This pack still goes through the real `/api/chat/eval` and `/api/chat/stream`
 route, but it enables Tiger-primary eval mode and gates on `message_end.tigerPrimary`.
@@ -263,7 +367,11 @@ Positive prompts should end with Tiger primary metadata showing:
 
 - `matchedIntent=catalog_search`
 - `matchedIntent=entity_ranking`
+- `matchedIntent=entity_compare`
 - `matchedIntent=metric_history`
+- `matchedIntent=news_search`
+- `matchedIntent=change_explanation`
+- `matchedIntent=semantic_search`
 - `route=primary_success`
 
 Negative controls should stay:

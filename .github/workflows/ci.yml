@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +26,18 @@ jobs:
 
       - name: Build packages
         run: pnpm build
+
+      - name: Check types
+        run: pnpm check-types
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        run: pnpm test:e2e
 
       # Note: Type checking is done during build via tsup's DTS generation
       # Workspace packages don't resolve correctly with tsc --noEmit
