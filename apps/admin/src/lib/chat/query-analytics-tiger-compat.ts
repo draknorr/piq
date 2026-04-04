@@ -139,7 +139,7 @@ const TIGER_QUERY_ANALYTICS_SEARCH_CATALOG_PROVENANCE: ChatExecutionProvenanceOv
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Legacy query_analytics requests for compatible catalog patterns now execute through Tiger search-catalog.',
+    'Legacy query_analytics requests for compatible catalog patterns now execute through the system search-catalog.',
   recommendedTigerContracts: ['searchCatalog'],
 };
 
@@ -156,7 +156,7 @@ const TIGER_QUERY_ANALYTICS_ENTITY_OVERVIEW_PROVENANCE: ChatExecutionProvenanceO
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Legacy query_analytics requests for single-entity and company game-list patterns now execute through Tiger get-entity-overview.',
+    'Legacy query_analytics requests for single-entity and company game-list patterns now execute through the system get-entity-overview.',
   recommendedTigerContracts: ['getEntityOverview'],
 };
 
@@ -177,7 +177,7 @@ const TIGER_QUERY_ANALYTICS_RANK_ENTITIES_PROVENANCE: ChatExecutionProvenanceOve
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Filtered company ranking requests now execute through Tiger rank-entities instead of the legacy chat analytics cubes.',
+    'Filtered company ranking requests now execute through the system rank-entities instead of the legacy chat analytics cubes.',
   recommendedTigerContracts: ['rankEntities'],
 };
 

@@ -97,6 +97,11 @@ const SAME_FAMILY_ENTITY_FOLLOW_UP_PATTERN =
   /^(?:and\s+)?(?:what|how)\s+about\s+(.+?)(?:[?!.]|$)/i;
 const ENTITY_KIND_CORRECTION_PATTERN =
   /^(.+?)\s+is\s+(?:a|an)\s+(game|publisher|developer|studio|company)(?:[?!.]|$)/i;
+const METRIC_LIKE_ENTITY_QUERY_PATTERN =
+  /\b(?:reviews?|review score|ratings?|owners?|players?|player count|ccu|concurrent players?|sales|price|discount|release date|release year|momentum|velocity)\b/i;
+const UNSUPPORTED_SEMANTIC_MIXED_PATTERN =
+  /\b(?:breaking out|trending(?: up)?|accelerating|declining|review momentum|reviews? surging|most players(?: right now)?|highest ccu|most concurrent players?)\b/i;
+const SAME_FRANCHISE_PATTERN = /\b(?:same franchise|same series)\b/i;
 const SINGLE_SELECTION_INDEX_PATTERN =
   /^\s*(\d+)\s*$/i;
 const COMPARE_SELECTION_INDEX_PATTERN =
@@ -610,6 +615,7 @@ interface RankedSelectionCandidate extends SessionChatSelectionCandidate {
   confidence: number;
   displayNameNormalized: string;
   gameCount: number;
+  organizationCore: string | null;
 }
 
 interface RankedSelectionSlot extends SessionChatSelectionSlot {
@@ -621,6 +627,8 @@ interface PrimaryEntityResolutionResult {
   entity: ResolvedCompareEntity | null;
   selectionState: SessionChatSelectionState | null;
 }
+
+type EntityResolutionPreference = 'company' | 'game' | null;
 
 function normalizeForLooseMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -676,6 +684,13 @@ function entityLooksOrganization(value: string): boolean {
   return ORGANIZATION_SUFFIX_PATTERN.test(value);
 }
 
+function candidatesShareOrganizationCore(
+  left: Pick<RankedSelectionCandidate, 'organizationCore'> | null | undefined,
+  right: Pick<RankedSelectionCandidate, 'organizationCore'> | null | undefined
+): boolean {
+  return Boolean(left?.organizationCore) && left?.organizationCore === right?.organizationCore;
+}
+
 function normalizeSelectionKind(value: string): SessionSelectionEntityKind | null {
   return value === 'game' || value === 'publisher' || value === 'developer'
     ? value
@@ -686,8 +701,9 @@ function scoreResolvedEntity(params: {
   entity: ResolvedCompareEntity;
   expectedEntityKind: SessionSelectionEntityKind | null;
   query: string;
+  resolutionPreference: EntityResolutionPreference;
 }): number {
-  const { entity, expectedEntityKind, query } = params;
+  const { entity, expectedEntityKind, query, resolutionPreference } = params;
   const entityKind = normalizeSelectionKind(entity.entityKind);
   if (!entityKind) {
     return 0;
@@ -707,12 +723,20 @@ function scoreResolvedEntity(params: {
 
   let score = matchQualityBaseScore(matchQuality) + (confidence * 8);
 
-  if (normalizedDisplayName === normalizedQuery || normalizedMatchedName === normalizedQuery) {
-    score += 12;
+  if (normalizedDisplayName === normalizedQuery) {
+    score += 24;
+  } else if (normalizedMatchedName === normalizedQuery) {
+    score += 16;
   }
 
   if (expectedEntityKind) {
     score += entityKind === expectedEntityKind ? 18 : -18;
+  }
+
+  if (resolutionPreference === 'company') {
+    score += entityKind === 'game' ? -24 : 22;
+  } else if (resolutionPreference === 'game') {
+    score += entityKind === 'game' ? 18 : -18;
   }
 
   if (queryIsOrganizationLike) {
@@ -747,6 +771,7 @@ function buildRankedSelectionCandidates(params: {
   entities: ResolvedCompareEntity[];
   expectedEntityKind: SessionSelectionEntityKind | null;
   query: string;
+  resolutionPreference: EntityResolutionPreference;
 }): RankedSelectionCandidate[] {
   const candidates = params.entities
     .map((entity) => {
@@ -769,12 +794,14 @@ function buildRankedSelectionCandidates(params: {
         gameCount,
         matchQuality: entity.matchQuality ?? null,
         ordinal: 0,
+        organizationCore: entityKind === 'game' ? null : normalizeOrganizationCore(entity.displayName),
         platform: entity.platform,
         platformEntityId: entity.platformEntityId ?? null,
         score: scoreResolvedEntity({
           entity,
           expectedEntityKind: params.expectedEntityKind,
           query: params.query,
+          resolutionPreference: params.resolutionPreference,
         }),
       };
     })
@@ -786,12 +813,12 @@ function buildRankedSelectionCandidates(params: {
       continue;
     }
 
-    const organizationCore = normalizeOrganizationCore(candidate.displayName);
+    const organizationCore = candidate.organizationCore;
     if (!organizationCore) {
       continue;
     }
 
-    const groupKey = `${candidate.entityKind}:${candidate.platform}:${organizationCore}`;
+    const groupKey = `${candidate.platform}:${organizationCore}`;
     const group = companyGroups.get(groupKey) ?? [];
     group.push(candidate);
     companyGroups.set(groupKey, group);
@@ -809,12 +836,12 @@ function buildRankedSelectionCandidates(params: {
 
     for (const candidate of group) {
       if (candidate.gameCount === maxGameCount) {
-        candidate.score += 6;
+        candidate.score += 8;
         continue;
       }
 
       const delta = maxGameCount - candidate.gameCount;
-      candidate.score -= Math.min(18, Math.round(delta * 1.5));
+      candidate.score -= Math.min(22, Math.round(delta * 1.75));
     }
   }
 
@@ -829,6 +856,7 @@ function buildRankedSelectionCandidates(params: {
 function needsClarificationForRankedCandidates(params: {
   candidates: RankedSelectionCandidate[];
   query: string;
+  resolutionPreference: EntityResolutionPreference;
 }): boolean {
   const [top, runnerUp] = params.candidates;
   if (!top || top.score < 70) {
@@ -841,6 +869,36 @@ function needsClarificationForRankedCandidates(params: {
 
   const scoreGap = top.score - runnerUp.score;
   const queryIsOrganizationLike = queryLooksOrganization(params.query);
+  const normalizedQuery = normalizeForLooseMatch(params.query);
+  const sameOrganizationCore = candidatesShareOrganizationCore(top, runnerUp);
+
+  if (
+    normalizedQuery
+    && top.displayNameNormalized === normalizedQuery
+    && top.entityKind === runnerUp.entityKind
+  ) {
+    if (runnerUp.displayNameNormalized.startsWith(`${normalizedQuery} `) && scoreGap >= 4) {
+      return false;
+    }
+
+    if (runnerUp.matchQuality !== 'exact' && scoreGap >= 8) {
+      return false;
+    }
+  }
+
+  if (
+    params.resolutionPreference === 'company'
+    && top.entityKind !== 'game'
+    && runnerUp.entityKind !== 'game'
+  ) {
+    if (sameOrganizationCore && top.gameCount >= Math.max(4, runnerUp.gameCount + 3)) {
+      return false;
+    }
+
+    if (scoreGap >= 6) {
+      return false;
+    }
+  }
 
   if (scoreGap < 12) {
     return true;
@@ -856,6 +914,61 @@ function needsClarificationForRankedCandidates(params: {
 
   if (queryIsOrganizationLike && top.entityKind === 'game' && runnerUp.entityKind !== 'game' && scoreGap < 24) {
     return true;
+  }
+
+  return false;
+}
+
+function shouldOverrideResolverAmbiguity(params: {
+  candidates: RankedSelectionCandidate[];
+  query: string;
+  resolutionPreference: EntityResolutionPreference;
+}): boolean {
+  const [top, runnerUp] = params.candidates;
+  if (!top || top.score < 82) {
+    return false;
+  }
+
+  const normalizedQuery = normalizeForLooseMatch(params.query);
+  const scoreGap = top.score - (runnerUp?.score ?? 0);
+  const sameOrganizationCore = candidatesShareOrganizationCore(top, runnerUp);
+
+  if (
+    params.resolutionPreference === 'game'
+    && top.entityKind === 'game'
+    && top.matchQuality === 'exact'
+    && top.displayNameNormalized === normalizedQuery
+  ) {
+    if (!runnerUp) {
+      return true;
+    }
+
+    if (runnerUp.entityKind === 'game' && runnerUp.displayNameNormalized.startsWith(`${normalizedQuery} `)) {
+      return scoreGap >= 6;
+    }
+
+    return scoreGap >= 10;
+  }
+
+  if (params.resolutionPreference === 'company' && top.entityKind !== 'game') {
+    const queryOrganizationCore = normalizeOrganizationCore(params.query);
+    if (!queryOrganizationCore || top.organizationCore !== queryOrganizationCore) {
+      return false;
+    }
+
+    if (!runnerUp) {
+      return true;
+    }
+
+    if (runnerUp.entityKind === 'game') {
+      return scoreGap >= 8;
+    }
+
+    if (sameOrganizationCore && top.gameCount >= Math.max(4, runnerUp.gameCount + 3)) {
+      return true;
+    }
+
+    return scoreGap >= 12;
   }
 
   return false;
@@ -978,12 +1091,12 @@ function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerSha
     return 'entity_overview';
   }
 
-  if (inferCatalogSearchIntent(prompt, toolCalls)) {
-    return 'catalog_search';
-  }
-
   if (inferSemanticIntent(prompt, toolCalls)) {
     return 'semantic_search';
+  }
+
+  if (inferCatalogSearchIntent(prompt, toolCalls)) {
+    return 'catalog_search';
   }
 
   if (inferRankingIntent(prompt)) {
@@ -1026,12 +1139,12 @@ function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | 
     return 'entity_overview';
   }
 
-  if (inferPrimaryCatalogSearchIntent(prompt)) {
-    return 'catalog_search';
-  }
-
   if (inferPrimarySemanticIntent(prompt)) {
     return 'semantic_search';
+  }
+
+  if (inferPrimaryCatalogSearchIntent(prompt)) {
+    return 'catalog_search';
   }
 
   if (inferRankingIntent(prompt)) {
@@ -1439,6 +1552,29 @@ function inferEntityOverviewViewMode(
   return 'company_games';
 }
 
+function inferEntityOverviewResolutionPreference(
+  prompt: string,
+  explicitKindHint: 'developer' | 'game' | 'publisher' | null
+): EntityResolutionPreference {
+  if (explicitKindHint === 'game') {
+    return 'game';
+  }
+
+  if (explicitKindHint === 'developer' || explicitKindHint === 'publisher') {
+    return 'company';
+  }
+
+  if (COMPANY_COUNT_PROMPT_PATTERN.test(prompt) || COMPANY_PORTFOLIO_METRIC_PROMPT_PATTERN.test(prompt)) {
+    return 'company';
+  }
+
+  if (GAME_METRIC_OVERVIEW_PROMPT_PATTERN.test(prompt)) {
+    return 'game';
+  }
+
+  return null;
+}
+
 function buildNewsTopicQuery(prompt: string, entityQuery?: string | null): string {
   const canonicalTopic = inferNewsTopicQuery(prompt);
   if (canonicalTopic) {
@@ -1562,7 +1698,7 @@ function buildCatalogRequestFromSearchGames(toolCalls: ChatToolCall[]): CatalogS
   if (!args) {
     return {
       request: null,
-      reason: 'No compatible search_games tool call was available for Tiger catalog shadow routing.',
+      reason: 'No compatible search_games tool call was available for system catalog shadow routing.',
     };
   }
 
@@ -1588,7 +1724,7 @@ function buildCatalogRequestFromSearchGames(toolCalls: ChatToolCall[]): CatalogS
   if (unsupported.length > 0) {
     return {
       request: null,
-      reason: `Tiger catalog shadow skipped unsupported search_games fields: ${unsupported.join(', ')}.`,
+      reason: `system catalog shadow skipped unsupported search_games fields: ${unsupported.join(', ')}.`,
     };
   }
 
@@ -1623,7 +1759,7 @@ function buildCatalogRequestFromScreenGames(toolCalls: ChatToolCall[]): CatalogS
   if (!args || !filters) {
     return {
       request: null,
-      reason: 'No compatible screen_games tool call was available for Tiger catalog shadow routing.',
+      reason: 'No compatible screen_games tool call was available for system catalog shadow routing.',
     };
   }
 
@@ -1654,7 +1790,7 @@ function buildCatalogRequestFromScreenGames(toolCalls: ChatToolCall[]): CatalogS
   if (unsupported.length > 0) {
     return {
       request: null,
-      reason: `Tiger catalog shadow skipped unsupported screen_games fields: ${unsupported.join(', ')}.`,
+      reason: `system catalog shadow skipped unsupported screen_games fields: ${unsupported.join(', ')}.`,
     };
   }
 
@@ -1678,7 +1814,7 @@ function buildCatalogRequestFromCompanyLookup(prompt: string, toolCalls: ChatToo
   if (!COMPANY_GAME_LIST_PROMPT_PATTERN.test(prompt)) {
     return {
       request: null,
-      reason: 'No compatible company-backed game-list prompt was available for Tiger catalog shadow routing.',
+      reason: 'No compatible company-backed game-list prompt was available for system catalog shadow routing.',
     };
   }
 
@@ -1687,7 +1823,7 @@ function buildCatalogRequestFromCompanyLookup(prompt: string, toolCalls: ChatToo
   if (!lookupToolCall || !canonicalName) {
     return {
       request: null,
-      reason: 'Tiger catalog shadow could not reuse a canonical company lookup result for this game-list prompt.',
+      reason: 'System catalog shadow could not reuse a canonical company lookup result for this game-list prompt.',
     };
   }
 
@@ -1705,12 +1841,12 @@ function buildCatalogRequestFromCompanyLookup(prompt: string, toolCalls: ChatToo
 
 function buildCatalogSearchShadowRequest(prompt: string, toolCalls: ChatToolCall[]): CatalogShadowBuildResult {
   const searchGamesAttempt = buildCatalogRequestFromSearchGames(toolCalls);
-  if (searchGamesAttempt.request || searchGamesAttempt.reason?.startsWith('Tiger catalog shadow skipped unsupported')) {
+  if (searchGamesAttempt.request || searchGamesAttempt.reason?.startsWith('system catalog shadow skipped unsupported')) {
     return searchGamesAttempt;
   }
 
   const screenGamesAttempt = buildCatalogRequestFromScreenGames(toolCalls);
-  if (screenGamesAttempt.request || screenGamesAttempt.reason?.startsWith('Tiger catalog shadow skipped unsupported')) {
+  if (screenGamesAttempt.request || screenGamesAttempt.reason?.startsWith('system catalog shadow skipped unsupported')) {
     return screenGamesAttempt;
   }
 
@@ -1719,7 +1855,12 @@ function buildCatalogSearchShadowRequest(prompt: string, toolCalls: ChatToolCall
 
 function extractCompanyQueryFromPrompt(prompt: string): string | null {
   const match = prompt.match(/\bgames?\b.*\b(?:by|from)\b\s+(.+?)(?:[?!.]|$)/i);
-  return normalizeEntityQuery(match?.[1] ?? null);
+  const candidate = normalizeEntityQuery(match?.[1] ?? null);
+  if (!candidate) {
+    return null;
+  }
+
+  return METRIC_LIKE_ENTITY_QUERY_PATTERN.test(candidate) ? null : candidate;
 }
 
 function extractPrimaryPlatforms(prompt: string): string[] {
@@ -1901,14 +2042,14 @@ function inferMomentumTimeframe(
 function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
   if (inferCompareIntent(prompt) || SEMANTIC_SIMILARITY_PROMPT_PATTERN.test(prompt)) {
     return {
-      reason: 'Tiger momentum routing does not combine discovery with compare or similarity prompts yet.',
+      reason: 'The system does not yet combine discovery with compare or similarity prompts.',
       request: null,
     };
   }
 
   if (extractCompanyQueryFromPrompt(prompt) || /\b(?:publisher|developer|studio|company)\b/i.test(prompt)) {
     return {
-      reason: 'Tiger momentum routing does not handle company-specific portfolio momentum yet.',
+      reason: 'The system does not handle company-specific portfolio momentum yet.',
       request: null,
     };
   }
@@ -1951,7 +2092,7 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
 
   if (!promptFamily) {
     return {
-      reason: 'Tiger momentum routing could not infer a stable momentum query from the prompt.',
+      reason: 'The system could not infer a stable momentum query from the prompt.',
       request: null,
     };
   }
@@ -2009,7 +2150,7 @@ function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildR
   const limit = extractRequestedTopCount(prompt, 20);
   if (/\b(?:games like|similar to|compare|breaking out|trending up|accelerating|declining|steam deck|controller support|co-op|coop)\b/.test(normalized)) {
     return {
-      reason: 'Tiger primary catalog routing does not support that discovery constraint yet.',
+      reason: 'The system does not support that discovery constraint yet.',
       requests: [],
     };
   }
@@ -2069,7 +2210,7 @@ function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildR
     && isFree == null
   ) {
     return {
-      reason: 'Tiger primary catalog routing could not infer a supported search request from the prompt.',
+      reason: 'The system could not infer a supported search request from the prompt.',
       requests: [],
     };
   }
@@ -2151,6 +2292,23 @@ function extractSemanticReferenceQuery(prompt: string): string | null {
 function buildSemanticRequestFromPrompt(
   prompt: string
 ): { reason?: string; request: SemanticSearchShadowRequest | null } {
+  if (SAME_FRANCHISE_PATTERN.test(prompt)) {
+    return {
+      request: null,
+      reason: 'The system does not support same-franchise semantic filtering yet.',
+    };
+  }
+
+  if (
+    UNSUPPORTED_SEMANTIC_MIXED_PATTERN.test(prompt)
+    && (SEMANTIC_SIMILARITY_PROMPT_PATTERN.test(prompt) || inferPrimarySemanticIntent(prompt))
+  ) {
+    return {
+      request: null,
+      reason: 'The system does not yet combine similarity or concept search with momentum-style ranking constraints.',
+    };
+  }
+
   const entityKindHint = normalizeEntityKindHint(prompt);
   const filters = extractSemanticFilters(prompt);
 
@@ -2159,7 +2317,7 @@ function buildSemanticRequestFromPrompt(
     if (!referenceQuery) {
       return {
         request: null,
-        reason: 'Tiger semantic routing could not infer a stable similarity reference from the prompt.',
+        reason: 'The system could not infer a stable similarity reference from the prompt.',
       };
     }
 
@@ -2177,7 +2335,7 @@ function buildSemanticRequestFromPrompt(
   if (!inferPrimarySemanticIntent(prompt)) {
     return {
       request: null,
-      reason: 'Tiger semantic routing could not infer a supported concept request from the prompt.',
+      reason: 'The system could not infer a supported concept request from the prompt.',
     };
   }
 
@@ -2357,8 +2515,8 @@ function buildTigerSelectionLastAnswer(params: {
     clarificationNeeded: params.clarificationNeeded ?? false,
     family: params.family,
     summary: params.clarificationNeeded
-      ? `Tiger needs clarification for ${params.family}.`
-      : `Tiger answered ${params.family}.`,
+      ? `System needs clarification for ${params.family}.`
+      : `System answered ${params.family}.`,
   };
 }
 
@@ -2561,22 +2719,22 @@ function applySelectionFollowUpState(params: {
   }
 
   return {
-    clarificationText: 'I could not map that follow-up to one of the available Tiger matches.',
+    clarificationText: 'I could not map that follow-up to one of the available matches.',
     selectionState: params.selectionState,
   };
 }
 
 function inferUnsupportedCompareReason(prompt: string): string | null {
   if (/\breview velocity\b|\breviews?\s+added\b|\brecent reviews?\b/i.test(prompt)) {
-    return 'Tiger compare does not support review-velocity or recent-review-window comparisons yet.';
+    return 'The system does not support review-velocity or recent-review-window comparisons yet.';
   }
 
   if (/\b(momentum|accelerating|declining|breaking out|trending up|sustained response)\b/i.test(prompt)) {
-    return 'Tiger compare does not support momentum or post-change response comparisons yet.';
+    return 'The system does not support momentum or post-change response comparisons yet.';
   }
 
   if (/\bbefore and after\b|\bbefore\/after\b/i.test(prompt)) {
-    return 'Tiger compare does not support before/after change comparisons yet.';
+    return 'The system does not support before/after change comparisons yet.';
   }
 
   return null;
@@ -2672,7 +2830,7 @@ function validateCompareMetricsForEntityKind(
   metrics: CompareMetricName[]
 ): string | null {
   if (entityKind === 'game' && metrics.includes('game_count')) {
-    return 'Tiger compare does not support game-count comparisons for game peers.';
+    return 'The system does not support game-count comparisons for game peers.';
   }
 
   return null;
@@ -2702,7 +2860,7 @@ function buildRankingShadowRequest(prompt: string): { reason?: string; request: 
   if (!inferRankingIntent(prompt)) {
     return {
       request: null,
-      reason: 'The prompt did not match a supported Tiger ranking pattern.',
+      reason: 'The prompt did not match a supported ranking pattern.',
     };
   }
 
@@ -2730,7 +2888,7 @@ function buildRankingShadowRequest(prompt: string): { reason?: string; request: 
   if (!metric) {
     return {
       request: null,
-      reason: 'The ranking prompt used filters or semantics Tiger rankEntities does not support yet.',
+      reason: 'The ranking prompt used filters or semantics the system does not support yet.',
     };
   }
 
@@ -2929,6 +3087,7 @@ async function resolveSelectionSlotAttempt(params: {
   expectedEntityKind: SessionSelectionEntityKind | null;
   label: string;
   query: string | null;
+  resolutionPreference?: EntityResolutionPreference;
   slotId: string;
 }): Promise<{
   attempt: TigerShadowAttempt;
@@ -2939,7 +3098,7 @@ async function resolveSelectionSlotAttempt(params: {
     return {
       attempt: buildSkippedAttempt(
         'resolveEntities',
-        'No resolvable entity reference was available for Tiger routing.'
+        'No resolvable entity reference was available for this request.'
       ),
       entitiesByUid: new Map(),
       slot: {
@@ -2993,13 +3152,24 @@ async function resolveSelectionSlotAttempt(params: {
     entities,
     expectedEntityKind: params.expectedEntityKind,
     query: params.query,
+    resolutionPreference: params.resolutionPreference ?? null,
   });
+  const localRequiresClarification = needsClarificationForRankedCandidates({
+    candidates,
+    query: params.query,
+    resolutionPreference: params.resolutionPreference ?? null,
+  });
+  const resolverRequestedClarification = response.data?.ambiguity?.requiresClarification ?? false;
   const requiresClarification =
-    (response.data?.ambiguity?.requiresClarification ?? false)
-      || needsClarificationForRankedCandidates({
+    localRequiresClarification
+    || (
+      resolverRequestedClarification
+      && !shouldOverrideResolverAmbiguity({
         candidates,
         query: params.query,
-      });
+        resolutionPreference: params.resolutionPreference ?? null,
+      })
+    );
   const selectedEntityUid = !requiresClarification ? candidates[0]?.entityUid ?? null : null;
 
   return {
@@ -3007,9 +3177,9 @@ async function resolveSelectionSlotAttempt(params: {
       contractName: 'resolveEntities',
       httpStatus: response.httpStatus,
       reason: requiresClarification
-        ? response.data?.ambiguity?.message ?? 'Tiger found multiple plausible matches and needs clarification.'
+        ? response.data?.ambiguity?.message ?? 'Multiple plausible matches were found and clarification is needed.'
         : entities.length === 0
-          ? 'Tiger could not resolve a stable entity from the prompt.'
+          ? 'The system could not resolve a stable entity from the prompt.'
           : undefined,
       resultCount: entities.length,
       status: 'success',
@@ -3069,6 +3239,7 @@ async function resolvePrimaryEntityAttempt(params: {
   expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
   family?: TigerPrimaryMatchedIntent;
   query: string | null;
+  resolutionPreference?: EntityResolutionPreference;
   selectionState?: SessionChatSelectionState | null;
 }): Promise<PrimaryEntityResolutionResult> {
   const selectedCandidate = pickSelectedCandidateFromSelectionState(params.selectionState);
@@ -3087,7 +3258,7 @@ async function resolvePrimaryEntityAttempt(params: {
     return {
       attempt: {
         contractName: 'resolveEntities',
-        reason: 'Tiger reused the current entity selection from session context.',
+        reason: 'Reused the current entity selection from session context.',
         status: 'success',
         sufficientToAnswer: true,
       },
@@ -3100,6 +3271,7 @@ async function resolvePrimaryEntityAttempt(params: {
     expectedEntityKind: params.expectedEntityKind,
     label: params.query ?? 'entity',
     query: params.query,
+    resolutionPreference: params.resolutionPreference ?? null,
     slotId: 'primary',
   });
   const entity = pickSelectedEntityFromSlot({
@@ -3133,6 +3305,7 @@ async function resolveGameEntityAttempt(params: {
     expectedEntityKind: 'game',
     family: params.family,
     query: params.query,
+    resolutionPreference: 'game',
     selectionState: params.selectionState,
   });
 
@@ -3140,7 +3313,7 @@ async function resolveGameEntityAttempt(params: {
     return {
       attempt: {
         ...resolved.attempt,
-        reason: resolved.attempt.reason ?? 'The Tiger resolveEntities contract did not return a Steam game match for the inferred reference.',
+        reason: resolved.attempt.reason ?? 'The system did not return a Steam game match for the inferred reference.',
         sufficientToAnswer: false,
       },
       entity: null,
@@ -3280,7 +3453,7 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
       attempts: [
         buildSkippedAttempt(
           'resolveEntities',
-          'Tiger compare routing could not infer two resolvable entities from the prompt.'
+          'The system could not infer two resolvable entities from the prompt.'
         ),
       ],
       entityKind: null,
@@ -3332,7 +3505,7 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
     attempts.push(
       buildSkippedAttempt(
         'resolveEntities',
-        'Tiger compare routing could not resolve all peers to the same entity kind and platform.'
+        'The system could not resolve all peers to the same entity kind and platform.'
       )
     );
     return { attempts, entityKind: null, entityUids: [], selectionState };
@@ -3353,7 +3526,7 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
     attempts.push(
       buildSkippedAttempt(
         'resolveEntities',
-        'Tiger compare routing could not resolve every peer to a stable shared entity type.'
+        'The system could not resolve every peer to a stable shared entity type.'
       )
     );
     return { attempts, entityKind: null, entityUids: [], selectionState };
@@ -3364,7 +3537,7 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
     attempts.push(
       buildSkippedAttempt(
         'resolveEntities',
-        'Tiger compare routing collapsed to fewer than two distinct peers.'
+        'The comparison collapsed to fewer than two distinct peers.'
       )
     );
     return { attempts, entityKind: null, entityUids: [], selectionState };
@@ -3436,7 +3609,7 @@ async function resolveDerivedCompareEntitiesAttempt(params: {
       attempts.push(
         buildSkippedAttempt(
           'compareEntities',
-          'Tiger compare could not derive a stable peer set from the ranking results.'
+          'The system could not derive a stable peer set from the ranking results.'
         )
       );
       return { attempts, entityKind: rankingAttempt.request.entityKind, entityUids: [] };
@@ -3455,11 +3628,11 @@ async function resolveDerivedCompareEntitiesAttempt(params: {
       attempts: [
         buildSkippedAttempt(
           'searchCatalog',
-          reason ?? 'Tiger compare could not derive a supported catalog peer set from the prompt.'
+          reason ?? 'The system could not derive a supported catalog peer set from the prompt.'
         ),
         buildSkippedAttempt(
           'compareEntities',
-          'Tiger compare did not find a supported derived peer-set strategy for this prompt.'
+          'The system did not find a supported derived peer-set strategy for this prompt.'
         ),
       ],
       entityKind: null,
@@ -3520,7 +3693,7 @@ async function resolveDerivedCompareEntitiesAttempt(params: {
   attempts.push(
     buildSkippedAttempt(
       'compareEntities',
-      'Tiger compare could not derive at least two comparable peers from the current catalog results.'
+      'The system could not derive at least two comparable peers from the current catalog results.'
     )
   );
   return { attempts, entityKind: 'game', entityUids: [] };
@@ -3603,7 +3776,7 @@ async function buildCompareRequestFromPrompt(params: {
               ...resolved.attempts,
               buildSkippedAttempt(
                 'compareEntities',
-                'Tiger compare routing skipped this prompt because it did not resolve to a stable peer set.'
+                'The comparison was skipped because it did not resolve to a stable peer set.'
               ),
             ],
       request:
@@ -3778,7 +3951,7 @@ async function runExplainChangesPrimary(params: {
     attempts.push(
       buildSkippedAttempt(
         'explainChanges',
-        'The Tiger primary explainChanges path was skipped because no game entity could be resolved.'
+        'The change explanation path was skipped because no game entity could be resolved.'
       )
     );
     return {
@@ -4117,7 +4290,7 @@ async function runMomentumPrimary(prompt: string): Promise<{
       attempts: [
         buildSkippedAttempt(
           'discoverMomentum',
-          built.reason ?? 'Tiger momentum routing could not infer a supported momentum request.'
+          built.reason ?? 'The system could not infer a supported momentum request.'
         ),
       ],
       request: null,
@@ -4156,7 +4329,7 @@ async function runMomentumPrimary(prompt: string): Promise<{
       httpStatus: response.httpStatus,
       reason: sufficientToAnswer
         ? undefined
-        : 'Tiger discoverMomentum returned no stable momentum set for this prompt.',
+        : 'The system did not return a stable momentum set for this prompt.',
       resultCount,
       status: sufficientToAnswer ? 'success' : 'skipped',
       sufficientToAnswer,
@@ -4173,7 +4346,7 @@ async function runMomentumShadow(prompt: string): Promise<TigerShadowAttempt[]> 
     return [
       buildSkippedAttempt(
         'discoverMomentum',
-        built.reason ?? 'Tiger momentum shadow could not infer a supported momentum request.'
+        built.reason ?? 'The system could not infer a supported momentum request.'
       ),
     ];
   }
@@ -4193,7 +4366,7 @@ async function runMomentumShadow(prompt: string): Promise<TigerShadowAttempt[]> 
     errorCode: response.ok ? undefined : response.errorCode,
     httpStatus: response.httpStatus,
     reason: response.ok
-      ? (sufficientToAnswer ? undefined : 'Tiger discoverMomentum returned no stable momentum set for this prompt.')
+      ? (sufficientToAnswer ? undefined : 'The system did not return a stable momentum set for this prompt.')
       : response.reason,
     resultCount,
     status: response.ok
@@ -4242,7 +4415,7 @@ async function buildSearchDocumentsRequest(params: {
       return {
         attempts: [{
           contractName: 'resolveEntities',
-          reason: 'Tiger reused the current entity selection from session context.',
+          reason: 'Reused the current entity selection from session context.',
           status: 'success',
           sufficientToAnswer: true,
         }],
@@ -4311,7 +4484,7 @@ async function buildSearchDocumentsRequest(params: {
     attempts: [
       buildSkippedAttempt(
         'resolveEntities',
-        'No game entity hint was available, so Tiger news routing ran without an entity filter.'
+        'No game entity hint was available, so the news lookup ran without an entity filter.'
       ),
     ],
     request: {
@@ -4336,7 +4509,7 @@ async function runSearchDocumentsShadow(params: {
     attempts.push(
       buildSkippedAttempt(
         'searchDocuments',
-        'Tiger news shadow routing could not build a supported request from the prompt.'
+        'The system could not build a supported news request from the prompt.'
       )
     );
     return attempts;
@@ -4390,7 +4563,7 @@ async function runSearchDocumentsPrimary(params: {
     attempts.push(
       buildSkippedAttempt(
         'searchDocuments',
-        'Tiger primary news routing could not build a supported request from the prompt.'
+        'The system could not build a supported news request from the prompt.'
       )
     );
     return {
@@ -4459,7 +4632,7 @@ async function runUserContextPrimary(params: {
       attempts: [
         buildSkippedAttempt(
           'getUserContext',
-          'Tiger user context routing requires an authenticated user.'
+          'This request requires an authenticated user.'
         ),
       ],
       request: null,
@@ -4520,7 +4693,7 @@ async function runCatalogSearchShadow(params: {
   const { request, reason } = buildCatalogSearchShadowRequest(params.prompt, params.toolCalls);
 
   if (!request) {
-    return [buildSkippedAttempt('searchCatalog', reason ?? 'Tiger catalog shadow could not build a supported request.')];
+    return [buildSkippedAttempt('searchCatalog', reason ?? 'The system could not build a supported catalog request.')];
   }
 
   const startedAt = performance.now();
@@ -4555,7 +4728,7 @@ async function runSemanticSearchShadow(params: {
   const { request, reason } = buildSemanticSearchShadowRequest(params);
 
   if (!request) {
-    return [buildSkippedAttempt('semanticSearch', reason ?? 'Tiger semantic shadow could not build a supported request.')];
+    return [buildSkippedAttempt('semanticSearch', reason ?? 'The system could not build a supported similarity request.')];
   }
 
   const startedAt = performance.now();
@@ -4586,7 +4759,7 @@ async function runSemanticSearchShadow(params: {
 async function runRankEntitiesShadow(prompt: string): Promise<TigerShadowAttempt[]> {
   const { request, reason } = buildRankingShadowRequest(prompt);
   if (!request) {
-    return [buildSkippedAttempt('rankEntities', reason ?? 'Tiger ranking shadow could not build a supported request.')];
+    return [buildSkippedAttempt('rankEntities', reason ?? 'The system could not build a supported ranking request.')];
   }
 
   const startedAt = performance.now();
@@ -4713,9 +4886,11 @@ async function runMetricHistoryShadow(params: {
 async function runEntityOverviewShadow(prompt: string): Promise<TigerShadowAttempt[]> {
   const query = extractEntityOverviewQuery(prompt);
   const expectedEntityKind = inferEntityOverviewKindHint(prompt);
+  const resolutionPreference = inferEntityOverviewResolutionPreference(prompt, expectedEntityKind);
   const { attempt: resolveAttempt, entity } = await resolvePrimaryEntityAttempt({
     expectedEntityKind,
     query,
+    resolutionPreference,
   });
   const attempts: TigerShadowAttempt[] = [resolveAttempt];
 
@@ -4723,7 +4898,7 @@ async function runEntityOverviewShadow(prompt: string): Promise<TigerShadowAttem
     attempts.push(
       buildSkippedAttempt(
         'getEntityOverview',
-        'The Tiger entity overview shadow path was skipped because no stable entity could be resolved.'
+        'The entity overview path was skipped because no stable entity could be resolved.'
       )
     );
     return attempts;
@@ -4786,10 +4961,15 @@ async function runEntityOverviewPrimary(params: {
 }> {
   const query = params.queryOverride ?? extractEntityOverviewQuery(params.prompt);
   const expectedEntityKind = params.explicitKindHint ?? inferEntityOverviewKindHint(params.prompt);
+  const resolutionPreference = inferEntityOverviewResolutionPreference(
+    params.prompt,
+    expectedEntityKind
+  );
   const { attempt: resolveAttempt, entity, selectionState } = await resolvePrimaryEntityAttempt({
     expectedEntityKind,
     family: 'entity_overview',
     query,
+    resolutionPreference,
     selectionState: params.selectionState,
   });
   const attempts: TigerShadowAttempt[] = [resolveAttempt];
@@ -4798,7 +4978,7 @@ async function runEntityOverviewPrimary(params: {
     attempts.push(
       buildSkippedAttempt(
         'getEntityOverview',
-        'The Tiger primary entity overview path was skipped because the prompt did not resolve to a stable entity.'
+        'The entity overview path was skipped because the prompt did not resolve to a stable entity.'
       )
     );
     return {
@@ -4870,7 +5050,7 @@ async function runCatalogSearchPrimary(prompt: string): Promise<{
   const { reason, requests } = buildCatalogSearchPrimaryRequests(prompt);
   if (requests.length === 0) {
     return {
-      attempts: [buildSkippedAttempt('searchCatalog', reason ?? 'Tiger primary catalog routing could not build a request.')],
+      attempts: [buildSkippedAttempt('searchCatalog', reason ?? 'The system could not build a catalog request.')],
       request: null,
       response: null,
     };
@@ -4923,7 +5103,7 @@ async function runSemanticSearchPrimary(prompt: string): Promise<{
   const { request, reason } = buildSemanticRequestFromPrompt(prompt);
   if (!request) {
     return {
-      attempts: [buildSkippedAttempt('semanticSearch', reason ?? 'Tiger primary semantic routing could not build a request.')],
+      attempts: [buildSkippedAttempt('semanticSearch', reason ?? 'The system could not build a similarity request.')],
       request: null,
       response: null,
     };
@@ -4977,7 +5157,7 @@ async function runRankEntitiesPrimary(prompt: string): Promise<{
   const { request, reason } = buildRankingShadowRequest(prompt);
   if (!request) {
     return {
-      attempts: [buildSkippedAttempt('rankEntities', reason ?? 'Tiger primary ranking could not build a request.')],
+      attempts: [buildSkippedAttempt('rankEntities', reason ?? 'The system could not build a ranking request.')],
       response: null,
     };
   }
@@ -5114,7 +5294,7 @@ async function runMetricHistoryPrimary(params: {
     attempts.push(
       buildSkippedAttempt(
         'traceMetricHistory',
-        'The Tiger primary metric history path was skipped because no game entity could be resolved.'
+        'The metric history path was skipped because no game entity could be resolved.'
       )
     );
     return {
@@ -5542,7 +5722,7 @@ export async function runTigerPrimaryEvaluation(params: {
                 : matchedIntent === 'change_explanation'
                   ? 'explainChanges'
                   : 'searchCatalog',
-          reason: error instanceof Error ? error.message : 'Unknown Tiger primary error',
+          reason: error instanceof Error ? error.message : 'Unknown system error',
           status: 'error',
         }],
         cohort,

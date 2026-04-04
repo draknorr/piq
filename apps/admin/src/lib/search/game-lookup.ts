@@ -58,7 +58,7 @@ const TIGER_GAME_LOOKUP_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'lookup_games now uses the Tiger resolve-entities contract before falling back to legacy fuzzy lookup.',
+    'lookup_games now uses the system resolve-entities contract before falling back to legacy fuzzy lookup.',
   recommendedTigerContracts: ['resolveEntities'],
 };
 
@@ -140,7 +140,7 @@ export async function lookupGames(args: LookupGamesArgs): Promise<LookupGamesRes
 
     return buildTigerOnlyLookupFailure(
       query,
-      tigerResponse.reason ?? `No Tiger game match was found for "${trimmedQuery}".`
+      tigerResponse.reason ?? `No game match was found for "${trimmedQuery}".`
     );
   } catch (error) {
     return buildTigerOnlyLookupFailure(

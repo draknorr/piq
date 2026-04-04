@@ -1,7 +1,7 @@
 /**
  * Trend Discovery Service
  *
- * Discovers games with trend momentum through Tiger-backed query-api contracts.
+ * Discovers games with trend momentum through system-backed query-api contracts.
  * Provides a simplified interface for trend-based queries.
  */
 
@@ -25,7 +25,7 @@ const TIGER_DISCOVER_TRENDING_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Trend-discovery prompts now execute through the Tiger discover-momentum contract before falling back.',
+    'Trend-discovery prompts now execute through the system discover-momentum contract before falling back.',
   recommendedTigerContracts: ['discoverMomentum'],
 };
 
@@ -172,8 +172,8 @@ async function tryTigerDiscoverTrending(
       sufficient_to_answer: response.data.sufficientToAnswer ?? (response.data.items?.length ?? 0) > 0,
       sufficiency_reason:
         (response.data.items?.length ?? 0) > 0
-          ? 'Tiger returned a ranked momentum set for the requested trend family.'
-          : 'No Tiger momentum results matched the requested trend family and filters.',
+          ? 'System returned a ranked momentum set for the requested trend family.'
+          : 'No system momentum results matched the requested trend family and filters.',
       results: (response.data.items ?? []).map((item) => ({
         appid: item.appid,
         name: item.name,
@@ -207,7 +207,7 @@ export async function discoverTrending(args: DiscoverTrendingArgs): Promise<Disc
       trend_type: args.trend_type,
       timeframe: args.timeframe ?? '7d',
       error:
-        'Tiger discover-momentum could not serve this discover_trending request. Try a narrower momentum query or use screen_games with explicit filters.',
+        'Discover-momentum could not serve this discover_trending request. Try a narrower momentum query or use screen_games with explicit filters.',
       unavailable: true,
     };
   } catch (error) {

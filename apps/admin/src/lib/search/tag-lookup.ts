@@ -1,7 +1,7 @@
 /**
  * Tag/Genre/Category Lookup Service
  *
- * Tiger-only taxonomy lookup for chat, while keeping cached lists for autocomplete.
+ * System-only taxonomy lookup for chat, while keeping cached lists for autocomplete.
  */
 
 import {
@@ -36,7 +36,7 @@ const TIGER_LOOKUP_TAGS_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Explicit tag and taxonomy lookup now runs through Tiger search-catalog facet lookup instead of direct Supabase reads.',
+    'Explicit tag and taxonomy lookup now runs through the system search-catalog facet lookup instead of direct Supabase reads.',
   recommendedTigerContracts: ['searchCatalog'],
 };
 
@@ -183,7 +183,7 @@ export async function lookupTags(args: LookupTagsArgs): Promise<LookupTagsResult
       results: {},
       unavailable: true,
       error:
-        'Tiger catalog facet lookup could not serve this lookup_tags request. Ask for specific tags, genres, or categories with a narrower taxonomy query.',
+        'Catalog facet lookup could not serve this lookup_tags request. Ask for specific tags, genres, or categories with a narrower taxonomy query.',
     };
   } catch (error) {
     return {

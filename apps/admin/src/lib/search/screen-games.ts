@@ -26,7 +26,7 @@ const TIGER_SCREEN_GAMES_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Momentum and screening prompts now execute only through the Tiger discover-momentum contract.',
+    'Momentum and screening prompts now execute only through the system discover-momentum contract.',
   recommendedTigerContracts: ['discoverMomentum'],
 };
 
@@ -454,8 +454,8 @@ async function tryTigerScreenGames(
       sufficient_to_answer: response.data.sufficientToAnswer ?? results.length > 0,
       sufficiency_reason:
         results.length > 0
-          ? 'Tiger momentum results are sufficient to answer directly.'
-          : 'No Tiger momentum candidates matched the requested filters.',
+          ? 'System momentum results are sufficient to answer directly.'
+          : 'No system momentum candidates matched the requested filters.',
     },
     TIGER_SCREEN_GAMES_PROVENANCE
   );
@@ -479,7 +479,7 @@ export async function screenGames(args: ScreenGamesArgs): Promise<ScreenGamesRes
       recommended_columns: getRecommendedColumns(args.sort_by, args.trend_profile),
       response_guidance: getResponseGuidance(args.sort_by, args.trend_profile),
       error:
-        'Tiger discover-momentum could not serve this screen_games request. Rephrase with supported momentum filters or a narrower leaderboard prompt.',
+        'Discover-momentum could not serve this screen_games request. Rephrase with supported momentum filters or a narrower leaderboard prompt.',
       unavailable: true,
     };
   } catch (error) {

@@ -72,7 +72,7 @@ const TIGER_COMPANY_LOOKUP_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Company lookup now uses the Tiger resolve-entities contract before falling back to the legacy resolver.',
+    'Company lookup now uses the system resolve-entities contract before falling back to the legacy resolver.',
   recommendedTigerContracts: ['resolveEntities'],
 };
 
@@ -325,13 +325,13 @@ async function lookupCompany(
     return {
       result_shape: 'lookup',
       sufficient_to_answer: true,
-      sufficiency_reason: `Tiger company lookup is temporarily unavailable for "${query}".`,
+      sufficiency_reason: `Company lookup is temporarily unavailable for "${query}".`,
       success: false,
       entityType,
       query,
       results: [],
       unavailable: true,
-      error: `Tiger company lookup is temporarily unavailable for "${query}".`,
+      error: `Company lookup is temporarily unavailable for "${query}".`,
     };
   } catch (error) {
     if (entityType === 'publisher') {

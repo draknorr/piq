@@ -399,7 +399,7 @@ export function buildSessionContextPrompt(context: SessionChatContext | null | u
 
   if (context.selectionState?.slots?.length) {
     sections.push(
-      `Tiger selection state (${context.selectionState.family}): ${context.selectionState.slots
+      `System selection state (${context.selectionState.family}): ${context.selectionState.slots
         .map((slot) => {
           const selected = slot.candidates.find((candidate) => candidate.entityUid === slot.selectedEntityUid);
           return `${slot.label}=${selected?.displayName ?? slot.query}`;

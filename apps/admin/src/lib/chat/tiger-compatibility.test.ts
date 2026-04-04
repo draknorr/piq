@@ -1014,8 +1014,158 @@ test('Tiger primary routes company portfolio metric prompts through get-entity-o
 
   assert.equal(result.info.matchedIntent, 'entity_overview');
   assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'getEntityOverview');
   assert.match(result.renderedText ?? '', /main portfolio metrics for \*\*FromSoftware\*\*/);
   assert.match(result.renderedText ?? '', /Portfolio owners midpoint/);
+  assert.doesNotMatch(result.renderedText ?? '', /likely matches/i);
+});
+
+test('Tiger primary auto-selects the dominant company candidate when resolver ambiguity is only alias noise', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(body.query, 'FromSoftware');
+      return jsonResponse({
+        ambiguity: {
+          candidateNames: ['FromSoftware', 'FromSoftware, Inc', 'FromSoftware, Inc.'],
+          message: 'Multiple strong matches found. A follow-up disambiguation question may improve answer quality.',
+          requiresClarification: true,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'FromSoftware',
+            entityKind: 'developer',
+            entityUid: 'developer:publisheriq:285932',
+            matchQuality: 'exact',
+            matchedName: 'FromSoftware',
+            platform: 'publisheriq',
+            platformEntityId: '285932',
+            signals: {
+              gameCount: 1,
+            },
+          },
+          {
+            confidence: 0.92,
+            displayName: 'FromSoftware, Inc',
+            entityKind: 'developer',
+            entityUid: 'developer:publisheriq:332003',
+            matchQuality: 'prefix',
+            matchedName: 'FromSoftware, Inc',
+            platform: 'publisheriq',
+            platformEntityId: '332003',
+            signals: {
+              gameCount: 1,
+            },
+          },
+          {
+            confidence: 0.92,
+            displayName: 'FromSoftware, Inc.',
+            entityKind: 'publisher',
+            entityUid: 'publisher:publisheriq:2949',
+            matchQuality: 'prefix',
+            matchedName: 'FromSoftware, Inc.',
+            platform: 'publisheriq',
+            platformEntityId: '2949',
+            signals: {
+              gameCount: 7,
+            },
+          },
+          {
+            confidence: 0.92,
+            displayName: 'FromSoftware, Inc.',
+            entityKind: 'developer',
+            entityUid: 'developer:publisheriq:3005',
+            matchQuality: 'prefix',
+            matchedName: 'FromSoftware, Inc.',
+            platform: 'publisheriq',
+            platformEntityId: '3005',
+            signals: {
+              gameCount: 12,
+            },
+          },
+          {
+            confidence: 0.92,
+            displayName: 'FromSoftware, Inc. (Japan)',
+            entityKind: 'publisher',
+            entityUid: 'publisher:publisheriq:194127',
+            matchQuality: 'prefix',
+            matchedName: 'FromSoftware, Inc. (Japan)',
+            platform: 'publisheriq',
+            platformEntityId: '194127',
+            signals: {
+              gameCount: 1,
+            },
+          },
+          {
+            confidence: 0.72,
+            displayName: 'Freed Software',
+            entityKind: 'game',
+            entityUid: 'game:steam:2082960',
+            matchQuality: 'fuzzy',
+            matchedName: 'Freed Software',
+            platform: 'steam',
+            platformEntityId: '2082960',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-entity-overview');
+    assert.deepEqual(body, {
+      entityKind: 'developer',
+      gamesLimit: 5,
+      gamesSortBy: 'release_date',
+      platformEntityId: '3005',
+    });
+
+    return jsonResponse({
+      entity: {
+        details: {
+          developers: [],
+          discountPercent: null,
+          isFree: null,
+          isReleased: null,
+          platforms: [],
+          priceCents: null,
+          publishers: [],
+          releaseDate: null,
+          releaseState: null,
+          releaseYear: null,
+        },
+        displayName: 'FromSoftware, Inc.',
+        entityKind: 'developer',
+        metrics: {
+          ccuPeak: 12000,
+          gameCount: 12,
+          ownersMidpoint: 4000000,
+          reviewScore: 94,
+          totalReviews: 600000,
+        },
+        platformEntityId: '3005',
+      },
+      games: [],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'How many players do FromSoftware games have?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_overview');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts.at(-1)?.contractName, 'getEntityOverview');
+  assert.match(result.renderedText ?? '', /portfolio metrics/i);
+  assert.doesNotMatch(result.renderedText ?? '', /Which one did you mean|I found a few likely matches/i);
 });
 
 test('Tiger primary routes company game-list prompts through Tiger catalog search', async (t) => {
@@ -1094,6 +1244,118 @@ test('Tiger primary routes company game-list prompts through Tiger catalog searc
   assert.equal(result.info.matchedIntent, 'catalog_search');
   assert.equal(result.info.route, 'primary_success');
   assert.match(result.renderedText ?? '', /ELDEN RING/);
+});
+
+test('Tiger primary routes review-ranking prompts through Tiger rankEntities instead of catalog search', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/rank-entities');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityKind: 'game',
+      limit: 10,
+      metric: 'total_reviews',
+      sortDirection: 'desc',
+    });
+
+    return jsonResponse({
+      entityKind: 'game',
+      items: [
+        {
+          displayName: 'Counter-Strike 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:730',
+          metrics: {
+            ccuPeak: 1404982,
+            ownersMidpoint: 0,
+            reviewScore: 88,
+            totalReviews: 9495164,
+          },
+          platformEntityId: '730',
+        },
+        {
+          displayName: 'Dota 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:570',
+          metrics: {
+            ccuPeak: 601576,
+            ownersMidpoint: 0,
+            reviewScore: 84,
+            totalReviews: 2684906,
+          },
+          platformEntityId: '570',
+        },
+      ],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the top games by reviews?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_ranking');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts[0]?.contractName, 'rankEntities');
+  assert.match(result.renderedText ?? '', /Counter-Strike 2/);
+  assert.match(result.renderedText ?? '', /Dota 2/);
+});
+
+test('Tiger primary routes concept prompts through Tiger semanticSearch instead of catalog search', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/semantic-search');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.mode, 'concept');
+    assert.equal(body.entityKind, 'game');
+    assert.equal(body.description, 'cozy farming games under $20');
+    assert.deepEqual(body.filters, {
+      max_price_cents: 2000,
+    });
+
+    return jsonResponse({
+      mode: 'semantic',
+      query_description: body.description,
+      results: [
+        {
+          genres: ['Farming Sim', 'RPG'],
+          id: 413150,
+          matchReasons: ['Cozy farming loop with strong player sentiment.'],
+          name: 'Stardew Valley',
+          price_cents: 1499,
+          review_percentage: 98,
+          score: 0.91,
+          steam_deck: 'verified',
+          tags: ['Cozy', 'Farming Sim'],
+          total_reviews: 990611,
+          type: 'game',
+        },
+      ],
+      sufficient_to_answer: true,
+      success: true,
+      total_found: 1,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Find cozy farming games under $20',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'semantic_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'semanticSearch');
+  assert.match(result.renderedText ?? '', /Stardew Valley/);
 });
 
 test('Tiger primary routes on-sale discovery prompts through Tiger catalog search', async (t) => {
@@ -2131,8 +2393,8 @@ test('Tiger primary uses candidate-specific switch hints for single-entity answe
 
   assert.equal(result.info.matchedIntent, 'change_explanation');
   assert.equal(result.info.route, 'primary_success');
-  assert.match(result.renderedText ?? '', /I treated this as Hades II \(game\)\./);
-  assert.match(result.renderedText ?? '', /Another likely match is Hades \(game\)\./);
+  assert.doesNotMatch(result.renderedText ?? '', /I treated this as Hades II \(game\)\./);
+  assert.doesNotMatch(result.renderedText ?? '', /Another likely match is Hades \(game\)\./);
   assert.doesNotMatch(result.renderedText ?? '', /publisher one/);
   assert.ok(result.followUpSuggestions?.some((suggestion) => suggestion.label.includes('Switch to Hades')));
 });
@@ -2234,6 +2496,211 @@ test('Tiger primary lets users switch by explicit alternate name', async (t) => 
   assert.equal(result.info.matchedIntent, 'change_explanation');
   assert.equal(result.info.route, 'primary_success');
   assert.match(result.renderedText ?? '', /Hades/);
+});
+
+test('Tiger primary prefers exact title matches for news prompts before clarifying', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(body.query, 'Primeval');
+      return jsonResponse({
+        ambiguity: {
+          candidateNames: ['Primeval', 'Primeval Genesis', 'Primeval Planet: Angimanation'],
+          message: 'Multiple strong matches found. A follow-up disambiguation question may improve answer quality.',
+          requiresClarification: true,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Primeval',
+            entityKind: 'game',
+            entityUid: 'game:steam:101',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '101',
+          },
+          {
+            confidence: 0.84,
+            displayName: 'Primeval Genesis',
+            entityKind: 'game',
+            entityUid: 'game:steam:102',
+            matchQuality: 'fuzzy',
+            platform: 'steam',
+            platformEntityId: '102',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/search-documents');
+    assert.deepEqual(body.entityUids, ['game:steam:101']);
+
+    return jsonResponse({
+      entity: {
+        displayName: 'Primeval',
+        entityKind: 'game',
+        entityUid: 'game:steam:101',
+        platform: 'steam',
+        platformEntityId: '101',
+      },
+      interpretedFilters: {
+        endTime: '2026-04-04T00:00:00.000Z',
+        entityUids: ['game:steam:101'],
+        feedScopes: [],
+        mode: 'topic_search',
+        query: 'recent announcements Primeval',
+        startTime: '2026-03-05T00:00:00.000Z',
+      },
+      items: [
+        {
+          appName: 'Primeval',
+          appid: 101,
+          bodyPreview: 'The team announced a closed playtest and refreshed the store page.',
+          entityUid: 'game:steam:101',
+          excerpt: 'Closed playtest announced alongside a store-page refresh.',
+          feedLabel: 'Steam News',
+          feedName: 'Steam',
+          feedScope: 'steam_news',
+          firstSeenAt: '2026-04-02T12:00:00.000Z',
+          gid: 'news-1',
+          matchReason: 'matched_exact_title',
+          publishedAt: '2026-04-02T12:00:00.000Z',
+          rank: 1,
+          rankingReason: 'Exact title match with recent entity news.',
+          sortTime: '2026-04-02T12:00:00.000Z',
+          title: 'Primeval announces closed playtest',
+          url: 'https://example.com/primeval-news',
+        },
+      ],
+      latestItem: null,
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Any recent announcements about Primeval?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'news_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts.at(-1)?.contractName, 'searchDocuments');
+  assert.match(result.renderedText ?? '', /Primeval announces closed playtest/);
+  assert.doesNotMatch(result.renderedText ?? '', /Which one did you mean/i);
+  assert.doesNotMatch(result.renderedText ?? '', /Another likely match is Primeval Genesis \(game\)\./);
+  assert.ok(result.followUpSuggestions?.some((suggestion) => suggestion.label.includes('Switch to Primeval Genesis')));
+});
+
+test('Tiger primary prefers exact title matches for change prompts before clarifying', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(body.query, 'Primeval');
+      return jsonResponse({
+        ambiguity: {
+          candidateNames: ['Primeval', 'Primeval Genesis', 'Primeval Planet: Angimanation'],
+          message: 'Multiple strong matches found. A follow-up disambiguation question may improve answer quality.',
+          requiresClarification: true,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Primeval',
+            entityKind: 'game',
+            entityUid: 'game:steam:101',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '101',
+          },
+          {
+            confidence: 0.82,
+            displayName: 'Primeval Genesis',
+            entityKind: 'game',
+            entityUid: 'game:steam:102',
+            matchQuality: 'fuzzy',
+            platform: 'steam',
+            platformEntityId: '102',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/explain-changes');
+    assert.deepEqual(body, {
+      entityUid: 'game:steam:101',
+      includeNews: true,
+      limit: 10,
+    });
+
+    return jsonResponse({
+      comparisonWindows: null,
+      entity: {
+        displayName: 'Primeval',
+        entityKind: 'game',
+        entityUid: 'game:steam:101',
+        platform: 'steam',
+        platformEntityId: '101',
+      },
+      mode: 'timeline',
+      moments: [
+        {
+          changeTypes: ['build', 'storefront'],
+          eventCount: 2,
+          events: [],
+          linkedNews: [],
+          reasons: ['A coordinated store-page and build update landed together.'],
+          sources: ['steam'],
+          windowEnd: '2026-04-02T00:00:00.000Z',
+          windowStart: '2026-04-01T00:00:00.000Z',
+        },
+      ],
+      selectedMoment: null,
+      sufficientToAnswer: true,
+      summary: {
+        countsByChangeType: {
+          build: 1,
+          storefront: 1,
+        },
+        countsBySource: {
+          steam: 2,
+        },
+        eventCount: 2,
+        momentCount: 1,
+        newsCount: 0,
+      },
+      timeWindow: {
+        endTime: '2026-04-04T00:00:00.000Z',
+        startTime: '2026-03-28T00:00:00.000Z',
+      },
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What changed for Primeval this week?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'change_explanation');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts.at(-1)?.contractName, 'explainChanges');
+  assert.match(result.renderedText ?? '', /Primeval/);
+  assert.doesNotMatch(result.renderedText ?? '', /Which one did you mean/i);
+  assert.doesNotMatch(result.renderedText ?? '', /Another likely match is Primeval Genesis \(game\)\./);
+  assert.ok(result.followUpSuggestions?.some((suggestion) => suggestion.label.includes('Switch to Primeval Genesis')));
 });
 
 test('Tiger primary lets users switch to the publisher alternative after an auto-selected company overview', async (t) => {
@@ -2546,6 +3013,28 @@ test('Tiger primary keeps unsupported review-velocity compare prompts out of Tig
   assert.equal(result.renderedText, null);
   assert.equal(result.info.attempts[0]?.contractName, 'compareEntities');
   assert.match(result.info.attempts[0]?.reason ?? '', /review-velocity/i);
+});
+
+test('Tiger primary keeps same-franchise semantic prompts out of Tiger semantic search', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async () => {
+    throw new Error('Tiger semantic search should not run for unsupported same-franchise prompts.');
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Steam Deck games similar to Hades II from the same franchise',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'semantic_search');
+  assert.equal(result.info.route, 'fallback_to_legacy');
+  assert.equal(result.renderedText, null);
+  assert.equal(result.info.attempts[0]?.contractName, 'semanticSearch');
+  assert.match(result.info.attempts[0]?.reason ?? '', /same-franchise/i);
 });
 
 test('Tiger primary answers portfolio prompts from Tiger user context', async (t) => {

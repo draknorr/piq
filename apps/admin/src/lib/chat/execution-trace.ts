@@ -78,7 +78,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Before/after change comparisons now run through Tiger explain-changes.',
+      'Before/after change comparisons now run through system explain-changes.',
     recommendedTigerContracts: ['explainChanges'],
   },
   discover_trending: {
@@ -90,7 +90,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Trend-discovery prompts now run through Tiger discover-momentum.',
+      'Trend-discovery prompts now run through system discover-momentum.',
     recommendedTigerContracts: ['discoverMomentum'],
   },
   find_change_patterns: {
@@ -106,7 +106,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Cross-game change-pattern discovery now runs through Tiger discover-change-patterns.',
+      'Cross-game change-pattern discovery now runs through system discover-change-patterns.',
     recommendedTigerContracts: ['discoverChangePatterns'],
   },
   find_similar: {
@@ -127,7 +127,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Change drilldown now runs through Tiger explain-changes.',
+      'Change drilldown now runs through system explain-changes.',
     recommendedTigerContracts: ['explainChanges'],
   },
   get_game_change_timeline: {
@@ -135,7 +135,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['rpc:get_app_change_feed', 'table:apps'],
     migrationDisposition: 'cut_over_now',
     migrationNotes:
-      'Single-title change timelines should be absorbed by Tiger explain-changes routing instead of staying on direct Supabase reads.',
+      'Single-title change timelines should be absorbed by system explain-changes routing instead of staying on direct Supabase reads.',
     recommendedTigerContracts: ['explainChanges'],
   },
   get_recent_news_detail: {
@@ -148,7 +148,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Recent-news detail now runs through Tiger search-documents.',
+      'Recent-news detail now runs through system search-documents.',
     recommendedTigerContracts: ['searchDocuments'],
   },
   get_recent_news_digest: {
@@ -161,7 +161,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Recent-news digests now run through Tiger search-documents.',
+      'Recent-news digests now run through system search-documents.',
     recommendedTigerContracts: ['searchDocuments'],
   },
   lookup_developers: {
@@ -169,7 +169,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['rpc:search_developers_fuzzy', 'table:developers', 'table:developer_metrics'],
     migrationDisposition: 'cut_over_now',
     migrationNotes:
-      'Developer identity resolution should route through Tiger resolve-entities instead of the legacy Supabase resolver.',
+      'Developer identity resolution should route through system resolve-entities instead of the legacy Supabase resolver.',
     recommendedTigerContracts: ['resolveEntities'],
   },
   lookup_games: {
@@ -177,7 +177,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['rpc:search_games_fuzzy', 'table:apps'],
     migrationDisposition: 'cut_over_now',
     migrationNotes:
-      'Game identity resolution should route through Tiger resolve-entities instead of the legacy lookup surface.',
+      'Game identity resolution should route through system resolve-entities instead of the legacy lookup surface.',
     recommendedTigerContracts: ['resolveEntities'],
   },
   lookup_publishers: {
@@ -185,7 +185,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['rpc:search_publishers_fuzzy', 'table:publishers', 'table:publisher_metrics'],
     migrationDisposition: 'cut_over_now',
     migrationNotes:
-      'Publisher identity resolution should route through Tiger resolve-entities instead of the legacy Supabase resolver.',
+      'Publisher identity resolution should route through system resolve-entities instead of the legacy Supabase resolver.',
     recommendedTigerContracts: ['resolveEntities'],
   },
   lookup_tags: {
@@ -198,7 +198,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'disable_instead_of_port',
     migrationNotes:
-      'Tag lookup should disappear from chat. Replace it with typed prompt parsing plus Tiger catalog filters instead of porting the tool as-is.',
+      'Tag lookup should disappear from chat. Replace it with typed prompt parsing plus system catalog filters instead of porting the tool as-is.',
     recommendedTigerContracts: ['searchCatalog'],
   },
   query_analytics: {
@@ -206,7 +206,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['cube:semantic_layer'],
     migrationDisposition: 'needs_tiger_contract',
     migrationNotes:
-      'Generic Cube analytics should not remain in chat. Split prompts onto typed Tiger contracts instead of keeping a generic analytics tool.',
+      'Generic Cube analytics should not remain in chat. Split prompts onto typed system contracts instead of keeping a generic analytics tool.',
     recommendedTigerContracts: ['resolveEntities', 'getEntityOverview', 'searchCatalog', 'rankEntities', 'traceMetricHistory'],
   },
   query_change_activity: {
@@ -220,7 +220,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Cross-game change discovery now runs through Tiger search-change-activity.',
+      'Cross-game change discovery now runs through system search-change-activity.',
     recommendedTigerContracts: ['searchChangeActivity'],
   },
   query_database: {
@@ -228,7 +228,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     dataSources: ['rpc:execute_readonly_query'],
     migrationDisposition: 'disable_instead_of_port',
     migrationNotes:
-      'Raw SQL should be removed from chat entirely. Replace each prompt family with a typed Tiger contract instead of carrying this tool forward.',
+      'Raw SQL should be removed from chat entirely. Replace each prompt family with a typed system contract instead of carrying this tool forward.',
     recommendedTigerContracts: [],
   },
   screen_games: {
@@ -240,7 +240,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Momentum and screening prompts now execute through Tiger discover-momentum.',
+      'Momentum and screening prompts now execute through system discover-momentum.',
     recommendedTigerContracts: ['discoverMomentum'],
   },
   search_by_concept: {
@@ -263,7 +263,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'cut_over_now',
     migrationNotes:
-      'Broad catalog discovery should move to Tiger search-catalog instead of reading Supabase tables directly from chat.',
+      'Broad catalog discovery should move to system search-catalog instead of reading Supabase tables directly from chat.',
     recommendedTigerContracts: ['searchCatalog'],
   },
   search_recent_news_topics: {
@@ -276,7 +276,7 @@ const TOOL_PROVENANCE: Record<string, ChatExecutionProvenanceDefinition> = {
     ],
     migrationDisposition: 'already_tiger',
     migrationNotes:
-      'Cross-game recent-news topic search now runs through Tiger search-documents.',
+      'Cross-game recent-news topic search now runs through system search-documents.',
     recommendedTigerContracts: ['searchDocuments'],
   },
 };
@@ -286,14 +286,14 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:compareEntities', 'relation:core_entities', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Entity compare already runs through Tiger.',
+    migrationNotes: 'Entity compare already runs through the system.',
     recommendedTigerContracts: ['compareEntities'],
   },
   continueResultSet: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:continueResultSet', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Tiger-owned continuation already runs through query-api.',
+    migrationNotes: 'System-owned continuation already runs through query-api.',
     recommendedTigerContracts: ['continueResultSet'],
   },
   explainChanges: {
@@ -306,7 +306,7 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:docs_steam_news_search_projection',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Single-entity change explanation already runs through Tiger.',
+    migrationNotes: 'Single-entity change explanation already runs through the system.',
     recommendedTigerContracts: ['explainChanges'],
   },
   discoverMomentum: {
@@ -317,14 +317,14 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:metrics_daily_metrics',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Momentum discovery already runs through Tiger.',
+    migrationNotes: 'Momentum discovery already runs through the system.',
     recommendedTigerContracts: ['discoverMomentum'],
   },
   getEntityOverview: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:getEntityOverview', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Entity overview and company portfolio snapshots already run through Tiger.',
+    migrationNotes: 'Entity overview and company portfolio snapshots already run through the system.',
     recommendedTigerContracts: ['getEntityOverview'],
   },
   getUserContext: {
@@ -338,14 +338,14 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       ...SHARED_CATALOG_RELATIONS,
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Pinned items, alert preferences, and unread alert context now run through Tiger.',
+    migrationNotes: 'Pinned items, alert preferences, and unread alert context now run through the system.',
     recommendedTigerContracts: ['getUserContext'],
   },
   rankEntities: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:rankEntities', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Ranking already runs through Tiger.',
+    migrationNotes: 'Ranking already runs through the system.',
     recommendedTigerContracts: ['rankEntities'],
   },
   discoverChangePatterns: {
@@ -360,21 +360,21 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:docs_steam_news_search_projection',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Cross-game change-pattern discovery already runs through Tiger.',
+    migrationNotes: 'Cross-game change-pattern discovery already runs through the system.',
     recommendedTigerContracts: ['discoverChangePatterns'],
   },
   resolveEntities: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:resolveEntities', 'relation:apps', 'relation:latest_daily_metrics', 'relation:publishers', 'relation:developers'],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Entity resolution already runs through Tiger.',
+    migrationNotes: 'Entity resolution already runs through the system.',
     recommendedTigerContracts: ['resolveEntities'],
   },
   searchCatalog: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:searchCatalog', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Catalog search already runs through Tiger.',
+    migrationNotes: 'Catalog search already runs through the system.',
     recommendedTigerContracts: ['searchCatalog'],
   },
   searchChangeActivity: {
@@ -387,7 +387,7 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:docs_steam_news_search_projection',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Cross-game change activity search already runs through Tiger.',
+    migrationNotes: 'Cross-game change activity search already runs through the system.',
     recommendedTigerContracts: ['searchChangeActivity'],
   },
   searchDocuments: {
@@ -398,21 +398,21 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:docs_steam_news_search_projection',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Document/news search already runs through Tiger.',
+    migrationNotes: 'Document/news search already runs through the system.',
     recommendedTigerContracts: ['searchDocuments'],
   },
   semanticSearch: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:semanticSearch', ...SHARED_CATALOG_RELATIONS],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Semantic search already runs through Tiger.',
+    migrationNotes: 'Semantic search already runs through the system.',
     recommendedTigerContracts: ['semanticSearch'],
   },
   traceMetricHistory: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:traceMetricHistory', 'relation:core_entities', 'relation:metrics_daily_metrics'],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Metric history already runs through Tiger.',
+    migrationNotes: 'Metric history already runs through the system.',
     recommendedTigerContracts: ['traceMetricHistory'],
   },
 };
@@ -481,7 +481,7 @@ function getContractProvenanceDefinition(
 ): ChatExecutionProvenanceDefinition {
   const definition = CONTRACT_PROVENANCE[contractName];
   if (!definition) {
-    throw new Error(`Missing chat execution provenance mapping for Tiger contract: ${contractName}`);
+    throw new Error(`Missing chat execution provenance mapping for system contract: ${contractName}`);
   }
   return definition;
 }

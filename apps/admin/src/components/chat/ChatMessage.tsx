@@ -78,7 +78,7 @@ function getTigerDebugBadge(message: DisplayMessage): {
 
   if (message.tigerPrimary?.route === 'primary_success') {
     return {
-      label: 'Tiger primary',
+      label: 'System primary',
       detail: titleCaseIntent(message.tigerPrimary.matchedIntent) ?? undefined,
       tone: 'blue',
     };
@@ -86,7 +86,7 @@ function getTigerDebugBadge(message: DisplayMessage): {
 
   if (message.tigerShadow?.route === 'shadow_success_legacy_answer') {
     return {
-      label: 'Tiger shadow',
+      label: 'System shadow',
       detail: titleCaseIntent(message.tigerShadow.matchedIntent) ?? undefined,
       tone: 'blue',
     };

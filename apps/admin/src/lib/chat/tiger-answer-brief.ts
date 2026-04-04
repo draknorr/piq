@@ -65,6 +65,22 @@ function formatDate(value: string | null | undefined): string | null {
   return value.slice(0, 10);
 }
 
+function joinHumanList(values: string[]): string {
+  if (values.length === 0) {
+    return '';
+  }
+
+  if (values.length === 1) {
+    return values[0];
+  }
+
+  if (values.length === 2) {
+    return `${values[0]} and ${values[1]}`;
+  }
+
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
 function humanizeMetric(metric: string | null | undefined): string {
   switch (metric) {
     case 'ccu_peak':
@@ -86,6 +102,119 @@ function humanizeEntityKind(entityKind: string | null | undefined): string {
   return entityKind === 'game' || entityKind === 'publisher' || entityKind === 'developer'
     ? entityKind
     : 'entity';
+}
+
+function inferNewsAnswerLabel(item: Record<string, unknown> | null): string {
+  if (!item) {
+    return 'coverage';
+  }
+
+  const combined = [
+    getString(item.title),
+    getString(item.rankingReason),
+    getString(item.feedLabel),
+    getString(item.feedScope),
+    getString(item.excerpt),
+    getString(item.bodyPreview),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+
+  if (/\b(patch notes?|hotfix|changelog|update notes?|accumulated updates?|growth rate update)\b/.test(combined)) {
+    return 'patch notes';
+  }
+
+  if (/\b(announcement|announcements|developer diary|dev diary|roadmap|playtest|demo)\b/.test(combined)) {
+    return 'announcements';
+  }
+
+  if (/\b(update|updates)\b/.test(combined)) {
+    return 'update posts';
+  }
+
+  return 'coverage';
+}
+
+function titleCaseToken(value: string): string {
+  if (value === 'macos') {
+    return 'macOS';
+  }
+
+  return value.length > 0
+    ? `${value.charAt(0).toUpperCase()}${value.slice(1).toLowerCase()}`
+    : value;
+}
+
+function describeMomentumAppliedFilters(response: unknown): string[] {
+  if (!isRecord(response) || !Array.isArray(response.filtersApplied)) {
+    return [];
+  }
+
+  const descriptions: string[] = [];
+
+  for (const rawFilter of response.filtersApplied) {
+    const value = String(rawFilter).trim();
+    if (!value) {
+      continue;
+    }
+
+    const [rawKey, rawRest = ''] = value.split(':', 2);
+    const key = rawKey.trim().toLowerCase();
+    const rest = rawRest.trim();
+
+    if (key === 'steam_deck' && rest) {
+      const deckValues = rest
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+        .map((entry) => `Steam Deck ${titleCaseToken(entry)}`);
+      descriptions.push(...deckValues);
+      continue;
+    }
+
+    if (key === 'platforms' && rest) {
+      const platforms = rest
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+        .map(titleCaseToken);
+      descriptions.push(...platforms);
+      continue;
+    }
+
+    if (key === 'is_free') {
+      if (rest === 'true') {
+        descriptions.push('free-to-play');
+      } else if (rest === 'false') {
+        descriptions.push('premium');
+      }
+      continue;
+    }
+
+    if (key === 'indie_heuristic' && rest === 'true') {
+      descriptions.push('indie');
+      continue;
+    }
+  }
+
+  return [...new Set(descriptions)];
+}
+
+function formatMomentumAppliedScope(response: unknown): string | null {
+  const filters = describeMomentumAppliedFilters(response);
+  return filters.length > 0 ? joinHumanList(filters) : null;
+}
+
+function getHistoryWindowLabels(response: unknown): { startDate: string | null; endDate: string | null } {
+  if (!isRecord(response)) {
+    return { endDate: null, startDate: null };
+  }
+
+  return {
+    endDate: formatDate(getString(response.endDate)),
+    startDate: formatDate(getString(response.startDate)),
+  };
 }
 
 function dedupeSuggestions(suggestions: QuerySuggestion[], maxResults = 4): QuerySuggestion[] {
@@ -197,6 +326,23 @@ function buildSelectionSwitchSuggestions(selectionState: SessionChatSelectionSta
   return dedupeSuggestions(suggestions, 3);
 }
 
+function shouldSurfaceAlternateSelectionHint(
+  selected: SessionChatSelectionCandidate,
+  alternate: SessionChatSelectionCandidate
+): boolean {
+  const scoreGap = selected.score - alternate.score;
+
+  if (
+    selected.matchQuality === 'exact'
+    && alternate.matchQuality !== 'exact'
+    && scoreGap >= 20
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function buildSelectionNote(selectionState: SessionChatSelectionState | null): string | null {
   if (!selectionState) {
     return null;
@@ -215,6 +361,10 @@ function buildSelectionNote(selectionState: SessionChatSelectionState | null): s
     const alternate = slot.candidates.find((candidate) => candidate.entityUid !== slot.selectedEntityUid);
 
     if (!selected || !alternate) {
+      return null;
+    }
+
+    if (!shouldSurfaceAlternateSelectionHint(selected, alternate)) {
       return null;
     }
 
@@ -684,6 +834,21 @@ function getMomentumBriefMode(response: unknown): 'current_players' | 'review_mo
   return 'momentum';
 }
 
+function getMomentumWindowLabel(response: unknown): string {
+  const timeframe = isRecord(response) ? getString(response.timeframe) : null;
+  const end = new Date();
+  const endLabel = formatDate(end.toISOString());
+
+  if (!endLabel || timeframe === 'current' || !timeframe) {
+    return endLabel ?? 'today';
+  }
+
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (timeframe === '30d' ? 29 : 6));
+  const startLabel = formatDate(start.toISOString());
+  return startLabel && endLabel ? `${startLabel} to ${endLabel}` : endLabel;
+}
+
 function buildDirectAnswer(params: {
   intent: TigerAnswerIntent;
   response: unknown;
@@ -742,7 +907,7 @@ function buildDirectAnswer(params: {
     }
 
     const metrics = isRecord(entity?.metrics) ? entity.metrics : null;
-    return `${entityName} currently spans ${formatNumber(getNumber(metrics?.gameCount))} games in the catalog.`;
+    return `${entityName}'s portfolio currently spans ${formatNumber(getNumber(metrics?.gameCount))} games, with approximately ${formatNumber(getNumber(metrics?.ownersMidpoint))} owners midpoint and ${formatNumber(getNumber(metrics?.ccuPeak))} peak CCU across the catalog.`;
   }
 
   if (intent === 'user_context') {
@@ -780,8 +945,12 @@ function buildDirectAnswer(params: {
       : [];
     const firstSeries = series[0] ?? null;
     const summary = firstSeries && isRecord(firstSeries.summary) ? firstSeries.summary : null;
+    const { startDate, endDate } = getHistoryWindowLabels(response);
     if (firstSeries && summary) {
-      return `Over this window, ${entityName}'s ${humanizeMetric(getString(firstSeries.metric))} moved from ${formatNumber(getNumber(summary.startValue))} to ${formatNumber(getNumber(summary.latestValue))}.`;
+      const windowPrefix = startDate && endDate
+        ? `From ${startDate} through ${endDate}, `
+        : 'Over this window, ';
+      return `${windowPrefix}${entityName}'s ${humanizeMetric(getString(firstSeries.metric))} moved from ${formatNumber(getNumber(summary.startValue))} to ${formatNumber(getNumber(summary.latestValue))}.`;
     }
     return `Here is the recent history for ${entityName}.`;
   }
@@ -792,6 +961,9 @@ function buildDirectAnswer(params: {
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
     const briefMode = getMomentumBriefMode(response);
+    const windowLabel = getMomentumWindowLabel(response);
+    const appliedScope = formatMomentumAppliedScope(response);
+    const scopeSuffix = appliedScope ? ` within the ${appliedScope} set` : '';
     const supportReasons =
       firstItem && Array.isArray(firstItem.supportReasons)
         ? firstItem.supportReasons.map((value) => String(value)).filter(Boolean)
@@ -799,9 +971,11 @@ function buildDirectAnswer(params: {
     const ccuPeak = firstItem ? getNumber(firstItem.ccuPeak) : null;
     return firstName
       ? briefMode === 'current_players'
-        ? `${firstName} currently has the highest player count in this ${timeframeLabel?.toLowerCase() ?? 'current'} set, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
-        : `${firstName} currently leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
-      : `Here is the current momentum set for ${timeframeLabel?.toLowerCase() ?? 'this window'}.`;
+        ? `As of ${windowLabel}, ${firstName} has the highest player count in this snapshot${scopeSuffix}, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
+        : `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
+      : briefMode === 'current_players'
+        ? `As of ${windowLabel}, here is the current player leaderboard${scopeSuffix}.`
+        : `Here is the current momentum set${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).`;
   }
 
   if (intent === 'news_search' && entityName) {
@@ -809,9 +983,10 @@ function buildDirectAnswer(params: {
     const title = firstItem ? getString(firstItem.title) : null;
     const publishedAt = firstItem ? formatDate(getString(firstItem.publishedAt) ?? getString(firstItem.sortTime)) : null;
     const rankingReason = firstItem ? getString(firstItem.rankingReason) : null;
+    const answerLabel = inferNewsAnswerLabel(firstItem);
     return title
-      ? `I found recent coverage for ${entityName}. The strongest match is “${title}” from ${publishedAt ?? 'recently'}${rankingReason ? `, and it lines up as ${rankingReason}` : ''}.`
-      : `I found recent coverage for ${entityName}.`;
+      ? `I found recent ${answerLabel} for ${entityName}. The strongest match is “${title}” from ${publishedAt ?? 'recently'}${rankingReason ? `, and it lines up as ${rankingReason}` : ''}.`
+      : `I found recent ${answerLabel} for ${entityName}.`;
   }
 
   if (intent === 'change_explanation' && entityName) {
@@ -887,9 +1062,14 @@ function buildKeyFacts(params: {
     const entityName = entity ? getString(entity.displayName) : null;
     const metrics = entity && isRecord(entity.metrics) ? entity.metrics : null;
     const details = entity && isRecord(entity.details) ? entity.details : null;
+    const entityKind = entity ? getString(entity.entityKind) : null;
 
     if (entityName && metrics) {
-      facts.push(`${entityName}: ${formatNumber(getNumber(metrics.totalReviews))} reviews, ${formatNumber(getNumber(metrics.ownersMidpoint))} owners midpoint, ${formatNumber(getNumber(metrics.ccuPeak))} peak CCU.`);
+      facts.push(
+        entityKind === 'game'
+          ? `${entityName}: ${formatNumber(getNumber(metrics.totalReviews))} reviews, ${formatNumber(getNumber(metrics.ownersMidpoint))} owners midpoint, ${formatNumber(getNumber(metrics.ccuPeak))} peak CCU.`
+          : `Portfolio totals for ${entityName}: ${formatNumber(getNumber(metrics.gameCount))} games, ${formatNumber(getNumber(metrics.totalReviews))} reviews, ${formatNumber(getNumber(metrics.ownersMidpoint))} owners midpoint, ${formatNumber(getNumber(metrics.ccuPeak))} peak CCU.`
+      );
     }
 
     if (details) {
@@ -947,6 +1127,11 @@ function buildKeyFacts(params: {
     const series = isRecord(response) && Array.isArray(response.series)
       ? response.series.filter((item): item is Record<string, unknown> => isRecord(item))
       : [];
+    const { startDate, endDate } = getHistoryWindowLabels(response);
+
+    if (startDate && endDate) {
+      facts.push(`Window: ${startDate} through ${endDate}.`);
+    }
 
     for (const entry of series.slice(0, 4)) {
       const summary = isRecord(entry.summary) ? entry.summary : null;
@@ -962,6 +1147,11 @@ function buildKeyFacts(params: {
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
     const briefMode = getMomentumBriefMode(response);
+    const windowLabel = getMomentumWindowLabel(response);
+    const appliedScope = formatMomentumAppliedScope(response);
+    if (appliedScope) {
+      facts.push(`Applied filters: ${appliedScope}.`);
+    }
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name) ?? getString(item.displayName);
       const supportLevel = getString(item.supportLevel);
@@ -974,7 +1164,7 @@ function buildKeyFacts(params: {
       }
       if (briefMode === 'current_players') {
         facts.push(
-          `${name}: ${formatNumber(getNumber(item.ccuPeak))} peak CCU, ${formatNumber(getNumber(item.totalReviews))} total reviews, trend ${getString(item.trendDirection) ?? 'n/a'}${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
+          `${name}: ${formatNumber(getNumber(item.ccuPeak))} peak CCU as of ${windowLabel}, ${formatNumber(getNumber(item.totalReviews))} total reviews, trend ${getString(item.trendDirection) ?? 'n/a'}${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
         );
         continue;
       }
@@ -987,7 +1177,7 @@ function buildKeyFacts(params: {
       }
 
       facts.push(
-        `${name}: ${rankingLabel ?? 'Momentum'} over ${timeframeLabel ?? 'this window'}, ${supportLevel ?? 'n/a'} support, ${formatNumber(getNumber(item.ccuPeak))} peak CCU, ${formatNumber(reviewDelta)} recent reviews added${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
+        `${name}: ${rankingLabel ?? 'Momentum'} over ${timeframeLabel ?? 'this window'} (${windowLabel}), ${supportLevel ?? 'n/a'} support, ${formatNumber(getNumber(item.ccuPeak))} peak CCU, ${formatNumber(reviewDelta)} recent reviews added${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
       );
     }
   } else if (intent === 'news_search') {

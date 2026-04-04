@@ -383,7 +383,7 @@ const TIGER_GAME_TIMELINE_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'get_game_change_timeline now uses Tiger resolve-entities plus explain-changes when the request can be mapped safely.',
+    'get_game_change_timeline now uses system resolve-entities plus explain-changes when the request can be mapped safely.',
   recommendedTigerContracts: ['resolveEntities', 'explainChanges'],
 };
 
@@ -398,7 +398,7 @@ const TIGER_CHANGE_ACTIVITY_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Cross-game change discovery now runs through Tiger search-change-activity instead of the legacy change projection RPCs.',
+    'Cross-game change discovery now runs through the system search-change-activity instead of the legacy change projection RPCs.',
   recommendedTigerContracts: ['searchChangeActivity'],
 };
 
@@ -415,7 +415,7 @@ const TIGER_CHANGE_PATTERNS_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Cross-game change-pattern discovery now runs through Tiger discover-change-patterns.',
+    'Cross-game change-pattern discovery now runs through the system discover-change-patterns.',
   recommendedTigerContracts: ['discoverChangePatterns'],
 };
 
@@ -429,7 +429,7 @@ const TIGER_NEWS_DOCUMENTS_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Recent-news digest, detail, and topic-search prompts now run through Tiger search-documents.',
+    'Recent-news digest, detail, and topic-search prompts now run through the system search-documents.',
   recommendedTigerContracts: ['searchDocuments'],
 };
 
@@ -444,7 +444,7 @@ const TIGER_CHANGE_DETAIL_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Change drilldown and before/after detail now run through Tiger explain-changes.',
+    'Change drilldown and before/after detail now run through the system explain-changes.',
   recommendedTigerContracts: ['explainChanges'],
 };
 
@@ -1670,7 +1670,7 @@ export async function queryChangeActivity(args: QueryChangeActivityArgs) {
     );
 
     if (!response.ok || !response.data) {
-      throw new Error(response.reason ?? 'Tiger search-change-activity failed');
+      throw new Error(response.reason ?? 'Search-change-activity failed');
     }
 
     const data = response.data;
@@ -1763,7 +1763,7 @@ export async function getGameChangeTimeline(args: GetGameChangeTimelineArgs) {
     unavailable: true,
     selected_change_surface: 'per_app_timeline',
     error:
-      'Tiger explain-changes could not serve this get_game_change_timeline request. Try a specific title with a standard recent-change window.',
+      'Explain-changes could not serve this get_game_change_timeline request. Try a specific title with a standard recent-change window.',
     sufficient_to_answer: false,
     fallback_allowed: false,
   };
@@ -2053,7 +2053,7 @@ export async function searchRecentNewsTopics(args: SearchRecentNewsTopicsArgs) {
     );
 
     if (!response.ok || !response.data) {
-      throw new Error(response.reason ?? 'Tiger search-documents failed');
+      throw new Error(response.reason ?? 'Search-documents failed');
     }
 
     const data = response.data;
@@ -2399,7 +2399,7 @@ export async function findChangePatterns(args: FindChangePatternsArgs) {
     );
 
     if (!response.ok || !response.data) {
-      throw new Error(response.reason ?? 'Tiger discover-change-patterns failed');
+      throw new Error(response.reason ?? 'Discover-change-patterns failed');
     }
     const data = response.data;
     const results = (data.items ?? []).filter((item) => !excludeAppIds.includes(item.appid));

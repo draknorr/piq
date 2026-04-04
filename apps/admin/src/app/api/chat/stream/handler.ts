@@ -309,7 +309,7 @@ async function executeTool(toolCall: ToolCall): Promise<{ success: boolean; erro
     return {
       success: false,
       unavailable: true,
-      error: 'query_database is not available in Tiger-only chat.',
+      error: 'query_database is not available in system chat.',
       sufficient_to_answer: false,
     };
   } else if (toolCall.name === 'query_analytics') {
@@ -322,7 +322,7 @@ async function executeTool(toolCall: ToolCall): Promise<{ success: boolean; erro
       success: false,
       unavailable: true,
       error:
-        'query_analytics is not available in Tiger-only chat. Use Tiger-backed discovery, ranking, compare, momentum, or change-intel tools instead.',
+        'query_analytics is not available in system chat. Use system-backed discovery, ranking, compare, momentum, or change-intel tools instead.',
       sufficient_to_answer: false,
     };
   } else if (toolCall.name === 'find_similar') {
@@ -734,31 +734,31 @@ function buildTigerOnlyFallbackReply(params: {
 }): string {
   const { tigerPrimary } = params;
   const primaryReason = extractTigerPrimaryReasons(tigerPrimary)[0] ?? null;
-  const reasonSuffix = primaryReason ? `\n\nTiger reason: ${primaryReason}` : '';
+  const reasonSuffix = primaryReason ? `\n\nReason: ${primaryReason}` : '';
 
   switch (tigerPrimary.matchedIntent) {
     case 'entity_overview':
-      return `I couldn't resolve a single stable game or company for that Tiger overview request. Try the exact Steam title or the exact studio/publisher name.${reasonSuffix}`;
+      return `I couldn't route that overview cleanly in the system yet because it couldn't resolve a single stable game or company. Try the exact Steam title or the exact studio or publisher name.${reasonSuffix}`;
     case 'entity_compare':
-      return `I couldn't build a stable Tiger comparison for that prompt. Try \`compare FromSoftware and Rockstar Games by reviews\` or name the exact entities you want compared.${reasonSuffix}`;
+      return `I couldn't route that comparison cleanly in the system yet. Try \`compare FromSoftware and Rockstar Games by reviews\` or name the exact entities you want compared.${reasonSuffix}`;
     case 'catalog_search':
-      return `Tiger couldn't satisfy that catalog search as phrased. Try a simpler request like \`show me all games by FromSoftware\` or \`show me Linux games with overwhelmingly positive reviews\`.${reasonSuffix}`;
+      return `I couldn't route that catalog search cleanly in the system yet. Try a simpler request like \`show me all games by FromSoftware\` or \`show me Linux games with overwhelmingly positive reviews\`.${reasonSuffix}`;
     case 'entity_ranking':
-      return `Tiger couldn't satisfy that ranking prompt as phrased. Try a direct ranking like \`what are the top games by reviews?\` or \`what publisher has the most games on Steam?\`.${reasonSuffix}`;
+      return `I couldn't route that ranking cleanly in the system yet. Try a direct ranking like \`what are the top games by reviews?\` or \`what publisher has the most games on Steam?\`.${reasonSuffix}`;
     case 'momentum_discovery':
-      return `Tiger couldn't satisfy that momentum prompt as phrased. Try a direct discovery like \`what games are trending this week?\`, \`what games are breaking out this week?\`, or \`show free-to-play games with the most players\`.${reasonSuffix}`;
+      return `I couldn't route that momentum request cleanly in the system yet. Try a direct discovery like \`what games are trending this week?\`, \`what games are breaking out this week?\`, or \`show free-to-play games with the most players\`.${reasonSuffix}`;
     case 'metric_history':
-      return `I couldn't resolve a single game for that Tiger history request. Try the exact Steam title and a direct time window, like \`How have Hades II reviews changed over the last 30 days?\`${reasonSuffix}`;
+      return `I couldn't route that history request cleanly in the system yet because it couldn't resolve a single game. Try the exact Steam title and a direct time window, like \`How have Hades II reviews changed over the last 30 days?\`${reasonSuffix}`;
     case 'news_search':
-      return `Tiger couldn't build a stable news lookup for that prompt. Try the exact game title, like \`Any recent announcements about Primeval?\`${reasonSuffix}`;
+      return `I couldn't route that news lookup cleanly in the system yet. Try the exact game title, like \`Any recent announcements about Primeval?\`${reasonSuffix}`;
     case 'change_explanation':
-      return `Tiger couldn't build a stable change explanation for that prompt. Try the exact game title, like \`What changed for Primeval this week?\`${reasonSuffix}`;
+      return `I couldn't route that change explanation cleanly in the system yet. Try the exact game title, like \`What changed for Primeval this week?\`${reasonSuffix}`;
     case 'change_discovery':
-      return `Tiger couldn't satisfy that change-discovery prompt as phrased. Try a direct prompt like \`show recent store-page changes\` or \`find games teasing a big update\`.${reasonSuffix}`;
+      return `I couldn't route that change-discovery prompt cleanly in the system yet. Try a direct prompt like \`show recent store-page changes\` or \`find games teasing a big update\`.${reasonSuffix}`;
     case 'semantic_search':
-      return `Tiger couldn't satisfy that similarity prompt as phrased. Try \`games like Hades with better reviews\` or describe the concept more directly.${reasonSuffix}`;
+      return `I couldn't route that similarity prompt cleanly in the system yet. Try \`games like Hades with better reviews\` or describe the concept more directly.${reasonSuffix}`;
     default:
-      return `Tiger chat couldn't route that prompt yet. It currently handles catalog discovery, rankings, momentum discovery, game and company overviews, direct comparisons, metric history, change/news lookups, and semantic similarity. Try naming the game or company and the task directly.${reasonSuffix}`;
+      return `I couldn't route that prompt cleanly in the system yet. It currently handles catalog discovery, rankings, momentum discovery, game and company overviews, direct comparisons, metric history, change and news lookups, and semantic similarity. Try naming the game or company and the task directly.${reasonSuffix}`;
   }
 }
 
@@ -797,7 +797,7 @@ function isUsableTigerNarration(value: string | null | undefined): value is stri
     return false;
   }
 
-  if (/\b(from Tiger|Tiger-backed|contract|tool call|internal routing)\b/i.test(normalized)) {
+  if (/\b(from (?:the system)|system-backed|contract|tool call|internal routing)\b/i.test(normalized)) {
     return false;
   }
 
@@ -824,7 +824,7 @@ async function narrateTigerAnswer(params: {
     const response = await Promise.race([
       provider.chat(narrationMessages),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Tiger narrator timed out')), readTigerNarratorTimeoutMs())
+        setTimeout(() => reject(new Error('System narrator timed out')), readTigerNarratorTimeoutMs())
       ),
     ]);
     const durationMs = params.deps.now() - startedAt;
@@ -1228,7 +1228,7 @@ export async function handleChatStreamRequest(
                 answer_contract_summary: phase1Quality?.terminalContract ?? null,
               });
             } catch (logError) {
-              console.error('Failed to log Tiger primary chat query:', logError);
+              console.error('Failed to log system primary chat query:', logError);
             }
           }
 
@@ -1339,7 +1339,7 @@ export async function handleChatStreamRequest(
 
             if (!contractResponse.ok || !contractResponse.data || !isRecord(contractResponse.data.result)) {
               continuationResult = {
-                error: contractResponse.reason ?? 'Unknown Tiger continuation error',
+                error: contractResponse.reason ?? 'Unknown system continuation error',
                 success: false,
               };
               tigerPrimaryResult = {
@@ -1446,7 +1446,7 @@ export async function handleChatStreamRequest(
                 contractName: 'continueResultSet',
                 fallbackReason:
                   !contractResponse.ok || !contractResponse.data || !isRecord(contractResponse.data.result)
-                    ? contractResponse.reason ?? 'Unknown Tiger continuation error'
+                    ? contractResponse.reason ?? 'Unknown system continuation error'
                     : null,
                 latencyMs: Math.round(executionMs),
                 stage: 'continuation',
@@ -2119,7 +2119,7 @@ export async function handleChatStreamRequest(
             })
           );
         } catch (shadowError) {
-          console.error('Tiger shadow evaluation failed:', shadowError);
+          console.error('System shadow evaluation failed:', shadowError);
         }
 
         // Log the chat query to database (do this BEFORE sending message_end)

@@ -2946,7 +2946,7 @@ export class DataPlaneService {
       sufficient_to_answer: reranked.length > 0,
       sufficiency_reason:
         reranked.length > 0
-          ? 'Returned Tiger concept matches that already satisfy the request. Respond directly from these rows instead of broadening.'
+          ? 'Returned concept matches that already satisfy the request. Respond directly from these rows instead of broadening.'
           : undefined,
       success: true,
       total_found: reranked.length,
@@ -3241,7 +3241,7 @@ export class DataPlaneService {
 
     if (!referenceProfile) {
       return {
-        error: `${reference.name} is not available for Tiger similarity search yet.`,
+        error: `${reference.name} is not in the system for similarity search yet.`,
         success: false,
       };
     }
@@ -3282,7 +3282,7 @@ export class DataPlaneService {
       sufficient_to_answer: ranked.length > 0,
       sufficiency_reason:
         ranked.length > 0
-          ? 'Returned Tiger similarity rows that already answer the request. Respond directly instead of broadening.'
+          ? 'Returned similarity rows that already answer the request. Respond directly instead of broadening.'
           : undefined,
       success: true,
       total_found: ranked.length,
@@ -3302,7 +3302,7 @@ export class DataPlaneService {
     if (!referenceProfile) {
       return {
         entityType: request.entityKind,
-        error: `${reference.name} is not available for Tiger company similarity search yet.`,
+        error: `${reference.name} is not in the system for company similarity search yet.`,
         reference: {
           id: reference.id,
           name: reference.name,
@@ -3340,7 +3340,7 @@ export class DataPlaneService {
       sufficient_to_answer: ranked.length > 0,
       sufficiency_reason:
         ranked.length > 0
-          ? 'Returned Tiger company peers that already answer the request. Respond directly instead of broadening.'
+          ? 'Returned company peers that already answer the request. Respond directly instead of broadening.'
           : undefined,
       success: true,
       total_found: ranked.length,
@@ -6672,7 +6672,7 @@ export class DataPlaneService {
       case 'velocity_7d':
         return 'Velocity (7d) ranks titles by recent reviews per day.';
       default:
-        return 'Momentum is ranked from Tiger current-state and recent-history metrics.';
+        return 'Momentum is ranked from current-state and recent-history metrics.';
     }
   }
 
@@ -7764,7 +7764,7 @@ export class DataPlaneService {
 
     if (blockingTables.length > 0) {
       throw new ContractRuntimeUnavailableError(
-        `Tiger searchCatalog does not support ${unsupportedFilters.join(', ')} filters until those legacy tables are backfilled.`,
+        `The system does not support ${unsupportedFilters.join(', ')} filters yet because the required data is still being backfilled.`,
         'searchCatalog',
         blockingTables,
         { unsupportedFilters }
@@ -7812,7 +7812,7 @@ export class DataPlaneService {
 
     if (blockingTables.length > 0) {
       throw new ContractRuntimeUnavailableError(
-        `Tiger discoverMomentum does not support ${unsupportedFilters.join(', ')} filters until those legacy tables are backfilled.`,
+        `The system does not support ${unsupportedFilters.join(', ')} filters yet because the required data is still being backfilled.`,
         'discoverMomentum',
         blockingTables,
         { unsupportedFilters }
@@ -7849,7 +7849,7 @@ export class DataPlaneService {
 
     if (blockingTables.length > 0) {
       throw new ContractRuntimeUnavailableError(
-        `Tiger semanticSearch does not support ${unsupportedFilters.length > 0 ? unsupportedFilters.join(', ') : 'the required metadata joins'} until the source tables are present and backfilled.`,
+        `The system does not support ${unsupportedFilters.length > 0 ? unsupportedFilters.join(', ') : 'the required metadata joins'} yet because the required data is still being backfilled.`,
         'semanticSearch',
         blockingTables,
         { unsupportedFilters }
@@ -7858,7 +7858,7 @@ export class DataPlaneService {
 
     if (filters.same_franchise_only) {
       throw new ContractRuntimeUnavailableError(
-        'Tiger semanticSearch does not support same_franchise_only until franchise metadata is backfilled.',
+        'The system does not support same_franchise_only yet because franchise metadata is still being backfilled.',
         'semanticSearch',
         ['legacy.app_franchises'],
         { unsupportedFilters: ['same_franchise_only'] }

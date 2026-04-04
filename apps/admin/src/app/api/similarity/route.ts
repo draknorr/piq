@@ -145,7 +145,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         {
           code: 'UNSUPPORTED_FILTER',
           error:
-            'Tiger similarity search does not support one or more requested feature filters yet.',
+            'System similarity search does not support one or more requested feature filters yet.',
           success: false,
           unsupportedFilters,
         },

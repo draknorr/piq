@@ -734,6 +734,100 @@ function formatMomentumTrendDirection(
   }
 }
 
+function formatIsoDate(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function joinHumanList(values: string[]): string {
+  if (values.length === 0) {
+    return '';
+  }
+
+  if (values.length === 1) {
+    return values[0];
+  }
+
+  if (values.length === 2) {
+    return `${values[0]} and ${values[1]}`;
+  }
+
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
+function titleCaseToken(value: string): string {
+  if (value === 'macos') {
+    return 'macOS';
+  }
+
+  return value.length > 0
+    ? `${value.charAt(0).toUpperCase()}${value.slice(1).toLowerCase()}`
+    : value;
+}
+
+function describeMomentumAppliedFilters(filtersApplied: string[]): string[] {
+  const descriptions: string[] = [];
+
+  for (const rawFilter of filtersApplied) {
+    const value = rawFilter.trim();
+    if (!value) {
+      continue;
+    }
+
+    const [rawKey, rawRest = ''] = value.split(':', 2);
+    const key = rawKey.trim().toLowerCase();
+    const rest = rawRest.trim();
+
+    if (key === 'steam_deck' && rest) {
+      const deckValues = rest
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+        .map((entry) => `Steam Deck ${titleCaseToken(entry)}`);
+      descriptions.push(...deckValues);
+      continue;
+    }
+
+    if (key === 'platforms' && rest) {
+      const platforms = rest
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+        .map(titleCaseToken);
+      descriptions.push(...platforms);
+      continue;
+    }
+
+    if (key === 'is_free') {
+      if (rest === 'true') {
+        descriptions.push('free-to-play');
+      } else if (rest === 'false') {
+        descriptions.push('premium');
+      }
+      continue;
+    }
+
+    if (key === 'indie_heuristic' && rest === 'true') {
+      descriptions.push('indie');
+      continue;
+    }
+  }
+
+  return [...new Set(descriptions)];
+}
+
+function buildMomentumWindowLabel(response: TigerPrimaryDiscoverMomentumResponse): string {
+  const end = new Date();
+  const endLabel = formatIsoDate(end);
+
+  if (response.timeframe === 'current') {
+    return endLabel;
+  }
+
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (response.timeframe === '30d' ? 29 : 6));
+  return `${formatIsoDate(start)} to ${endLabel}`;
+}
+
 function getMomentumTableMode(
   response: TigerPrimaryDiscoverMomentumResponse
 ): 'current_players' | 'review_momentum' | 'momentum' {
@@ -758,9 +852,16 @@ function getMomentumTableMode(
 function renderMomentumDiscovery(response: TigerPrimaryDiscoverMomentumResponse): string {
   const leader = response.items[0] ?? null;
   const leaderReason = leader ? formatMomentumSupportReason(leader) : null;
+  const windowLabel = buildMomentumWindowLabel(response);
+  const appliedScope = describeMomentumAppliedFilters(response.filtersApplied);
+  const scopeSuffix = appliedScope.length > 0 ? ` within the **${joinHumanList(appliedScope)}** set` : '';
   const intro = leader
-    ? `**${leader.name}** currently leads this set by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
-    : `Here are the leading games by **${response.rankingLabel}** for **${response.timeframeLabel}**.`;
+    ? response.timeframe === 'current'
+      ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
+      : `From **${windowLabel}**, **${leader.name}** leads this set${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
+    : response.timeframe === 'current'
+      ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix}.`
+      : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix} for **${response.timeframeLabel}**.`;
   const tableMode = getMomentumTableMode(response);
   const reviewDeltaColumn = response.timeframe === '30d' ? 'Reviews Added (30d)' : 'Reviews Added (7d)';
   const rows = response.items.slice(0, 10).map((item) => {
@@ -806,6 +907,10 @@ function renderMomentumDiscovery(response: TigerPrimaryDiscoverMomentumResponse)
     intro,
     '',
     buildMarkdownTable(headers, rows),
+    '',
+    response.timeframe === 'current'
+      ? `Snapshot date: **${windowLabel}**.`
+      : `Window: **${windowLabel}**.`,
     '',
     response.rankingDefinition,
   ].join('\n');
@@ -870,13 +975,14 @@ function renderSearchDocuments(response: TigerPrimarySearchDocumentsResponse): s
   const uniqueGames = Array.from(new Set(response.items.map((item) => item.appName).filter(Boolean)));
   const topic = response.interpretedFilters.query?.trim() ?? null;
   const mode = response.interpretedFilters.mode ?? 'topic_search';
+  const introLabel = inferNewsIntroLabel(response.items[0]);
   const intro = response.entity
-    ? `Here are the most relevant recent documents for **${response.entity.displayName}**.`
+    ? `Here are the most relevant recent ${introLabel} for **${response.entity.displayName}**.`
     : mode === 'digest' && uniqueGames.length >= 2
       ? `Here is a recent news digest across **${uniqueGames.slice(0, 3).join(', ')}**.`
       : topic
-        ? `Here are the most relevant recent documents for **${topic}**.`
-        : 'Here are the most relevant recent news documents.';
+        ? `Here are the most relevant recent ${introLabel} for **${topic}**.`
+        : `Here are the most relevant recent ${introLabel}.`;
 
   const rows = response.items.slice(0, 8).map((item) => [
     formatDate(item.publishedAt || item.sortTime),
@@ -937,6 +1043,37 @@ function joinLabels(values: string[] | null | undefined): string {
   }
 
   return values.join(', ');
+}
+
+function inferNewsIntroLabel(item: TigerPrimarySearchDocumentItem | null | undefined): string {
+  if (!item) {
+    return 'news documents';
+  }
+
+  const combined = [
+    item.title,
+    item.feedLabel,
+    item.feedScope,
+    item.excerpt ?? null,
+    item.bodyPreview ?? null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+
+  if (/\b(patch notes?|hotfix|changelog|update notes?|accumulated updates?|growth rate update)\b/.test(combined)) {
+    return 'patch notes';
+  }
+
+  if (/\b(announcement|announcements|developer diary|dev diary|roadmap|playtest|demo)\b/.test(combined)) {
+    return 'announcements';
+  }
+
+  if (/\b(update|updates)\b/.test(combined)) {
+    return 'update posts';
+  }
+
+  return 'news documents';
 }
 
 function formatReleaseStatus(details: TigerPrimaryEntityOverviewResponse['entity']['details']): string {

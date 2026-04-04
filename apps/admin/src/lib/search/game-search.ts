@@ -1,7 +1,7 @@
 /**
  * Game Search Service
  *
- * Tiger-only compatibility wrapper for the legacy `search_games` tool shape.
+ * System-only compatibility wrapper for the legacy `search_games` tool shape.
  */
 
 import {
@@ -110,7 +110,7 @@ const TIGER_SEARCH_GAMES_PROVENANCE: ChatExecutionProvenanceOverride = {
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'search_games now executes only through Tiger search-catalog for the supported typed filter set.',
+    'search_games now executes only through the system search-catalog for the supported typed filter set.',
   recommendedTigerContracts: ['searchCatalog'],
 };
 
@@ -286,8 +286,8 @@ async function tryTigerSearchGames(
       debug: {
         input_args: args,
         steps: [
-          'Tiger compatibility wrapper routed search_games to searchCatalog.',
-          `Tiger returned ${results.length} row(s).`,
+          'Search wrapper routed search_games to searchCatalog.',
+          `Returned ${results.length} row(s).`,
           `Coverage complete: ${coverageComplete}`,
         ],
         coverage_complete: coverageComplete,
@@ -325,12 +325,12 @@ export async function searchGames(args: SearchGamesArgs): Promise<SearchGamesRes
       sparse_result: false,
       debug: {
         input_args: args,
-        steps: ['Tiger-only chat disabled the legacy search_games fallback path.'],
+        steps: ['Legacy search_games fallback path is disabled.'],
         coverage_complete: false,
         sparse_result: false,
       },
       error:
-        'Tiger search-catalog could not serve this search_games request. Rephrase using supported catalog filters or a narrower game discovery prompt.',
+        'Search-catalog could not serve this search_games request. Rephrase using supported catalog filters or a narrower game discovery prompt.',
     };
   } catch (error) {
     return {
@@ -338,7 +338,7 @@ export async function searchGames(args: SearchGamesArgs): Promise<SearchGamesRes
       error: error instanceof Error ? error.message : 'Failed to search games',
       debug: {
         input_args: args,
-        steps: ['Tiger-only search_games execution failed before producing a catalog response.'],
+        steps: ['Search_games execution failed before producing a catalog response.'],
         coverage_complete: false,
         sparse_result: false,
       },

@@ -1,7 +1,7 @@
 /**
  * Chat LLM tools.
  *
- * The remaining tool surface is Tiger-backed or a Tiger-backed compatibility
+ * The remaining tool surface is system-backed or a system-backed compatibility
  * alias. Legacy Cube/Supabase answer-path tools are not exposed here.
  */
 
@@ -461,7 +461,7 @@ Use this tool BEFORE querying for games by publisher to find the exact name:
 
 Returns ranked publisher candidates, a canonicalResult when resolution is confident, a compact summary object, and a needsDisambiguation flag when the name is ambiguous.
 
-Use lookup only for identity resolution. If the user then asks for company counts, rankings, comparisons, or top titles, use the relevant Tiger-backed search, compare, or trend tool rather than answering from lookup alone.`,
+Use lookup only for identity resolution. If the user then asks for company counts, rankings, comparisons, or top titles, use the relevant system-backed search, compare, or trend tool rather than answering from lookup alone.`,
     parameters: {
       type: 'object',
       properties: {
@@ -491,7 +491,7 @@ Use this tool BEFORE querying for games by developer to find the exact name:
 
 Returns ranked developer candidates, a canonicalResult when resolution is confident, a compact summary object, and a needsDisambiguation flag when the name is ambiguous.
 
-Use lookup only for identity resolution. If the user then asks for company counts, rankings, comparisons, or top titles, use the relevant Tiger-backed search, compare, or trend tool rather than answering from lookup alone.`,
+Use lookup only for identity resolution. If the user then asks for company counts, rankings, comparisons, or top titles, use the relevant system-backed search, compare, or trend tool rather than answering from lookup alone.`,
     parameters: {
       type: 'object',
       properties: {
@@ -860,7 +860,7 @@ Use this tool when users ask about a SPECIFIC game:
 - "Elden Ring" → lookup_games("Elden Ring") to find appid
 - "What's the review score for Hades?" → lookup first
 
-Returns matching games with appid and name. Use the resolved game in subsequent Tiger-backed discovery, compare, history, or change-intel calls.`,
+Returns matching games with appid and name. Use the resolved game in subsequent system-backed discovery, compare, history, or change-intel calls.`,
     parameters: {
       type: 'object',
       properties: {

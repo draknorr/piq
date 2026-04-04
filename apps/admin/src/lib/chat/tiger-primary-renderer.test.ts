@@ -7,6 +7,7 @@ test('renderTigerPrimaryResult uses player-centric columns for current Peak CCU 
   const markdown = renderTigerPrimaryResult({
     matchedIntent: 'momentum_discovery',
     response: {
+      filtersApplied: [],
       items: [
         {
           appid: 730,
@@ -40,6 +41,7 @@ test('renderTigerPrimaryResult keeps review-centric columns for review momentum 
   const markdown = renderTigerPrimaryResult({
     matchedIntent: 'momentum_discovery',
     response: {
+      filtersApplied: [],
       items: [
         {
           appid: 1145360,
@@ -66,4 +68,66 @@ test('renderTigerPrimaryResult keeps review-centric columns for review momentum 
   });
 
   assert.match(markdown, /\| Game \| Reviews Added \(7d\) \| Review % \| Total Reviews \| Peak CCU \| Platforms \|/);
+});
+
+test('renderTigerPrimaryResult names applied Steam Deck filters in momentum intros', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'momentum_discovery',
+    response: {
+      filtersApplied: ['sort_by: reviews_added_7d', 'timeframe: 7d', 'steam_deck: verified'],
+      items: [
+        {
+          appid: 1,
+          ccuPeak: 2276,
+          name: 'Everwind',
+          platformSupport: ['windows'],
+          reviewPercentage: null,
+          reviewsAdded7d: 2060,
+          supportLevel: 'high',
+          supportReasons: ['2,060 reviews added over 7d.'],
+          totalReviews: 2060,
+          trendDirection: 'up',
+        },
+      ],
+      rankingDefinition: 'Reviews added (7d) counts net new reviews in the last 7 days.',
+      rankingLabel: 'Reviews Added (7d)',
+      sortBy: 'reviews_added_7d',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: 'review_momentum',
+    },
+  });
+
+  assert.match(markdown, /Steam Deck Verified/i);
+});
+
+test('renderTigerPrimaryResult labels patch-note document sets as patch notes', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'news_search',
+    response: {
+      entity: {
+        displayName: 'Primeval',
+      },
+      interpretedFilters: {
+        mode: 'topic_search',
+        query: 'patch notes',
+      },
+      items: [
+        {
+          appName: 'Primeval',
+          bodyPreview: 'Accumulated Updates - March 13',
+          excerpt: 'Accumulated Updates - March 13',
+          feedLabel: 'Community Announcements',
+          feedScope: 'community_announcements',
+          publishedAt: '2026-03-13T00:00:00.000Z',
+          sortTime: '2026-03-13T00:00:00.000Z',
+          title: 'Accumulated Updates - March 13',
+          url: 'https://example.com/update',
+        },
+      ],
+    },
+  });
+
+  assert.match(markdown, /patch notes/i);
 });
