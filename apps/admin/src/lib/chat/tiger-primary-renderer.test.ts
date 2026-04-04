@@ -115,6 +115,50 @@ test('renderTigerPrimaryResult uses sentiment-centric columns for review-sentime
   assert.match(markdown, /established titles/i);
 });
 
+test('renderTigerPrimaryResult renders numeric-string review percentages and sparse weekly broadening notes', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'momentum_discovery',
+    momentumPromptFamily: 'review_sentiment_down',
+    response: {
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 7d',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          name: 'Example Game',
+          platformSupport: ['windows'],
+          reviewPercentage: '74.4',
+          reviewsAdded7d: 120,
+          sentimentDelta: '-4.2',
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+        },
+      ],
+      rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    },
+    scopeAdjustedForSparseResults: true,
+  });
+
+  assert.match(markdown, /74\.4%/);
+  assert.match(markdown, /broad weekly screen was too sparse/i);
+  assert.doesNotMatch(markdown, /established titles/i);
+});
+
 test('renderTigerPrimaryResult names applied Steam Deck filters in momentum intros', () => {
   const markdown = renderTigerPrimaryResult({
     matchedIntent: 'momentum_discovery',

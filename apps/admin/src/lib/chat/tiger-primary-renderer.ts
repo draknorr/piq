@@ -362,41 +362,63 @@ interface TigerPrimaryExplainChangesResponse {
 }
 
 function formatNumber(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
     return 'n/a';
   }
 
-  if (!Number.isInteger(value)) {
-    return value.toFixed(2);
+  if (!Number.isInteger(numericValue)) {
+    return numericValue.toFixed(2);
   }
 
-  return value.toLocaleString();
+  return numericValue.toLocaleString();
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 'n/a';
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
   }
 
-  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }
 
-function formatSignedNumber(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+function formatPercent(value: unknown): string {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
     return 'n/a';
   }
 
-  const absolute = Math.abs(value);
+  return `${numericValue.toFixed(numericValue % 1 === 0 ? 0 : 1)}%`;
+}
+
+function formatSignedNumber(value: unknown): string {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
+    return 'n/a';
+  }
+
+  const absolute = Math.abs(numericValue);
   const formatted = absolute % 1 === 0 ? absolute.toFixed(0) : absolute.toFixed(1);
-  return `${value > 0 ? '+' : value < 0 ? '-' : ''}${formatted}`;
+  return `${numericValue > 0 ? '+' : numericValue < 0 ? '-' : ''}${formatted}`;
 }
 
 function formatCurrencyCents(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
     return 'n/a';
   }
 
-  return `$${(value / 100).toFixed(2)}`;
+  return `$${(numericValue / 100).toFixed(2)}`;
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -960,6 +982,7 @@ function isReviewActivityDown(
 
 function renderMomentumDiscovery(params: {
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
+  scopeAdjustedForSparseResults?: boolean;
   response: TigerPrimaryDiscoverMomentumResponse;
 }): string {
   const { response } = params;
@@ -975,18 +998,21 @@ function renderMomentumDiscovery(params: {
     hasEstablishedTitlesFloor(response) && (tableMode === 'review_activity' || tableMode === 'review_sentiment')
       ? 'I screened for established titles so this stays focused on broadly played games rather than low-volume noise.'
       : null;
+  const sparseBroadeningNote = params.scopeAdjustedForSparseResults
+    ? 'I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.'
+    : null;
   const intro = leader
     ? response.timeframe === 'current'
       ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
         : tableMode === 'review_activity'
           ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
           : `From **${windowLabel}**, **${leader.name}** leads this set${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
     : response.timeframe === 'current'
       ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix}.`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
         : tableMode === 'review_activity'
           ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
           : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix} for **${response.timeframeLabel}**.`;
@@ -1376,6 +1402,7 @@ export function renderTigerPrimaryResult(params: {
   matchedIntent: TigerPrimaryRenderableIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
+  scopeAdjustedForSparseResults?: boolean;
 }): string {
   if (params.matchedIntent === 'change_discovery') {
     return renderChangeDiscovery(
@@ -1406,6 +1433,7 @@ export function renderTigerPrimaryResult(params: {
   if (params.matchedIntent === 'momentum_discovery') {
     return renderMomentumDiscovery({
       momentumPromptFamily: params.momentumPromptFamily ?? null,
+      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
       response: params.response as TigerPrimaryDiscoverMomentumResponse,
     });
   }

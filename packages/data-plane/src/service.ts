@@ -958,6 +958,24 @@ function roundNumber(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
+function coerceNullableNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
 function parseTimestamp(value: string): Date {
   return new Date(value);
 }
@@ -6779,47 +6797,61 @@ export class DataPlaneService {
   }
 
   private mapMomentumItem(row: MomentumRow): DiscoverMomentumItem {
+    const ccuGrowth30dPercent = coerceNullableNumber(row.ccu_growth_30d_percent);
+    const ccuGrowth7dPercent = coerceNullableNumber(row.ccu_growth_7d_percent);
+    const ccuPeak = coerceNullableNumber(row.ccu_peak);
+    const discountPercent = coerceNullableNumber(row.discount_percent);
+    const priceCents = coerceNullableNumber(row.price_cents);
+    const releaseYear = coerceNullableNumber(row.release_year);
+    const reviewPercentage = coerceNullableNumber(row.positive_percentage);
+    const reviewsAdded30d = coerceNullableNumber(row.reviews_added_30d);
+    const reviewsAdded7d = coerceNullableNumber(row.reviews_added_7d);
+    const sentimentDelta = coerceNullableNumber(row.sentiment_delta);
+    const totalReviews = coerceNullableNumber(row.total_reviews);
+    const velocity30d = coerceNullableNumber(row.velocity_30d);
+    const velocity7d = coerceNullableNumber(row.velocity_7d);
+    const velocityAcceleration = coerceNullableNumber(row.velocity_acceleration);
     const supportReasons: string[] = [];
 
-    if ((row.reviews_added_7d ?? 0) >= 25) {
-      supportReasons.push(`${Math.round(row.reviews_added_7d ?? 0).toLocaleString()} reviews added over 7d.`);
+    if ((reviewsAdded7d ?? 0) >= 25) {
+      supportReasons.push(`${Math.round(reviewsAdded7d ?? 0).toLocaleString()} reviews added over 7d.`);
     }
-    if ((row.velocity_acceleration ?? 0) >= 25) {
-      supportReasons.push(`Review velocity is up ${Math.round(row.velocity_acceleration ?? 0)}% versus the trailing baseline.`);
+    if ((velocityAcceleration ?? 0) >= 25) {
+      supportReasons.push(`Review velocity is up ${Math.round(velocityAcceleration ?? 0)}% versus the trailing baseline.`);
     }
-    if ((row.ccu_growth_7d_percent ?? 0) >= 20) {
-      supportReasons.push(`Peak CCU is up ${Math.round(row.ccu_growth_7d_percent ?? 0)}% over 7d.`);
+    if ((ccuGrowth7dPercent ?? 0) >= 20) {
+      supportReasons.push(`Peak CCU is up ${Math.round(ccuGrowth7dPercent ?? 0)}% over 7d.`);
     }
-    if ((row.sentiment_delta ?? 0) >= 2) {
-      supportReasons.push(`Sentiment improved by ${roundNumber(row.sentiment_delta ?? 0, 1)} points.`);
+    if ((sentimentDelta ?? 0) >= 2) {
+      supportReasons.push(`Sentiment improved by ${roundNumber(sentimentDelta ?? 0, 1)} points.`);
     }
-    if ((row.sentiment_delta ?? 0) <= -2) {
-      supportReasons.push(`Sentiment fell by ${roundNumber(Math.abs(row.sentiment_delta ?? 0), 1)} points.`);
+    if ((sentimentDelta ?? 0) <= -2) {
+      supportReasons.push(`Sentiment fell by ${roundNumber(Math.abs(sentimentDelta ?? 0), 1)} points.`);
     }
-    if ((row.velocity_acceleration ?? 0) <= -25) {
-      supportReasons.push(`Review velocity is down ${Math.round(Math.abs(row.velocity_acceleration ?? 0))}% versus the trailing baseline.`);
+    if ((velocityAcceleration ?? 0) <= -25) {
+      supportReasons.push(`Review velocity is down ${Math.round(Math.abs(velocityAcceleration ?? 0))}% versus the trailing baseline.`);
     }
-    if ((row.ccu_growth_7d_percent ?? 0) <= -20) {
-      supportReasons.push(`Peak CCU is down ${Math.round(Math.abs(row.ccu_growth_7d_percent ?? 0))}% over 7d.`);
+    if ((ccuGrowth7dPercent ?? 0) <= -20) {
+      supportReasons.push(`Peak CCU is down ${Math.round(Math.abs(ccuGrowth7dPercent ?? 0))}% over 7d.`);
     }
 
     const supportLevel: DiscoverMomentumItem['supportLevel'] =
       supportReasons.length >= 3 ? 'high' : supportReasons.length >= 2 ? 'medium' : 'low';
     const momentumScore = roundNumber(
-      (row.reviews_added_7d ?? 0)
-      + Math.max(row.ccu_growth_7d_percent ?? 0, 0) / 10
-      + Math.max(row.sentiment_delta ?? 0, 0) * 2
-      + Math.max(row.velocity_acceleration ?? 0, 0) / 5,
+      (reviewsAdded7d ?? 0)
+      + Math.max(ccuGrowth7dPercent ?? 0, 0) / 10
+      + Math.max(sentimentDelta ?? 0, 0) * 2
+      + Math.max(velocityAcceleration ?? 0, 0) / 5,
       2
     );
 
     return {
       appid: row.appid,
-      ccuGrowth30dPercent: row.ccu_growth_30d_percent,
-      ccuGrowth7dPercent: row.ccu_growth_7d_percent,
-      ccuPeak: row.ccu_peak,
+      ccuGrowth30dPercent,
+      ccuGrowth7dPercent,
+      ccuPeak,
       developerName: row.developer_name,
-      discountPercent: row.discount_percent,
+      discountPercent,
       entityUid: buildEntityUid('steam', 'game', String(row.appid)),
       isFree: row.is_free,
       isSelfPublished: row.is_self_published,
@@ -6829,22 +6861,22 @@ export class DataPlaneService {
       platformSupport: row.platforms
         ? row.platforms.split(',').map((platform) => platform.trim()).filter(Boolean)
         : [],
-      priceCents: row.price_cents,
+      priceCents,
       publisherName: row.publisher_name,
       releaseDate: row.release_date,
-      releaseYear: row.release_year,
-      reviewPercentage: row.positive_percentage,
-      reviewsAdded30d: row.reviews_added_30d,
-      reviewsAdded7d: row.reviews_added_7d,
-      sentimentDelta: row.sentiment_delta,
+      releaseYear,
+      reviewPercentage,
+      reviewsAdded30d,
+      reviewsAdded7d,
+      sentimentDelta,
       steamDeckCategory: null,
       supportLevel,
       supportReasons: supportReasons.length > 0 ? supportReasons : ['Current-state momentum evidence is limited.'],
-      totalReviews: row.total_reviews,
+      totalReviews,
       trendDirection: row.trend_direction,
-      velocity30d: row.velocity_30d,
-      velocity7d: row.velocity_7d,
-      velocityAcceleration: row.velocity_acceleration,
+      velocity30d,
+      velocity7d,
+      velocityAcceleration,
     };
   }
 

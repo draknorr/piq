@@ -161,6 +161,54 @@ test('buildTigerSuccessBrief keeps review-sentiment framing after reranking with
   assert.ok(brief.keyFacts.some((fact) => /Sentiment delta -4.2 pts/i.test(fact)));
 });
 
+test('buildTigerSuccessBrief handles numeric-string review percentages and weekly sparse-result broadening notes', () => {
+  const brief = buildTigerSuccessBrief({
+    fallbackMarkdown: [
+      'From **2026-03-29** to **2026-04-04**, **Example Game** leads this review sentiment decline screen by **Total Reviews** for **Last 7 days**. I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.',
+      '',
+      '| Game | Sentiment Delta | Review % | Reviews Added (7d) | Total Reviews | Platforms |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| Example Game | -4.2 pts | 74.4% | 120 | 18,000 | windows |',
+    ].join('\n'),
+    intent: 'momentum_discovery',
+    momentumPromptFamily: 'review_sentiment_down',
+    response: {
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 7d',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          ccuPeak: 4200,
+          name: 'Example Game',
+          reviewPercentage: '74.4',
+          reviewsAdded7d: 120,
+          sentimentDelta: '-4.2',
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+        },
+      ],
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    },
+    scopeAdjustedForSparseResults: true,
+    selectionState: null,
+  });
+
+  assert.match(brief.directAnswer, /broad weekly screen was too sparse/i);
+  assert.ok(brief.keyFacts.some((fact) => /74\.4% review percentage/i.test(fact)));
+  assert.ok(brief.keyFacts.some((fact) => /market-leading titles to established mid-tier games/i.test(fact)));
+});
+
 test('buildTigerSuccessBrief grounds metric-history summaries with exact dates', () => {
   const brief = buildTigerSuccessBrief({
     fallbackMarkdown: [

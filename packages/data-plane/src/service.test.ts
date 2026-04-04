@@ -302,29 +302,29 @@ test('discoverMomentum returns Tiger momentum rows as typed items', async () => 
   (service as any).queryMomentumRows = async () => [
     {
       appid: 730,
-      ccu_growth_30d_percent: 12,
-      ccu_growth_7d_percent: 8,
-      ccu_peak: 1500000,
+      ccu_growth_30d_percent: '12',
+      ccu_growth_7d_percent: '8',
+      ccu_peak: '1500000',
       developer_name: 'Valve',
-      discount_percent: 0,
+      discount_percent: '0',
       is_free: true,
       is_self_published: true,
       name: 'Counter-Strike 2',
       owners_midpoint: 100000000,
       platforms: 'windows',
-      positive_percentage: 88,
-      price_cents: 0,
+      positive_percentage: '88.4',
+      price_cents: '0',
       publisher_name: 'Valve',
       release_date: '2023-09-27',
-      release_year: 2023,
-      reviews_added_30d: 42000,
-      reviews_added_7d: 9000,
-      sentiment_delta: 1.4,
-      total_reviews: 9000000,
+      release_year: '2023',
+      reviews_added_30d: '42000',
+      reviews_added_7d: '9000',
+      sentiment_delta: '1.4',
+      total_reviews: '9000000',
       trend_direction: 'up',
-      velocity_30d: 1400,
-      velocity_7d: 1285,
-      velocity_acceleration: 12,
+      velocity_30d: '1400',
+      velocity_7d: '1285',
+      velocity_acceleration: '12',
     },
   ];
   const result = await service.discoverMomentum({
@@ -335,6 +335,8 @@ test('discoverMomentum returns Tiger momentum rows as typed items', async () => 
 
   assert.equal(result.items.length, 1);
   assert.equal(result.items[0]?.appid, 730);
+  assert.equal(typeof result.items[0]?.reviewPercentage, 'number');
+  assert.equal(result.items[0]?.reviewPercentage, 88.4);
   assert.equal(result.items[0]?.momentumScore, 9006);
   assert.equal(result.rankingLabel, 'Peak CCU');
   assert.equal(result.timeframe, 'current');

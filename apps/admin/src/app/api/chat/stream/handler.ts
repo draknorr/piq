@@ -913,6 +913,10 @@ function buildTigerOnlyFallbackReply(params: {
   const { tigerPrimary } = params;
   const primaryReason = extractTigerPrimaryReasons(tigerPrimary)[0] ?? null;
   const reasonSuffix = primaryReason ? `\n\nReason: ${primaryReason}` : '';
+  const weeklyReviewSentimentNoResults =
+    tigerPrimary.matchedIntent === 'momentum_discovery'
+    && primaryReason != null
+    && /weekly review-sentiment screen/i.test(primaryReason);
 
   switch (tigerPrimary.matchedIntent) {
     case 'entity_overview':
@@ -924,6 +928,9 @@ function buildTigerOnlyFallbackReply(params: {
     case 'entity_ranking':
       return `I couldn't route that ranking cleanly in the system yet. Try a direct ranking like \`what are the top games by reviews?\` or \`what publisher has the most games on Steam?\`.${reasonSuffix}`;
     case 'momentum_discovery':
+      if (weeklyReviewSentimentNoResults) {
+        return `I couldn't find a stable week-over-week review-sentiment set even after broadening from market-leading titles to established mid-tier games. Try narrowing to indie, Linux, or Steam Deck verified games, or switch back to the 30-day view.${reasonSuffix}`;
+      }
       return `I couldn't route that momentum request cleanly in the system yet. Try a direct discovery like \`what games are trending this week?\`, \`what games are breaking out this week?\`, or \`show free-to-play games with the most players\`.${reasonSuffix}`;
     case 'metric_history':
       return `I couldn't route that history request cleanly in the system yet because it couldn't resolve a single game. Try the exact Steam title and a direct time window, like \`How have Hades II reviews changed over the last 30 days?\`${reasonSuffix}`;

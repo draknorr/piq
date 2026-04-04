@@ -2454,6 +2454,42 @@ function applyReviewTrendPopularityDefaults(
   return request;
 }
 
+function shouldRetrySparseWeeklyReviewSentimentRequest(params: {
+  promptFamily: MomentumPromptFamily | null;
+  request: DiscoverMomentumShadowRequest;
+}): boolean {
+  if (!isReviewSentimentPromptFamily(params.promptFamily) || params.request.timeframe !== '7d') {
+    return false;
+  }
+
+  if (hasMomentumNarrowingScope(params.request)) {
+    return false;
+  }
+
+  const filters = params.request.filters ?? null;
+  return filters?.minReviews === BROAD_REVIEW_TREND_MIN_REVIEWS
+    && filters.minCcu === BROAD_REVIEW_TREND_MIN_CCU
+    && filters.minReviewsAdded7d === BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED;
+}
+
+function buildRelaxedSparseWeeklyReviewSentimentRequest(
+  request: DiscoverMomentumShadowRequest
+): DiscoverMomentumShadowRequest {
+  const relaxedFilters: NonNullable<DiscoverMomentumShadowRequest['filters']> = {
+    ...(request.filters ?? {}),
+    minReviews: NARROW_REVIEW_TREND_MIN_REVIEWS,
+    minReviewsAdded7d: NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED,
+  };
+
+  delete relaxedFilters.minCcu;
+  delete relaxedFilters.minReviewsAdded30d;
+
+  return {
+    ...request,
+    filters: relaxedFilters,
+  };
+}
+
 function inferMomentumTimeframe(
   prompt: string,
   promptFamily: MomentumPromptFamily
@@ -5515,6 +5551,7 @@ async function runMomentumPrimary(params: {
   momentumPromptFamily?: MomentumPromptFamily | null;
   request: DiscoverMomentumShadowRequest | null;
   response: DiscoverMomentumResponse | null;
+  scopeAdjustedForSparseResults?: boolean;
 }> {
   const built = params.requestOverride
     ? { momentumPromptFamily: null, request: params.requestOverride }
@@ -5533,6 +5570,8 @@ async function runMomentumPrimary(params: {
     };
   }
 
+  const momentumPromptFamily =
+    built.momentumPromptFamily ?? inferMomentumRequestFamily(built.request);
   const startedAt = performance.now();
   const response = await postToQueryApi<DiscoverMomentumResponse>(
     '/v1/contracts/discover-momentum',
@@ -5551,7 +5590,7 @@ async function runMomentumPrimary(params: {
         status: 'error',
         timingMs,
       }],
-      momentumPromptFamily: built.momentumPromptFamily ?? null,
+      momentumPromptFamily,
       request: built.request,
       response: null,
     };
@@ -5559,6 +5598,84 @@ async function runMomentumPrimary(params: {
 
   const resultCount = response.data?.items?.length ?? 0;
   const sufficientToAnswer = Boolean((response.data?.sufficientToAnswer ?? false) && resultCount > 0);
+  const retrySparseWeeklyReviewSentiment = !sufficientToAnswer
+    && shouldRetrySparseWeeklyReviewSentimentRequest({
+      promptFamily: momentumPromptFamily,
+      request: built.request,
+    });
+
+  if (retrySparseWeeklyReviewSentiment) {
+    const relaxedRequest = buildRelaxedSparseWeeklyReviewSentimentRequest(built.request);
+    const retryStartedAt = performance.now();
+    const retryResponse = await postToQueryApi<DiscoverMomentumResponse>(
+      '/v1/contracts/discover-momentum',
+      relaxedRequest,
+      { timeoutMs: readPrimaryTimeoutMs() }
+    );
+    const retryTimingMs = Math.round(performance.now() - retryStartedAt);
+
+    if (!retryResponse.ok) {
+      return {
+        attempts: [
+          {
+            contractName: 'discoverMomentum',
+            httpStatus: response.httpStatus,
+            reason: 'The broad weekly review-sentiment screen was too sparse, so the system retried with the market-leader floor relaxed.',
+            resultCount,
+            status: 'skipped',
+            sufficientToAnswer,
+            timingMs,
+          },
+          {
+            contractName: 'discoverMomentum',
+            errorCode: retryResponse.errorCode,
+            httpStatus: retryResponse.httpStatus,
+            reason: retryResponse.reason,
+            status: 'error',
+            timingMs: retryTimingMs,
+          },
+        ],
+        momentumPromptFamily,
+        request: relaxedRequest,
+        response: null,
+      };
+    }
+
+    const retryResultCount = retryResponse.data?.items?.length ?? 0;
+    const retrySufficientToAnswer = Boolean(
+      (retryResponse.data?.sufficientToAnswer ?? false) && retryResultCount > 0
+    );
+
+    return {
+      attempts: [
+        {
+          contractName: 'discoverMomentum',
+          httpStatus: response.httpStatus,
+          reason: 'The broad weekly review-sentiment screen was too sparse, so the system retried with the market-leader floor relaxed.',
+          resultCount,
+          status: 'skipped',
+          sufficientToAnswer,
+          timingMs,
+        },
+        {
+          contractName: 'discoverMomentum',
+          httpStatus: retryResponse.httpStatus,
+          reason: retrySufficientToAnswer
+            ? undefined
+            : 'No qualifying titles met the weekly review-sentiment screen even after relaxing the popularity floor.',
+          resultCount: retryResultCount,
+          status: retrySufficientToAnswer ? 'success' : 'skipped',
+          sufficientToAnswer: retrySufficientToAnswer,
+          timingMs: retryTimingMs,
+        },
+      ],
+      momentumPromptFamily,
+      request: relaxedRequest,
+      response: retrySufficientToAnswer ? (retryResponse.data ?? null) : null,
+      scopeAdjustedForSparseResults: retrySufficientToAnswer,
+    };
+  }
+
   return {
     attempts: [{
       contractName: 'discoverMomentum',
@@ -5571,7 +5688,7 @@ async function runMomentumPrimary(params: {
       sufficientToAnswer,
       timingMs,
     }],
-    momentumPromptFamily: built.momentumPromptFamily ?? null,
+    momentumPromptFamily,
     request: built.request,
     response: sufficientToAnswer ? (response.data ?? null) : null,
   };
@@ -6908,10 +7025,15 @@ export async function runTigerPrimaryEvaluation(params: {
                 : inferMomentumRequestFamily(outcome.request as DiscoverMomentumShadowRequest)
           )
         : null;
+    const scopeAdjustedForSparseResults =
+      matchedIntent === 'momentum_discovery'
+      && 'scopeAdjustedForSparseResults' in outcome
+      && outcome.scopeAdjustedForSparseResults === true;
     const renderedText = renderTigerPrimaryResult({
       matchedIntent,
       momentumPromptFamily,
       response: outcome.response,
+      scopeAdjustedForSparseResults,
     });
 
     if (!renderedText.trim()) {
@@ -6952,6 +7074,7 @@ export async function runTigerPrimaryEvaluation(params: {
       intent: matchedIntent,
       momentumPromptFamily,
       response: outcome.response,
+      scopeAdjustedForSparseResults,
       selectionState,
     });
 

@@ -3776,6 +3776,275 @@ test('Tiger primary moves review-sentiment activity floors to the requested week
   assert.equal(result.sessionState?.requestState?.timeframe, '7d');
 });
 
+test('Tiger primary retries sparse weekly review-sentiment pivots with the relaxed established-title floor', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let callCount = 0;
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+
+    callCount += 1;
+    if (callCount === 1) {
+      assert.deepEqual(JSON.parse(String(init.body)), {
+        filters: {
+          maxSentimentDelta: -3,
+          minCcu: 100,
+          minReviews: 10000,
+          minReviewsAdded7d: 25,
+        },
+        limit: 10,
+        sortBy: 'total_reviews',
+        sortDirection: 'desc',
+        timeframe: '7d',
+        trendType: null,
+      });
+
+      return jsonResponse({
+        filtersApplied: [
+          'sort_by: total_reviews',
+          'timeframe: 7d',
+          'min_reviews: 10000',
+          'min_ccu: 100',
+          'min_reviews_added_7d: 25',
+          'max_sentiment_delta: -3',
+        ],
+        items: [],
+        rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+        rankingLabel: 'Total Reviews',
+        sortBy: 'total_reviews',
+        sortDirection: 'desc',
+        sufficientToAnswer: false,
+        timeframe: '7d',
+        timeframeLabel: 'Last 7 days',
+        trendType: null,
+      });
+    }
+
+    assert.equal(callCount, 2);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        maxSentimentDelta: -3,
+        minReviews: 1000,
+        minReviewsAdded7d: 5,
+      },
+      limit: 10,
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 7d',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          entityUid: 'game:steam:2668510',
+          isFree: false,
+          name: 'Example Game',
+          platformSupport: ['windows'],
+          reviewPercentage: '74.4',
+          reviewsAdded7d: 120,
+          sentimentDelta: '-4.2',
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+        },
+      ],
+      rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'this week instead',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'momentum_discovery',
+        summary: 'System answered momentum_discovery.',
+      },
+      requestState: {
+        canonicalArgs: {
+          filters: {
+            maxSentimentDelta: -3,
+            minCcu: 100,
+            minReviews: 10000,
+            minReviewsAdded30d: 25,
+          },
+          limit: 10,
+          sortBy: 'total_reviews',
+          sortDirection: 'desc',
+          timeframe: '30d',
+          trendType: null,
+        },
+        contractName: 'discoverMomentum',
+        entityKind: 'game',
+        family: 'momentum_discovery',
+        metric: 'total_reviews',
+        momentumPromptFamily: 'review_sentiment_down',
+        previewItems: [
+          {
+            entityUid: 'game:steam:2668510',
+            label: 'Example Game',
+            ordinal: 1,
+            platformEntityId: 2668510,
+          },
+        ],
+        timeframe: '30d',
+        trendType: null,
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /broad weekly screen was too sparse/i);
+  assert.match(result.renderedText ?? '', /74\.4%/);
+  assert.equal(result.info.attempts[0]?.status, 'skipped');
+  assert.equal(result.info.attempts[1]?.status, 'success');
+  assert.deepEqual(result.sessionState?.requestState?.canonicalArgs, {
+    filters: {
+      maxSentimentDelta: -3,
+      minReviews: 1000,
+      minReviewsAdded7d: 5,
+    },
+    limit: 10,
+    sortBy: 'total_reviews',
+    sortDirection: 'desc',
+    timeframe: '7d',
+    trendType: null,
+  });
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_sentiment_down');
+  assert.equal(result.sessionState?.requestState?.timeframe, '7d');
+});
+
+test('Tiger primary reports review-trend-aware weekly no-results after the relaxed retry also comes back empty', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let callCount = 0;
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+
+    callCount += 1;
+    if (callCount === 1) {
+      return jsonResponse({
+        filtersApplied: [
+          'sort_by: total_reviews',
+          'timeframe: 7d',
+          'min_reviews: 10000',
+          'min_ccu: 100',
+          'min_reviews_added_7d: 25',
+          'max_sentiment_delta: -3',
+        ],
+        items: [],
+        rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+        rankingLabel: 'Total Reviews',
+        sortBy: 'total_reviews',
+        sortDirection: 'desc',
+        sufficientToAnswer: false,
+        timeframe: '7d',
+        timeframeLabel: 'Last 7 days',
+        trendType: null,
+      });
+    }
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 7d',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [],
+      rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      sufficientToAnswer: false,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'this week instead',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'momentum_discovery',
+        summary: 'System answered momentum_discovery.',
+      },
+      requestState: {
+        canonicalArgs: {
+          filters: {
+            maxSentimentDelta: -3,
+            minCcu: 100,
+            minReviews: 10000,
+            minReviewsAdded30d: 25,
+          },
+          limit: 10,
+          sortBy: 'total_reviews',
+          sortDirection: 'desc',
+          timeframe: '30d',
+          trendType: null,
+        },
+        contractName: 'discoverMomentum',
+        entityKind: 'game',
+        family: 'momentum_discovery',
+        metric: 'total_reviews',
+        momentumPromptFamily: 'review_sentiment_down',
+        previewItems: [],
+        timeframe: '30d',
+        trendType: null,
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'fallback_to_legacy');
+  assert.equal(result.renderedText, null);
+  assert.match(result.info.attempts[1]?.reason ?? '', /weekly review-sentiment screen/i);
+});
+
 test('Tiger primary can drill from ranked results into change lookups for the top item', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');

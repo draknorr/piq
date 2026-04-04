@@ -31,7 +31,21 @@ function getString(value: unknown): string | null {
 }
 
 function getNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }
 
 function normalizeForLooseMatch(value: string): string {
@@ -1025,6 +1039,14 @@ function getEstablishedTitlesNote(response: unknown): string | null {
     : null;
 }
 
+function getSparseReviewSentimentBroadeningNote(
+  scopeAdjustedForSparseResults: boolean | undefined
+): string | null {
+  return scopeAdjustedForSparseResults
+    ? 'I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.'
+    : null;
+}
+
 function getMomentumWindowLabel(response: unknown): string {
   const timeframe = isRecord(response) ? getString(response.timeframe) : null;
   const end = new Date();
@@ -1044,6 +1066,7 @@ function buildDirectAnswer(params: {
   intent: TigerAnswerIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
+  scopeAdjustedForSparseResults?: boolean;
 }): string {
   const { intent, response } = params;
   const entity = getEntityFromResponse(response);
@@ -1159,12 +1182,14 @@ function buildDirectAnswer(params: {
     const appliedScope = formatMomentumAppliedScope(response);
     const scopeSuffix = appliedScope ? ` within the ${appliedScope} set` : '';
     const establishedTitlesNote = getEstablishedTitlesNote(response);
+    const sparseBroadeningNote = getSparseReviewSentimentBroadeningNote(params.scopeAdjustedForSparseResults);
     const supportReasons =
       firstItem && Array.isArray(firstItem.supportReasons)
         ? firstItem.supportReasons.map((value) => String(value)).filter(Boolean)
         : [];
     const ccuPeak = firstItem ? getNumber(firstItem.ccuPeak) : null;
     const establishedSuffix = establishedTitlesNote ? ` ${establishedTitlesNote}` : '';
+    const sparseBroadeningSuffix = sparseBroadeningNote ? ` ${sparseBroadeningNote}` : '';
 
     if (firstName) {
       if (briefMode === 'current_players') {
@@ -1172,7 +1197,7 @@ function buildDirectAnswer(params: {
       }
 
       if (briefMode === 'review_sentiment') {
-        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
+        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${sparseBroadeningSuffix}`;
       }
 
       if (briefMode === 'review_activity') {
@@ -1187,7 +1212,7 @@ function buildDirectAnswer(params: {
     }
 
     if (briefMode === 'review_sentiment') {
-      return `Here is the current review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}`;
+      return `Here is the current review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}${sparseBroadeningSuffix}`;
     }
 
     if (briefMode === 'review_activity') {
@@ -1238,6 +1263,7 @@ function buildKeyFacts(params: {
   intent: TigerAnswerIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
+  scopeAdjustedForSparseResults?: boolean;
 }): string[] {
   const { intent, response } = params;
   const facts: string[] = [];
@@ -1371,11 +1397,15 @@ function buildKeyFacts(params: {
     const windowLabel = getMomentumWindowLabel(response);
     const appliedScope = formatMomentumAppliedScope(response);
     const establishedTitlesNote = getEstablishedTitlesNote(response);
+    const sparseBroadeningNote = getSparseReviewSentimentBroadeningNote(params.scopeAdjustedForSparseResults);
     if (appliedScope) {
       facts.push(`Applied filters: ${appliedScope}.`);
     }
     if (establishedTitlesNote) {
       facts.push(establishedTitlesNote);
+    }
+    if (sparseBroadeningNote) {
+      facts.push(sparseBroadeningNote);
     }
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name) ?? getString(item.displayName);
@@ -1570,6 +1600,7 @@ export function buildTigerSuccessBrief(params: {
   intent: TigerAnswerIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
+  scopeAdjustedForSparseResults?: boolean;
   selectionState: SessionChatSelectionState | null;
 }): TigerAnswerBrief {
   const selectionNote = buildSelectionNote(params.selectionState);
@@ -1592,6 +1623,7 @@ export function buildTigerSuccessBrief(params: {
       intent: params.intent,
       momentumPromptFamily: params.momentumPromptFamily ?? null,
       response: params.response,
+      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
     }),
     evidenceMarkdown,
     fallbackMarkdown,
@@ -1601,6 +1633,7 @@ export function buildTigerSuccessBrief(params: {
       intent: params.intent,
       momentumPromptFamily: params.momentumPromptFamily ?? null,
       response: params.response,
+      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
     }),
     selectionNote,
   };

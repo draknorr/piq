@@ -698,6 +698,71 @@ test('chat route preserves review-trend request families across Tiger continuati
   assertExhausted();
 });
 
+test('chat route uses review-trend-aware Tiger-only fallback copy for empty weekly sentiment retries', async (t) => {
+  setScopedEnv(t, 'CHAT_PHASE1_QUALITY_ENABLED', 'true');
+
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'this week instead' }],
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    tigerPrimaryCalls: [
+      {
+        response: {
+          contractResult: null,
+          info: {
+            attempts: [
+              {
+                contractName: 'discoverMomentum',
+                reason: 'The broad weekly review-sentiment screen was too sparse, so the system retried with the market-leader floor relaxed.',
+                resultCount: 0,
+                status: 'skipped',
+                sufficientToAnswer: false,
+                timingMs: 5,
+              },
+              {
+                contractName: 'discoverMomentum',
+                reason: 'No qualifying titles met the weekly review-sentiment screen even after relaxing the popularity floor.',
+                resultCount: 0,
+                status: 'skipped',
+                sufficientToAnswer: false,
+                timingMs: 4,
+              },
+            ],
+            cohort: 'default',
+            enabled: true,
+            matchedIntent: 'momentum_discovery',
+            mode: 'all',
+            renderMode: 'deterministic',
+            route: 'fallback_to_legacy',
+          },
+          renderedText: null,
+          sessionState: null,
+        },
+      },
+    ],
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const text = getTextEvents(events)[0]?.delta ?? '';
+  const endEvent = getEndEvent(events);
+
+  assert.deepEqual(getEventTypes(events), ['text_delta', 'message_end']);
+  assert.ok(endEvent);
+  assert.equal(endEvent.tigerPrimary?.route, 'primary_success');
+  assert.match(text, /week-over-week review-sentiment set/i);
+  assert.match(text, /established mid-tier games/i);
+  assert.match(text, /switch back to the 30-day view/i);
+  assertExhausted();
+});
+
 test('chat route includes execution trace metadata for eval requests', async (t) => {
   setScopedEnv(t, 'CHAT_EVAL_SECRET', 'test-secret');
   setScopedEnv(t, 'CHAT_TIGER_LEGACY_FALLBACK_ENABLED', 'true');
