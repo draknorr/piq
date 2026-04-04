@@ -1,0 +1,254 @@
+[
+  {
+    "id": "TC-S0-01",
+    "priority": "P0",
+    "name": "Momentum continuation stays on Tiger",
+    "notes": "Checks that natural continuation language keeps the momentum result set on Tiger and returns the next page instead of falling back or repeating the same rows.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "uiSmoke": true,
+    "turns": [
+      {
+        "user": "What game has the most players right now?",
+        "expectation": "Should answer with a Tiger momentum ranking using the player-centric table shape.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["discoverMomentum"],
+        "mustInclude": ["Counter-Strike 2"],
+        "mustNotInclude": ["Legacy fallback", "Reviews Added (7d)", "Review % n/a"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "show me more",
+        "expectation": "Should continue the Tiger momentum result set instead of falling back or repeating the first page.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["continueResultSet"],
+        "mustInclude": ["Peak CCU"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S0-02",
+    "priority": "P0",
+    "name": "Semantic narrowing keeps the Tiger similarity set",
+    "notes": "Checks Tiger semantic similarity plus natural narrowing on the continuable result set.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "turns": [
+      {
+        "user": "Games similar to Hollow Knight with fewer than 10K reviews",
+        "expectation": "Should establish a Tiger semantic similarity result set.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["semanticSearch"],
+        "mustInclude": ["Hollow Knight"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "same but Steam Deck verified",
+        "expectation": "Should reuse the Tiger similarity result set and apply the Steam Deck refinement on Tiger.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["continueResultSet"],
+        "mustInclude": ["Steam Deck"],
+        "mustNotInclude": ["Legacy fallback", "Qdrant"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S0-03",
+    "priority": "P0",
+    "name": "Entity switching uses named alternates",
+    "notes": "Checks that Tiger uses natural alternate switching instead of robotic commands and that explicit switching stays on Tiger.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "uiSmoke": true,
+    "turns": [
+      {
+        "user": "What changed on Hades II before and after its last big update?",
+        "expectation": "Should answer for Hades II and mention Hades as a natural alternate if relevant.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustInclude": ["Hades II"],
+        "mustNotInclude": ["use the other one", "publisher one", "Legacy fallback"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "use Hades instead",
+        "expectation": "Should switch to Hades on the Tiger path and answer the same family again.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustInclude": ["Hades"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S1-01",
+    "priority": "P1",
+    "name": "Single-entity follow-up keeps the prior family",
+    "notes": "Checks the newer 'what about' behavior for single-entity change prompts.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "turns": [
+      {
+        "user": "What changed on Hades II before and after its last big update?",
+        "expectation": "Should establish the change-explanation family on Tiger.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustInclude": ["Hades II"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "what about DVD Survivors",
+        "expectation": "Should keep the change-explanation family and pivot to DVD Survivors.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustInclude": ["DVD Survivors"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S1-02",
+    "priority": "P1",
+    "name": "Unrelated prompt resets stale entity context",
+    "notes": "Checks that a prior entity-specific selection does not leak into a later unrelated catalog prompt.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "uiSmoke": true,
+    "turns": [
+      {
+        "user": "What changed on Hades II before and after its last big update?",
+        "expectation": "Should establish Hades II change context.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustInclude": ["Hades II"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "what are the top indie games currently?",
+        "expectation": "Should answer an unrelated Tiger catalog prompt without carrying Hades context forward.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["searchCatalog"],
+        "mustInclude": ["Indie"],
+        "mustNotInclude": ["Hades II", "Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S1-03",
+    "priority": "P1",
+    "name": "Catalog result sets support comparison follow-ups",
+    "notes": "Checks that a Tiger catalog result set can be reused in a natural comparison follow-up without dropping to the old loop.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "turns": [
+      {
+        "user": "Show me all games by FromSoftware",
+        "expectation": "Should establish a Tiger catalog result set for FromSoftware games.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["searchCatalog"],
+        "mustInclude": ["FromSoftware"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "Compare those by reviews",
+        "expectation": "Should answer from the constrained Tiger result set rather than fall back or ask a generic unrelated follow-up.",
+        "expectedRoutes": ["primary_success"],
+        "mustInclude": ["reviews"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S1-04",
+    "priority": "P1",
+    "name": "Review-trend pivots keep the same Tiger family",
+    "notes": "Checks that review-sentiment prompts stay Tiger-owned across narrowing, timeframe pivots, and drill-downs before an unrelated reset.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 45000,
+    "turns": [
+      {
+        "user": "Which popular games are getting worse reviews lately?",
+        "expectation": "Should establish a Tiger review-sentiment screen.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["discoverMomentum"],
+        "mustInclude": ["review sentiment"],
+        "mustNotInclude": ["Legacy fallback", "couldn't route", "unsupported"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "what about indie ones?",
+        "expectation": "Should keep the same Tiger review-sentiment family while narrowing scope to indie titles.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["discoverMomentum"],
+        "mustInclude": ["indie"],
+        "mustNotInclude": ["Legacy fallback", "couldn't route", "unsupported"],
+        "latencyBudgetMs": 15000
+      },
+      {
+        "user": "this week instead",
+        "expectation": "Should keep the review-sentiment family and pivot the same screen to a 7-day window.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["discoverMomentum"],
+        "mustInclude": ["review sentiment", "Last 7 days"],
+        "mustNotInclude": ["Legacy fallback", "couldn't route", "unsupported"],
+        "latencyBudgetMs": 15000
+      },
+      {
+        "user": "what changed for the top one?",
+        "expectation": "Should drill from the visible Tiger screen into a Tiger change explanation for the first result.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["explainChanges"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      },
+      {
+        "user": "what are the top indie games currently?",
+        "expectation": "Should reset stale review-trend context and answer the unrelated Tiger discovery prompt cleanly.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["searchCatalog"],
+        "mustInclude": ["Indie"],
+        "mustNotInclude": ["Legacy fallback"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  },
+  {
+    "id": "TC-S1-05",
+    "priority": "P1",
+    "name": "Review-trend result sets continue on Tiger",
+    "notes": "Checks that natural continuation language keeps a Tiger review-trend result set on Tiger instead of rerouting or falling back.",
+    "mustAvoidBackends": ["legacy", "cube", "supabase", "qdrant"],
+    "latencyBudgetMs": 40000,
+    "turns": [
+      {
+        "user": "Which popular games are getting worse reviews lately?",
+        "expectation": "Should establish a Tiger review-sentiment screen.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["discoverMomentum"],
+        "mustInclude": ["review sentiment"],
+        "mustNotInclude": ["Legacy fallback", "couldn't route", "unsupported"],
+        "latencyBudgetMs": 25000
+      },
+      {
+        "user": "show me more",
+        "expectation": "Should continue the Tiger result set instead of restarting the prompt or falling back.",
+        "expectedRoutes": ["primary_success"],
+        "expectedContracts": ["continueResultSet"],
+        "mustInclude": ["Sentiment Delta"],
+        "mustNotInclude": ["Legacy fallback", "couldn't route", "unsupported"],
+        "latencyBudgetMs": 15000
+      }
+    ]
+  }
+]

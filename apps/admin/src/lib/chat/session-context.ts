@@ -562,6 +562,7 @@ export function summarizeSessionContextForLog(context: SessionChatContext | null
           contractName: context.requestState.contractName,
           metric: context.requestState.metric ?? null,
           entityKind: context.requestState.entityKind ?? null,
+          momentumPromptFamily: context.requestState.momentumPromptFamily ?? null,
           timeframe: context.requestState.timeframe ?? null,
           trendType: context.requestState.trendType ?? null,
           previewItems: context.requestState.previewItems.slice(0, 10),

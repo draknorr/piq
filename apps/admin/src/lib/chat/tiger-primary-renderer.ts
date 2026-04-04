@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SessionMomentumPromptFamily } from '@/lib/chat/chat-context-types';
+
 type TigerPrimaryRenderableIntent =
   | 'catalog_search'
   | 'change_discovery'
@@ -170,6 +172,7 @@ interface TigerPrimaryDiscoverMomentumItem {
   reviewPercentage: number | null;
   reviewsAdded30d: number | null;
   reviewsAdded7d: number | null;
+  sentimentDelta?: number | null;
   supportLevel: 'high' | 'low' | 'medium';
   supportReasons: string[];
   totalReviews: number | null;
@@ -192,6 +195,7 @@ interface TigerPrimaryDiscoverMomentumResponse {
     | 'total_reviews'
     | 'velocity_7d'
     | 'velocity_acceleration';
+  sortDirection?: 'asc' | 'desc';
   sufficientToAnswer: boolean;
   timeframe: '7d' | '30d' | 'current';
   timeframeLabel: string;
@@ -375,6 +379,16 @@ function formatPercent(value: number | null | undefined): string {
   }
 
   return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
+}
+
+function formatSignedNumber(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'n/a';
+  }
+
+  const absolute = Math.abs(value);
+  const formatted = absolute % 1 === 0 ? absolute.toFixed(0) : absolute.toFixed(1);
+  return `${value > 0 ? '+' : value < 0 ? '-' : ''}${formatted}`;
 }
 
 function formatCurrencyCents(value: number | null | undefined): string {
@@ -815,6 +829,50 @@ function describeMomentumAppliedFilters(filtersApplied: string[]): string[] {
   return [...new Set(descriptions)];
 }
 
+function hasMomentumAppliedFilter(filtersApplied: string[], filterKey: string): boolean {
+  return filtersApplied.some((entry) => {
+    const [rawKey] = entry.split(':', 1);
+    return rawKey.trim().toLowerCase() === filterKey.toLowerCase();
+  });
+}
+
+function hasMomentumAppliedFilterValue(
+  filtersApplied: string[],
+  filterKey: string,
+  expectedValue: string
+): boolean {
+  return filtersApplied.some((entry) => {
+    const [rawKey, rawRest = ''] = entry.split(':', 2);
+    return rawKey.trim().toLowerCase() === filterKey.toLowerCase()
+      && rawRest.trim().toLowerCase() === expectedValue.toLowerCase();
+  });
+}
+
+function isReviewSentimentMomentumFamily(
+  promptFamily: SessionMomentumPromptFamily | null | undefined
+): promptFamily is 'review_sentiment_down' | 'review_sentiment_up' {
+  return promptFamily === 'review_sentiment_down' || promptFamily === 'review_sentiment_up';
+}
+
+function isReviewActivityMomentumFamily(
+  promptFamily: SessionMomentumPromptFamily | null | undefined
+): promptFamily is 'review_activity_down' | 'review_activity_up' | 'review_momentum' {
+  return (
+    promptFamily === 'review_activity_down'
+    || promptFamily === 'review_activity_up'
+    || promptFamily === 'review_momentum'
+  );
+}
+
+function hasEstablishedTitlesFloor(response: TigerPrimaryDiscoverMomentumResponse): boolean {
+  return hasMomentumAppliedFilterValue(response.filtersApplied, 'min_reviews', '10000')
+    && hasMomentumAppliedFilterValue(response.filtersApplied, 'min_ccu', '100')
+    && (
+      hasMomentumAppliedFilterValue(response.filtersApplied, 'min_reviews_added_7d', '25')
+      || hasMomentumAppliedFilterValue(response.filtersApplied, 'min_reviews_added_30d', '25')
+    );
+}
+
 function buildMomentumWindowLabel(response: TigerPrimaryDiscoverMomentumResponse): string {
   const end = new Date();
   const endLabel = formatIsoDate(end);
@@ -829,40 +887,109 @@ function buildMomentumWindowLabel(response: TigerPrimaryDiscoverMomentumResponse
 }
 
 function getMomentumTableMode(
-  response: TigerPrimaryDiscoverMomentumResponse
-): 'current_players' | 'review_momentum' | 'momentum' {
+  response: TigerPrimaryDiscoverMomentumResponse,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined = null
+): 'current_players' | 'review_activity' | 'review_sentiment' | 'momentum' {
   if (response.sortBy === 'ccu_peak' && response.timeframe === 'current') {
     return 'current_players';
   }
 
   if (
-    response.sortBy === 'review_score'
+    isReviewSentimentMomentumFamily(momentumPromptFamily)
+    || response.sortBy === 'sentiment_delta'
+    || hasMomentumAppliedFilter(response.filtersApplied, 'min_sentiment_delta')
+    || hasMomentumAppliedFilter(response.filtersApplied, 'max_sentiment_delta')
+  ) {
+    return 'review_sentiment';
+  }
+
+  if (
+    isReviewActivityMomentumFamily(momentumPromptFamily)
+    || response.sortBy === 'review_score'
     || response.sortBy === 'reviews_added_7d'
     || response.sortBy === 'reviews_added_30d'
-    || response.sortBy === 'sentiment_delta'
     || response.sortBy === 'velocity_7d'
+    || (response.sortBy === 'velocity_acceleration'
+      && response.sortDirection === 'asc'
+      && response.trendType !== 'declining')
     || response.trendType === 'review_momentum'
+    || hasMomentumAppliedFilter(response.filtersApplied, 'min_reviews_added_7d')
+    || hasMomentumAppliedFilter(response.filtersApplied, 'min_reviews_added_30d')
   ) {
-    return 'review_momentum';
+    return 'review_activity';
   }
 
   return 'momentum';
 }
 
-function renderMomentumDiscovery(response: TigerPrimaryDiscoverMomentumResponse): string {
+function isReviewSentimentDown(
+  response: TigerPrimaryDiscoverMomentumResponse,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined
+): boolean {
+  if (momentumPromptFamily === 'review_sentiment_down') {
+    return true;
+  }
+
+  if (momentumPromptFamily === 'review_sentiment_up') {
+    return false;
+  }
+
+  return hasMomentumAppliedFilter(response.filtersApplied, 'max_sentiment_delta')
+    || (response.sortBy === 'sentiment_delta' && response.sortDirection === 'asc');
+}
+
+function isReviewActivityDown(
+  response: TigerPrimaryDiscoverMomentumResponse,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined
+): boolean {
+  if (momentumPromptFamily === 'review_activity_down') {
+    return true;
+  }
+
+  if (
+    momentumPromptFamily === 'review_activity_up'
+    || momentumPromptFamily === 'review_momentum'
+  ) {
+    return false;
+  }
+
+  return response.sortBy === 'velocity_acceleration'
+    && response.sortDirection === 'asc'
+    && response.trendType !== 'declining';
+}
+
+function renderMomentumDiscovery(params: {
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
+  response: TigerPrimaryDiscoverMomentumResponse;
+}): string {
+  const { response } = params;
   const leader = response.items[0] ?? null;
   const leaderReason = leader ? formatMomentumSupportReason(leader) : null;
   const windowLabel = buildMomentumWindowLabel(response);
   const appliedScope = describeMomentumAppliedFilters(response.filtersApplied);
   const scopeSuffix = appliedScope.length > 0 ? ` within the **${joinHumanList(appliedScope)}** set` : '';
+  const tableMode = getMomentumTableMode(response, params.momentumPromptFamily);
+  const sentimentDown = isReviewSentimentDown(response, params.momentumPromptFamily);
+  const activityDown = isReviewActivityDown(response, params.momentumPromptFamily);
+  const establishedTitlesNote =
+    hasEstablishedTitlesFloor(response) && (tableMode === 'review_activity' || tableMode === 'review_sentiment')
+      ? 'I screened for established titles so this stays focused on broadly played games rather than low-volume noise.'
+      : null;
   const intro = leader
     ? response.timeframe === 'current'
       ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
-      : `From **${windowLabel}**, **${leader.name}** leads this set${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
+      : tableMode === 'review_sentiment'
+        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+        : tableMode === 'review_activity'
+          ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          : `From **${windowLabel}**, **${leader.name}** leads this set${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
     : response.timeframe === 'current'
       ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix}.`
-      : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix} for **${response.timeframeLabel}**.`;
-  const tableMode = getMomentumTableMode(response);
+      : tableMode === 'review_sentiment'
+        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+        : tableMode === 'review_activity'
+          ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix} for **${response.timeframeLabel}**.`;
   const reviewDeltaColumn = response.timeframe === '30d' ? 'Reviews Added (30d)' : 'Reviews Added (7d)';
   const rows = response.items.slice(0, 10).map((item) => {
     if (tableMode === 'current_players') {
@@ -875,7 +1002,18 @@ function renderMomentumDiscovery(response: TigerPrimaryDiscoverMomentumResponse)
       ];
     }
 
-    if (tableMode === 'review_momentum') {
+    if (tableMode === 'review_sentiment') {
+      return [
+        formatGameLink(item.name, item.appid),
+        `${formatSignedNumber(item.sentimentDelta)} pts`,
+        formatPercent(item.reviewPercentage),
+        formatNumber(response.timeframe === '30d' ? item.reviewsAdded30d : item.reviewsAdded7d),
+        formatNumber(item.totalReviews),
+        (Array.isArray(item.platformSupport) ? item.platformSupport : []).join(', ') || 'n/a',
+      ];
+    }
+
+    if (tableMode === 'review_activity') {
       return [
         formatGameLink(item.name, item.appid),
         formatNumber(response.timeframe === '30d' ? item.reviewsAdded30d : item.reviewsAdded7d),
@@ -899,7 +1037,9 @@ function renderMomentumDiscovery(response: TigerPrimaryDiscoverMomentumResponse)
   const headers =
     tableMode === 'current_players'
       ? ['Game', 'Peak CCU', 'Trend', 'Total Reviews', 'Platforms']
-      : tableMode === 'review_momentum'
+      : tableMode === 'review_sentiment'
+        ? ['Game', 'Sentiment Delta', 'Review %', reviewDeltaColumn, 'Total Reviews', 'Platforms']
+        : tableMode === 'review_activity'
         ? ['Game', reviewDeltaColumn, 'Review %', 'Total Reviews', 'Peak CCU', 'Platforms']
         : ['Game', 'Support', 'Trend', 'Peak CCU', reviewDeltaColumn, 'Platforms'];
 
@@ -1234,6 +1374,7 @@ function renderExplainChanges(response: TigerPrimaryExplainChangesResponse): str
 
 export function renderTigerPrimaryResult(params: {
   matchedIntent: TigerPrimaryRenderableIntent;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
 }): string {
   if (params.matchedIntent === 'change_discovery') {
@@ -1263,7 +1404,10 @@ export function renderTigerPrimaryResult(params: {
   }
 
   if (params.matchedIntent === 'momentum_discovery') {
-    return renderMomentumDiscovery(params.response as TigerPrimaryDiscoverMomentumResponse);
+    return renderMomentumDiscovery({
+      momentumPromptFamily: params.momentumPromptFamily ?? null,
+      response: params.response as TigerPrimaryDiscoverMomentumResponse,
+    });
   }
 
   if (params.matchedIntent === 'news_search') {

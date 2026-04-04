@@ -70,6 +70,51 @@ test('renderTigerPrimaryResult keeps review-centric columns for review momentum 
   assert.match(markdown, /\| Game \| Reviews Added \(7d\) \| Review % \| Total Reviews \| Peak CCU \| Platforms \|/);
 });
 
+test('renderTigerPrimaryResult uses sentiment-centric columns for review-sentiment answers', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'momentum_discovery',
+    momentumPromptFamily: 'review_sentiment_down',
+    response: {
+      filtersApplied: [
+        'sort_by: sentiment_delta',
+        'timeframe: 30d',
+        'min_reviews: 10000',
+        'min_ccu: 100',
+        'min_reviews_added_30d: 25',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          name: 'Example Game',
+          platformSupport: ['windows'],
+          reviewPercentage: 74,
+          reviewsAdded30d: 900,
+          sentimentDelta: -4.2,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+          velocityAcceleration: -28,
+        },
+      ],
+      rankingDefinition: 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.',
+      rankingLabel: 'Sentiment Delta',
+      sortBy: 'sentiment_delta',
+      sortDirection: 'asc',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+      trendType: null,
+    },
+  });
+
+  assert.match(markdown, /\| Game \| Sentiment Delta \| Review % \| Reviews Added \(30d\) \| Total Reviews \| Platforms \|/);
+  assert.match(markdown, /review sentiment decline/i);
+  assert.match(markdown, /established titles/i);
+});
+
 test('renderTigerPrimaryResult names applied Steam Deck filters in momentum intros', () => {
   const markdown = renderTigerPrimaryResult({
     matchedIntent: 'momentum_discovery',

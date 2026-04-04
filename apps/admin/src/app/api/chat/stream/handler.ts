@@ -54,6 +54,7 @@ import { logChatQuery } from '@/lib/chat-query-logger';
 import type {
   ChatTurnQualityInfo,
   SessionChatContext,
+  SessionMomentumPromptFamily,
   SessionChatRequestState,
   SessionChatResultSet,
 } from '@/lib/chat/chat-context-types';
@@ -627,7 +628,97 @@ function cloneRecord<T extends Record<string, unknown>>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function hasAppliedMomentumFilter(
+  response: Record<string, unknown>,
+  filterKey: string
+): boolean {
+  if (!Array.isArray(response.filtersApplied)) {
+    return false;
+  }
+
+  return response.filtersApplied.some(
+    (entry) => typeof entry === 'string' && entry.toLowerCase().startsWith(`${filterKey.toLowerCase()}:`)
+  );
+}
+
+function inferMomentumPromptFamilyFromHandler(params: {
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+}): SessionMomentumPromptFamily | null {
+  const { request, response } = params;
+  const filters = isRecord(request.filters) ? request.filters : null;
+  const sortBy = typeof request.sortBy === 'string' ? request.sortBy : null;
+  const sortDirection = request.sortDirection === 'asc' ? 'asc' : 'desc';
+  const timeframe =
+    request.timeframe === '7d' || request.timeframe === '30d' || request.timeframe === 'current'
+      ? request.timeframe
+      : null;
+  const trendType =
+    request.trendType === 'accelerating'
+    || request.trendType === 'breaking_out'
+    || request.trendType === 'declining'
+    || request.trendType === 'review_momentum'
+      ? request.trendType
+      : null;
+
+  if (sortBy === 'ccu_peak' && timeframe === 'current') {
+    return 'current_players';
+  }
+
+  if (
+    typeof filters?.maxSentimentDelta === 'number'
+    || hasAppliedMomentumFilter(response, 'max_sentiment_delta')
+  ) {
+    return 'review_sentiment_down';
+  }
+
+  if (
+    typeof filters?.minSentimentDelta === 'number'
+    || hasAppliedMomentumFilter(response, 'min_sentiment_delta')
+  ) {
+    return 'review_sentiment_up';
+  }
+
+  if (sortBy === 'sentiment_delta') {
+    return sortDirection === 'asc' ? 'review_sentiment_down' : 'review_sentiment_up';
+  }
+
+  if (sortBy === 'velocity_acceleration' && sortDirection === 'asc' && trendType !== 'declining') {
+    return 'review_activity_down';
+  }
+
+  if (
+    sortBy === 'reviews_added_7d'
+    || sortBy === 'reviews_added_30d'
+    || sortBy === 'velocity_7d'
+    || trendType === 'review_momentum'
+    || hasAppliedMomentumFilter(response, 'min_reviews_added_7d')
+    || hasAppliedMomentumFilter(response, 'min_reviews_added_30d')
+  ) {
+    return 'review_activity_up';
+  }
+
+  if (trendType === 'breaking_out') {
+    return 'breaking_out';
+  }
+
+  if (trendType === 'accelerating') {
+    return 'accelerating';
+  }
+
+  if (trendType === 'declining') {
+    return 'declining';
+  }
+
+  if (sortBy === 'momentum_score') {
+    return 'trending';
+  }
+
+  return null;
+}
+
 function buildMomentumRequestStateFromHandler(params: {
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   request: Record<string, unknown>;
   response: Record<string, unknown>;
   timestamp?: string;
@@ -648,6 +739,7 @@ function buildMomentumRequestStateFromHandler(params: {
     entityKind: 'game',
     family: 'momentum_discovery',
     metric: typeof params.request.sortBy === 'string' ? params.request.sortBy : null,
+    momentumPromptFamily: params.momentumPromptFamily ?? inferMomentumPromptFamilyFromHandler(params),
     previewItems: items.slice(0, 10).map((item, index) => ({
       entityUid: typeof item.entityUid === 'string' ? item.entityUid : null,
       label: typeof item.name === 'string' ? item.name : `Result ${index + 1}`,
@@ -1459,6 +1551,7 @@ export async function handleChatStreamRequest(
                   && isRecord(contractResponse.data.effectiveArgs)
                   && isRecord(contractResponse.data.result)
                   ? buildMomentumRequestStateFromHandler({
+                      momentumPromptFamily: sessionContext?.requestState?.momentumPromptFamily ?? null,
                       request: contractResponse.data.effectiveArgs,
                       response: contractResponse.data.result,
                     })
@@ -1487,9 +1580,11 @@ export async function handleChatStreamRequest(
                   : buildTigerSuccessBrief({
                       fallbackMarkdown: renderTigerPrimaryResult({
                         matchedIntent: continuationMatchedIntent,
+                        momentumPromptFamily: sessionContext?.requestState?.momentumPromptFamily ?? null,
                         response: contractResponse.data.result,
                       }),
                       intent: continuationMatchedIntent,
+                      momentumPromptFamily: sessionContext?.requestState?.momentumPromptFamily ?? null,
                       response: contractResponse.data.result,
                       selectionState: null,
                     });

@@ -1999,6 +1999,7 @@ export class DataPlaneService {
       rankingDefinition: this.describeMomentumRanking(request.sortBy, timeframe, request.trendType ?? null),
       rankingLabel: this.labelMomentumRanking(request.sortBy),
       sortBy: request.sortBy,
+      sortDirection: request.sortDirection ?? 'desc',
       sufficientToAnswer: pageRows.length > 0,
       timeframe,
       timeframeLabel: this.labelMomentumTimeframe(timeframe),
@@ -6610,6 +6611,27 @@ export class DataPlaneService {
     return '7d';
   }
 
+  private getMomentumSentimentBaselineWindow(
+    timeframe: '7d' | '30d' | 'current'
+  ): 7 | 30 {
+    return timeframe === '7d' ? 7 : 30;
+  }
+
+  private buildSentimentDeltaExpression(
+    timeframe: '7d' | '30d' | 'current',
+    baseAlias = 'candidate'
+  ): string {
+    const baselineAlias = timeframe === '7d' ? 'baseline7' : 'baseline30';
+    return `CASE
+      WHEN COALESCE(${baselineAlias}.positive_reviews, 0) + COALESCE(${baselineAlias}.negative_reviews, 0) > 0
+        THEN COALESCE(${baseAlias}.positive_percentage, 0) - (
+          COALESCE(${baselineAlias}.positive_reviews, 0)::numeric
+          / NULLIF(COALESCE(${baselineAlias}.positive_reviews, 0) + COALESCE(${baselineAlias}.negative_reviews, 0), 0)::numeric
+        ) * 100
+      ELSE 0
+    END`;
+  }
+
   private labelMomentumRanking(sortBy: DiscoverMomentumRequest['sortBy']): string {
     switch (sortBy) {
       case 'ccu_peak':
@@ -6664,7 +6686,7 @@ export class DataPlaneService {
       case 'reviews_added_7d':
         return 'Reviews added (7d) counts net new reviews in the last 7 days.';
       case 'sentiment_delta':
-        return 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.';
+        return `Sentiment delta measures the change in positive-review rate versus the trailing ${this.getMomentumSentimentBaselineWindow(timeframe)}-day baseline.`;
       case 'total_reviews':
         return 'Total reviews ranks titles by lifetime Steam review volume.';
       case 'velocity_acceleration':
@@ -6740,6 +6762,12 @@ export class DataPlaneService {
     if (typeof filters.minReviewsAdded30d === 'number') {
       applied.push(`min_reviews_added_30d: ${filters.minReviewsAdded30d}`);
     }
+    if (typeof filters.minSentimentDelta === 'number') {
+      applied.push(`min_sentiment_delta: ${filters.minSentimentDelta}`);
+    }
+    if (typeof filters.maxSentimentDelta === 'number') {
+      applied.push(`max_sentiment_delta: ${filters.maxSentimentDelta}`);
+    }
     if (filters.releaseYear?.gte != null) {
       applied.push(`release_year >= ${filters.releaseYear.gte}`);
     }
@@ -6764,6 +6792,15 @@ export class DataPlaneService {
     }
     if ((row.sentiment_delta ?? 0) >= 2) {
       supportReasons.push(`Sentiment improved by ${roundNumber(row.sentiment_delta ?? 0, 1)} points.`);
+    }
+    if ((row.sentiment_delta ?? 0) <= -2) {
+      supportReasons.push(`Sentiment fell by ${roundNumber(Math.abs(row.sentiment_delta ?? 0), 1)} points.`);
+    }
+    if ((row.velocity_acceleration ?? 0) <= -25) {
+      supportReasons.push(`Review velocity is down ${Math.round(Math.abs(row.velocity_acceleration ?? 0))}% versus the trailing baseline.`);
+    }
+    if ((row.ccu_growth_7d_percent ?? 0) <= -20) {
+      supportReasons.push(`Peak CCU is down ${Math.round(Math.abs(row.ccu_growth_7d_percent ?? 0))}% over 7d.`);
     }
 
     const supportLevel: DiscoverMomentumItem['supportLevel'] =
@@ -6941,6 +6978,18 @@ export class DataPlaneService {
       postConditions.push(`GREATEST(COALESCE(candidate.total_reviews, 0) - COALESCE(baseline30.total_reviews, COALESCE(candidate.total_reviews, 0)), 0) >= $${paramsList.length}`);
     }
 
+    const sentimentDeltaExpression = this.buildSentimentDeltaExpression(params.timeframe);
+
+    if (typeof filters?.minSentimentDelta === 'number') {
+      paramsList.push(filters.minSentimentDelta);
+      postConditions.push(`(${sentimentDeltaExpression}) >= $${paramsList.length}`);
+    }
+
+    if (typeof filters?.maxSentimentDelta === 'number') {
+      paramsList.push(filters.maxSentimentDelta);
+      postConditions.push(`(${sentimentDeltaExpression}) <= $${paramsList.length}`);
+    }
+
     if (params.trendType === 'accelerating') {
       postConditions.push(`(
         CASE
@@ -6974,7 +7023,7 @@ export class DataPlaneService {
     }
 
     const sortDirection = params.sortDirection === 'asc' ? 'ASC' : 'DESC';
-    const sortExpression = this.resolveMomentumSortExpression(params.sortBy, 'candidate');
+    const sortExpression = this.resolveMomentumSortExpression(params.sortBy, params.timeframe, 'candidate');
     paramsList.push(params.limit);
     const baseline7Join = this.buildMomentumBaselineJoin({
       alias: 'baseline7',
@@ -7076,18 +7125,7 @@ export class DataPlaneService {
             )::double precision
           ELSE NULL
         END AS velocity_acceleration,
-        CASE
-          WHEN COALESCE(baseline30.positive_reviews, 0) + COALESCE(baseline30.negative_reviews, 0) > 0
-            THEN ROUND(
-              COALESCE(candidate.positive_percentage, 0)
-              - (
-                COALESCE(baseline30.positive_reviews, 0)::numeric
-                / NULLIF(COALESCE(baseline30.positive_reviews, 0) + COALESCE(baseline30.negative_reviews, 0), 0)::numeric
-              ) * 100,
-              2
-            )::double precision
-          ELSE NULL
-        END AS sentiment_delta,
+        ROUND((${sentimentDeltaExpression}), 2)::double precision AS sentiment_delta,
         CASE
           WHEN COALESCE(baseline7.ccu_peak, 0) > 0
             THEN ROUND((((COALESCE(candidate.ccu_peak, 0) - baseline7.ccu_peak)::numeric / baseline7.ccu_peak::numeric) * 100), 2)::double precision
@@ -7120,6 +7158,7 @@ export class DataPlaneService {
 
   private resolveMomentumSortExpression(
     sortBy: DiscoverMomentumRequest['sortBy'],
+    timeframe: '7d' | '30d' | 'current',
     baseAlias = 'ldm'
   ): string {
     switch (sortBy) {
@@ -7132,14 +7171,7 @@ export class DataPlaneService {
       case 'reviews_added_7d':
         return `GREATEST(COALESCE(${baseAlias}.total_reviews, 0) - COALESCE(baseline7.total_reviews, COALESCE(${baseAlias}.total_reviews, 0)), 0)`;
       case 'sentiment_delta':
-        return `CASE
-          WHEN COALESCE(baseline30.positive_reviews, 0) + COALESCE(baseline30.negative_reviews, 0) > 0
-            THEN COALESCE(${baseAlias}.positive_percentage, 0) - (
-              COALESCE(baseline30.positive_reviews, 0)::numeric
-              / NULLIF(COALESCE(baseline30.positive_reviews, 0) + COALESCE(baseline30.negative_reviews, 0), 0)::numeric
-            ) * 100
-          ELSE 0
-        END`;
+        return this.buildSentimentDeltaExpression(timeframe, baseAlias);
       case 'total_reviews':
         return `COALESCE(${baseAlias}.total_reviews, 0)`;
       case 'velocity_acceleration':
@@ -7181,6 +7213,7 @@ export class DataPlaneService {
   private requiresMomentumBaseline7(params: {
     filters: DiscoverMomentumRequest['filters'] | null;
     sortBy: DiscoverMomentumRequest['sortBy'];
+    timeframe: '7d' | '30d' | 'current';
     trendType: DiscoverMomentumRequest['trendType'];
   }): boolean {
     if (
@@ -7194,12 +7227,24 @@ export class DataPlaneService {
       return true;
     }
 
-    return typeof params.filters?.minReviewsAdded7d === 'number';
+    if (params.sortBy === 'sentiment_delta' && params.timeframe === '7d') {
+      return true;
+    }
+
+    return typeof params.filters?.minReviewsAdded7d === 'number'
+      || (
+        params.timeframe === '7d'
+        && (
+          typeof params.filters?.minSentimentDelta === 'number'
+          || typeof params.filters?.maxSentimentDelta === 'number'
+        )
+      );
   }
 
   private requiresMomentumBaseline30(params: {
     filters: DiscoverMomentumRequest['filters'] | null;
     sortBy: DiscoverMomentumRequest['sortBy'];
+    timeframe: '7d' | '30d' | 'current';
     trendType: DiscoverMomentumRequest['trendType'];
   }): boolean {
     if (
@@ -7213,7 +7258,14 @@ export class DataPlaneService {
       return true;
     }
 
-    return typeof params.filters?.minReviewsAdded30d === 'number';
+    return typeof params.filters?.minReviewsAdded30d === 'number'
+      || (
+        params.timeframe !== '7d'
+        && (
+          typeof params.filters?.minSentimentDelta === 'number'
+          || typeof params.filters?.maxSentimentDelta === 'number'
+        )
+      );
   }
 
   private buildMomentumBaselineJoin(params: {

@@ -12,6 +12,17 @@ export type SessionSelectionMatchQuality = 'exact' | 'prefix' | 'substring' | 'f
 export type SessionCandidateKind = 'games' | 'publishers' | 'developers' | 'activities';
 export type SessionResultSetItemKind = 'games' | 'activities';
 export type SessionRequestStateFamily = 'entity_ranking' | 'momentum_discovery';
+export type SessionMomentumPromptFamily =
+  | 'accelerating'
+  | 'breaking_out'
+  | 'current_players'
+  | 'declining'
+  | 'review_activity_down'
+  | 'review_activity_up'
+  | 'review_momentum'
+  | 'review_sentiment_down'
+  | 'review_sentiment_up'
+  | 'trending';
 
 export type Phase1FallbackAction =
   | 'respond'
@@ -108,6 +119,7 @@ export interface SessionChatRequestState {
   entityKind?: SessionSelectionEntityKind | null;
   family: SessionRequestStateFamily;
   metric?: string | null;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   previewItems: SessionChatRequestPreviewItem[];
   timeframe?: '7d' | '30d' | 'current' | null;
   trendType?: 'accelerating' | 'breaking_out' | 'declining' | 'review_momentum' | null;

@@ -237,6 +237,48 @@ test('chat route stores continuable Tiger momentum result sets in session contex
             route: 'primary_success',
           },
           renderedText: 'Counter-Strike 2 currently leads this set by Peak CCU.',
+          sessionState: {
+            lastAnswer: {
+              family: 'momentum_discovery',
+              summary: 'System answered momentum_discovery.',
+            },
+            requestState: {
+              canonicalArgs: {
+                limit: 3,
+                sortBy: 'ccu_peak',
+                timeframe: 'current',
+              },
+              contractName: 'discoverMomentum',
+              entityKind: 'game',
+              family: 'momentum_discovery',
+              metric: 'ccu_peak',
+              momentumPromptFamily: 'current_players',
+              previewItems: [
+                {
+                  entityUid: null,
+                  label: 'Counter-Strike 2',
+                  ordinal: 1,
+                  platformEntityId: 730,
+                },
+                {
+                  entityUid: null,
+                  label: 'Dota 2',
+                  ordinal: 2,
+                  platformEntityId: 570,
+                },
+                {
+                  entityUid: null,
+                  label: 'Slay the Spire 2',
+                  ordinal: 3,
+                  platformEntityId: 320,
+                },
+              ],
+              timeframe: 'current',
+              trendType: null,
+              updatedAt: '2026-04-04T00:00:00.000Z',
+            },
+            selectionState: null,
+          },
         },
       },
     ],
@@ -254,6 +296,7 @@ test('chat route stores continuable Tiger momentum result sets in session contex
   assert.equal(endEvent.sessionContext?.resultSet?.sourceContract, 'discoverMomentum');
   assert.equal(endEvent.sessionContext?.resultSet?.sourceTool, 'screen_games');
   assert.deepEqual(endEvent.sessionContext?.resultSet?.shownIds, [730, 570, 320]);
+  assert.equal(endEvent.sessionContext?.requestState?.momentumPromptFamily, 'current_players');
   assertExhausted();
 });
 
@@ -481,6 +524,177 @@ test('chat route continues Tiger momentum result sets for natural follow-ups lik
   assert.equal(endEvent.sessionContext?.resultSet?.sourceContract, 'discoverMomentum');
   assert.deepEqual(endEvent.sessionContext?.resultSet?.shownIds, [730, 570, 320, 440, 1172470, 271590]);
   assert.equal(trace.queryApiCalls.length, 1);
+  assertExhausted();
+});
+
+test('chat route preserves review-trend request families across Tiger continuations', async () => {
+  const priorContext: SessionChatContext = {
+    version: 1,
+    entities: [],
+    constraints: [],
+    lastAnswer: null,
+    requestState: {
+      canonicalArgs: {
+        filters: {
+          maxSentimentDelta: -3,
+          minCcu: 100,
+          minReviews: 10000,
+          minReviewsAdded30d: 25,
+        },
+        limit: 3,
+        sortBy: 'total_reviews',
+        sortDirection: 'desc',
+        timeframe: '30d',
+        trendType: null,
+      },
+      contractName: 'discoverMomentum',
+      entityKind: 'game',
+      family: 'momentum_discovery',
+      metric: 'total_reviews',
+      momentumPromptFamily: 'review_sentiment_down',
+      previewItems: [
+        {
+          entityUid: 'game:steam:2668510',
+          label: 'Example Game',
+          ordinal: 1,
+          platformEntityId: 2668510,
+        },
+      ],
+      timeframe: '30d',
+      trendType: null,
+      updatedAt: '2026-04-01T00:00:00.000Z',
+    },
+    resultSet: {
+      continuationToken: null,
+      continuable: true,
+      family: 'momentum',
+      itemKind: 'games',
+      lastPageSize: 3,
+      shownIds: [2668510, 2668520, 2668530],
+      sourceArgs: {
+        filters: {
+          maxSentimentDelta: -3,
+          minCcu: 100,
+          minReviews: 10000,
+          minReviewsAdded30d: 25,
+        },
+        sortBy: 'total_reviews',
+        sortDirection: 'desc',
+        timeframe: '30d',
+      },
+      sourceContract: 'discoverMomentum',
+      sourceTool: 'screen_games',
+      totalFound: null,
+      updatedAt: '2026-04-01T00:00:00.000Z',
+    },
+    updatedAt: '2026-04-01T00:00:00.000Z',
+  };
+
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'show me more' }],
+      sessionContext: priorContext,
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    queryApiCalls: [
+      {
+        assertBody: (body) => {
+          assert.deepEqual(body, {
+            continuationToken: null,
+            requestedCount: 3,
+            sourceArgs: {
+              excludeAppIds: [2668510, 2668520, 2668530],
+              filters: {
+                maxSentimentDelta: -3,
+                minCcu: 100,
+                minReviews: 10000,
+                minReviewsAdded30d: 25,
+              },
+              sortBy: 'total_reviews',
+              sortDirection: 'desc',
+              timeframe: '30d',
+            },
+            sourceContract: 'discoverMomentum',
+          });
+        },
+        expectedPath: '/v1/contracts/continue-result-set',
+        response: {
+          data: {
+            continuationToken: null,
+            effectiveArgs: {
+              excludeAppIds: [2668510, 2668520, 2668530],
+              filters: {
+                maxSentimentDelta: -3,
+                minCcu: 100,
+                minReviews: 10000,
+                minReviewsAdded30d: 25,
+              },
+              limit: 3,
+              sortBy: 'total_reviews',
+              sortDirection: 'desc',
+              timeframe: '30d',
+            },
+            exhausted: false,
+            provenance: {
+              capturedAt: '2026-04-01T00:00:00.000Z',
+              source: 'tiger',
+              tables: ['legacy.apps', 'legacy.latest_daily_metrics'],
+            },
+            result: {
+              filtersApplied: [
+                'sort_by: total_reviews',
+                'timeframe: 30d',
+                'min_reviews: 10000',
+                'min_ccu: 100',
+                'min_reviews_added_30d: 25',
+                'max_sentiment_delta: -3',
+              ],
+              items: [
+                {
+                  appid: 2668540,
+                  ccuPeak: 3900,
+                  entityUid: 'game:steam:2668540',
+                  isFree: false,
+                  name: 'Follow-up Game',
+                  reviewPercentage: 72,
+                  reviewsAdded30d: 180,
+                  sentimentDelta: -3.8,
+                  supportLevel: 'high',
+                  supportReasons: ['Sentiment fell by 3.8 points.'],
+                  totalReviews: 16000,
+                  trendDirection: 'down',
+                },
+              ],
+              rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+              rankingLabel: 'Total Reviews',
+              sortBy: 'total_reviews',
+              sortDirection: 'desc',
+              sufficientToAnswer: true,
+              timeframe: '30d',
+              timeframeLabel: 'Last 30 days',
+              trendType: null,
+            },
+            sourceContract: 'discoverMomentum',
+          },
+          httpStatus: 200,
+          ok: true,
+        },
+      },
+    ],
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const endEvent = getEndEvent(events);
+
+  assert.ok(endEvent);
+  assert.equal(endEvent.sessionContext?.requestState?.momentumPromptFamily, 'review_sentiment_down');
   assertExhausted();
 });
 

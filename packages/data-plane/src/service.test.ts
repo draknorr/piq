@@ -340,6 +340,63 @@ test('discoverMomentum returns Tiger momentum rows as typed items', async () => 
   assert.equal(result.timeframe, 'current');
 });
 
+test('discoverMomentum returns sortDirection and 7d sentiment ranking details', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryMomentumRows = async () => [
+    {
+      appid: 2668510,
+      ccu_growth_30d_percent: -12,
+      ccu_growth_7d_percent: -6,
+      ccu_peak: 4200,
+      developer_name: 'Example Studio',
+      discount_percent: 0,
+      is_free: false,
+      is_self_published: true,
+      name: 'Example Game',
+      owners_midpoint: 500000,
+      platforms: 'windows',
+      positive_percentage: 74,
+      price_cents: 1999,
+      publisher_name: 'Example Studio',
+      release_date: '2025-01-15',
+      release_year: 2025,
+      reviews_added_30d: 900,
+      reviews_added_7d: 240,
+      sentiment_delta: -4.2,
+      total_reviews: 18000,
+      trend_direction: 'down',
+      velocity_30d: 30,
+      velocity_7d: 34,
+      velocity_acceleration: -28,
+    },
+  ];
+
+  const result = await service.discoverMomentum({
+    filters: {
+      maxSentimentDelta: -3,
+      minReviewsAdded7d: 25,
+    },
+    sortBy: 'sentiment_delta',
+    sortDirection: 'asc',
+    timeframe: '7d',
+  });
+
+  assert.equal(result.sortDirection, 'asc');
+  assert.match(result.rankingDefinition, /7-day baseline/i);
+  assert.ok(result.filtersApplied.includes('max_sentiment_delta: -3'));
+  assert.ok(result.filtersApplied.includes('min_reviews_added_7d: 25'));
+});
+
+test('buildSentimentDeltaExpression switches baselines with the requested window', () => {
+  const service = createService();
+
+  assert.match((service as any).buildSentimentDeltaExpression('7d'), /baseline7/);
+  assert.match((service as any).buildSentimentDeltaExpression('30d'), /baseline30/);
+  assert.match((service as any).buildSentimentDeltaExpression('current'), /baseline30/);
+});
+
 test('discoverMomentum excludes previously shown appids before slicing the next page', async () => {
   const service = createService();
 

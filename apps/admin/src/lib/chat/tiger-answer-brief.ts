@@ -3,6 +3,7 @@ import 'server-only';
 import type {
   SessionChatSelectionCandidate,
   SessionChatSelectionSlot,
+  SessionMomentumPromptFamily,
   SessionChatSelectionState,
 } from '@/lib/chat/chat-context-types';
 import type { QuerySuggestion } from '@/lib/chat/query-templates';
@@ -55,6 +56,16 @@ function formatPercent(value: number | null | undefined): string {
   }
 
   return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
+}
+
+function formatSignedNumber(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'n/a';
+  }
+
+  const absolute = Math.abs(value);
+  const formatted = absolute % 1 === 0 ? absolute.toFixed(0) : absolute.toFixed(1);
+  return `${value > 0 ? '+' : value < 0 ? '-' : ''}${formatted}`;
 }
 
 function formatDate(value: string | null | undefined): string | null {
@@ -426,6 +437,7 @@ function getTopDisplayNames(response: unknown, maxItems = 3): string[] {
 
 function buildIntentSuggestions(params: {
   intent: TigerAnswerIntent;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
 }): QuerySuggestion[] {
   const { intent, response } = params;
@@ -652,10 +664,19 @@ function buildIntentSuggestions(params: {
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const sortBy = isRecord(response) ? getString(response.sortBy) : null;
     const timeframe = isRecord(response) ? getString(response.timeframe) : null;
+    const briefMode = getMomentumBriefMode(response, params.momentumPromptFamily);
+    const sentimentDown = isReviewSentimentDown(response, params.momentumPromptFamily);
+    const activityDown = isReviewActivityDown(response, params.momentumPromptFamily);
     const baseTrendQuery =
-      rankingLabel?.toLowerCase().includes('ccu')
+      briefMode === 'current_players' || rankingLabel?.toLowerCase().includes('ccu')
         ? 'games with the most players right now'
-        : rankingLabel?.toLowerCase().includes('acceleration')
+        : briefMode === 'review_sentiment'
+          ? `games with ${sentimentDown ? 'worsening' : 'improving'} review sentiment ${timeframe === '7d' ? 'this week' : 'this month'}`
+          : briefMode === 'review_activity'
+            ? activityDown
+              ? `games with slowing review pace ${timeframe === '30d' ? 'this month' : 'this week'}`
+              : `games with review momentum ${timeframe === '30d' ? 'this month' : 'this week'}`
+            : rankingLabel?.toLowerCase().includes('acceleration')
           ? `games accelerating ${timeframe === '30d' ? 'this month' : 'this week'}`
           : rankingLabel?.toLowerCase().includes('review')
             ? `games with review momentum ${timeframe === '30d' ? 'this month' : 'this week'}`
@@ -693,6 +714,20 @@ function buildIntentSuggestions(params: {
         category: 'template',
         label: 'Trending instead',
         query: 'What about trending this week?',
+      });
+    }
+    if (sortBy !== 'total_reviews') {
+      suggestions.push({
+        category: 'template',
+        label: 'By total reviews',
+        query: 'What about by total reviews instead?',
+      });
+    }
+    if (timeframe === '30d') {
+      suggestions.push({
+        category: 'template',
+        label: 'This week instead',
+        query: 'What about this week instead?',
       });
     }
     if (!filtersApplied.some((entry) => entry.includes('steam_deck'))) {
@@ -848,27 +883,146 @@ function getMomentumTrendType(
     : null;
 }
 
-function getMomentumBriefMode(response: unknown): 'current_players' | 'review_momentum' | 'momentum' {
+function hasMomentumAppliedFilter(response: unknown, filterKey: string): boolean {
+  if (!isRecord(response) || !Array.isArray(response.filtersApplied)) {
+    return false;
+  }
+
+  return response.filtersApplied.some((entry) => {
+    if (typeof entry !== 'string') {
+      return false;
+    }
+
+    const [rawKey] = entry.split(':', 1);
+    return rawKey.trim().toLowerCase() === filterKey.toLowerCase();
+  });
+}
+
+function hasMomentumAppliedFilterValue(
+  response: unknown,
+  filterKey: string,
+  expectedValue: string
+): boolean {
+  if (!isRecord(response) || !Array.isArray(response.filtersApplied)) {
+    return false;
+  }
+
+  return response.filtersApplied.some((entry) => {
+    if (typeof entry !== 'string') {
+      return false;
+    }
+
+    const [rawKey, rawRest = ''] = entry.split(':', 2);
+    return rawKey.trim().toLowerCase() === filterKey.toLowerCase()
+      && rawRest.trim().toLowerCase() === expectedValue.toLowerCase();
+  });
+}
+
+function isReviewSentimentMomentumFamily(
+  promptFamily: SessionMomentumPromptFamily | null | undefined
+): promptFamily is 'review_sentiment_down' | 'review_sentiment_up' {
+  return promptFamily === 'review_sentiment_down' || promptFamily === 'review_sentiment_up';
+}
+
+function isReviewActivityMomentumFamily(
+  promptFamily: SessionMomentumPromptFamily | null | undefined
+): promptFamily is 'review_activity_down' | 'review_activity_up' | 'review_momentum' {
+  return (
+    promptFamily === 'review_activity_down'
+    || promptFamily === 'review_activity_up'
+    || promptFamily === 'review_momentum'
+  );
+}
+
+function hasEstablishedTitlesFloor(response: unknown): boolean {
+  return hasMomentumAppliedFilterValue(response, 'min_reviews', '10000')
+    && hasMomentumAppliedFilterValue(response, 'min_ccu', '100')
+    && (
+      hasMomentumAppliedFilterValue(response, 'min_reviews_added_7d', '25')
+      || hasMomentumAppliedFilterValue(response, 'min_reviews_added_30d', '25')
+    );
+}
+
+function getMomentumBriefMode(
+  response: unknown,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined = null
+): 'current_players' | 'review_activity' | 'review_sentiment' | 'momentum' {
   const sortBy = getMomentumSortBy(response);
   const trendType = getMomentumTrendType(response);
+  const sortDirection = isRecord(response) && getString(response.sortDirection) === 'asc' ? 'asc' : 'desc';
   const timeframe = isRecord(response) ? getString(response.timeframe) : null;
+  const hasSentimentFilter = hasMomentumAppliedFilter(response, 'min_sentiment_delta')
+    || hasMomentumAppliedFilter(response, 'max_sentiment_delta');
+  const hasReviewActivityFilter = hasMomentumAppliedFilter(response, 'min_reviews_added_7d')
+    || hasMomentumAppliedFilter(response, 'min_reviews_added_30d');
 
   if (sortBy === 'ccu_peak' && timeframe === 'current') {
     return 'current_players';
   }
 
+  if (isReviewSentimentMomentumFamily(momentumPromptFamily) || sortBy === 'sentiment_delta' || hasSentimentFilter) {
+    return 'review_sentiment';
+  }
+
   if (
-    sortBy === 'review_score'
+    isReviewActivityMomentumFamily(momentumPromptFamily)
+    || sortBy === 'review_score'
     || sortBy === 'reviews_added_7d'
     || sortBy === 'reviews_added_30d'
-    || sortBy === 'sentiment_delta'
     || sortBy === 'velocity_7d'
+    || (sortBy === 'velocity_acceleration' && sortDirection === 'asc' && trendType !== 'declining')
     || trendType === 'review_momentum'
+    || hasReviewActivityFilter
   ) {
-    return 'review_momentum';
+    return 'review_activity';
   }
 
   return 'momentum';
+}
+
+function isReviewSentimentDown(
+  response: unknown,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined
+): boolean {
+  if (momentumPromptFamily === 'review_sentiment_down') {
+    return true;
+  }
+
+  if (momentumPromptFamily === 'review_sentiment_up') {
+    return false;
+  }
+
+  return hasMomentumAppliedFilter(response, 'max_sentiment_delta')
+    || (getMomentumSortBy(response) === 'sentiment_delta'
+      && isRecord(response)
+      && getString(response.sortDirection) === 'asc');
+}
+
+function isReviewActivityDown(
+  response: unknown,
+  momentumPromptFamily: SessionMomentumPromptFamily | null | undefined
+): boolean {
+  if (momentumPromptFamily === 'review_activity_down') {
+    return true;
+  }
+
+  if (
+    momentumPromptFamily === 'review_activity_up'
+    || momentumPromptFamily === 'review_momentum'
+  ) {
+    return false;
+  }
+
+  return getMomentumSortBy(response) === 'velocity_acceleration'
+    && isRecord(response)
+    && getString(response.sortDirection) === 'asc'
+    && getMomentumTrendType(response) !== 'declining';
+}
+
+function getEstablishedTitlesNote(response: unknown): string | null {
+  return hasEstablishedTitlesFloor(response)
+    ? 'I screened for established titles so this stays focused on broadly played games rather than low-volume noise.'
+    : null;
 }
 
 function getMomentumWindowLabel(response: unknown): string {
@@ -888,6 +1042,7 @@ function getMomentumWindowLabel(response: unknown): string {
 
 function buildDirectAnswer(params: {
   intent: TigerAnswerIntent;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
 }): string {
   const { intent, response } = params;
@@ -997,22 +1152,49 @@ function buildDirectAnswer(params: {
     const firstName = firstItem ? getString(firstItem.name) ?? getString(firstItem.displayName) : null;
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
-    const briefMode = getMomentumBriefMode(response);
+    const briefMode = getMomentumBriefMode(response, params.momentumPromptFamily);
+    const sentimentDown = isReviewSentimentDown(response, params.momentumPromptFamily);
+    const activityDown = isReviewActivityDown(response, params.momentumPromptFamily);
     const windowLabel = getMomentumWindowLabel(response);
     const appliedScope = formatMomentumAppliedScope(response);
     const scopeSuffix = appliedScope ? ` within the ${appliedScope} set` : '';
+    const establishedTitlesNote = getEstablishedTitlesNote(response);
     const supportReasons =
       firstItem && Array.isArray(firstItem.supportReasons)
         ? firstItem.supportReasons.map((value) => String(value)).filter(Boolean)
         : [];
     const ccuPeak = firstItem ? getNumber(firstItem.ccuPeak) : null;
-    return firstName
-      ? briefMode === 'current_players'
-        ? `As of ${windowLabel}, ${firstName} has the highest player count in this snapshot${scopeSuffix}, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
-        : `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`
-      : briefMode === 'current_players'
-        ? `As of ${windowLabel}, here is the current player leaderboard${scopeSuffix}.`
-        : `Here is the current momentum set${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).`;
+    const establishedSuffix = establishedTitlesNote ? ` ${establishedTitlesNote}` : '';
+
+    if (firstName) {
+      if (briefMode === 'current_players') {
+        return `As of ${windowLabel}, ${firstName} has the highest player count in this snapshot${scopeSuffix}, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
+      }
+
+      if (briefMode === 'review_sentiment') {
+        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
+      }
+
+      if (briefMode === 'review_activity') {
+        return `From ${windowLabel}, ${firstName} ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity screen'}${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} by ${rankingLabel?.toLowerCase() ?? 'recent reviews added'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
+      }
+
+      return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
+    }
+
+    if (briefMode === 'current_players') {
+      return `As of ${windowLabel}, here is the current player leaderboard${scopeSuffix}.`;
+    }
+
+    if (briefMode === 'review_sentiment') {
+      return `Here is the current review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}`;
+    }
+
+    if (briefMode === 'review_activity') {
+      return `Here is the current review-activity screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}`;
+    }
+
+    return `Here is the current momentum set${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).`;
   }
 
   if (intent === 'news_search' && entityName) {
@@ -1054,6 +1236,7 @@ function buildDirectAnswer(params: {
 
 function buildKeyFacts(params: {
   intent: TigerAnswerIntent;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
 }): string[] {
   const { intent, response } = params;
@@ -1183,11 +1366,16 @@ function buildKeyFacts(params: {
   } else if (intent === 'momentum_discovery') {
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
-    const briefMode = getMomentumBriefMode(response);
+    const timeframe = isRecord(response) ? getString(response.timeframe) : null;
+    const briefMode = getMomentumBriefMode(response, params.momentumPromptFamily);
     const windowLabel = getMomentumWindowLabel(response);
     const appliedScope = formatMomentumAppliedScope(response);
+    const establishedTitlesNote = getEstablishedTitlesNote(response);
     if (appliedScope) {
       facts.push(`Applied filters: ${appliedScope}.`);
+    }
+    if (establishedTitlesNote) {
+      facts.push(establishedTitlesNote);
     }
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name) ?? getString(item.displayName);
@@ -1195,7 +1383,10 @@ function buildKeyFacts(params: {
       const supportReasons = Array.isArray(item.supportReasons)
         ? item.supportReasons.map((value) => String(value)).filter(Boolean)
         : [];
-      const reviewDelta = getNumber(item.reviewsAdded30d) ?? getNumber(item.reviewsAdded7d);
+      const reviewDelta = timeframe === '30d'
+        ? getNumber(item.reviewsAdded30d) ?? getNumber(item.reviewsAdded7d)
+        : getNumber(item.reviewsAdded7d) ?? getNumber(item.reviewsAdded30d);
+      const sentimentDelta = getNumber(item.sentimentDelta);
       if (!name) {
         continue;
       }
@@ -1206,7 +1397,14 @@ function buildKeyFacts(params: {
         continue;
       }
 
-      if (briefMode === 'review_momentum') {
+      if (briefMode === 'review_sentiment') {
+        facts.push(
+          `${name}: Sentiment delta ${formatSignedNumber(sentimentDelta)} pts, ${formatPercent(getNumber(item.reviewPercentage))} review percentage, ${formatNumber(reviewDelta)} recent reviews added, ${formatNumber(getNumber(item.totalReviews))} total reviews${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
+        );
+        continue;
+      }
+
+      if (briefMode === 'review_activity') {
         facts.push(
           `${name}: ${formatNumber(reviewDelta)} recent reviews added, ${formatPercent(getNumber(item.reviewPercentage))} review percentage, ${formatNumber(getNumber(item.ccuPeak))} peak CCU${supportReasons[0] ? `. ${supportReasons[0]}` : '.'}`
         );
@@ -1370,6 +1568,7 @@ export function buildTigerClarificationBrief(params: {
 export function buildTigerSuccessBrief(params: {
   fallbackMarkdown: string;
   intent: TigerAnswerIntent;
+  momentumPromptFamily?: SessionMomentumPromptFamily | null;
   response: unknown;
   selectionState: SessionChatSelectionState | null;
 }): TigerAnswerBrief {
@@ -1379,6 +1578,7 @@ export function buildTigerSuccessBrief(params: {
     ...buildSelectionSwitchSuggestions(params.selectionState),
     ...buildIntentSuggestions({
       intent: params.intent,
+      momentumPromptFamily: params.momentumPromptFamily ?? null,
       response: params.response,
     }),
   ]);
@@ -1390,6 +1590,7 @@ export function buildTigerSuccessBrief(params: {
     answerKind: 'success',
     directAnswer: buildDirectAnswer({
       intent: params.intent,
+      momentumPromptFamily: params.momentumPromptFamily ?? null,
       response: params.response,
     }),
     evidenceMarkdown,
@@ -1398,6 +1599,7 @@ export function buildTigerSuccessBrief(params: {
     intent: params.intent,
     keyFacts: buildKeyFacts({
       intent: params.intent,
+      momentumPromptFamily: params.momentumPromptFamily ?? null,
       response: params.response,
     }),
     selectionNote,

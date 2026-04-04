@@ -1777,6 +1777,216 @@ test('Tiger primary routes review-momentum filters through discoverMomentum', as
   assert.match(result.renderedText ?? '', /ELDEN RING NIGHTREIGN/);
 });
 
+test('Tiger primary routes worsening-review prompts through sentiment discovery defaults', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        maxSentimentDelta: -3,
+        minCcu: 100,
+        minReviews: 10000,
+        minReviewsAdded30d: 25,
+      },
+      limit: 10,
+      sortBy: 'sentiment_delta',
+      sortDirection: 'asc',
+      timeframe: '30d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: sentiment_delta',
+        'timeframe: 30d',
+        'min_reviews: 10000',
+        'min_ccu: 100',
+        'min_reviews_added_30d: 25',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          entityUid: 'game:steam:2668510',
+          isFree: false,
+          name: 'Example Game',
+          platformSupport: ['windows'],
+          reviewPercentage: 74,
+          reviewsAdded30d: 900,
+          sentimentDelta: -4.2,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+          velocityAcceleration: -28,
+        },
+      ],
+      rankingDefinition: 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.',
+      rankingLabel: 'Sentiment Delta',
+      sortBy: 'sentiment_delta',
+      sortDirection: 'asc',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Which popular games are getting worse reviews lately?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /review sentiment decline/i);
+  assert.equal(result.contractResult?.contractName, 'discoverMomentum');
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_sentiment_down');
+});
+
+test('Tiger primary relaxes broad review-sentiment defaults when the user narrows to indie', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        maxSentimentDelta: -3,
+        minReviews: 1000,
+        minReviewsAdded30d: 5,
+      },
+      indieHeuristic: true,
+      limit: 10,
+      sortBy: 'sentiment_delta',
+      sortDirection: 'asc',
+      timeframe: '30d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: sentiment_delta',
+        'timeframe: 30d',
+        'indie_heuristic: true',
+        'min_reviews: 1000',
+        'min_reviews_added_30d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          isFree: false,
+          name: 'Example Indie',
+          platformSupport: ['windows'],
+          reviewPercentage: 74,
+          reviewsAdded30d: 120,
+          sentimentDelta: -4.2,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 4200,
+          trendDirection: 'down',
+          velocityAcceleration: -28,
+        },
+      ],
+      rankingDefinition: 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.',
+      rankingLabel: 'Sentiment Delta',
+      sortBy: 'sentiment_delta',
+      sortDirection: 'asc',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Which popular indie games are getting worse reviews lately?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_sentiment_down');
+});
+
+test('Tiger primary routes review-activity prompts through review-momentum semantics', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        minCcu: 100,
+        minReviews: 10000,
+        minReviewsAdded7d: 25,
+      },
+      limit: 10,
+      sortBy: 'reviews_added_7d',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      trendType: 'review_momentum',
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: reviews_added_7d',
+        'timeframe: 7d',
+        'trend_type: review_momentum',
+        'min_reviews: 10000',
+        'min_ccu: 100',
+        'min_reviews_added_7d: 25',
+      ],
+      items: [
+        {
+          appid: 1245620,
+          ccuPeak: 21000,
+          isFree: false,
+          name: 'Momentum Game',
+          platformSupport: ['windows'],
+          reviewPercentage: 82,
+          reviewsAdded7d: 6400,
+          supportLevel: 'high',
+          supportReasons: ['Review momentum is running well above the trailing baseline.'],
+          totalReviews: 48000,
+          trendDirection: 'up',
+        },
+      ],
+      rankingDefinition: 'Review momentum highlights titles adding reviews quickly over the selected window.',
+      rankingLabel: 'Reviews Added (7d)',
+      sortBy: 'reviews_added_7d',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: 'review_momentum',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What games are trending up in reviews right now?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_activity_up');
+});
+
 test('Tiger primary does not misroute mixed similarity-plus-momentum prompts to discoverMomentum', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
@@ -3335,6 +3545,235 @@ test('Tiger primary applies typo-tolerant momentum filter pivots from request st
     (result.contractResult?.request as { filters?: { steamDeck?: string[] } } | undefined)?.filters?.steamDeck,
     ['verified']
   );
+});
+
+test('Tiger primary preserves review-sentiment semantics when narrowing follow-ups to indie', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        maxSentimentDelta: -3,
+        minReviews: 1000,
+        minReviewsAdded30d: 5,
+      },
+      indieHeuristic: true,
+      limit: 10,
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      timeframe: '30d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 30d',
+        'indie_heuristic: true',
+        'min_reviews: 1000',
+        'min_reviews_added_30d: 5',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          entityUid: 'game:steam:2668510',
+          isFree: false,
+          name: 'Example Indie',
+          platformSupport: ['windows'],
+          reviewPercentage: 74,
+          reviewsAdded30d: 120,
+          sentimentDelta: -4.2,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 4200,
+          trendDirection: 'down',
+          velocityAcceleration: -28,
+        },
+      ],
+      rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'what about indie ones?',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'momentum_discovery',
+        summary: 'System answered momentum_discovery.',
+      },
+      requestState: {
+        canonicalArgs: {
+          filters: {
+            maxSentimentDelta: -3,
+            minCcu: 100,
+            minReviews: 10000,
+            minReviewsAdded30d: 25,
+          },
+          limit: 10,
+          sortBy: 'total_reviews',
+          sortDirection: 'desc',
+          timeframe: '30d',
+          trendType: null,
+        },
+        contractName: 'discoverMomentum',
+        entityKind: 'game',
+        family: 'momentum_discovery',
+        metric: 'total_reviews',
+        momentumPromptFamily: 'review_sentiment_down',
+        previewItems: [
+          {
+            entityUid: 'game:steam:2668510',
+            label: 'Example Game',
+            ordinal: 1,
+            platformEntityId: 2668510,
+          },
+        ],
+        timeframe: '30d',
+        trendType: null,
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /review sentiment decline/i);
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_sentiment_down');
+});
+
+test('Tiger primary moves review-sentiment activity floors to the requested week on timeframe pivots', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        maxSentimentDelta: -3,
+        minCcu: 100,
+        minReviews: 10000,
+        minReviewsAdded7d: 25,
+      },
+      limit: 10,
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: total_reviews',
+        'timeframe: 7d',
+        'min_reviews: 10000',
+        'min_ccu: 100',
+        'min_reviews_added_7d: 25',
+        'max_sentiment_delta: -3',
+      ],
+      items: [
+        {
+          appid: 2668510,
+          ccuPeak: 4200,
+          entityUid: 'game:steam:2668510',
+          isFree: false,
+          name: 'Example Game',
+          platformSupport: ['windows'],
+          reviewPercentage: 74,
+          reviewsAdded7d: 240,
+          sentimentDelta: -4.2,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 4.2 points.'],
+          totalReviews: 18000,
+          trendDirection: 'down',
+          velocityAcceleration: -28,
+        },
+      ],
+      rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
+      rankingLabel: 'Total Reviews',
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'this week instead',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'momentum_discovery',
+        summary: 'System answered momentum_discovery.',
+      },
+      requestState: {
+        canonicalArgs: {
+          filters: {
+            maxSentimentDelta: -3,
+            minCcu: 100,
+            minReviews: 10000,
+            minReviewsAdded30d: 25,
+          },
+          limit: 10,
+          sortBy: 'total_reviews',
+          sortDirection: 'desc',
+          timeframe: '30d',
+          trendType: null,
+        },
+        contractName: 'discoverMomentum',
+        entityKind: 'game',
+        family: 'momentum_discovery',
+        metric: 'total_reviews',
+        momentumPromptFamily: 'review_sentiment_down',
+        previewItems: [
+          {
+            entityUid: 'game:steam:2668510',
+            label: 'Example Game',
+            ordinal: 1,
+            platformEntityId: 2668510,
+          },
+        ],
+        timeframe: '30d',
+        trendType: null,
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /review sentiment decline/i);
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_sentiment_down');
+  assert.equal(result.sessionState?.requestState?.timeframe, '7d');
 });
 
 test('Tiger primary can drill from ranked results into change lookups for the top item', async (t) => {

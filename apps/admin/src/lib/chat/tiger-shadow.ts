@@ -3,6 +3,7 @@ import 'server-only';
 import type {
   SessionChatContext,
   SessionChatLastAnswer,
+  SessionMomentumPromptFamily,
   SessionChatRequestPreviewItem,
   SessionChatRequestState,
   SessionChatSelectionCandidate,
@@ -64,7 +65,7 @@ const CHANGE_PROMPT_PATTERN =
 const CHANGE_DISCOVERY_PROMPT_PATTERN =
   /\b(biggest steam page refreshes?|store-?page changes?|release timing changes?|changed tags?(?: or genres?)?|marketing push|relaunch pattern|teasing a big update|sustained response|under-marketed|signable indie games|agency leads|without an announcement)\b/i;
 const MOMENTUM_PROMPT_PATTERN =
-  /\b(?:most players(?: right now)?|highest ccu|most concurrent players?|most played(?: right now)?|trending(?: up)?|gaining traction|hot right now|breaking out|accelerating|declining|review momentum|reviews? surging)\b/i;
+  /\b(?:most players(?: right now)?|highest ccu|most concurrent players?|most played(?: right now)?|trending(?: up)?|trending down|gaining traction|hot right now|breaking out|accelerating|declining|review momentum|reviews? surging|trending up in reviews|improving sentiment|worsening sentiment|worse reviews?|better reviews?|reviews? slipping|reviews? improving|reviews? slowing down)\b/i;
 const MOMENTUM_PLAYER_PROMPT_PATTERN =
   /\b(?:most players(?: right now)?|highest ccu|most concurrent players?|most played(?: right now)?)\b/i;
 const MOMENTUM_TRENDING_PROMPT_PATTERN =
@@ -348,9 +349,21 @@ interface DiscoverMomentumResponse {
   }>;
   rankingDefinition?: string;
   rankingLabel?: string;
+  sortBy?:
+    | 'ccu_peak'
+    | 'momentum_score'
+    | 'review_score'
+    | 'reviews_added_30d'
+    | 'reviews_added_7d'
+    | 'sentiment_delta'
+    | 'total_reviews'
+    | 'velocity_7d'
+    | 'velocity_acceleration';
+  sortDirection?: 'asc' | 'desc';
   sufficientToAnswer?: boolean;
   timeframe?: '7d' | '30d' | 'current';
   timeframeLabel?: string;
+  trendType?: 'accelerating' | 'breaking_out' | 'declining' | 'review_momentum' | null;
 }
 
 interface TraceMetricHistoryResponse {
@@ -497,11 +510,13 @@ interface DiscoverMomentumShadowRequest {
     isFree?: boolean | null;
     maxPriceCents?: number | null;
     maxReviews?: number | null;
+    maxSentimentDelta?: number | null;
     minCcu?: number | null;
     minReviewScore?: number | null;
     minReviews?: number | null;
     minReviewsAdded30d?: number | null;
     minReviewsAdded7d?: number | null;
+    minSentimentDelta?: number | null;
     platforms?: string[];
     releaseYear?: {
       gte?: number | null;
@@ -526,6 +541,8 @@ interface DiscoverMomentumShadowRequest {
   timeframe?: '7d' | '30d' | 'current';
   trendType?: 'accelerating' | 'breaking_out' | 'declining' | 'review_momentum' | null;
 }
+
+type MomentumPromptFamily = SessionMomentumPromptFamily;
 
 interface SemanticSearchShadowRequest {
   continuationToken?: string | null;
@@ -571,6 +588,7 @@ interface CatalogShadowBuildResult {
 }
 
 interface MomentumBuildResult {
+  momentumPromptFamily?: MomentumPromptFamily | null;
   reason?: string;
   request: DiscoverMomentumShadowRequest | null;
 }
@@ -643,6 +661,7 @@ interface RequestPivotResolution {
   compareRequestOverride?: CompareEntitiesShadowRequest | null;
   entityQuery?: string;
   matchedIntent: TigerPrimaryMatchedIntent;
+  momentumPromptFamily?: MomentumPromptFamily | null;
   requestOverride?: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest | null;
 }
 
@@ -1473,6 +1492,10 @@ function inferRankingIntent(prompt: string): boolean {
 }
 
 function inferMomentumIntent(prompt: string): boolean {
+  if (inferReviewTrendPromptFamily(prompt)) {
+    return true;
+  }
+
   if (!MOMENTUM_PROMPT_PATTERN.test(prompt)) {
     return false;
   }
@@ -2186,9 +2209,254 @@ function extractMomentumTags(prompt: string): string[] | undefined {
   return matches.length > 0 ? Array.from(new Set(matches)) : undefined;
 }
 
+const BROAD_REVIEW_TREND_MIN_CCU = 100;
+const BROAD_REVIEW_TREND_MIN_REVIEWS = 10_000;
+const BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED = 25;
+const NARROW_REVIEW_TREND_MIN_REVIEWS = 1_000;
+const NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED = 5;
+const REVIEW_SENTIMENT_THRESHOLD = 3;
+
+function isReviewSentimentPromptFamily(
+  promptFamily: MomentumPromptFamily | null | undefined
+): promptFamily is 'review_sentiment_down' | 'review_sentiment_up' {
+  return promptFamily === 'review_sentiment_down' || promptFamily === 'review_sentiment_up';
+}
+
+function isReviewActivityPromptFamily(
+  promptFamily: MomentumPromptFamily | null | undefined
+): promptFamily is 'review_activity_down' | 'review_activity_up' {
+  return (
+    promptFamily === 'review_activity_down'
+    || promptFamily === 'review_activity_up'
+  );
+}
+
+function isReviewTrendPromptFamily(
+  promptFamily: MomentumPromptFamily | null | undefined
+): promptFamily is
+  | 'review_activity_down'
+  | 'review_activity_up'
+  | 'review_sentiment_down'
+  | 'review_sentiment_up' {
+  return isReviewSentimentPromptFamily(promptFamily) || isReviewActivityPromptFamily(promptFamily);
+}
+
+function clearReviewTrendSpecificFilters(
+  filters: NonNullable<DiscoverMomentumShadowRequest['filters']>
+): void {
+  delete filters.minReviewsAdded7d;
+  delete filters.minReviewsAdded30d;
+  delete filters.minSentimentDelta;
+  delete filters.maxSentimentDelta;
+}
+
+function getReviewTrendReviewAddedField(
+  request: DiscoverMomentumShadowRequest
+): 'minReviewsAdded30d' | 'minReviewsAdded7d' {
+  return request.timeframe === '30d' || request.sortBy === 'reviews_added_30d'
+    ? 'minReviewsAdded30d'
+    : 'minReviewsAdded7d';
+}
+
+function inferReviewTrendPromptFamily(prompt: string): Exclude<
+  MomentumPromptFamily,
+  'accelerating' | 'breaking_out' | 'current_players' | 'declining' | 'review_momentum' | 'trending'
+> | null {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+
+  if (
+    includesApproxPhrase(tokens, ['getting', 'worse', 'reviews'])
+    || includesApproxPhrase(tokens, ['worse', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews', 'getting', 'worse'])
+    || includesApproxPhrase(tokens, ['reviews', 'slipping'])
+    || includesApproxPhrase(tokens, ['worsening', 'sentiment'])
+    || includesApproxPhrase(tokens, ['declining', 'sentiment'])
+    || includesApproxPhrase(tokens, ['sentiment', 'declining'])
+    || includesApproxPhrase(tokens, ['sentiment', 'falling'])
+    || includesApproxPhrase(tokens, ['mixed', 'lately'])
+    || includesApproxPhrase(tokens, ['review', 'sentiment', 'falling'])
+  ) {
+    return 'review_sentiment_down';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['improving', 'sentiment'])
+    || includesApproxPhrase(tokens, ['sentiment', 'improving'])
+    || includesApproxPhrase(tokens, ['better', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews', 'improving'])
+    || includesApproxPhrase(tokens, ['sentiment', 'up'])
+  ) {
+    return 'review_sentiment_up';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['trending', 'up', 'reviews'])
+    || includesApproxPhrase(tokens, ['trending', 'up', 'in', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews', 'trending', 'up'])
+    || includesApproxPhrase(tokens, ['reviews', 'surging'])
+    || includesApproxPhrase(tokens, ['getting', 'more', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews', 'picking', 'up'])
+  ) {
+    return 'review_activity_up';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['reviews', 'slowing', 'down'])
+    || includesApproxPhrase(tokens, ['review', 'momentum', 'fading'])
+    || includesApproxPhrase(tokens, ['fewer', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews', 'trending', 'down'])
+  ) {
+    return 'review_activity_down';
+  }
+
+  return null;
+}
+
+function inferMomentumRequestFamily(
+  request: DiscoverMomentumShadowRequest
+): MomentumPromptFamily | null {
+  const filters = request.filters ?? null;
+
+  if (request.sortBy === 'ccu_peak' && request.timeframe === 'current') {
+    return 'current_players';
+  }
+
+  if (typeof filters?.maxSentimentDelta === 'number') {
+    return 'review_sentiment_down';
+  }
+
+  if (typeof filters?.minSentimentDelta === 'number') {
+    return 'review_sentiment_up';
+  }
+
+  if (request.sortBy === 'sentiment_delta') {
+    return request.sortDirection === 'asc' ? 'review_sentiment_down' : 'review_sentiment_up';
+  }
+
+  if (
+    request.sortBy === 'reviews_added_7d'
+    || request.sortBy === 'reviews_added_30d'
+    || request.sortBy === 'velocity_7d'
+    || request.trendType === 'review_momentum'
+  ) {
+    return 'review_activity_up';
+  }
+
+  if (request.sortBy === 'velocity_acceleration' && request.sortDirection === 'asc' && request.trendType !== 'declining') {
+    return 'review_activity_down';
+  }
+
+  if (request.trendType === 'breaking_out') {
+    return 'breaking_out';
+  }
+
+  if (request.trendType === 'accelerating') {
+    return 'accelerating';
+  }
+
+  if (request.trendType === 'declining') {
+    return 'declining';
+  }
+
+  if (request.sortBy === 'momentum_score') {
+    return 'trending';
+  }
+
+  return null;
+}
+
+function hasMomentumNarrowingScope(request: DiscoverMomentumShadowRequest): boolean {
+  const filters = request.filters ?? null;
+  return Boolean(
+    request.indieHeuristic
+      || filters?.platforms?.length
+      || filters?.steamDeck?.length
+      || filters?.tags?.length
+      || filters?.genres?.length
+      || filters?.releaseYear
+      || filters?.maxPriceCents != null
+      || filters?.isFree != null
+  );
+}
+
+function applyReviewTrendPopularityDefaults(
+  prompt: string,
+  request: DiscoverMomentumShadowRequest,
+  promptFamily: MomentumPromptFamily | null
+): DiscoverMomentumShadowRequest {
+  if (!isReviewTrendPromptFamily(promptFamily)) {
+    return request;
+  }
+
+  const filters: NonNullable<DiscoverMomentumShadowRequest['filters']> = {
+    ...(request.filters ?? {}),
+  };
+  const narrowed = hasMomentumNarrowingScope(request);
+  const explicitMinReviews = extractMomentumMinReviews(prompt);
+  const explicitMinCcu = extractMomentumMinCcu(prompt);
+  const reviewAddedField = getReviewTrendReviewAddedField(request);
+  const staleReviewAddedField =
+    reviewAddedField === 'minReviewsAdded30d' ? 'minReviewsAdded7d' : 'minReviewsAdded30d';
+  const broadReviewFloor = BROAD_REVIEW_TREND_MIN_REVIEWS;
+  const narrowReviewFloor = NARROW_REVIEW_TREND_MIN_REVIEWS;
+  const broadReviewAddedFloor = BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED;
+  const narrowReviewAddedFloor = NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED;
+
+  if (explicitMinReviews == null) {
+    if (narrowed) {
+      if (typeof filters.minReviews !== 'number' || filters.minReviews === broadReviewFloor) {
+        filters.minReviews = narrowReviewFloor;
+      } else {
+        filters.minReviews = Math.max(filters.minReviews, narrowReviewFloor);
+      }
+    } else {
+      filters.minReviews = Math.max(filters.minReviews ?? 0, broadReviewFloor);
+    }
+  }
+
+  if (explicitMinCcu == null) {
+    if (narrowed) {
+      if (filters.minCcu === BROAD_REVIEW_TREND_MIN_CCU) {
+        delete filters.minCcu;
+      }
+    } else {
+      filters.minCcu = Math.max(filters.minCcu ?? 0, BROAD_REVIEW_TREND_MIN_CCU);
+    }
+  }
+
+  delete filters[staleReviewAddedField];
+
+  const currentReviewAddedFloor = filters[reviewAddedField];
+  const nextReviewAddedFloor = narrowed ? narrowReviewAddedFloor : broadReviewAddedFloor;
+  const normalizedReviewAddedFloor =
+    typeof currentReviewAddedFloor !== 'number' || currentReviewAddedFloor === broadReviewAddedFloor
+      ? nextReviewAddedFloor
+      : Math.max(currentReviewAddedFloor, nextReviewAddedFloor);
+
+  filters[reviewAddedField] = normalizedReviewAddedFloor;
+
+  if (isReviewSentimentPromptFamily(promptFamily)) {
+    if (promptFamily === 'review_sentiment_down') {
+      filters.maxSentimentDelta = typeof filters.maxSentimentDelta === 'number'
+        ? Math.min(filters.maxSentimentDelta, -REVIEW_SENTIMENT_THRESHOLD)
+        : -REVIEW_SENTIMENT_THRESHOLD;
+      delete filters.minSentimentDelta;
+    } else {
+      filters.minSentimentDelta = Math.max(filters.minSentimentDelta ?? 0, REVIEW_SENTIMENT_THRESHOLD);
+      delete filters.maxSentimentDelta;
+    }
+  } else {
+    delete filters.minSentimentDelta;
+    delete filters.maxSentimentDelta;
+  }
+
+  request.filters = Object.keys(filters).length > 0 ? filters : null;
+  return request;
+}
+
 function inferMomentumTimeframe(
   prompt: string,
-  promptFamily: 'current_players' | 'trending' | 'breaking_out' | 'accelerating' | 'declining' | 'review_momentum'
+  promptFamily: MomentumPromptFamily
 ): '7d' | '30d' | 'current' {
   if (promptFamily === 'current_players') {
     return 'current';
@@ -2202,7 +2470,13 @@ function inferMomentumTimeframe(
     return '30d';
   }
 
-  if (promptFamily === 'accelerating' || promptFamily === 'declining') {
+  if (
+    promptFamily === 'accelerating'
+    || promptFamily === 'declining'
+    || promptFamily === 'review_activity_down'
+    || promptFamily === 'review_sentiment_down'
+    || promptFamily === 'review_sentiment_up'
+  ) {
     return '30d';
   }
 
@@ -2224,19 +2498,24 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
     };
   }
 
-  let promptFamily:
-    | 'accelerating'
-    | 'breaking_out'
-    | 'current_players'
-    | 'declining'
-    | 'review_momentum'
-    | 'trending'
-    | null = null;
+  let promptFamily: MomentumPromptFamily | null = inferReviewTrendPromptFamily(prompt);
   let sortBy: DiscoverMomentumShadowRequest['sortBy'] | null = null;
   let sortDirection: DiscoverMomentumShadowRequest['sortDirection'] = 'desc';
   let trendType: DiscoverMomentumShadowRequest['trendType'] = null;
 
-  if (MOMENTUM_PLAYER_PROMPT_PATTERN.test(prompt)) {
+  if (promptFamily === 'review_sentiment_down') {
+    sortBy = 'sentiment_delta';
+    sortDirection = 'asc';
+  } else if (promptFamily === 'review_sentiment_up') {
+    sortBy = 'sentiment_delta';
+    sortDirection = 'desc';
+  } else if (promptFamily === 'review_activity_up') {
+    sortBy = null;
+    trendType = 'review_momentum';
+  } else if (promptFamily === 'review_activity_down') {
+    sortBy = 'velocity_acceleration';
+    sortDirection = 'asc';
+  } else if (MOMENTUM_PLAYER_PROMPT_PATTERN.test(prompt)) {
     promptFamily = 'current_players';
     sortBy = 'ccu_peak';
   } else if (MOMENTUM_BREAKOUT_PROMPT_PATTERN.test(prompt)) {
@@ -2269,7 +2548,7 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
 
   const timeframe = inferMomentumTimeframe(prompt, promptFamily);
   if (!sortBy) {
-    sortBy = promptFamily === 'review_momentum'
+    sortBy = promptFamily === 'review_momentum' || promptFamily === 'review_activity_up'
       ? timeframe === '30d'
         ? 'reviews_added_30d'
         : 'reviews_added_7d'
@@ -2302,16 +2581,19 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
     ...(isFree != null ? { isFree } : {}),
   };
 
+  const request: DiscoverMomentumShadowRequest = {
+    ...(Object.keys(filters).length > 0 ? { filters } : {}),
+    ...( /\bindie\b/i.test(prompt) ? { indieHeuristic: true } : {}),
+    limit: extractRequestedTopCount(prompt, 10, 20),
+    sortBy,
+    sortDirection,
+    timeframe,
+    trendType,
+  };
+
   return {
-    request: {
-      ...(Object.keys(filters).length > 0 ? { filters } : {}),
-      ...( /\bindie\b/i.test(prompt) ? { indieHeuristic: true } : {}),
-      limit: extractRequestedTopCount(prompt, 10, 20),
-      sortBy,
-      sortDirection,
-      timeframe,
-      trendType,
-    },
+    momentumPromptFamily: promptFamily,
+    request: applyReviewTrendPopularityDefaults(prompt, request, promptFamily),
   };
 }
 
@@ -2367,6 +2649,7 @@ function stripMomentumContinuationArgs(
 
 function buildPrimaryRequestState(params: {
   intent: 'entity_ranking' | 'momentum_discovery';
+  momentumPromptFamily?: MomentumPromptFamily | null;
   request: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest;
   response: DiscoverMomentumResponse | RankEntitiesResponse;
   timestamp?: string;
@@ -2393,6 +2676,7 @@ function buildPrimaryRequestState(params: {
     entityKind: 'game',
     family: 'momentum_discovery',
     metric: request.sortBy,
+    momentumPromptFamily: params.momentumPromptFamily ?? inferMomentumRequestFamily(request),
     previewItems: buildRequestPreviewItems(params.response as DiscoverMomentumResponse),
     timeframe: request.timeframe ?? null,
     trendType: request.trendType ?? null,
@@ -2456,8 +2740,53 @@ function inferRankingMetricPivot(
 function inferMomentumPivot(
   prompt: string,
   currentTimeframe: DiscoverMomentumShadowRequest['timeframe']
-): Pick<DiscoverMomentumShadowRequest, 'sortBy' | 'sortDirection' | 'timeframe' | 'trendType'> | null {
+): (Pick<DiscoverMomentumShadowRequest, 'sortBy' | 'sortDirection' | 'timeframe' | 'trendType'> & {
+  promptFamily?: MomentumPromptFamily | null;
+}) | null {
   const tokens = tokenizeFollowUpPrompt(prompt);
+  const reviewTrendFamily = inferReviewTrendPromptFamily(prompt);
+
+  if (reviewTrendFamily) {
+    const timeframe = inferMomentumTimeframe(prompt, reviewTrendFamily) === '30d' ? '30d' : '7d';
+
+    if (reviewTrendFamily === 'review_sentiment_down') {
+      return {
+        promptFamily: reviewTrendFamily,
+        sortBy: 'sentiment_delta',
+        sortDirection: 'asc',
+        timeframe,
+        trendType: null,
+      };
+    }
+
+    if (reviewTrendFamily === 'review_sentiment_up') {
+      return {
+        promptFamily: reviewTrendFamily,
+        sortBy: 'sentiment_delta',
+        sortDirection: 'desc',
+        timeframe,
+        trendType: null,
+      };
+    }
+
+    if (reviewTrendFamily === 'review_activity_down') {
+      return {
+        promptFamily: reviewTrendFamily,
+        sortBy: 'velocity_acceleration',
+        sortDirection: 'asc',
+        timeframe,
+        trendType: null,
+      };
+    }
+
+    return {
+      promptFamily: reviewTrendFamily,
+      sortBy: timeframe === '30d' ? 'reviews_added_30d' : 'reviews_added_7d',
+      sortDirection: 'desc',
+      timeframe,
+      trendType: 'review_momentum',
+    };
+  }
 
   if (
     includesApproxPhrase(tokens, ['ccu'])
@@ -2466,6 +2795,7 @@ function inferMomentumPivot(
     || includesApproxPhrase(tokens, ['players', 'right', 'now'])
   ) {
     return {
+      promptFamily: 'current_players',
       sortBy: 'ccu_peak',
       sortDirection: 'desc',
       timeframe: 'current',
@@ -2502,6 +2832,7 @@ function inferMomentumPivot(
     includesApproxPhrase(tokens, ['breaking', 'out'])
   ) {
     return {
+      promptFamily: 'breaking_out',
       sortBy: 'momentum_score',
       sortDirection: 'desc',
       timeframe: currentTimeframe === 'current' ? '7d' : (currentTimeframe ?? '7d'),
@@ -2513,6 +2844,7 @@ function inferMomentumPivot(
     includesApproxPhrase(tokens, ['accelerating'])
   ) {
     return {
+      promptFamily: 'accelerating',
       sortBy: 'velocity_acceleration',
       sortDirection: 'desc',
       timeframe: currentTimeframe === 'current' ? '30d' : (currentTimeframe ?? '30d'),
@@ -2525,6 +2857,7 @@ function inferMomentumPivot(
     || includesApproxPhrase(tokens, ['trending', 'down'])
   ) {
     return {
+      promptFamily: 'declining',
       sortBy: 'velocity_acceleration',
       sortDirection: 'asc',
       timeframe: currentTimeframe === 'current' ? '30d' : (currentTimeframe ?? '30d'),
@@ -2538,6 +2871,7 @@ function inferMomentumPivot(
   ) {
     const timeframe = currentTimeframe === '30d' ? '30d' : '7d';
     return {
+      promptFamily: 'review_momentum',
       sortBy: timeframe === '30d' ? 'reviews_added_30d' : 'reviews_added_7d',
       sortDirection: 'desc',
       timeframe,
@@ -2551,6 +2885,7 @@ function inferMomentumPivot(
     || includesApproxPhrase(tokens, ['hot', 'right', 'now'])
   ) {
     return {
+      promptFamily: 'trending',
       sortBy: 'momentum_score',
       sortDirection: 'desc',
       timeframe: currentTimeframe === 'current' ? '7d' : (currentTimeframe ?? '7d'),
@@ -2804,8 +3139,13 @@ function buildRankingPivotRequest(
 function buildMomentumPivotRequest(
   prompt: string,
   requestState: SessionChatRequestState
-): DiscoverMomentumShadowRequest | null {
+): {
+  momentumPromptFamily: MomentumPromptFamily | null;
+  request: DiscoverMomentumShadowRequest;
+} | null {
   const current = deepCloneRecord(requestState.canonicalArgs as DiscoverMomentumShadowRequest);
+  const previousPromptFamily = requestState.momentumPromptFamily ?? inferMomentumRequestFamily(current);
+  let nextPromptFamily = previousPromptFamily;
   let changed = false;
 
   const pivot = inferMomentumPivot(prompt, current.timeframe);
@@ -2814,6 +3154,9 @@ function buildMomentumPivotRequest(
     current.sortDirection = pivot.sortDirection;
     current.timeframe = pivot.timeframe;
     current.trendType = pivot.trendType;
+    if (pivot.promptFamily) {
+      nextPromptFamily = pivot.promptFamily;
+    }
     changed = true;
   }
 
@@ -2825,6 +3168,7 @@ function buildMomentumPivotRequest(
       current.sortBy = 'ccu_peak';
       current.trendType = null;
       current.sortDirection = 'desc';
+      nextPromptFamily = 'current_players';
     }
   }
 
@@ -2920,7 +3264,26 @@ function buildMomentumPivotRequest(
     changed = true;
   }
 
-  return changed ? current : null;
+  if (!changed) {
+    return null;
+  }
+
+  if (current.filters) {
+    const switchedAwayFromReviewTrend =
+      isReviewTrendPromptFamily(previousPromptFamily) && !isReviewTrendPromptFamily(nextPromptFamily);
+    if (switchedAwayFromReviewTrend) {
+      clearReviewTrendSpecificFilters(current.filters);
+    }
+  }
+
+  if (isReviewTrendPromptFamily(nextPromptFamily)) {
+    applyReviewTrendPopularityDefaults(prompt, current, nextPromptFamily);
+  }
+
+  return {
+    momentumPromptFamily: nextPromptFamily,
+    request: current,
+  };
 }
 
 function resolveRequestPreviewDrillDown(
@@ -2997,11 +3360,12 @@ function resolveRequestStatePivotFollowUp(
   }
 
   if (requestState.family === 'momentum_discovery') {
-    const requestOverride = buildMomentumPivotRequest(prompt, requestState);
-    return requestOverride
+    const momentumOverride = buildMomentumPivotRequest(prompt, requestState);
+    return momentumOverride
       ? {
           matchedIntent: 'momentum_discovery',
-          requestOverride,
+          momentumPromptFamily: momentumOverride.momentumPromptFamily,
+          requestOverride: momentumOverride.request,
         }
       : null;
   }
@@ -5148,11 +5512,12 @@ async function runMomentumPrimary(params: {
   requestOverride?: DiscoverMomentumShadowRequest | null;
 }): Promise<{
   attempts: TigerShadowAttempt[];
+  momentumPromptFamily?: MomentumPromptFamily | null;
   request: DiscoverMomentumShadowRequest | null;
   response: DiscoverMomentumResponse | null;
 }> {
   const built = params.requestOverride
-    ? { request: params.requestOverride }
+    ? { momentumPromptFamily: null, request: params.requestOverride }
     : buildMomentumPrimaryRequest(params.prompt);
   if (!built.request) {
     return {
@@ -5162,6 +5527,7 @@ async function runMomentumPrimary(params: {
           built.reason ?? 'The system could not infer a supported momentum request.'
         ),
       ],
+      momentumPromptFamily: built.momentumPromptFamily ?? null,
       request: null,
       response: null,
     };
@@ -5185,6 +5551,7 @@ async function runMomentumPrimary(params: {
         status: 'error',
         timingMs,
       }],
+      momentumPromptFamily: built.momentumPromptFamily ?? null,
       request: built.request,
       response: null,
     };
@@ -5204,6 +5571,7 @@ async function runMomentumPrimary(params: {
       sufficientToAnswer,
       timingMs,
     }],
+    momentumPromptFamily: built.momentumPromptFamily ?? null,
     request: built.request,
     response: sufficientToAnswer ? (response.data ?? null) : null,
   };
@@ -6253,6 +6621,7 @@ function resolvePrimaryFollowUpContext(params: {
   entityQuery?: string | null;
   explicitKindHint?: SessionSelectionEntityKind | null;
   matchedIntent: TigerPrimaryMatchedIntent;
+  momentumPromptFamily?: MomentumPromptFamily | null;
   requestOverride?: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest | null;
   selectionState?: SessionChatSelectionState | null;
 } | null {
@@ -6282,6 +6651,7 @@ function resolvePrimaryFollowUpContext(params: {
       compareRequestOverride: requestPivot.compareRequestOverride ?? null,
       entityQuery: requestPivot.entityQuery ?? null,
       matchedIntent: requestPivot.matchedIntent,
+      momentumPromptFamily: requestPivot.momentumPromptFamily ?? null,
       requestOverride: requestPivot.requestOverride ?? null,
       selectionState: null,
     };
@@ -6330,8 +6700,8 @@ export async function runTigerPrimaryEvaluation(params: {
     sessionContext: params.sessionContext,
   });
   const priorSelectionState = params.sessionContext?.selectionState ?? null;
-  const matchedIntent = inferPrimaryMatchedIntent(params.prompt)
-    ?? followUpContext?.matchedIntent
+  const matchedIntent = followUpContext?.matchedIntent
+    ?? inferPrimaryMatchedIntent(params.prompt)
     ?? (inferCompareFollowUpIntent(params.prompt, params.sessionContext) ? 'entity_compare' : null);
   if (!matchedIntent) {
     return {
@@ -6528,8 +6898,19 @@ export async function runTigerPrimaryEvaluation(params: {
       };
     }
 
+    const momentumPromptFamily =
+      matchedIntent === 'momentum_discovery' && 'request' in outcome && outcome.request
+        ? (
+            followUpContext?.matchedIntent === 'momentum_discovery'
+              ? (followUpContext.momentumPromptFamily ?? null)
+              : ('momentumPromptFamily' in outcome && outcome.momentumPromptFamily)
+                ? outcome.momentumPromptFamily
+                : inferMomentumRequestFamily(outcome.request as DiscoverMomentumShadowRequest)
+          )
+        : null;
     const renderedText = renderTigerPrimaryResult({
       matchedIntent,
+      momentumPromptFamily,
       response: outcome.response,
     });
 
@@ -6561,6 +6942,7 @@ export async function runTigerPrimaryEvaluation(params: {
         : matchedIntent === 'momentum_discovery' && 'request' in outcome && outcome.request
           ? buildPrimaryRequestState({
               intent: 'momentum_discovery',
+              momentumPromptFamily,
               request: outcome.request as DiscoverMomentumShadowRequest,
               response: outcome.response as DiscoverMomentumResponse,
             })
@@ -6568,6 +6950,7 @@ export async function runTigerPrimaryEvaluation(params: {
     const answerBrief = buildTigerSuccessBrief({
       fallbackMarkdown: renderedText,
       intent: matchedIntent,
+      momentumPromptFamily,
       response: outcome.response,
       selectionState,
     });

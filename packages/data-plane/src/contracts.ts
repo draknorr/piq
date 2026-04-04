@@ -767,6 +767,8 @@ export interface DiscoverMomentumRequest {
     minReviews?: number | null;
     minReviewsAdded30d?: number | null;
     minReviewsAdded7d?: number | null;
+    maxSentimentDelta?: number | null;
+    minSentimentDelta?: number | null;
     platforms?: string[];
     releaseYear?: {
       gte?: number | null;
@@ -831,6 +833,7 @@ export interface DiscoverMomentumResponse {
   rankingDefinition: string;
   rankingLabel: string;
   sortBy: DiscoverMomentumRequest['sortBy'];
+  sortDirection?: DiscoverMomentumRequest['sortDirection'];
   sufficientToAnswer: boolean;
   timeframe: '7d' | '30d' | 'current';
   timeframeLabel: string;
