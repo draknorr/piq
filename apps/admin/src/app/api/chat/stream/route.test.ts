@@ -257,6 +257,107 @@ test('chat route stores continuable Tiger momentum result sets in session contex
   assertExhausted();
 });
 
+test('chat route stores Tiger request state for ranking answers', async () => {
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'What are the biggest games?' }],
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    tigerPrimaryCalls: [
+      {
+        response: {
+          contractResult: {
+            contractName: 'rankEntities',
+            request: {
+              entityKind: 'game',
+              limit: 10,
+              metric: 'owners_midpoint',
+              sortDirection: 'desc',
+            },
+            response: {
+              entityKind: 'game',
+              items: [
+                {
+                  displayName: 'Counter-Strike 2',
+                  entityKind: 'game',
+                  entityUid: 'game:steam:730',
+                  metricValue: 150000000,
+                  metrics: {
+                    ccuPeak: 1404982,
+                    gameCount: null,
+                    ownersMidpoint: 150000000,
+                    reviewScore: 88,
+                    totalReviews: 9000000,
+                  },
+                  platform: 'steam',
+                  platformEntityId: '730',
+                  rank: 1,
+                },
+              ],
+              metric: 'owners_midpoint',
+              sufficientToAnswer: true,
+            },
+          },
+          info: {
+            attempts: [{ contractName: 'rankEntities', status: 'success', timingMs: 5 }],
+            cohort: 'default',
+            enabled: true,
+            matchedIntent: 'entity_ranking',
+            mode: 'all',
+            renderMode: 'deterministic',
+            route: 'primary_success',
+          },
+          renderedText: 'Counter-Strike 2 leads by owners.',
+          sessionState: {
+            lastAnswer: {
+              family: 'entity_ranking',
+              summary: 'System answered entity_ranking.',
+            },
+            requestState: {
+              canonicalArgs: {
+                entityKind: 'game',
+                limit: 10,
+                metric: 'owners_midpoint',
+                sortDirection: 'desc',
+              },
+              contractName: 'rankEntities',
+              entityKind: 'game',
+              family: 'entity_ranking',
+              metric: 'owners_midpoint',
+              previewItems: [
+                {
+                  entityUid: 'game:steam:730',
+                  label: 'Counter-Strike 2',
+                  ordinal: 1,
+                  platformEntityId: '730',
+                },
+              ],
+              updatedAt: '2026-04-04T00:00:00.000Z',
+            },
+            selectionState: null,
+          },
+        },
+      },
+    ],
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const endEvent = getEndEvent(events);
+
+  assert.ok(endEvent);
+  assert.equal(endEvent.sessionContext?.requestState?.family, 'entity_ranking');
+  assert.equal(endEvent.sessionContext?.requestState?.metric, 'owners_midpoint');
+  assert.equal(endEvent.sessionContext?.candidateSet?.names[0], 'Counter-Strike 2');
+  assertExhausted();
+});
+
 test('chat route continues Tiger momentum result sets for natural follow-ups like "show me more"', async () => {
   const priorContext: SessionChatContext = {
     version: 1,

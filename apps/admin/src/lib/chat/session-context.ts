@@ -5,6 +5,7 @@ import type {
   SessionChatContext,
   SessionChatEntity,
   SessionChatLastAnswer,
+  SessionChatRequestState,
   SessionChatResultSet,
   SessionChatSelectionState,
   ToolAnswerContractSummary,
@@ -446,6 +447,7 @@ export function buildSessionContextFromTurn(params: {
   const entities: SessionChatEntity[] = [];
   const constraints: SessionChatConstraint[] = [];
   let candidateSet: SessionChatCandidateSet | null = null;
+  const requestState: SessionChatRequestState | null = previousContext?.requestState ?? null;
   let resultSet: SessionChatResultSet | null = null;
 
   for (const toolCall of executedToolCalls) {
@@ -487,6 +489,7 @@ export function buildSessionContextFromTurn(params: {
     constraints,
     candidateSet,
     selectionState: previousContext?.selectionState ?? null,
+    requestState,
     resultSet,
     lastAnswer: terminalContract
       ? {
@@ -553,6 +556,17 @@ export function summarizeSessionContextForLog(context: SessionChatContext | null
           continuationToken: context.resultSet.continuationToken ?? null,
         }
       : null,
+    requestState: context.requestState
+      ? {
+          family: context.requestState.family,
+          contractName: context.requestState.contractName,
+          metric: context.requestState.metric ?? null,
+          entityKind: context.requestState.entityKind ?? null,
+          timeframe: context.requestState.timeframe ?? null,
+          trendType: context.requestState.trendType ?? null,
+          previewItems: context.requestState.previewItems.slice(0, 10),
+        }
+      : null,
     lastAnswer: context.lastAnswer ?? null,
     updatedAt: context.updatedAt,
   };
@@ -560,18 +574,20 @@ export function summarizeSessionContextForLog(context: SessionChatContext | null
 
 export function applyTigerPrimarySessionState(params: {
   baseContext?: SessionChatContext | null;
-  lastAnswer?: SessionChatLastAnswer | null;
-  selectionState?: SessionChatSelectionState | null;
+  lastAnswer?: SessionChatLastAnswer | null | undefined;
+  requestState?: SessionChatRequestState | null | undefined;
+  selectionState?: SessionChatSelectionState | null | undefined;
   timestamp?: string;
 }): SessionChatContext | null {
   const {
     baseContext,
-    lastAnswer = null,
-    selectionState = null,
+    lastAnswer,
+    requestState,
+    selectionState,
     timestamp = new Date().toISOString(),
   } = params;
 
-  if (!baseContext && !lastAnswer && !selectionState) {
+  if (!baseContext && lastAnswer === undefined && selectionState === undefined && requestState === undefined) {
     return null;
   }
 
@@ -587,6 +603,7 @@ export function applyTigerPrimarySessionState(params: {
         constraints: [],
         candidateSet: null,
         selectionState: null,
+        requestState: null,
         resultSet: null,
         lastAnswer: null,
         updatedAt: timestamp,
@@ -601,6 +618,14 @@ export function applyTigerPrimarySessionState(params: {
 
   if (lastAnswer) {
     context.lastAnswer = lastAnswer;
+  } else if (lastAnswer === null) {
+    context.lastAnswer = null;
+  }
+
+  if (requestState) {
+    context.requestState = requestState;
+  } else if (requestState === null) {
+    context.requestState = null;
   }
 
   context.updatedAt = timestamp;

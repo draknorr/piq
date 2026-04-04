@@ -3,6 +3,8 @@ import 'server-only';
 import type {
   SessionChatContext,
   SessionChatLastAnswer,
+  SessionChatRequestPreviewItem,
+  SessionChatRequestState,
   SessionChatSelectionCandidate,
   SessionChatSelectionSlot,
   SessionChatSelectionState,
@@ -585,6 +587,7 @@ interface TigerPrimaryEvaluationResult {
       | 'compareEntities'
       | 'discoverMomentum'
       | 'getEntityOverview'
+      | 'rankEntities'
       | 'searchCatalog'
       | 'semanticSearch';
     request: Record<string, unknown>;
@@ -595,6 +598,7 @@ interface TigerPrimaryEvaluationResult {
   renderedText: string | null;
   sessionState?: {
     lastAnswer: SessionChatLastAnswer | null;
+    requestState?: SessionChatRequestState | null;
     selectionState: SessionChatSelectionState | null;
   } | null;
 }
@@ -630,8 +634,174 @@ interface PrimaryEntityResolutionResult {
 
 type EntityResolutionPreference = 'company' | 'game' | null;
 
+interface RequestPivotPreviewMatch {
+  item: SessionChatRequestPreviewItem;
+  ordinal: number;
+}
+
+interface RequestPivotResolution {
+  compareRequestOverride?: CompareEntitiesShadowRequest | null;
+  entityQuery?: string;
+  matchedIntent: TigerPrimaryMatchedIntent;
+  requestOverride?: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest | null;
+}
+
+const REQUEST_PIVOT_ORDINAL_WORDS: Record<string, number> = {
+  first: 1,
+  one: 1,
+  second: 2,
+  two: 2,
+  third: 3,
+  three: 3,
+  fourth: 4,
+  four: 4,
+  fifth: 5,
+  five: 5,
+  sixth: 6,
+  six: 6,
+  seventh: 7,
+  seven: 7,
+  eighth: 8,
+  eight: 8,
+  ninth: 9,
+  nine: 9,
+  tenth: 10,
+  ten: 10,
+};
+
 function normalizeForLooseMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function deepCloneRecord<T extends object>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function normalizeFollowUpPrompt(prompt: string): string {
+  return prompt
+    .toLowerCase()
+    .replace(/[?.,!]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripFollowUpLeadIn(prompt: string): string {
+  let next = normalizeFollowUpPrompt(prompt);
+  const prefixes = [
+    'can you ',
+    'could you ',
+    'would you ',
+    'please ',
+    'ok ',
+    'okay ',
+    'so ',
+    'then ',
+    'what about ',
+    'how about ',
+    'what abt ',
+    'same but ',
+    'same thing but ',
+    'same thing ',
+    'same set but ',
+    'same results but ',
+    'instead ',
+  ];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of prefixes) {
+      if (next.startsWith(prefix)) {
+        next = next.slice(prefix.length).trim();
+        changed = true;
+      }
+    }
+  }
+
+  return next.replace(/\s+instead$/, '').replace(/\s+please$/, '').trim();
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  if (left.length === 0) {
+    return right.length;
+  }
+
+  if (right.length === 0) {
+    return left.length;
+  }
+
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const current = new Array<number>(right.length + 1).fill(0);
+
+  for (let row = 1; row <= left.length; row += 1) {
+    current[0] = row;
+    for (let column = 1; column <= right.length; column += 1) {
+      const substitutionCost = left[row - 1] === right[column - 1] ? 0 : 1;
+      current[column] = Math.min(
+        current[column - 1] + 1,
+        previous[column] + 1,
+        previous[column - 1] + substitutionCost
+      );
+    }
+
+    for (let column = 0; column <= right.length; column += 1) {
+      previous[column] = current[column];
+    }
+  }
+
+  return previous[right.length] ?? right.length;
+}
+
+function areSimilarPromptTokens(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  const normalizedLeft = left.replace(/s$/, '');
+  const normalizedRight = right.replace(/s$/, '');
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+
+  if (Math.abs(normalizedLeft.length - normalizedRight.length) > 1) {
+    return false;
+  }
+
+  const maxDistance = Math.max(normalizedLeft.length, normalizedRight.length) >= 6 ? 2 : 1;
+  return levenshteinDistance(normalizedLeft, normalizedRight) <= maxDistance;
+}
+
+function tokenizeFollowUpPrompt(prompt: string): string[] {
+  return stripFollowUpLeadIn(prompt)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function includesApproxPhrase(tokens: string[], phrase: string[]): boolean {
+  if (phrase.length === 0 || tokens.length < phrase.length) {
+    return false;
+  }
+
+  for (let index = 0; index <= tokens.length - phrase.length; index += 1) {
+    let matches = true;
+    for (let offset = 0; offset < phrase.length; offset += 1) {
+      if (!areSimilarPromptTokens(tokens[index + offset] ?? '', phrase[offset] ?? '')) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function normalizeOrganizationCore(value: string): string {
@@ -2143,6 +2313,700 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
       trendType,
     },
   };
+}
+
+function buildRequestPreviewItems(
+  response: RankEntitiesResponse | DiscoverMomentumResponse
+): SessionChatRequestPreviewItem[] {
+  if (Array.isArray((response as RankEntitiesResponse).items) && 'metric' in response) {
+    const items = ((response as RankEntitiesResponse).items ?? []) as Array<{
+      displayName?: string | null;
+      entityUid?: string | null;
+      platformEntityId?: string | number | null;
+    }>;
+    return items.slice(0, 10).map((item, index) => {
+      const label = typeof item.displayName === 'string' && item.displayName.trim().length > 0
+        ? item.displayName
+        : `Result ${index + 1}`;
+
+      return {
+        entityUid: item.entityUid ?? null,
+        label,
+        ordinal: index + 1,
+        platformEntityId: item.platformEntityId ?? null,
+      };
+    });
+  }
+
+  const items = ((response as DiscoverMomentumResponse).items ?? []) as Array<{
+    appid?: number | null;
+    entityUid?: string | null;
+    name?: string | null;
+  }>;
+  return items.slice(0, 10).map((item, index) => {
+    const label = typeof item.name === 'string' && item.name.trim().length > 0
+      ? item.name
+      : `Result ${index + 1}`;
+
+    return {
+      entityUid: item.entityUid ?? null,
+      label,
+      ordinal: index + 1,
+      platformEntityId: item.appid ?? null,
+    };
+  });
+}
+
+function stripMomentumContinuationArgs(
+  request: DiscoverMomentumShadowRequest
+): DiscoverMomentumShadowRequest {
+  const next = deepCloneRecord(request);
+  delete next.excludeAppIds;
+  return next;
+}
+
+function buildPrimaryRequestState(params: {
+  intent: 'entity_ranking' | 'momentum_discovery';
+  request: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest;
+  response: DiscoverMomentumResponse | RankEntitiesResponse;
+  timestamp?: string;
+}): SessionChatRequestState {
+  const timestamp = params.timestamp ?? new Date().toISOString();
+
+  if (params.intent === 'entity_ranking') {
+    const request = params.request as RankEntitiesShadowRequest;
+    return {
+      canonicalArgs: deepCloneRecord(request),
+      contractName: 'rankEntities',
+      entityKind: request.entityKind,
+      family: 'entity_ranking',
+      metric: request.metric,
+      previewItems: buildRequestPreviewItems(params.response as RankEntitiesResponse),
+      updatedAt: timestamp,
+    };
+  }
+
+  const request = stripMomentumContinuationArgs(params.request as DiscoverMomentumShadowRequest);
+  return {
+    canonicalArgs: request,
+    contractName: 'discoverMomentum',
+    entityKind: 'game',
+    family: 'momentum_discovery',
+    metric: request.sortBy,
+    previewItems: buildRequestPreviewItems(params.response as DiscoverMomentumResponse),
+    timeframe: request.timeframe ?? null,
+    trendType: request.trendType ?? null,
+    updatedAt: timestamp,
+  };
+}
+
+function inferRankingMetricPivot(
+  prompt: string,
+  entityKind: RankEntitiesShadowRequest['entityKind']
+): RankEntitiesShadowRequest['metric'] | null {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+
+  if (
+    includesApproxPhrase(tokens, ['review', 'score'])
+    || includesApproxPhrase(tokens, ['best', 'rated'])
+    || includesApproxPhrase(tokens, ['highest', 'rated'])
+  ) {
+    return 'review_score';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['total', 'reviews'])
+    || includesApproxPhrase(tokens, ['reviews'])
+  ) {
+    return 'total_reviews';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['ccu'])
+    || includesApproxPhrase(tokens, ['peak', 'ccu'])
+    || includesApproxPhrase(tokens, ['concurrent', 'players'])
+    || includesApproxPhrase(tokens, ['players', 'right', 'now'])
+  ) {
+    return 'ccu_peak';
+  }
+
+  if (
+    entityKind !== 'game'
+    && (
+      includesApproxPhrase(tokens, ['game', 'count'])
+      || includesApproxPhrase(tokens, ['most', 'games'])
+      || includesApproxPhrase(tokens, ['catalog', 'size'])
+    )
+  ) {
+    return 'game_count';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['owners'])
+    || includesApproxPhrase(tokens, ['biggest'])
+    || includesApproxPhrase(tokens, ['largest'])
+    || includesApproxPhrase(tokens, ['most', 'popular'])
+  ) {
+    return 'owners_midpoint';
+  }
+
+  return null;
+}
+
+function inferMomentumPivot(
+  prompt: string,
+  currentTimeframe: DiscoverMomentumShadowRequest['timeframe']
+): Pick<DiscoverMomentumShadowRequest, 'sortBy' | 'sortDirection' | 'timeframe' | 'trendType'> | null {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+
+  if (
+    includesApproxPhrase(tokens, ['ccu'])
+    || includesApproxPhrase(tokens, ['peak', 'ccu'])
+    || includesApproxPhrase(tokens, ['concurrent', 'players'])
+    || includesApproxPhrase(tokens, ['players', 'right', 'now'])
+  ) {
+    return {
+      sortBy: 'ccu_peak',
+      sortDirection: 'desc',
+      timeframe: 'current',
+      trendType: null,
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['review', 'score'])
+    || includesApproxPhrase(tokens, ['best', 'rated'])
+    || includesApproxPhrase(tokens, ['highest', 'rated'])
+  ) {
+    return {
+      sortBy: 'review_score',
+      sortDirection: 'desc',
+      timeframe: currentTimeframe ?? '7d',
+      trendType: null,
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['total', 'reviews'])
+    || includesApproxPhrase(tokens, ['by', 'reviews'])
+  ) {
+    return {
+      sortBy: 'total_reviews',
+      sortDirection: 'desc',
+      timeframe: currentTimeframe ?? '7d',
+      trendType: null,
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['breaking', 'out'])
+  ) {
+    return {
+      sortBy: 'momentum_score',
+      sortDirection: 'desc',
+      timeframe: currentTimeframe === 'current' ? '7d' : (currentTimeframe ?? '7d'),
+      trendType: 'breaking_out',
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['accelerating'])
+  ) {
+    return {
+      sortBy: 'velocity_acceleration',
+      sortDirection: 'desc',
+      timeframe: currentTimeframe === 'current' ? '30d' : (currentTimeframe ?? '30d'),
+      trendType: 'accelerating',
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['declining'])
+    || includesApproxPhrase(tokens, ['trending', 'down'])
+  ) {
+    return {
+      sortBy: 'velocity_acceleration',
+      sortDirection: 'asc',
+      timeframe: currentTimeframe === 'current' ? '30d' : (currentTimeframe ?? '30d'),
+      trendType: 'declining',
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['review', 'momentum'])
+    || includesApproxPhrase(tokens, ['reviews', 'surging'])
+  ) {
+    const timeframe = currentTimeframe === '30d' ? '30d' : '7d';
+    return {
+      sortBy: timeframe === '30d' ? 'reviews_added_30d' : 'reviews_added_7d',
+      sortDirection: 'desc',
+      timeframe,
+      trendType: 'review_momentum',
+    };
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['trending'])
+    || includesApproxPhrase(tokens, ['gaining', 'traction'])
+    || includesApproxPhrase(tokens, ['hot', 'right', 'now'])
+  ) {
+    return {
+      sortBy: 'momentum_score',
+      sortDirection: 'desc',
+      timeframe: currentTimeframe === 'current' ? '7d' : (currentTimeframe ?? '7d'),
+      trendType: null,
+    };
+  }
+
+  return null;
+}
+
+function inferPivotLimit(prompt: string, fallback: number): number | null {
+  const explicitTop = prompt.match(/\btop\s+(\d{1,2})\b/i);
+  if (explicitTop) {
+    return extractRequestedTopCount(prompt, fallback, 20);
+  }
+
+  const normalized = normalizeFollowUpPrompt(prompt);
+  const ordinalCount = normalized.match(/\b(?:first|top)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b/i);
+  if (ordinalCount) {
+    return REQUEST_PIVOT_ORDINAL_WORDS[ordinalCount[1]?.toLowerCase() ?? ''] ?? null;
+  }
+
+  return null;
+}
+
+function inferPivotTimeframe(prompt: string): DiscoverMomentumShadowRequest['timeframe'] | null {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+  if (
+    includesApproxPhrase(tokens, ['right', 'now'])
+    || includesApproxPhrase(tokens, ['currently'])
+    || includesApproxPhrase(tokens, ['today'])
+  ) {
+    return 'current';
+  }
+
+  if (includesApproxPhrase(tokens, ['this', 'week'])) {
+    return '7d';
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['this', 'month'])
+    || includesApproxPhrase(tokens, ['last', '30', 'days'])
+    || includesApproxPhrase(tokens, ['past', '30', 'days'])
+  ) {
+    return '30d';
+  }
+
+  return null;
+}
+
+function inferApproxPlatforms(prompt: string): string[] {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+  const platforms: string[] = [];
+
+  if (includesApproxPhrase(tokens, ['windows'])) {
+    platforms.push('windows');
+  }
+  if (includesApproxPhrase(tokens, ['mac']) || includesApproxPhrase(tokens, ['macos'])) {
+    platforms.push('macos');
+  }
+  if (includesApproxPhrase(tokens, ['linux'])) {
+    platforms.push('linux');
+  }
+
+  return platforms;
+}
+
+function inferApproxSteamDeck(prompt: string): Array<'playable' | 'verified'> | undefined {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+  if (
+    includesApproxPhrase(tokens, ['steam', 'deck', 'verified'])
+    || includesApproxPhrase(tokens, ['deck', 'verified'])
+  ) {
+    return ['verified'];
+  }
+
+  if (
+    includesApproxPhrase(tokens, ['steam', 'deck', 'playable'])
+    || includesApproxPhrase(tokens, ['deck', 'playable'])
+  ) {
+    return ['playable'];
+  }
+
+  return undefined;
+}
+
+function inferApproxFreeFlag(prompt: string): boolean | null {
+  const tokens = tokenizeFollowUpPrompt(prompt);
+  if (
+    includesApproxPhrase(tokens, ['free', 'to', 'play'])
+    || includesApproxPhrase(tokens, ['f2p'])
+  ) {
+    return true;
+  }
+
+  if (includesApproxPhrase(tokens, ['premium'])) {
+    return false;
+  }
+
+  return null;
+}
+
+function findPreviewMatches(
+  prompt: string,
+  requestState: SessionChatRequestState,
+  maxMatches = 2
+): RequestPivotPreviewMatch[] {
+  const matches = new Map<number, RequestPivotPreviewMatch>();
+  const normalizedPrompt = normalizeForLooseMatch(prompt);
+
+  const hashMatches = [...prompt.matchAll(/#(\d{1,2})/g)];
+  for (const match of hashMatches) {
+    const ordinal = Number.parseInt(match[1] ?? '', 10);
+    const item = requestState.previewItems.find((candidate) => candidate.ordinal === ordinal);
+    if (item) {
+      matches.set(ordinal, { item, ordinal });
+    }
+  }
+
+  for (const [word, ordinal] of Object.entries(REQUEST_PIVOT_ORDINAL_WORDS)) {
+    if (
+      new RegExp(`\\b(?:top|the|#)?\\s*${word}\\b`, 'i').test(prompt)
+      || new RegExp(`\\b${word}\\s+one\\b`, 'i').test(prompt)
+    ) {
+      const item = requestState.previewItems.find((candidate) => candidate.ordinal === ordinal);
+      if (item) {
+        matches.set(ordinal, { item, ordinal });
+      }
+    }
+  }
+
+  if (
+    /\b(?:top|first)\s+two\b/i.test(prompt)
+    || /\btop\s+2\b/i.test(prompt)
+  ) {
+    for (const ordinal of [1, 2]) {
+      const item = requestState.previewItems.find((candidate) => candidate.ordinal === ordinal);
+      if (item) {
+        matches.set(ordinal, { item, ordinal });
+      }
+    }
+  }
+
+  if (matches.size === 0) {
+    for (const item of requestState.previewItems) {
+      const normalizedLabel = normalizeForLooseMatch(item.label);
+      if (normalizedLabel && normalizedPrompt.includes(normalizedLabel)) {
+        matches.set(item.ordinal, { item, ordinal: item.ordinal });
+      }
+    }
+  }
+
+  return [...matches.values()]
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .slice(0, maxMatches);
+}
+
+function buildRankingPivotRequest(
+  prompt: string,
+  requestState: SessionChatRequestState
+): RankEntitiesShadowRequest | null {
+  const current = deepCloneRecord(requestState.canonicalArgs as RankEntitiesShadowRequest & {
+    catalogFilters?: {
+      isFree?: boolean | null;
+      maxPriceCents?: number | null;
+      minReviewScore?: number | null;
+      minReviews?: number | null;
+      platforms?: string[];
+      releaseYear?: {
+        gte?: number | null;
+        lte?: number | null;
+      } | null;
+      tags?: string[];
+    } | null;
+  });
+  let changed = false;
+
+  const metric = inferRankingMetricPivot(prompt, current.entityKind);
+  if (metric && metric !== current.metric) {
+    current.metric = metric;
+    changed = true;
+  }
+
+  const limit = inferPivotLimit(prompt, current.limit ?? 10);
+  if (limit != null && limit !== current.limit) {
+    current.limit = limit;
+    changed = true;
+  }
+
+  const platforms = inferApproxPlatforms(prompt);
+  if (platforms.length > 0) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      platforms,
+    };
+    changed = true;
+  }
+
+  const isFree = inferApproxFreeFlag(prompt);
+  if (isFree != null) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      isFree,
+    };
+    changed = true;
+  }
+
+  const maxPriceCents = extractMomentumMaxPriceCents(prompt);
+  if (maxPriceCents != null) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      maxPriceCents,
+    };
+    changed = true;
+  }
+
+  const minReviewScore = extractMomentumReviewThreshold(prompt);
+  if (minReviewScore != null) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      minReviewScore,
+    };
+    changed = true;
+  }
+
+  const minReviews = extractMomentumMinReviews(prompt);
+  if (minReviews != null) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      minReviews,
+    };
+    changed = true;
+  }
+
+  const tags = extractMomentumTags(prompt);
+  if (tags && tags.length > 0) {
+    current.catalogFilters = {
+      ...(current.catalogFilters ?? {}),
+      tags,
+    };
+    changed = true;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  return current;
+}
+
+function buildMomentumPivotRequest(
+  prompt: string,
+  requestState: SessionChatRequestState
+): DiscoverMomentumShadowRequest | null {
+  const current = deepCloneRecord(requestState.canonicalArgs as DiscoverMomentumShadowRequest);
+  let changed = false;
+
+  const pivot = inferMomentumPivot(prompt, current.timeframe);
+  if (pivot) {
+    current.sortBy = pivot.sortBy;
+    current.sortDirection = pivot.sortDirection;
+    current.timeframe = pivot.timeframe;
+    current.trendType = pivot.trendType;
+    changed = true;
+  }
+
+  const timeframe = inferPivotTimeframe(prompt);
+  if (timeframe && timeframe !== current.timeframe) {
+    current.timeframe = timeframe;
+    changed = true;
+    if (timeframe === 'current' && current.sortBy !== 'ccu_peak') {
+      current.sortBy = 'ccu_peak';
+      current.trendType = null;
+      current.sortDirection = 'desc';
+    }
+  }
+
+  const limit = inferPivotLimit(prompt, current.limit ?? 10);
+  if (limit != null && limit !== current.limit) {
+    current.limit = limit;
+    changed = true;
+  }
+
+  const platforms = inferApproxPlatforms(prompt);
+  if (platforms.length > 0) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      platforms,
+    };
+    changed = true;
+  }
+
+  const steamDeck = inferApproxSteamDeck(prompt);
+  if (steamDeck?.length) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      steamDeck,
+    };
+    changed = true;
+  }
+
+  const isFree = inferApproxFreeFlag(prompt);
+  if (isFree != null) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      isFree,
+    };
+    changed = true;
+  }
+
+  const maxPriceCents = extractMomentumMaxPriceCents(prompt);
+  if (maxPriceCents != null) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      maxPriceCents,
+    };
+    changed = true;
+  }
+
+  const minReviewScore = extractMomentumReviewThreshold(prompt);
+  if (minReviewScore != null) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      minReviewScore,
+    };
+    changed = true;
+  }
+
+  const minReviews = extractMomentumMinReviews(prompt);
+  if (minReviews != null) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      minReviews,
+    };
+    changed = true;
+  }
+
+  const minCcu = extractMomentumMinCcu(prompt);
+  if (minCcu != null) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      minCcu,
+    };
+    changed = true;
+  }
+
+  const tags = extractMomentumTags(prompt);
+  if (tags && tags.length > 0) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      tags,
+    };
+    changed = true;
+  }
+
+  const releaseYear = extractPrimaryReleaseYear(prompt);
+  if (releaseYear) {
+    current.filters = {
+      ...(current.filters ?? {}),
+      releaseYear,
+    };
+    changed = true;
+  }
+
+  if (/\bindie\b/i.test(prompt)) {
+    current.indieHeuristic = true;
+    changed = true;
+  }
+
+  return changed ? current : null;
+}
+
+function resolveRequestPreviewDrillDown(
+  prompt: string,
+  requestState: SessionChatRequestState
+): RequestPivotResolution | null {
+  const matches = findPreviewMatches(prompt, requestState, 2);
+  if (matches.length === 0) {
+    return null;
+  }
+
+  if (inferCompareIntent(prompt) && matches.length >= 2) {
+    const entityUids = matches
+      .map((match) => match.item.entityUid)
+      .filter((entityUid): entityUid is string => Boolean(entityUid));
+    if (entityUids.length >= 2) {
+      return {
+        compareRequestOverride: {
+          entityUids: entityUids.slice(0, 2),
+          ...(extractCompareMetrics(prompt).length > 0
+            ? { metrics: extractCompareMetrics(prompt) }
+            : {}),
+        },
+        matchedIntent: 'entity_compare',
+      };
+    }
+  }
+
+  const target = matches[0]?.item;
+  if (!target) {
+    return null;
+  }
+
+  if (CHANGE_PROMPT_PATTERN.test(prompt)) {
+    return { entityQuery: target.label, matchedIntent: 'change_explanation' };
+  }
+
+  if (NEWS_PROMPT_PATTERN.test(prompt)) {
+    return { entityQuery: target.label, matchedIntent: 'news_search' };
+  }
+
+  if (METRIC_HISTORY_PROMPT_PATTERN.test(prompt)) {
+    return { entityQuery: target.label, matchedIntent: 'metric_history' };
+  }
+
+  if (/^(?:and\s+)?(?:what|how)\s+about\b/i.test(prompt) || /\btell me about\b/i.test(prompt)) {
+    return { entityQuery: target.label, matchedIntent: 'entity_overview' };
+  }
+
+  return null;
+}
+
+function resolveRequestStatePivotFollowUp(
+  prompt: string,
+  requestState: SessionChatRequestState | null | undefined
+): RequestPivotResolution | null {
+  if (!requestState) {
+    return null;
+  }
+
+  const drillDown = resolveRequestPreviewDrillDown(prompt, requestState);
+  if (drillDown) {
+    return drillDown;
+  }
+
+  if (requestState.family === 'entity_ranking') {
+    const requestOverride = buildRankingPivotRequest(prompt, requestState);
+    return requestOverride
+      ? {
+          matchedIntent: 'entity_ranking',
+          requestOverride,
+        }
+      : null;
+  }
+
+  if (requestState.family === 'momentum_discovery') {
+    const requestOverride = buildMomentumPivotRequest(prompt, requestState);
+    return requestOverride
+      ? {
+          matchedIntent: 'momentum_discovery',
+          requestOverride,
+        }
+      : null;
+  }
+
+  return null;
 }
 
 function buildCatalogSearchPrimaryRequests(prompt: string): CatalogPrimaryBuildResult {
@@ -4279,12 +5143,17 @@ async function runChangeDiscoveryShadow(prompt: string): Promise<TigerShadowAtte
   }];
 }
 
-async function runMomentumPrimary(prompt: string): Promise<{
+async function runMomentumPrimary(params: {
+  prompt: string;
+  requestOverride?: DiscoverMomentumShadowRequest | null;
+}): Promise<{
   attempts: TigerShadowAttempt[];
   request: DiscoverMomentumShadowRequest | null;
   response: DiscoverMomentumResponse | null;
 }> {
-  const built = buildMomentumPrimaryRequest(prompt);
+  const built = params.requestOverride
+    ? { request: params.requestOverride }
+    : buildMomentumPrimaryRequest(params.prompt);
   if (!built.request) {
     return {
       attempts: [
@@ -5150,14 +6019,21 @@ async function runSemanticSearchPrimary(prompt: string): Promise<{
   };
 }
 
-async function runRankEntitiesPrimary(prompt: string): Promise<{
+async function runRankEntitiesPrimary(params: {
+  prompt: string;
+  requestOverride?: RankEntitiesShadowRequest | null;
+}): Promise<{
   attempts: TigerShadowAttempt[];
+  request: RankEntitiesShadowRequest | null;
   response: RankEntitiesResponse | null;
 }> {
-  const { request, reason } = buildRankingShadowRequest(prompt);
+  const { request, reason } = params.requestOverride
+    ? { request: params.requestOverride }
+    : buildRankingShadowRequest(params.prompt);
   if (!request) {
     return {
       attempts: [buildSkippedAttempt('rankEntities', reason ?? 'The system could not build a ranking request.')],
+      request: null,
       response: null,
     };
   }
@@ -5180,6 +6056,7 @@ async function runRankEntitiesPrimary(prompt: string): Promise<{
         status: 'error',
         timingMs,
       }],
+      request,
       response: null,
     };
   }
@@ -5193,6 +6070,7 @@ async function runRankEntitiesPrimary(prompt: string): Promise<{
       sufficientToAnswer: response.data?.sufficientToAnswer ?? false,
       timingMs,
     }],
+    request,
     response:
       (response.data?.items?.length ?? 0) > 0 && response.data?.sufficientToAnswer
         ? response.data ?? null
@@ -5202,6 +6080,7 @@ async function runRankEntitiesPrimary(prompt: string): Promise<{
 
 async function runCompareEntitiesPrimary(params: {
   prompt: string;
+  requestOverride?: CompareEntitiesShadowRequest | null;
   sessionContext: SessionChatContext | null;
 }): Promise<{
   attempts: TigerShadowAttempt[];
@@ -5210,11 +6089,17 @@ async function runCompareEntitiesPrimary(params: {
   response: CompareEntitiesResponse | null;
   selectionState: SessionChatSelectionState | null;
 }> {
-  const builtRequest = await buildCompareRequestFromPrompt({
-    prompt: params.prompt,
-    sessionContext: params.sessionContext,
-    timeoutMs: readPrimaryTimeoutMs(),
-  });
+  const builtRequest = params.requestOverride
+    ? {
+        attempts: [] as TigerShadowAttempt[],
+        request: params.requestOverride,
+        selectionState: params.sessionContext?.selectionState ?? null,
+      }
+    : await buildCompareRequestFromPrompt({
+        prompt: params.prompt,
+        sessionContext: params.sessionContext,
+        timeoutMs: readPrimaryTimeoutMs(),
+      });
   const attempts = [...builtRequest.attempts];
 
   if (!builtRequest.request || builtRequest.request.entityUids.length < 2) {
@@ -5363,10 +6248,12 @@ function resolvePrimaryFollowUpContext(params: {
   prompt: string;
   sessionContext: SessionChatContext | null;
 }): {
+  compareRequestOverride?: CompareEntitiesShadowRequest | null;
   clarificationText?: string | null;
   entityQuery?: string | null;
   explicitKindHint?: SessionSelectionEntityKind | null;
   matchedIntent: TigerPrimaryMatchedIntent;
+  requestOverride?: DiscoverMomentumShadowRequest | RankEntitiesShadowRequest | null;
   selectionState?: SessionChatSelectionState | null;
 } | null {
   const priorSelectionState = params.sessionContext?.selectionState ?? null;
@@ -5383,6 +6270,20 @@ function resolvePrimaryFollowUpContext(params: {
       explicitKindHint: inferEntityKindCorrection(params.prompt),
       matchedIntent: priorSelectionState.family as TigerPrimaryMatchedIntent,
       selectionState: updatedSelection.selectionState,
+    };
+  }
+
+  const requestPivot = resolveRequestStatePivotFollowUp(
+    params.prompt,
+    params.sessionContext?.requestState
+  );
+  if (requestPivot) {
+    return {
+      compareRequestOverride: requestPivot.compareRequestOverride ?? null,
+      entityQuery: requestPivot.entityQuery ?? null,
+      matchedIntent: requestPivot.matchedIntent,
+      requestOverride: requestPivot.requestOverride ?? null,
+      selectionState: null,
     };
   }
 
@@ -5501,7 +6402,13 @@ export async function runTigerPrimaryEvaluation(params: {
           userId: params.userId,
         })
       : matchedIntent === 'momentum_discovery'
-      ? await runMomentumPrimary(params.prompt)
+      ? await runMomentumPrimary({
+          prompt: params.prompt,
+          requestOverride:
+            followUpContext?.matchedIntent === 'momentum_discovery'
+              ? (followUpContext.requestOverride as DiscoverMomentumShadowRequest | null | undefined)
+              : null,
+        })
       : matchedIntent === 'entity_overview'
       ? await runEntityOverviewPrimary({
           explicitKindHint: followUpContext?.explicitKindHint ?? null,
@@ -5512,12 +6419,22 @@ export async function runTigerPrimaryEvaluation(params: {
       : matchedIntent === 'catalog_search'
       ? await runCatalogSearchPrimary(params.prompt)
       : matchedIntent === 'entity_ranking'
-        ? await runRankEntitiesPrimary(params.prompt)
+        ? await runRankEntitiesPrimary({
+            prompt: params.prompt,
+            requestOverride:
+              followUpContext?.matchedIntent === 'entity_ranking'
+                ? (followUpContext.requestOverride as RankEntitiesShadowRequest | null | undefined)
+                : null,
+          })
         : matchedIntent === 'entity_compare'
           ? await runCompareEntitiesPrimary({
-              prompt: params.prompt,
-              sessionContext: params.sessionContext,
-            })
+            prompt: params.prompt,
+            requestOverride:
+              followUpContext?.matchedIntent === 'entity_compare' && followUpContext.compareRequestOverride
+                ? followUpContext.compareRequestOverride
+                : null,
+            sessionContext: params.sessionContext,
+          })
           : matchedIntent === 'metric_history'
             ? await runMetricHistoryPrimary({
                 entityQuery,
@@ -5634,6 +6551,20 @@ export async function runTigerPrimaryEvaluation(params: {
 
     const selectionState =
       'selectionState' in outcome ? (outcome.selectionState ?? null) : activeSelectionState;
+    const requestState =
+      matchedIntent === 'entity_ranking' && 'request' in outcome && outcome.request
+        ? buildPrimaryRequestState({
+            intent: 'entity_ranking',
+            request: outcome.request as RankEntitiesShadowRequest,
+            response: outcome.response as RankEntitiesResponse,
+          })
+        : matchedIntent === 'momentum_discovery' && 'request' in outcome && outcome.request
+          ? buildPrimaryRequestState({
+              intent: 'momentum_discovery',
+              request: outcome.request as DiscoverMomentumShadowRequest,
+              response: outcome.response as DiscoverMomentumResponse,
+            })
+          : null;
     const answerBrief = buildTigerSuccessBrief({
       fallbackMarkdown: renderedText,
       intent: matchedIntent,
@@ -5650,6 +6581,12 @@ export async function runTigerPrimaryEvaluation(params: {
               request: outcome.request as unknown as Record<string, unknown>,
               response: outcome.response,
             }
+          : matchedIntent === 'entity_ranking' && 'request' in outcome && outcome.request
+            ? {
+                contractName: 'rankEntities',
+                request: outcome.request as unknown as Record<string, unknown>,
+                response: outcome.response,
+              }
           : matchedIntent === 'catalog_search' && 'request' in outcome && outcome.request
         ? {
             contractName: 'searchCatalog',
@@ -5693,6 +6630,7 @@ export async function runTigerPrimaryEvaluation(params: {
           family: matchedIntent,
           clarificationNeeded: false,
         }),
+        requestState,
         selectionState,
       },
     };

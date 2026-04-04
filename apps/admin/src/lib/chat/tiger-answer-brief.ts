@@ -472,6 +472,7 @@ function buildIntentSuggestions(params: {
     const firstName = topNames[0] ?? null;
     const secondName = topNames[1] ?? null;
     const suggestions: QuerySuggestion[] = [];
+    const currentMetric = isRecord(response) ? getString(response.metric) : null;
 
     if (firstName && secondName) {
       suggestions.push({
@@ -485,6 +486,27 @@ function buildIntentSuggestions(params: {
         category: 'template',
         label: `What changed for ${firstName}?`,
         query: `What changed for ${firstName} this week?`,
+      });
+    }
+    if (currentMetric !== 'ccu_peak') {
+      suggestions.push({
+        category: 'template',
+        label: 'By Peak CCU',
+        query: 'What about by CCU?',
+      });
+    }
+    if (currentMetric !== 'owners_midpoint') {
+      suggestions.push({
+        category: 'template',
+        label: 'By owners',
+        query: 'What about by owners?',
+      });
+    }
+    if (currentMetric !== 'total_reviews') {
+      suggestions.push({
+        category: 'template',
+        label: 'By reviews',
+        query: 'What about by reviews?',
       });
     }
     if (items.length >= 10) {
@@ -628,6 +650,7 @@ function buildIntentSuggestions(params: {
       ? response.filtersApplied.map((value) => String(value).toLowerCase())
       : [];
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
+    const sortBy = isRecord(response) ? getString(response.sortBy) : null;
     const timeframe = isRecord(response) ? getString(response.timeframe) : null;
     const baseTrendQuery =
       rankingLabel?.toLowerCase().includes('ccu')
@@ -656,6 +679,20 @@ function buildIntentSuggestions(params: {
         category: 'template',
         label: `Compare ${firstName} and ${secondName}`,
         query: `Compare ${firstName} and ${secondName} by reviews`,
+      });
+    }
+    if (sortBy !== 'ccu_peak' || timeframe !== 'current') {
+      suggestions.push({
+        category: 'template',
+        label: 'By Peak CCU',
+        query: 'What about by CCU?',
+      });
+    }
+    if (sortBy !== 'momentum_score') {
+      suggestions.push({
+        category: 'template',
+        label: 'Trending instead',
+        query: 'What about trending this week?',
       });
     }
     if (!filtersApplied.some((entry) => entry.includes('steam_deck'))) {

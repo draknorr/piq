@@ -3147,3 +3147,424 @@ test('Tiger primary answers portfolio prompts from Tiger user context', async (t
   assert.match(result.renderedText ?? '', /Pinned items:/);
   assert.ok(result.followUpSuggestions?.some((suggestion) => suggestion.query.includes('Hades II')));
 });
+
+test('Tiger primary reuses ranking request state for metric pivots like "what abt by ccu"', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/rank-entities');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityKind: 'game',
+      limit: 10,
+      metric: 'ccu_peak',
+      sortDirection: 'desc',
+    });
+
+    return jsonResponse({
+      entityKind: 'game',
+      items: [
+        {
+          displayName: 'Counter-Strike 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:730',
+          metricValue: 1404982,
+          metrics: {
+            ccuPeak: 1404982,
+            gameCount: null,
+            ownersMidpoint: 150000000,
+            reviewScore: 88,
+            totalReviews: 9000000,
+          },
+          platform: 'steam',
+          platformEntityId: '730',
+          rank: 1,
+          releaseYear: 2012,
+        },
+      ],
+      metric: 'ccu_peak',
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'what abt by ccu?',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'entity_ranking',
+        summary: 'System answered entity_ranking.',
+      },
+      requestState: {
+        canonicalArgs: {
+          entityKind: 'game',
+          limit: 10,
+          metric: 'owners_midpoint',
+          sortDirection: 'desc',
+        },
+        contractName: 'rankEntities',
+        entityKind: 'game',
+        family: 'entity_ranking',
+        metric: 'owners_midpoint',
+        previewItems: [
+          {
+            entityUid: 'game:steam:730',
+            label: 'Counter-Strike 2',
+            ordinal: 1,
+            platformEntityId: '730',
+          },
+        ],
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_ranking');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'rankEntities');
+  assert.equal((result.contractResult?.request as { metric?: string } | undefined)?.metric, 'ccu_peak');
+  assert.equal(result.sessionState?.requestState?.metric, 'ccu_peak');
+});
+
+test('Tiger primary applies typo-tolerant momentum filter pivots from request state', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        steamDeck: ['verified'],
+      },
+      limit: 10,
+      sortBy: 'momentum_score',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: ['steam_deck:verified'],
+      items: [
+        {
+          appid: 1145360,
+          ccuPeak: 18000,
+          entityUid: 'game:steam:1145360',
+          isFree: false,
+          matchedSteamDeck: 'verified',
+          momentumScore: 82,
+          name: 'Hades II',
+          platformSupport: ['windows'],
+          reviewPercentage: 95,
+          reviewsAdded7d: 2000,
+          supportLevel: 'high',
+          supportReasons: ['Verified on Steam Deck.'],
+          totalReviews: 42000,
+          trendDirection: 'up',
+        },
+      ],
+      provenance: {
+        capturedAt: '2026-04-04T00:00:00.000Z',
+        source: 'tiger',
+        tables: ['legacy.apps'],
+      },
+      rankingDefinition: 'Momentum score blends review velocity and player traction.',
+      rankingLabel: 'Momentum Score',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'This week',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'same but deck verifed',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'momentum_discovery',
+        summary: 'System answered momentum_discovery.',
+      },
+      requestState: {
+        canonicalArgs: {
+          limit: 10,
+          sortBy: 'momentum_score',
+          sortDirection: 'desc',
+          timeframe: '7d',
+          trendType: null,
+        },
+        contractName: 'discoverMomentum',
+        entityKind: 'game',
+        family: 'momentum_discovery',
+        metric: 'momentum_score',
+        previewItems: [
+          {
+            entityUid: 'game:steam:1145360',
+            label: 'Hades II',
+            ordinal: 1,
+            platformEntityId: 1145360,
+          },
+        ],
+        timeframe: '7d',
+        trendType: null,
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'discoverMomentum');
+  assert.deepEqual(
+    (result.contractResult?.request as { filters?: { steamDeck?: string[] } } | undefined)?.filters?.steamDeck,
+    ['verified']
+  );
+});
+
+test('Tiger primary can drill from ranked results into change lookups for the top item', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      assert.match(String(init.body), /Counter-Strike 2/);
+      return jsonResponse({
+        items: [
+          {
+            displayName: 'Counter-Strike 2',
+            entityKind: 'game',
+            entityUid: 'game:steam:730',
+            platform: 'steam',
+            platformEntityId: '730',
+            score: 120,
+          },
+        ],
+        sufficientToAnswer: true,
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/explain-changes');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityUid: 'game:steam:730',
+      includeNews: true,
+      limit: 10,
+    });
+
+    return jsonResponse({
+      comparisonWindows: null,
+      entity: {
+        displayName: 'Counter-Strike 2',
+        entityKind: 'game',
+        entityUid: 'game:steam:730',
+        platform: 'steam',
+        platformEntityId: '730',
+      },
+      mode: 'timeline',
+      moments: [
+        {
+          changeTypes: ['price_change'],
+          eventCount: 1,
+          events: [],
+          linkedNews: [],
+          sources: ['storefront'],
+          windowEnd: '2026-04-04T00:00:00.000Z',
+          windowStart: '2026-04-04T00:00:00.000Z',
+        },
+      ],
+      provenance: {
+        capturedAt: '2026-04-04T00:00:00.000Z',
+        source: 'tiger',
+        tables: ['legacy.latest_activities'],
+      },
+      sufficientToAnswer: true,
+      summary: {
+        countsByChangeType: { price_change: 1 },
+        countsBySource: { storefront: 1 },
+        eventCount: 1,
+        momentCount: 1,
+        newsCount: 0,
+      },
+      timeWindow: {
+        endTime: '2026-04-04T00:00:00.000Z',
+        startTime: '2026-03-28T00:00:00.000Z',
+      },
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'what changed for the top one?',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'entity_ranking',
+        summary: 'System answered entity_ranking.',
+      },
+      requestState: {
+        canonicalArgs: {
+          entityKind: 'game',
+          limit: 10,
+          metric: 'owners_midpoint',
+          sortDirection: 'desc',
+        },
+        contractName: 'rankEntities',
+        entityKind: 'game',
+        family: 'entity_ranking',
+        metric: 'owners_midpoint',
+        previewItems: [
+          {
+            entityUid: 'game:steam:730',
+            label: 'Counter-Strike 2',
+            ordinal: 1,
+            platformEntityId: '730',
+          },
+          {
+            entityUid: 'game:steam:570',
+            label: 'Dota 2',
+            ordinal: 2,
+            platformEntityId: '570',
+          },
+        ],
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'change_explanation');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts[0]?.contractName, 'resolveEntities');
+  assert.equal(result.info.attempts.at(-1)?.contractName, 'explainChanges');
+  assert.match(result.renderedText ?? '', /Counter-Strike 2/);
+});
+
+test('Tiger primary can compare the top two visible results from ranking request state', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/compare-entities');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityUids: ['game:steam:730', 'game:steam:570'],
+      metrics: ['total_reviews'],
+    });
+
+    return jsonResponse({
+      entityKind: 'game',
+      highlights: [
+        {
+          displayName: 'Counter-Strike 2',
+          entityUid: 'game:steam:730',
+          metric: 'total_reviews',
+          value: 9000000,
+        },
+      ],
+      items: [
+        {
+          displayName: 'Counter-Strike 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:730',
+          metrics: {
+            ccuPeak: 1404982,
+            gameCount: null,
+            ownersMidpoint: 150000000,
+            reviewScore: 88,
+            totalReviews: 9000000,
+          },
+          platformEntityId: '730',
+        },
+        {
+          displayName: 'Dota 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:570',
+          metrics: {
+            ccuPeak: 601576,
+            gameCount: null,
+            ownersMidpoint: 150000000,
+            reviewScore: 82,
+            totalReviews: 2500000,
+          },
+          platformEntityId: '570',
+        },
+      ],
+      metrics: ['total_reviews'],
+      platform: 'steam',
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'compare the top two by reviews',
+    sessionContext: {
+      version: 1,
+      entities: [],
+      constraints: [],
+      lastAnswer: {
+        family: 'entity_ranking',
+        summary: 'System answered entity_ranking.',
+      },
+      requestState: {
+        canonicalArgs: {
+          entityKind: 'game',
+          limit: 10,
+          metric: 'owners_midpoint',
+          sortDirection: 'desc',
+        },
+        contractName: 'rankEntities',
+        entityKind: 'game',
+        family: 'entity_ranking',
+        metric: 'owners_midpoint',
+        previewItems: [
+          {
+            entityUid: 'game:steam:730',
+            label: 'Counter-Strike 2',
+            ordinal: 1,
+            platformEntityId: '730',
+          },
+          {
+            entityUid: 'game:steam:570',
+            label: 'Dota 2',
+            ordinal: 2,
+            platformEntityId: '570',
+          },
+        ],
+        updatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      selectionState: null,
+      resultSet: null,
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_compare');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'compareEntities');
+  assert.match(result.renderedText ?? '', /Counter-Strike 2/);
+  assert.match(result.renderedText ?? '', /Dota 2/);
+});

@@ -11,6 +11,7 @@ export type SessionSelectionEntityKind = 'game' | 'publisher' | 'developer';
 export type SessionSelectionMatchQuality = 'exact' | 'prefix' | 'substring' | 'fuzzy';
 export type SessionCandidateKind = 'games' | 'publishers' | 'developers' | 'activities';
 export type SessionResultSetItemKind = 'games' | 'activities';
+export type SessionRequestStateFamily = 'entity_ranking' | 'momentum_discovery';
 
 export type Phase1FallbackAction =
   | 'respond'
@@ -94,6 +95,25 @@ export interface SessionChatSelectionState {
   slots: SessionChatSelectionSlot[];
 }
 
+export interface SessionChatRequestPreviewItem {
+  entityUid?: string | null;
+  label: string;
+  ordinal: number;
+  platformEntityId?: number | string | null;
+}
+
+export interface SessionChatRequestState {
+  canonicalArgs: object;
+  contractName: 'discoverMomentum' | 'rankEntities';
+  entityKind?: SessionSelectionEntityKind | null;
+  family: SessionRequestStateFamily;
+  metric?: string | null;
+  previewItems: SessionChatRequestPreviewItem[];
+  timeframe?: '7d' | '30d' | 'current' | null;
+  trendType?: 'accelerating' | 'breaking_out' | 'declining' | 'review_momentum' | null;
+  updatedAt: string;
+}
+
 export interface SessionChatResultSet {
   continuationToken?: string | null;
   family: string;
@@ -114,6 +134,7 @@ export interface SessionChatContext {
   constraints: SessionChatConstraint[];
   candidateSet?: SessionChatCandidateSet | null;
   selectionState?: SessionChatSelectionState | null;
+  requestState?: SessionChatRequestState | null;
   resultSet?: SessionChatResultSet | null;
   lastAnswer?: SessionChatLastAnswer | null;
   updatedAt: string;

@@ -51,7 +51,12 @@ import { normalizeTrendToolCall } from '@/lib/chat/trend-tool-policy';
 import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
 import { tryTigerQueryAnalyticsCompat } from '@/lib/chat/query-analytics-tiger-compat';
 import { logChatQuery } from '@/lib/chat-query-logger';
-import type { ChatTurnQualityInfo, SessionChatContext, SessionChatResultSet } from '@/lib/chat/chat-context-types';
+import type {
+  ChatTurnQualityInfo,
+  SessionChatContext,
+  SessionChatRequestState,
+  SessionChatResultSet,
+} from '@/lib/chat/chat-context-types';
 import {
   compareChangeBeforeAfter,
   findChangePatterns,
@@ -417,6 +422,7 @@ function buildTigerSyntheticToolCall(params: {
     | 'compareEntities'
     | 'discoverMomentum'
     | 'getEntityOverview'
+    | 'rankEntities'
     | 'searchCatalog'
     | 'semanticSearch';
   request: Record<string, unknown>;
@@ -528,6 +534,37 @@ function buildTigerSyntheticToolCall(params: {
     };
   }
 
+  if (contractName === 'rankEntities') {
+    const items = Array.isArray(response.items)
+      ? response.items
+          .filter((item): item is Record<string, unknown> => isRecord(item))
+          .map((item) => ({
+            displayName: typeof item.displayName === 'string' ? item.displayName : 'Unknown',
+            entityKind: typeof item.entityKind === 'string' ? item.entityKind : 'game',
+            entityUid: typeof item.entityUid === 'string' ? item.entityUid : null,
+            metricValue: typeof item.metricValue === 'number' ? item.metricValue : null,
+            platformEntityId:
+              typeof item.platformEntityId === 'string' || typeof item.platformEntityId === 'number'
+                ? item.platformEntityId
+                : null,
+            rank: typeof item.rank === 'number' ? item.rank : null,
+            releaseYear: typeof item.releaseYear === 'number' ? item.releaseYear : null,
+          }))
+      : [];
+
+    return {
+      name: 'rankEntities',
+      arguments: request,
+      result: {
+        entityKind: typeof response.entityKind === 'string' ? response.entityKind : 'game',
+        items,
+        metric: typeof response.metric === 'string' ? response.metric : null,
+        success: true,
+        sufficientToAnswer: response.sufficientToAnswer === true,
+      },
+    };
+  }
+
   if (contractName === 'discoverMomentum') {
     const items = Array.isArray(response.items)
       ? response.items
@@ -583,6 +620,55 @@ function buildTigerSyntheticToolCall(params: {
       total_found: typeof response.total_found === 'number' ? response.total_found : undefined,
       ...(resultSet ? { continuation_meta: { resultSet } } : {}),
     },
+  };
+}
+
+function cloneRecord<T extends Record<string, unknown>>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildMomentumRequestStateFromHandler(params: {
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+  timestamp?: string;
+}): SessionChatRequestState | null {
+  const items = Array.isArray(params.response.items)
+    ? params.response.items.filter((item): item is Record<string, unknown> => isRecord(item))
+    : [];
+  if (items.length === 0) {
+    return null;
+  }
+
+  const canonicalArgs = cloneRecord(params.request);
+  delete canonicalArgs.excludeAppIds;
+
+  return {
+    canonicalArgs,
+    contractName: 'discoverMomentum',
+    entityKind: 'game',
+    family: 'momentum_discovery',
+    metric: typeof params.request.sortBy === 'string' ? params.request.sortBy : null,
+    previewItems: items.slice(0, 10).map((item, index) => ({
+      entityUid: typeof item.entityUid === 'string' ? item.entityUid : null,
+      label: typeof item.name === 'string' ? item.name : `Result ${index + 1}`,
+      ordinal: index + 1,
+      platformEntityId:
+        typeof item.appid === 'number' || typeof item.appid === 'string'
+          ? item.appid
+          : null,
+    })),
+    timeframe:
+      params.request.timeframe === '7d' || params.request.timeframe === '30d' || params.request.timeframe === 'current'
+        ? params.request.timeframe
+        : null,
+    trendType:
+      params.request.trendType === 'accelerating'
+      || params.request.trendType === 'breaking_out'
+      || params.request.trendType === 'declining'
+      || params.request.trendType === 'review_momentum'
+        ? params.request.trendType
+        : null,
+    updatedAt: params.timestamp ?? new Date().toISOString(),
   };
 }
 
@@ -1055,6 +1141,7 @@ export async function handleChatStreamRequest(
       let lastUserMessageContent: string | null = null;
       let tigerPrimaryResult: MessageEndEvent['tigerPrimary'];
       let tigerFollowUpSuggestions: MessageEndEvent['followUpSuggestions'];
+      let tigerRequestState: SessionChatRequestState | null = null;
       let tigerShadow: TigerShadowInfo | undefined;
       const executedToolNames: string[] = [];
       const executedToolCalls: ChatToolCall[] = [];
@@ -1130,6 +1217,8 @@ export async function handleChatStreamRequest(
                     sourceContract: 'discoverMomentum',
                     sourceTool: 'screen_games',
                   })
+                : contractResult.contractName === 'rankEntities'
+                  ? null
                 : contractResult.contractName === 'searchCatalog'
                 ? buildTigerPrimaryResultSet({
                     family: 'discovery',
@@ -1167,10 +1256,12 @@ export async function handleChatStreamRequest(
             }
           }
 
+          tigerRequestState = tigerPrimaryEvaluation.sessionState?.requestState ?? null;
           updatedSessionContext = applyTigerPrimarySessionState({
             baseContext: updatedSessionContext,
-            lastAnswer: tigerPrimaryEvaluation.sessionState?.lastAnswer ?? null,
-            selectionState: tigerPrimaryEvaluation.sessionState?.selectionState ?? null,
+            lastAnswer: tigerPrimaryEvaluation.sessionState?.lastAnswer,
+            requestState: tigerPrimaryEvaluation.sessionState?.requestState,
+            selectionState: tigerPrimaryEvaluation.sessionState?.selectionState,
           });
 
           let primaryText = tigerPrimaryEvaluation.renderedText;
@@ -1363,6 +1454,15 @@ export async function handleChatStreamRequest(
               const continuationMatchedIntent = getContinuationMatchedIntent(
                 contractResponse.data.sourceContract
               );
+              tigerRequestState =
+                contractResponse.data.sourceContract === 'discoverMomentum'
+                  && isRecord(contractResponse.data.effectiveArgs)
+                  && isRecord(contractResponse.data.result)
+                  ? buildMomentumRequestStateFromHandler({
+                      request: contractResponse.data.effectiveArgs,
+                      response: contractResponse.data.result,
+                    })
+                  : tigerRequestState;
 
               syntheticToolCall = buildTigerSyntheticToolCall({
                 contractName: contractResponse.data.sourceContract,
@@ -2080,6 +2180,10 @@ export async function handleChatStreamRequest(
           previousContext: sessionContext,
           executedToolCalls: allToolCalls,
           terminalContract: phase1Quality?.terminalContract ?? null,
+        });
+        updatedSessionContext = applyTigerPrimarySessionState({
+          baseContext: updatedSessionContext,
+          requestState: tigerRequestState,
         });
 
         // Calculate credits if enabled
