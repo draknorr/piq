@@ -110,6 +110,7 @@ async function main(): Promise<void> {
       const { error } = await supabase.from('apps').upsert(
         batch.map((app) => ({
           appid: app.appid,
+          catalog_seed_state: 'hydrated',
           name: app.name,
           last_seen_in_steam_applist_at: runSeenAt,
         })),

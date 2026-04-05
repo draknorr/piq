@@ -342,6 +342,323 @@ test('discoverMomentum returns Tiger momentum rows as typed items', async () => 
   assert.equal(result.timeframe, 'current');
 });
 
+test('discoverMomentum aligns support reasons with the visible review window and drops zero-ccu evidence', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryMomentumRows = async () => [
+    {
+      appid: 777,
+      ccu_growth_30d_percent: '0',
+      ccu_growth_7d_percent: '0',
+      ccu_peak: '0',
+      developer_name: 'Example Studio',
+      discount_percent: '0',
+      is_free: false,
+      is_self_published: true,
+      name: 'Example Horror',
+      owners_midpoint: 100000,
+      platforms: 'windows',
+      positive_percentage: '81.2',
+      price_cents: '1999',
+      publisher_name: 'Example Studio',
+      release_date: '2025-10-10',
+      release_year: '2025',
+      reviews_added_30d: '102',
+      reviews_added_7d: '6',
+      sentiment_delta: '0.4',
+      total_reviews: '3200',
+      trend_direction: 'up',
+      velocity_30d: '3.4',
+      velocity_7d: '0.9',
+      velocity_acceleration: '14',
+    },
+  ];
+
+  const result = await service.discoverMomentum({
+    sortBy: 'reviews_added_30d',
+    timeframe: '30d',
+  });
+
+  assert.equal(result.items[0]?.ccuPeak, null);
+  assert.match(result.items[0]?.supportReasons[0] ?? '', /102 reviews added over 30d/i);
+  assert.doesNotMatch((result.items[0]?.supportReasons ?? []).join(' '), /Peak CCU/i);
+});
+
+test('semantic similarity broadens retrieval windows when prompts add narrowing filters', () => {
+  const service = createService() as any;
+
+  assert.equal(
+    service.resolveSemanticGameSearchLimit(undefined, 0, 6),
+    30
+  );
+  assert.equal(
+    service.resolveSemanticGameSearchLimit({
+      review_comparison: 'better_only',
+      steam_deck: ['verified'],
+    }, 0, 6),
+    72
+  );
+  assert.equal(service.resolveSemanticSimilarityThreshold(undefined), 0.16);
+  assert.equal(
+    service.resolveSemanticSimilarityThreshold({
+      review_comparison: 'better_only',
+      steam_deck: ['verified'],
+    }),
+    0.08
+  );
+});
+
+test('semantic similarity returns close alternatives when strict comparison filters leave too few exact matches', async () => {
+  const service = createService() as any;
+
+  service.queryTigerSemanticGameProfile = async () => ({
+    appid: 1145360,
+    developerIds: [1],
+    genres: ['Action', 'RPG'],
+    isFree: false,
+    name: 'Hades',
+    platforms: ['windows'],
+    priceCents: 2499,
+    publisherIds: [2],
+    reviewPercentage: 97,
+    tags: ['Action', 'Roguelike', 'Indie', 'Singleplayer'],
+    totalReviews: 250000,
+    type: 'game',
+  });
+  service.queryTigerSemanticGameCandidates = async () => [
+    {
+      appid: 413150,
+      current_price_cents: 1499,
+      developer_ids: [11],
+      genres: ['Indie', 'RPG', 'Simulation'],
+      is_free: false,
+      name: 'Stardew Valley',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 98.5,
+      publisher_ids: [12],
+      steam_deck_category: 'verified',
+      tags: ['Great Soundtrack', 'Indie', 'RPG', 'Singleplayer'],
+      total_reviews: 990611,
+      type: 'game',
+    },
+    {
+      appid: 367520,
+      current_price_cents: 1499,
+      developer_ids: [21],
+      genres: ['Action', 'RPG'],
+      is_free: false,
+      name: 'Hollow Knight',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 96.9,
+      publisher_ids: [22],
+      steam_deck_category: 'verified',
+      tags: ['Action', 'Indie', 'Metroidvania', 'Singleplayer'],
+      total_reviews: 355000,
+      type: 'game',
+    },
+    {
+      appid: 588650,
+      current_price_cents: 2499,
+      developer_ids: [31],
+      genres: ['Action', 'RPG'],
+      is_free: false,
+      name: 'Dead Cells',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 96.4,
+      publisher_ids: [32],
+      steam_deck_category: 'verified',
+      tags: ['Action', 'Indie', 'Roguelike', 'Singleplayer'],
+      total_reviews: 145000,
+      type: 'game',
+    },
+  ];
+
+  const result = await service.runTigerGameSimilaritySearch(
+    {
+      entityKind: 'game',
+      filters: {
+        review_comparison: 'better_only',
+      },
+      limit: 8,
+      mode: 'similarity',
+      referenceQuery: 'Hades',
+    },
+    {
+      id: 1145360,
+      metrics: {
+        developer_ids: [1],
+        price_cents: 2499,
+        publisher_ids: [2],
+        review_percentage: 97,
+        total_reviews: 250000,
+      },
+      name: 'Hades',
+      type: 'game',
+    }
+  );
+
+  assert.deepEqual(
+    result.results?.map((item: { name: string }) => item.name),
+    ['Stardew Valley']
+  );
+  assert.deepEqual(
+    result.close_alternatives?.map((item: { name: string }) => item.name),
+    ['Hollow Knight', 'Dead Cells']
+  );
+  assert.match(result.close_alternatives_reason ?? '', /stricter higher-review cutoff/i);
+  assert.equal(result.sufficient_to_answer, true);
+});
+
+test('semantic similarity keeps adding close alternatives when exact matches stay thin relative to the requested list', async () => {
+  const service = createService() as any;
+
+  service.queryTigerSemanticGameProfile = async () => ({
+    appid: 1145360,
+    developerIds: [1],
+    genres: ['Action', 'RPG'],
+    isFree: false,
+    name: 'Hades',
+    platforms: ['windows'],
+    priceCents: 2499,
+    publisherIds: [2],
+    reviewPercentage: 97,
+    tags: ['Action', 'Roguelike', 'Indie', 'Singleplayer'],
+    totalReviews: 250000,
+    type: 'game',
+  });
+  service.queryTigerSemanticGameCandidates = async () => [
+    {
+      appid: 413150,
+      current_price_cents: 1499,
+      developer_ids: [11],
+      genres: ['Indie', 'RPG', 'Simulation'],
+      is_free: false,
+      name: 'Stardew Valley',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 98.5,
+      publisher_ids: [12],
+      steam_deck_category: 'verified',
+      tags: ['Great Soundtrack', 'Indie', 'RPG', 'Singleplayer'],
+      total_reviews: 990611,
+      type: 'game',
+    },
+    {
+      appid: 1118200,
+      current_price_cents: 999,
+      developer_ids: [13],
+      genres: ['Action', 'Indie', 'Sandbox'],
+      is_free: false,
+      name: 'People Playground',
+      platforms: 'windows',
+      positive_percentage: 98.5,
+      publisher_ids: [14],
+      steam_deck_category: 'playable',
+      tags: ['Action', 'Indie', 'Singleplayer', 'Sandbox'],
+      total_reviews: 308115,
+      type: 'game',
+    },
+    {
+      appid: 620,
+      current_price_cents: 999,
+      developer_ids: [15],
+      genres: ['Action', 'Adventure'],
+      is_free: false,
+      name: 'Portal 2',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 98.7,
+      publisher_ids: [16],
+      steam_deck_category: 'verified',
+      tags: ['Action', 'Atmospheric', 'Singleplayer', 'Story Rich'],
+      total_reviews: 456304,
+      type: 'game',
+    },
+    {
+      appid: 367520,
+      current_price_cents: 1499,
+      developer_ids: [21],
+      genres: ['Action', 'RPG'],
+      is_free: false,
+      name: 'Hollow Knight',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 96.9,
+      publisher_ids: [22],
+      steam_deck_category: 'verified',
+      tags: ['Action', 'Indie', 'Metroidvania', 'Singleplayer'],
+      total_reviews: 355000,
+      type: 'game',
+    },
+    {
+      appid: 588650,
+      current_price_cents: 2499,
+      developer_ids: [31],
+      genres: ['Action', 'RPG'],
+      is_free: false,
+      name: 'Dead Cells',
+      platforms: 'windows,macos,linux',
+      positive_percentage: 96.4,
+      publisher_ids: [32],
+      steam_deck_category: 'verified',
+      tags: ['Action', 'Indie', 'Roguelike', 'Singleplayer'],
+      total_reviews: 145000,
+      type: 'game',
+    },
+  ];
+
+  const result = await service.runTigerGameSimilaritySearch(
+    {
+      entityKind: 'game',
+      filters: {
+        review_comparison: 'better_only',
+      },
+      limit: 8,
+      mode: 'similarity',
+      referenceQuery: 'Hades',
+    },
+    {
+      id: 1145360,
+      metrics: {
+        developer_ids: [1],
+        price_cents: 2499,
+        publisher_ids: [2],
+        review_percentage: 97,
+        total_reviews: 250000,
+      },
+      name: 'Hades',
+      type: 'game',
+    }
+  );
+
+  assert.deepEqual(
+    result.results?.map((item: { name: string }) => item.name),
+    ['People Playground', 'Stardew Valley', 'Portal 2']
+  );
+  assert.deepEqual(
+    result.close_alternatives?.map((item: { name: string }) => item.name),
+    ['Hollow Knight', 'Dead Cells']
+  );
+});
+
+test('discoverMomentum forwards similarity seed appids to queryMomentumRows', async () => {
+  const service = createService();
+  let receivedArgs: Record<string, unknown> | null = null;
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryMomentumRows = async (args: Record<string, unknown>) => {
+    receivedArgs = args;
+    return [];
+  };
+
+  await service.discoverMomentum({
+    appids: [1145360, 774361, 632360],
+    limit: 5,
+    sortBy: 'reviews_added_7d',
+    timeframe: '7d',
+  });
+
+  assert.deepEqual((receivedArgs as { appids?: number[] } | null)?.appids, [1145360, 774361, 632360]);
+});
+
 test('discoverMomentum returns sortDirection and 7d sentiment ranking details', async () => {
   const service = createService();
 
@@ -508,7 +825,7 @@ test('searchCatalog can answer facet-only taxonomy lookups without querying item
     },
     categories: [],
     genres: [],
-    tags: ['Colony Sim', 'Base Building'],
+    tags: ['Base Building', 'Resource Management'],
   });
 
   const result = await service.searchCatalog({
@@ -518,10 +835,174 @@ test('searchCatalog can answer facet-only taxonomy lookups without querying item
   });
 
   assert.equal(result.items.length, 0);
-  assert.equal(result.facets?.tags[0], 'Colony Sim');
+  assert.equal(result.facets?.tags[0], 'Base Building');
   assert.equal(result.interpretedFilters.facetQuery, 'colony sim');
   assert.deepEqual(result.interpretedFilters.includeFacets, ['tags']);
   assert.equal(result.sufficientToAnswer, true);
+});
+
+test('getRelatedEntities returns DLC rows with source context', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).getBlockingTables = async () => [];
+  (service as any).queryGameOverview = async () => ({
+    display_name: 'ELDEN RING',
+    review_score: 95,
+    total_reviews: 820000,
+  });
+  (service as any).queryRelatedDlcRows = async () => [
+    {
+      appid: 2778580,
+      franchise_name: null,
+      name: 'ELDEN RING Shadow of the Erdtree',
+      positive_percentage: 94,
+      review_score: 94,
+      steam_deck_category: 'verified',
+      total_reviews: 54000,
+      release_date: '2024-06-20',
+      release_year: 2024,
+    },
+  ];
+  (service as any).queryFranchiseNamesByApp = async () => [];
+  (service as any).querySteamDeckCategoryByApp = async () => 'verified';
+
+  const result = await service.getRelatedEntities({
+    limit: 10,
+    relationKind: 'dlc',
+    sourceAppid: 1245620,
+  });
+
+  assert.equal(result.source.displayName, 'ELDEN RING');
+  assert.equal(result.source.appid, 1245620);
+  assert.equal(result.matchMode, 'structured_relation');
+  assert.equal(result.items[0]?.appid, 2778580);
+  assert.equal(result.items[0]?.name, 'ELDEN RING Shadow of the Erdtree');
+  assert.equal(result.sufficientToAnswer, true);
+});
+
+test('getRelatedEntities falls back to apps.parent_appid when DLC tables are unavailable', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).getBlockingTables = async (relations: string[]) =>
+    relations.includes('app_dlc') ? ['legacy.app_dlc'] : [];
+  (service as any).queryGameOverview = async () => ({
+    developer_ids: [1],
+    display_name: 'ELDEN RING',
+    publisher_ids: [10],
+    review_score: 95,
+    total_reviews: 820000,
+  });
+  (service as any).queryRelatedDlcRowsFromApps = async () => [
+    {
+      appid: 2778580,
+      franchise_name: null,
+      name: 'ELDEN RING Shadow of the Erdtree',
+      positive_percentage: 94,
+      review_score: 94,
+      steam_deck_category: 'verified',
+      total_reviews: 54000,
+      release_date: '2024-06-20',
+      release_year: 2024,
+    },
+  ];
+  (service as any).querySteamDeckCategoryByApp = async () => 'verified';
+
+  const result = await service.getRelatedEntities({
+    limit: 10,
+    relationKind: 'dlc',
+    sourceAppid: 1245620,
+  });
+
+  assert.equal(result.matchMode, 'parent_appid');
+  assert.deepEqual(result.provenance.tables, [
+    'legacy.apps',
+    'legacy.latest_daily_metrics',
+    'legacy.app_steam_deck',
+  ]);
+  assert.equal(result.items[0]?.appid, 2778580);
+});
+
+test('getRelatedEntities returns a safe empty DLC response when relation ids are unavailable on the active source', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).getBlockingTables = async (relations: string[]) =>
+    relations.includes('app_dlc') ? ['legacy.app_dlc'] : [];
+  (service as any).queryGameOverview = async () => ({
+    developer_ids: [1],
+    display_name: 'ELDEN RING',
+    publisher_ids: [10],
+    review_score: 95,
+    total_reviews: 820000,
+  });
+  (service as any).queryRelatedDlcRowsFromApps = async () => [];
+  (service as any).queryRelatedDlcAppids = async () => {
+    throw new Error('queryRelatedDlcAppids should not be called when app_dlc is unavailable');
+  };
+  (service as any).querySteamDeckCategoryByApp = async () => 'verified';
+
+  const result = await service.getRelatedEntities({
+    limit: 10,
+    relationKind: 'dlc',
+    sourceAppid: 1245620,
+  });
+
+  assert.equal(result.matchMode, 'parent_appid');
+  assert.equal(result.items.length, 0);
+  assert.equal(result.sufficientToAnswer, false);
+  assert.deepEqual(result.provenance.tables, [
+    'legacy.apps',
+    'legacy.latest_daily_metrics',
+    'legacy.app_steam_deck',
+  ]);
+});
+
+test('getRelatedEntities falls back to title-family matches when franchise tables are unavailable', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).getBlockingTables = async (relations: string[]) =>
+    relations.includes('app_franchises') ? ['legacy.app_franchises'] : [];
+  (service as any).queryGameOverview = async () => ({
+    developer_ids: [77],
+    display_name: 'Hades II',
+    publisher_ids: [77],
+    review_score: 94,
+    total_reviews: 54000,
+  });
+  (service as any).queryRelatedTitleFamilyRows = async () => [
+    {
+      appid: 1145360,
+      franchise_name: null,
+      name: 'Hades',
+      positive_percentage: 98,
+      review_score: 98,
+      steam_deck_category: 'verified',
+      total_reviews: 275000,
+      release_date: '2020-09-17',
+      release_year: 2020,
+    },
+  ];
+  (service as any).querySteamDeckCategoryByApp = async () => 'playable';
+
+  const result = await service.getRelatedEntities({
+    filters: { steamDeck: ['verified'] },
+    limit: 10,
+    relationKind: 'franchise_games',
+    sourceAppid: 1145350,
+  });
+
+  assert.equal(result.matchMode, 'title_family');
+  assert.deepEqual(result.provenance.tables, [
+    'legacy.apps',
+    'legacy.latest_daily_metrics',
+    'legacy.app_publishers',
+    'legacy.app_developers',
+    'legacy.app_steam_deck',
+  ]);
+  assert.equal(result.items[0]?.name, 'Hades');
 });
 
 test('discoverMomentum only checks Tiger tag backfill when tag filters are requested', async () => {

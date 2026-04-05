@@ -220,3 +220,146 @@ test('renderTigerPrimaryResult labels patch-note document sets as patch notes', 
 
   assert.match(markdown, /patch notes/i);
 });
+
+test('renderTigerPrimaryResult labels semantic scores as match scores out of 100', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'semantic_search',
+    response: {
+      mode: 'semantic',
+      reference: {
+        name: 'Hades',
+        type: 'game',
+      },
+      results: [
+        {
+          id: 1,
+          matchReasons: ['Same developer', 'Action Roguelike'],
+          name: 'Hades II',
+          review_percentage: 95,
+          score: 47,
+          total_reviews: 54000,
+          type: 'game',
+        },
+      ],
+      sufficient_to_answer: true,
+      success: true,
+    },
+  });
+
+  assert.match(markdown, /\| Result \| Match Score \| Review % \| Total Reviews \|/);
+  assert.match(markdown, /\| \[Hades II\]\(game:1\) \| 47\/100 \| 95% \| 54,000 \|/);
+  assert.doesNotMatch(markdown, /\| Score \|/);
+});
+
+test('renderTigerPrimaryResult separates strict semantic matches from close alternatives', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'semantic_search',
+    request: {
+      entityKind: 'game',
+      filters: {
+        review_comparison: 'better_only',
+      },
+      mode: 'similarity',
+      referenceQuery: 'Hades',
+    },
+    response: {
+      close_alternatives: [
+        {
+          id: 367520,
+          matchReasons: ['Action', 'Indie', 'Metroidvania', 'Singleplayer'],
+          name: 'Hollow Knight',
+          review_percentage: 96.9,
+          score: 47,
+          total_reviews: 355000,
+          type: 'game',
+        },
+      ],
+      close_alternatives_reason:
+        'These stay highly similar, but they miss the stricter higher-review cutoff from the original request.',
+      mode: 'semantic',
+      reference: {
+        name: 'Hades',
+        type: 'game',
+      },
+      results: [
+        {
+          id: 413150,
+          matchReasons: ['Great Soundtrack', 'Indie', 'RPG', 'Singleplayer'],
+          name: 'Stardew Valley',
+          review_percentage: 98.5,
+          score: 47,
+          total_reviews: 990611,
+          type: 'game',
+        },
+      ],
+      sufficient_to_answer: true,
+      success: true,
+    },
+  });
+
+  assert.match(markdown, /Strict matches/);
+  assert.match(markdown, /Close alternatives/);
+  assert.match(markdown, /higher-review cutoff/i);
+  assert.match(markdown, /Stardew Valley/);
+  assert.match(markdown, /Hollow Knight/);
+});
+
+test('renderTigerPrimaryResult frames canonical facet answers as paired facets', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'catalog_search',
+    response: {
+      facets: {
+        canonicalMatch: {
+          name: 'Colony Sim',
+          type: 'tags',
+        },
+        categories: [],
+        genres: [],
+        tags: ['Base Building', 'Resource Management', 'Simulation'],
+      },
+      interpretedFilters: {
+        facetQuery: 'colony sim',
+        includeFacets: ['tags'],
+      },
+      items: [],
+      sufficientToAnswer: true,
+    },
+  });
+
+  assert.match(markdown, /most commonly paired with \*\*Colony Sim\*\*/i);
+  assert.doesNotMatch(markdown, /closest matching tags/i);
+  assert.match(markdown, /Base Building/);
+});
+
+test('renderTigerPrimaryResult omits zero-signal peak ccu columns from review momentum tables', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'momentum_discovery',
+    response: {
+      filtersApplied: ['sort_by: reviews_added_30d', 'timeframe: 30d'],
+      items: [
+        {
+          appid: 777,
+          ccuPeak: null,
+          name: 'Example Horror',
+          platformSupport: ['windows'],
+          reviewPercentage: 81.2,
+          reviewsAdded30d: 102,
+          supportLevel: 'medium',
+          supportReasons: ['102 reviews added over 30d.'],
+          totalReviews: 3200,
+          trendDirection: 'up',
+        },
+      ],
+      rankingDefinition: 'Reviews added (30d) counts net new reviews in the last 30 days.',
+      rankingLabel: 'Reviews Added (30d)',
+      sortBy: 'reviews_added_30d',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+      trendType: null,
+    },
+  });
+
+  assert.match(markdown, /\| Game \| Reviews Added \(30d\) \| Review % \| Total Reviews \| Platforms \|/);
+  assert.doesNotMatch(markdown, /Peak CCU/);
+});

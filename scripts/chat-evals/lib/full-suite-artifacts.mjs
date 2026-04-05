@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { formatLatencyMs } from './blended-persona-scoring.mjs';
 import { BLENDED_PERSONA } from './full-suite-inventory.mjs';
+import { buildPromptReviewArtifacts } from './prompt-review.mjs';
 import { buildAuditArtifacts } from './tool-backend-audit.mjs';
 
 export async function writeFullSuiteArtifacts(params) {
@@ -22,10 +23,16 @@ export async function writeFullSuiteArtifacts(params) {
     promptResults,
     scenarioResults,
   });
+  const promptReviewArtifacts = buildPromptReviewArtifacts({
+    promptResults,
+    runSummary,
+    scenarioResults,
+  });
   const enrichedRunSummary = {
     ...runSummary,
     auditSummary: auditArtifacts.auditSummary,
     comparisonSummary: baselineComparison?.summary ?? null,
+    reviewSummary: promptReviewArtifacts.reviewSummary,
   };
 
   await fs.writeFile(
@@ -51,6 +58,26 @@ export async function writeFullSuiteArtifacts(params) {
   await fs.writeFile(
     path.join(outDir, 'run-summary.json'),
     `${JSON.stringify(enrichedRunSummary, null, 2)}\n`
+  );
+  await fs.writeFile(
+    path.join(outDir, 'prompt-review-matrix.json'),
+    `${JSON.stringify(promptReviewArtifacts.promptReviewMatrix, null, 2)}\n`
+  );
+  await fs.writeFile(
+    path.join(outDir, 'prompt-review-matrix.md'),
+    promptReviewArtifacts.promptReviewMatrixMarkdown
+  );
+  await fs.writeFile(
+    path.join(outDir, 'latency-hotspots.json'),
+    `${JSON.stringify(promptReviewArtifacts.latencyHotspots, null, 2)}\n`
+  );
+  await fs.writeFile(
+    path.join(outDir, 'latency-hotspots.md'),
+    promptReviewArtifacts.latencyHotspotsMarkdown
+  );
+  await fs.writeFile(
+    path.join(outDir, 'calibration-queue.json'),
+    `${JSON.stringify(promptReviewArtifacts.calibrationQueue, null, 2)}\n`
   );
   await fs.writeFile(
     path.join(outDir, 'ledger-run-draft.md'),
@@ -119,6 +146,7 @@ export async function writeFullSuiteArtifacts(params) {
     auditArtifacts,
     baselineComparison,
     promptRankings,
+    promptReviewArtifacts,
     scenarioRankings,
   };
 }
@@ -158,15 +186,26 @@ export function buildFullSuiteCurationTemplate(promptResults, scenarioResults) {
     prompts: promptResults.map((result) => ({
       critiqueId: result.critiqueId,
       curatorNotes: null,
+      dataQualityScore: result.dataQualityScore ?? null,
+      dataQualityVerdict: result.dataQualityVerdict ?? null,
       draftScore: result.draftScore,
       draftVerdict: result.verdict,
+      improvementAreas: result.improvementAreas ?? [],
+      inventoryName: result.inventoryName || result.sourceInventory || null,
+      isVariant: result.isVariant === true,
       overrideScore: null,
       overrideUsefulnessSummary: null,
       overrideVerdict: null,
       prompt: result.prompt,
       qualityNotes: result.qualityNotes,
+      reviewConfidence: result.reviewConfidence ?? null,
+      seedPromptId: result.seedPromptId ?? String(result.critiqueId),
       scoreBreakdown: result.scoreBreakdown,
+      suggestedFixTarget: result.suggestedFixTarget ?? null,
+      toneScore: result.toneScore ?? null,
+      toneVerdict: result.toneVerdict ?? null,
       usefulnessSummary: result.usefulnessSummary,
+      variantKey: result.variantKey ?? null,
     })),
     scenarios: scenarioResults.map((result) => ({
       carryForwardQuality: result.carryForwardQuality,
@@ -219,10 +258,18 @@ export function renderFullSuiteLedgerDraft(params) {
 
   lines.push(
     `- Prompt count: ${runSummary.promptCount}`,
+    `- Seed prompts: ${runSummary.seedPromptCount ?? runSummary.promptCount}`,
+    `- Variant prompts: ${runSummary.variantPromptCount ?? 0}`,
     `- Scenario count: ${runSummary.scenarioCount}`,
     `- Prompt average score: ${runSummary.promptAverageScore}/10`,
     `- Scenario average score: ${runSummary.scenarioAverageScore}/10`,
     `- Run duration: ${formatLatencyMs(runSummary.runDurationMs)}`,
+    ...(runSummary.reviewSummary
+      ? [
+          `- Avg data quality: ${runSummary.reviewSummary.promptDataQualityAverage}/10`,
+          `- Avg tone: ${runSummary.reviewSummary.promptToneAverage}/10`,
+        ]
+      : []),
     '',
     '## Blended Persona',
     '',
@@ -257,11 +304,31 @@ export function renderFullSuiteLedgerDraft(params) {
     lines.push('');
     lines.push(`- Section: ${result.section}`);
     lines.push(`- Family: ${result.family}`);
+    lines.push(`- Inventory: ${result.inventoryName || result.sourceInventory || '-'}`);
+    lines.push(`- Variant: ${result.isVariant === true ? result.variantKey || 'yes' : 'seed'}`);
     lines.push(`- Status: ${result.status}`);
     lines.push(`- Draft score: ${result.draftScore}/10`);
     lines.push(`- Verdict: ${result.verdict}`);
+    if (result.dataQualityScore != null) {
+      lines.push(`- Data quality: ${result.dataQualityScore}/10 (${result.dataQualityVerdict})`);
+    }
+    if (result.toneScore != null) {
+      lines.push(`- Tone: ${result.toneScore}/10 (${result.toneVerdict})`);
+    }
     lines.push(`- Latency: ${result.visibleLatencyText || result.latencyText || '-'}`);
+    if (result.latencyVerdict) {
+      lines.push(`- Latency verdict: ${result.latencyVerdict}`);
+    }
     lines.push(`- Usefulness summary: ${result.usefulnessSummary}`);
+    if (result.reviewConfidence) {
+      lines.push(`- Review confidence: ${result.reviewConfidence}`);
+    }
+    if (Array.isArray(result.improvementAreas) && result.improvementAreas.length > 0) {
+      lines.push(`- Improvement areas: ${result.improvementAreas.join(', ')}`);
+    }
+    if (result.suggestedFixTarget) {
+      lines.push(`- Suggested fix target: ${result.suggestedFixTarget}`);
+    }
     lines.push(`- Notes: ${result.qualityNotes.map((note) => `\`${note}\``).join(', ') || '-'}`);
     if (result.routeSummary) {
       lines.push(`- Route: ${result.routeSummary}`);

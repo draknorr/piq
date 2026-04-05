@@ -1,6 +1,22 @@
 # Chat Prompt Evals Runbook
 
-This runbook covers the critique-suite workflows for the prompts called out in:
+This runbook covers two related chat-eval workflows:
+
+- the older critique-suite quality passes drawn from `docs/chat-output-user-critique.md`
+- the newer Tiger cutover gate for the recent non-personal Tiger-only migration work
+
+Use the Tiger cutover suite as the main acceptance run when you are validating:
+
+- the removal of Qdrant from the canonical non-personal chat path
+- Tiger-only semantic, momentum, catalog, compare, news, and change routes
+- natural follow-ups like `show me more`, `same but ...`, `what about ...`, and explicit entity switching
+- the new narrator-backed answer feel, latency, and follow-up suggestion quality
+
+The older critique suites remain useful for broader answer-quality regression tracking, but they are not the primary cutover gate anymore.
+
+## Legacy Critique Scope
+
+The critique-suite workflows still target the prompts called out in:
 
 - `docs/chat-output-user-critique.md` section `1. Game Lookups and Filtered Discovery`
 - `docs/chat-output-user-critique.md` section `2. Publisher, Developer, and Company Answers`
@@ -44,6 +60,12 @@ It differs from the wrapper scripts above in two ways:
 - it runs the full old critique inventory plus the checked-in multi-turn phase-1 scenarios in one pass
 - it writes draft blended-persona rankings for every old critique prompt and every checked-in multi-turn phase-1 scenario
 
+For the current dev-server full pass, use the combined inventory mode:
+
+- `--inventory all` runs the old full-suite inventory and the Tiger cutover inventory together
+- `--variant-mode light` appends 8 deterministic prompt variants on top of the 81 checked-in seed prompts
+- `--shuffle-seed <value>` shuffles prompt order only; scenarios stay in checked-in order
+
 Run it from the repo root:
 
 ```bash
@@ -68,12 +90,22 @@ pnpm chat-evals:full-blended-endpoint -- \
 pnpm chat-evals:full-blended-endpoint -- --manifest-only --out-dir /tmp/publisheriq-chat-evals/full-blended-manifest
 ```
 
+```bash
+pnpm chat-evals:full-blended-endpoint -- \
+  --inventory all \
+  --variant-mode light \
+  --shuffle-seed april-dev-pass
+```
+
 Default behavior:
 
 - targets the local admin chat endpoint at `http://127.0.0.1:3001` unless you pass `--origin`
 - reuses the same `POST /api/chat/stream` path the chat UI calls
 - authenticates with the same local bypass or magic-link flow used by the other endpoint eval wrappers
 - scores the normalized final assistant text from SSE `text_delta` output; hidden Tiger metadata is saved only as diagnostics and is not used for ranking
+- supports `--inventory all` for the combined 81-prompt / 14-scenario seed pass
+- supports `--variant-mode light` for the combined pass, which adds 8 deterministic variants and keeps seed-vs-variant results separate in the review artifacts
+- supports `--shuffle-seed` to vary prompt order without changing the checked-in prompt text
 - does not start `admin` or `query-api` for you in this first pass; if the origin is not reachable it fails fast with a preflight error
 
 Artifacts include:
@@ -91,17 +123,83 @@ Artifacts include:
 - `backend-usage-summary.json`
 - `migration-matrix.json`
 - `migration-matrix.md`
+- `prompt-review-matrix.json`
+- `prompt-review-matrix.md`
+- `latency-hotspots.json`
+- `latency-hotspots.md`
+- `calibration-queue.json`
 - `prompt-baseline-comparison.json`
 - `scenario-baseline-comparison.json`
 - `prompt-baseline-comparison.md`
 - `non-tiger-prompts.json`
 - `migration-priority.json`
 
-This is now the default quality pass for ranking the old prompt inventory on the new chat stack.
+This remains the default quality pass for ranking the old critique inventory on the new chat stack.
 Keep using the older API/debug wrappers when you want lower-level transport, tool, or Tiger routing diagnostics.
 The endpoint runner now also writes an answer-path audit for Tiger cutover work, including
 which tools/contracts ran, which backends they hit, and which prompts still depend on
 legacy Supabase or Cube reads.
+
+## Tiger Cutover Endpoint Gate
+
+Use the new Tiger cutover endpoint gate when you want the main non-personal acceptance run for the recent Tiger-only migration work.
+
+Run it from the repo root:
+
+```bash
+pnpm chat-evals:tiger-cutover-endpoint
+```
+
+Useful overrides:
+
+```bash
+pnpm chat-evals:tiger-cutover-endpoint -- --max-prompts 6 --max-scenarios 2
+```
+
+```bash
+pnpm chat-evals:tiger-cutover-endpoint -- --manifest-only --out-dir /tmp/publisheriq-chat-evals/tiger-cutover-manifest
+```
+
+Default behavior:
+
+- targets the local admin chat endpoint at `http://127.0.0.1:3001`
+- runs the checked-in Tiger cutover prompt manifest and multi-turn scenario manifest
+- scores answers with the existing blended-persona ranker
+- writes the normal endpoint artifacts plus:
+  - `tiger-cutover-gate.json`
+  - `tiger-cutover-gate.md`
+- marks blockers for:
+  - `fallback_to_legacy`
+  - forbidden legacy/Qdrant/Cube/Supabase traces
+  - missing expected Tiger contracts
+  - poor `P0` scores
+  - obvious latency overruns
+
+Key checked-in inventories:
+
+- `scripts/chat-evals/tiger-cutover-prompts.json`
+- `scripts/chat-evals/tiger-cutover-scenarios.json`
+
+## Tiger Cutover Browser Smoke
+
+Use the browser smoke run when you want a smaller UI-facing confirmation of the Tiger cutover suite.
+
+```bash
+pnpm chat-evals:tiger-cutover-ui
+```
+
+Useful overrides:
+
+```bash
+pnpm chat-evals:tiger-cutover-ui -- --headed
+```
+
+Default behavior:
+
+- runs only the `uiSmoke` subset from the Tiger cutover prompt/scenario inventories
+- starts its own local admin server on `http://127.0.0.1:3003`
+- reuses or starts local `query-api`
+- keeps the endpoint gate as the source of truth; the browser run is a smoke pass, not the main blocker
 
 ## Browser Quality Run
 
@@ -118,12 +216,17 @@ Useful overrides:
 pnpm chat-evals:full-blended-ui -- --max-prompts 3 --max-scenarios 1 --headed
 ```
 
+```bash
+pnpm chat-evals:full-blended-ui -- --inventory all --smoke-only
+```
+
 Default behavior:
 
 - starts its own local admin dev server on `http://127.0.0.1:3003`
 - reuses local `query-api` if it is already healthy, otherwise starts one on the configured local base URL
 - enables Tiger primary/shadow eval mode plus local browser bypass for the spawned admin server
 - scores only the final assistant text rendered in the browser UI
+- supports `--inventory all --smoke-only` to run the combined seed-only browser smoke subset across both inventories
 
 Use this when you want UI-level confirmation. Keep the endpoint runner as the primary full-suite quality harness.
 

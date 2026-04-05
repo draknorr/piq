@@ -131,6 +131,7 @@ export interface CaptureQueueJob {
   source: AppCaptureSource;
   triggerReason: string;
   triggerCursor: string | null;
+  payload: Record<string, unknown>;
   attempts: number;
 }
 
@@ -144,4 +145,11 @@ export interface VersionWriteResult {
 export interface HeroAssetDescriptor {
   kind: HeroAssetKind;
   url: string;
+}
+
+export interface DiscoveredAppSeed {
+  appid: number;
+  appType?: 'game' | 'dlc' | 'demo' | 'mod' | 'video' | 'hardware' | 'music';
+  discoveryReason?: string;
+  placeholderName?: string;
 }

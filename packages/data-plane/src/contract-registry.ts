@@ -19,6 +19,7 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
     endpoint: '/v1/contracts/get-entity-overview',
     status: 'ready',
     requiredRelations: [
+      'core_entities',
       'apps',
       'latest_daily_metrics',
       'app_publishers',
@@ -32,6 +33,26 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
       'tell me about X',
       'games by a company',
       'how many games has this company published'
+    ],
+  },
+  {
+    name: 'getRelatedEntities',
+    endpoint: '/v1/contracts/get-related-entities',
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'latest_daily_metrics',
+      'app_dlc',
+      'app_franchises',
+      'franchises',
+      'app_steam_deck',
+    ],
+    description:
+      'Expand a resolved game into typed relation sets such as DLC and same-franchise games with optional quality and Steam Deck filters.',
+    naturalLanguageStrength: [
+      'show me all DLC for a game',
+      'games in the same series',
+      'same-franchise follow-ups with quality or platform filters'
     ],
   },
   {

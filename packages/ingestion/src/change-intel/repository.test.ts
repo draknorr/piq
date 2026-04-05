@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { claimCaptureQueue, enqueueCaptureJobs, requeueStaleCaptureClaims } from './repository.js';
+import {
+  claimCaptureQueue,
+  enqueueCaptureJobs,
+  requeueStaleCaptureClaims,
+  seedDiscoveredApps,
+} from './repository.js';
 
 interface QueueRpcArgs {
   p_jobs: Array<Record<string, unknown>>;
@@ -139,6 +144,51 @@ test('requeueStaleCaptureClaims returns zero when the stale-claim RPC finds noth
   assert.equal(rpcCalled, true);
 });
 
+test('seedDiscoveredApps forwards normalized discovery payloads to the seed_discovered_apps RPC', async () => {
+  let rpcName: string | null = null;
+  let rpcArgs: Record<string, unknown> | null = null;
+
+  const supabase = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcName = name;
+      rpcArgs = args;
+      return Promise.resolve({ data: 2, error: null });
+    },
+  } as any;
+
+  const seeded = await seedDiscoveredApps(supabase, [
+    {
+      appid: 2778580,
+      appType: 'dlc',
+      discoveryReason: 'storefront_dlc_reference',
+    },
+    {
+      appid: 1245620,
+      appType: 'game',
+      discoveryReason: 'storefront_parent_reference',
+      placeholderName: 'ELDEN RING (pending metadata)',
+    },
+  ]);
+
+  assert.equal(seeded, 2);
+  assert.equal(rpcName, 'seed_discovered_apps');
+  assert.deepEqual(rpcArgs, {
+    p_records: [
+      {
+        appid: 2778580,
+        app_type: 'dlc',
+        discovery_reason: 'storefront_dlc_reference',
+      },
+      {
+        appid: 1245620,
+        app_type: 'game',
+        discovery_reason: 'storefront_parent_reference',
+        placeholder_name: 'ELDEN RING (pending metadata)',
+      },
+    ],
+  });
+});
+
 test('claimCaptureQueue retries transient RPC failures before succeeding', async () => {
   const originalDelay = process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS;
   process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS = '1';
@@ -160,6 +210,7 @@ test('claimCaptureQueue retries transient RPC failures before succeeding', async
               source: 'news',
               trigger_reason: 'storefront_snapshot_change',
               trigger_cursor: '',
+              payload: { news_gids: ['gid-1'] },
               attempts: 1,
             },
           ],
@@ -178,6 +229,7 @@ test('claimCaptureQueue retries transient RPC failures before succeeding', async
         source: 'news',
         triggerReason: 'storefront_snapshot_change',
         triggerCursor: '',
+        payload: { news_gids: ['gid-1'] },
         attempts: 1,
       },
     ]);

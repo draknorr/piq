@@ -394,7 +394,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+class ClientDisconnectError extends Error {
+  constructor() {
+    super('Client disconnected');
+    this.name = 'ClientDisconnectError';
+  }
+}
+
+function isClientDisconnectError(error: unknown): boolean {
+  if (error instanceof ClientDisconnectError) {
+    return true;
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return /already closed|client disconnected|controller is already closed|operation was aborted/i.test(message);
+}
+
 function classifyStreamFailureKind(error: unknown): string {
+  if (isClientDisconnectError(error)) {
+    return 'client_disconnect';
+  }
+
   const message = error instanceof Error ? error.message : String(error);
 
   if (/statement timeout|canceling statement due to statement timeout/i.test(message)) {
@@ -423,6 +447,7 @@ function buildTigerSyntheticToolCall(params: {
     | 'compareEntities'
     | 'discoverMomentum'
     | 'getEntityOverview'
+    | 'getRelatedEntities'
     | 'rankEntities'
     | 'searchCatalog'
     | 'semanticSearch';
@@ -529,6 +554,38 @@ function buildTigerSyntheticToolCall(params: {
       result: {
         success: true,
         results: items,
+        total_found: items.length,
+        ...(resultSet ? { continuation_meta: { resultSet } } : {}),
+      },
+    };
+  }
+
+  if (contractName === 'getRelatedEntities') {
+    const items = Array.isArray(response.items)
+      ? response.items
+          .filter((item): item is Record<string, unknown> => isRecord(item))
+          .map((item) => ({
+            appid: typeof item.appid === 'number' ? item.appid : 0,
+            name: typeof item.name === 'string' ? item.name : 'Unknown',
+          }))
+      : [];
+    const source = isRecord(response.source) ? response.source : null;
+
+    return {
+      name: 'search_games',
+      arguments: request,
+      result: {
+        success: true,
+        relation_kind:
+          typeof response.relationKind === 'string' ? response.relationKind : undefined,
+        results: items,
+        source_game:
+          source && typeof source.displayName === 'string'
+            ? {
+                appid: typeof source.appid === 'number' ? source.appid : undefined,
+                name: source.displayName,
+              }
+            : undefined,
         total_found: items.length,
         ...(resultSet ? { continuation_meta: { resultSet } } : {}),
       },
@@ -986,6 +1043,17 @@ function isUsableTigerNarration(value: string | null | undefined): value is stri
     return false;
   }
 
+  if (/\b(?:check|look at|look on|see)\b.+\b(?:other platforms|gaming platforms|websites|reviews|sources|coverage)\b/i.test(normalized)) {
+    return false;
+  }
+
+  if (
+    /\b(?:brief|prompt|question)\b.+\b(?:did(?:n't| not)|was(?:n't| not)|weren't|were not)\b/i.test(normalized)
+    || /\b(?:titles?|metrics?|details?)\s+(?:weren't|were not|wasn't|was not|didn't)\s+(?:provided|specified)\b/i.test(normalized)
+  ) {
+    return false;
+  }
+
   return true;
 }
 
@@ -1034,8 +1102,7 @@ async function executeResolvedToolCall(params: {
   toolCall: ToolCall;
   lastUserPrompt: string;
   phase1State: ReturnType<typeof createPhase1GuardrailState> | null;
-  controller: ReadableStreamDefaultController<Uint8Array>;
-  encoder: TextEncoder;
+  emitEvent?: (event: ToolResultEvent) => void;
   emitResultEvent?: boolean;
 }): Promise<{
   result: QueryResult | SimilarityResult | Record<string, unknown>;
@@ -1047,8 +1114,7 @@ async function executeResolvedToolCall(params: {
     toolCall,
     lastUserPrompt,
     phase1State,
-    controller,
-    encoder,
+    emitEvent,
     emitResultEvent = true,
   } = params;
   const toolStart = deps.now();
@@ -1080,7 +1146,7 @@ async function executeResolvedToolCall(params: {
       result,
       timing: { executionMs: Math.round(toolExecutionMs) },
     };
-    controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
+    emitEvent?.(toolResultEvent);
   }
 
   return {
@@ -1232,6 +1298,46 @@ export async function handleChatStreamRequest(
 
   const stream = new ReadableStream({
     async start(controller) {
+      let streamClosed = false;
+      const markStreamClosed = () => {
+        streamClosed = true;
+      };
+      const ensureStreamWritable = () => {
+        if (streamClosed || request.signal.aborted) {
+          throw new ClientDisconnectError();
+        }
+      };
+      const emitEvent = (event: StreamEvent) => {
+        ensureStreamWritable();
+        try {
+          controller.enqueue(encoder.encode(formatSSE(event)));
+        } catch (error) {
+          if (isClientDisconnectError(error)) {
+            markStreamClosed();
+            throw new ClientDisconnectError();
+          }
+          throw error;
+        }
+      };
+      const closeStream = () => {
+        if (streamClosed) {
+          return;
+        }
+        markStreamClosed();
+        try {
+          controller.close();
+        } catch (error) {
+          if (!isClientDisconnectError(error)) {
+            throw error;
+          }
+        }
+      };
+      const handleAbort = () => {
+        markStreamClosed();
+      };
+
+      request.signal.addEventListener('abort', handleAbort, { once: true });
+
       // Track token usage across all iterations
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
@@ -1270,8 +1376,8 @@ export async function handleChatStreamRequest(
 
         if (!body.messages || !Array.isArray(body.messages)) {
           const errorEvent: ErrorEvent = { type: 'error', message: 'Invalid request: messages array required' };
-          controller.enqueue(encoder.encode(formatSSE(errorEvent)));
-          controller.close();
+          emitEvent(errorEvent);
+          closeStream();
           return;
         }
 
@@ -1364,9 +1470,10 @@ export async function handleChatStreamRequest(
           });
 
           let primaryText = tigerPrimaryEvaluation.renderedText;
-          if (tigerPrimaryEvaluation.answerBrief) {
+          const primaryAnswerBrief = tigerPrimaryEvaluation.answerBrief;
+          if (primaryAnswerBrief && primaryAnswerBrief.allowNarration !== false) {
             const narration = await narrateTigerAnswer({
-              brief: tigerPrimaryEvaluation.answerBrief,
+              brief: primaryAnswerBrief,
               deps,
               prompt: lastUserPrompt,
             });
@@ -1374,7 +1481,7 @@ export async function handleChatStreamRequest(
 
             if (narration.content) {
               primaryText = renderTigerNarratedAnswer({
-                brief: tigerPrimaryEvaluation.answerBrief,
+                brief: primaryAnswerBrief,
                 narration: narration.content,
               });
               tigerPrimaryResult = {
@@ -1426,7 +1533,7 @@ export async function handleChatStreamRequest(
             type: 'text_delta',
             delta: primaryText,
           };
-          controller.enqueue(encoder.encode(formatSSE(textEvent)));
+          emitEvent(textEvent);
 
           const endEvent: MessageEndEvent = {
             type: 'message_end',
@@ -1447,7 +1554,7 @@ export async function handleChatStreamRequest(
             },
             creditsCharged: creditsEnabled ? creditsCharged : undefined,
           };
-          controller.enqueue(encoder.encode(formatSSE(endEvent)));
+          emitEvent(endEvent);
           return;
         }
 
@@ -1456,8 +1563,8 @@ export async function handleChatStreamRequest(
         // Check if provider supports streaming
         if (!provider.chatStream) {
           const errorEvent: ErrorEvent = { type: 'error', message: 'Provider does not support streaming' };
-          controller.enqueue(encoder.encode(formatSSE(errorEvent)));
-          controller.close();
+          emitEvent(errorEvent);
+          closeStream();
           return;
         }
 
@@ -1512,7 +1619,7 @@ export async function handleChatStreamRequest(
               name: continuationToolCall.name,
               arguments: continuationToolCall.arguments,
             };
-            controller.enqueue(encoder.encode(formatSSE(toolStartEvent)));
+            emitEvent(toolStartEvent);
 
             const continuationStartedAt = deps.now();
             const contractResponse = await deps.postToQueryApi<TigerContractContinuationResult>(
@@ -1667,7 +1774,7 @@ export async function handleChatStreamRequest(
               result: continuationResult,
               timing: { executionMs: Math.round(executionMs) },
             };
-            controller.enqueue(encoder.encode(formatSSE(continuationToolResultEvent)));
+            emitEvent(continuationToolResultEvent);
 
             if (syntheticToolCall) {
               executedToolCalls.push({
@@ -1700,7 +1807,7 @@ export async function handleChatStreamRequest(
               debugStats.totalChars += renderedContinuationText.length;
               debugStats.lastIterationHadText = true;
               const textEvent: TextDeltaEvent = { type: 'text_delta', delta: renderedContinuationText };
-              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              emitEvent(textEvent);
             } else {
               const modelContent = formatResultForModel(continuationResult, { compact: true });
               messages = [
@@ -1731,15 +1838,14 @@ export async function handleChatStreamRequest(
               name: continuationToolCall.name,
               arguments: continuationToolCall.arguments,
             };
-            controller.enqueue(encoder.encode(formatSSE(toolStartEvent)));
+            emitEvent(toolStartEvent);
 
             const executed = await executeResolvedToolCall({
               deps,
               toolCall: continuationToolCall,
               lastUserPrompt,
               phase1State: null,
-              controller,
-              encoder,
+              emitEvent,
               emitResultEvent: false,
             });
 
@@ -1812,7 +1918,7 @@ export async function handleChatStreamRequest(
               result: continuationResult as { success: boolean; error?: string } & Record<string, unknown>,
               timing: { executionMs: Math.round(executed.toolExecutionMs) },
             };
-            controller.enqueue(encoder.encode(formatSSE(continuationToolResultEvent)));
+            emitEvent(continuationToolResultEvent);
 
             executedToolCalls.push({
               name: continuationToolCall.name,
@@ -1842,7 +1948,7 @@ export async function handleChatStreamRequest(
               debugStats.totalChars += renderedContinuationText.length;
               debugStats.lastIterationHadText = true;
               const textEvent: TextDeltaEvent = { type: 'text_delta', delta: renderedContinuationText };
-              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              emitEvent(textEvent);
             } else {
               const modelContent = formatResultForModel(continuationResult, { compact: true });
               messages = [
@@ -1884,22 +1990,28 @@ export async function handleChatStreamRequest(
             type: 'text_delta',
             delta: tigerOnlyReply,
           };
-          controller.enqueue(encoder.encode(formatSSE(textEvent)));
+          emitEvent(textEvent);
         }
 
         while (debugStats.totalChars === 0 && iterations < MAX_TOOL_ITERATIONS) {
+          ensureStreamWritable();
           iterations++;
           debugStats.iterations = iterations;
           let iterationTextCount = 0;
 
           const llmStart = deps.now();
-          const llmStream = provider.chatStream(messages, forceFinalRenderWithoutTools ? undefined : tools);
+          const llmStream = provider.chatStream(
+            messages,
+            forceFinalRenderWithoutTools ? undefined : tools,
+            { signal: request.signal }
+          );
 
           let accumulatedText = '';
           const completedToolCalls: ToolCall[] = [];
 
           // Stream through the LLM response
           for await (const chunk of llmStream) {
+            ensureStreamWritable();
             if (chunk.type === 'text' && chunk.text) {
               accumulatedText += chunk.text;
               if (!shouldBufferCompanyResponse) {
@@ -1907,7 +2019,7 @@ export async function handleChatStreamRequest(
                 debugStats.totalChars += chunk.text.length;
                 iterationTextCount++;
                 const textEvent: TextDeltaEvent = { type: 'text_delta', delta: chunk.text };
-                controller.enqueue(encoder.encode(formatSSE(textEvent)));
+                emitEvent(textEvent);
               }
             }
 
@@ -1918,7 +2030,7 @@ export async function handleChatStreamRequest(
                 name: chunk.toolCall.name,
                 arguments: chunk.toolCall.arguments,
               };
-              controller.enqueue(encoder.encode(formatSSE(toolStartEvent)));
+              emitEvent(toolStartEvent);
             }
 
             if (chunk.type === 'tool_use_end' && chunk.toolCall) {
@@ -1950,7 +2062,7 @@ export async function handleChatStreamRequest(
               debugStats.totalChars += accumulatedText.length;
               iterationTextCount++;
               const textEvent: TextDeltaEvent = { type: 'text_delta', delta: accumulatedText };
-              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              emitEvent(textEvent);
             }
           }
 
@@ -2031,7 +2143,7 @@ export async function handleChatStreamRequest(
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
-              controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
+              emitEvent(toolResultEvent);
 
               toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
@@ -2088,7 +2200,7 @@ export async function handleChatStreamRequest(
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
-              controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
+              emitEvent(toolResultEvent);
 
               toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
@@ -2152,7 +2264,7 @@ export async function handleChatStreamRequest(
               result,
               timing: { executionMs: Math.round(toolExecutionMs) },
             };
-            controller.enqueue(encoder.encode(formatSSE(toolResultEvent)));
+            emitEvent(toolResultEvent);
             {
               const traceEntry = buildToolExecutionTraceEntry({
                 latencyMs: Math.round(toolExecutionMs),
@@ -2213,7 +2325,7 @@ export async function handleChatStreamRequest(
               debugStats.totalChars += renderedText.length;
               debugStats.lastIterationHadText = true;
               const textEvent: TextDeltaEvent = { type: 'text_delta', delta: renderedText };
-              controller.enqueue(encoder.encode(formatSSE(textEvent)));
+              emitEvent(textEvent);
               break;
             }
           }
@@ -2252,7 +2364,7 @@ export async function handleChatStreamRequest(
         if (debugStats.totalChars === 0 && debugStats.toolCallCount > 0) {
           const fallbackText = `I executed ${debugStats.toolCallCount} tool calls but wasn't able to generate a response. This may be due to hitting the maximum iteration limit (${MAX_TOOL_ITERATIONS}). Please try rephrasing your question or being more specific.`;
           const fallbackEvent: TextDeltaEvent = { type: 'text_delta', delta: fallbackText };
-          controller.enqueue(encoder.encode(formatSSE(fallbackEvent)));
+          emitEvent(fallbackEvent);
           debugStats.textDeltaCount = 1;
           debugStats.totalChars = fallbackText.length;
         }
@@ -2387,10 +2499,13 @@ export async function handleChatStreamRequest(
           },
           creditsCharged: creditsEnabled ? creditsCharged : undefined,
         };
-        controller.enqueue(encoder.encode(formatSSE(endEvent)));
+        emitEvent(endEvent);
 
       } catch (error) {
-        console.error('Streaming chat error:', error);
+        const clientDisconnected = request.signal.aborted || isClientDisconnectError(error);
+        if (!clientDisconnected) {
+          console.error('Streaming chat error:', error);
+        }
         const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
         const failureKind = classifyStreamFailureKind(error);
 
@@ -2433,8 +2548,10 @@ export async function handleChatStreamRequest(
           }
         }
 
-        const errorEvent: ErrorEvent = { type: 'error', message: errorMessage };
-        controller.enqueue(encoder.encode(formatSSE(errorEvent)));
+        if (!clientDisconnected) {
+          const errorEvent: ErrorEvent = { type: 'error', message: errorMessage };
+          emitEvent(errorEvent);
+        }
 
         // Refund credits on server error
         if (creditsEnabled && reservationId) {
@@ -2446,7 +2563,8 @@ export async function handleChatStreamRequest(
           }
         }
       } finally {
-        controller.close();
+        request.signal.removeEventListener('abort', handleAbort);
+        closeStream();
       }
     },
   });

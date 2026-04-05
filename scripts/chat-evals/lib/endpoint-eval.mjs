@@ -38,7 +38,9 @@ export async function loadEvalEnvFiles(files, baseEnv = process.env) {
 export function validateEvalEnv({ env, origin }) {
   const requiredKeys = shouldUseLocalEvalBypass(origin, env)
     ? ['CHAT_EVAL_SECRET']
-    : ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL'];
+    : shouldUseLocalBrowserBypass(origin, env)
+      ? []
+      : ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'BYPASS_AUTH_EMAIL'];
 
   for (const key of requiredKeys) {
     if (!env[key]) {
@@ -46,14 +48,14 @@ export function validateEvalEnv({ env, origin }) {
     }
   }
 
-  if (!readEvalBypassEmail(env)) {
+  if (!shouldUseLocalBrowserBypass(origin, env) && !readEvalBypassEmail(env)) {
     throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
   }
 }
 
 export async function authenticateEval({ env, origin }) {
   const bypassEmail = readEvalBypassEmail(env);
-  if (!bypassEmail) {
+  if (!bypassEmail && !shouldUseLocalBrowserBypass(origin, env)) {
     throw new Error('Missing required env var: CHAT_EVAL_BYPASS_EMAIL or BYPASS_AUTH_EMAIL');
   }
 
@@ -63,6 +65,15 @@ export async function authenticateEval({ env, origin }) {
       cookieJar: new Map(),
       email: bypassEmail,
       evalSecret: env.CHAT_EVAL_SECRET,
+    };
+  }
+
+  if (shouldUseLocalBrowserBypass(origin, env)) {
+    return {
+      authMode: 'local_browser_bypass',
+      cookieJar: new Map(),
+      email: bypassEmail || 'local-browser-bypass',
+      evalSecret: null,
     };
   }
 
@@ -433,6 +444,19 @@ export function shouldUseLocalEvalBypass(origin, env) {
   }
 
   if (!env.CHAT_EVAL_SECRET?.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(origin);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+export function shouldUseLocalBrowserBypass(origin, env) {
+  if (env.CHAT_LOCAL_BROWSER_BYPASS_ENABLED !== 'true') {
     return false;
   }
 

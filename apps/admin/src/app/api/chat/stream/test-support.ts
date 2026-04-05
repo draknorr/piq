@@ -193,7 +193,7 @@ export function createScriptedChatDeps(params: {
         chat: async () => {
           throw new Error('chat() should not be used in scripted chat tests');
         },
-        async *chatStream(messages: Message[], tools?: Tool[]) {
+        async *chatStream(messages: Message[], tools?: Tool[], _options?: { signal?: AbortSignal }) {
           const plan = providerInvocations.shift();
           assert.ok(plan, 'Unexpected provider chatStream invocation');
 

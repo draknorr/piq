@@ -66,6 +66,7 @@ class FakeSupabaseClient:
         self.fail_rpcs: set[str] = set()
         self.tables: Dict[str, List[Dict[str, Any]]] = {
             "app_categories": [],
+            "app_dlc": [],
             "app_genres": [],
             "app_steam_tags": [],
             "steam_categories": [],
@@ -116,6 +117,8 @@ class FakeSupabaseClient:
                 )
             elif function_name == "replace_app_steam_tags":
                 self._replace_app_steam_tags(params["p_appid"], params.get("p_tag_ids"))
+            elif function_name == "seed_discovered_apps":
+                pass
             else:
                 raise AssertionError(f"Unexpected RPC call: {function_name}")
         except Exception:
@@ -377,3 +380,30 @@ def test_rpc_failure_does_not_empty_existing_tag_rows(
         {"appid": 730, "tag_id": 20, "rank": 1, "created_at": "2026-01-01T00:00:01Z"},
     ]
     assert ("app_steam_tags", "delete") not in fake_client.calls
+
+
+def test_sync_dlc_relationships_seeds_missing_dlc_ids_before_upsert(
+    relation_database: tuple[PICSDatabase, FakeSupabaseClient],
+) -> None:
+    database, fake_client = relation_database
+
+    database._sync_dlc_relationships(1245620, [2778580, 2778590, 2778580])
+
+    assert fake_client.rpc_calls[0] == (
+        "seed_discovered_apps",
+        {
+            "p_records": [
+                {
+                    "appid": 2778580,
+                    "app_type": "dlc",
+                    "discovery_reason": "pics_dlc_reference",
+                },
+                {
+                    "appid": 2778590,
+                    "app_type": "dlc",
+                    "discovery_reason": "pics_dlc_reference",
+                },
+            ]
+        },
+    )
+    assert ("app_dlc", "upsert") in fake_client.calls

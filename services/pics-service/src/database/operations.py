@@ -1010,19 +1010,37 @@ class PICSDatabase:
         relationships to be stored even when DLC apps don't exist yet.
         This handles the case where processing order is unpredictable.
         """
-        if not dlc_appids:
+        normalized_dlc_appids = sorted(
+            {int(dlc_id) for dlc_id in (dlc_appids or []) if isinstance(dlc_id, int) and dlc_id > 0 and dlc_id != parent_appid}
+        )
+
+        if not normalized_dlc_appids:
             return
 
         try:
+            self._db.client.rpc(
+                "seed_discovered_apps",
+                {
+                    "p_records": [
+                        {
+                            "appid": dlc_id,
+                            "app_type": "dlc",
+                            "discovery_reason": "pics_dlc_reference",
+                        }
+                        for dlc_id in normalized_dlc_appids
+                    ]
+                },
+            ).execute()
+
             records = [
                 {"parent_appid": parent_appid, "dlc_appid": dlc_id, "source": "pics"}
-                for dlc_id in dlc_appids
+                for dlc_id in normalized_dlc_appids
             ]
             self._db.client.table("app_dlc").upsert(
                 records,
                 on_conflict="parent_appid,dlc_appid",
             ).execute()
-            logger.info(f"Synced {len(dlc_appids)} DLC relationships for app {parent_appid}")
+            logger.info(f"Synced {len(normalized_dlc_appids)} DLC relationships for app {parent_appid}")
         except Exception as e:
             logger.error(f"Failed to sync DLC relationships for {parent_appid}: {e}")
 

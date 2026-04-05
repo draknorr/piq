@@ -66,7 +66,12 @@ const listHotNewsRefreshCandidates = (
   }
 ).listHotNewsRefreshCandidates;
 
-async function enqueueProjectionRefresh(supabase: TypedSupabaseClient, appid: number, triggerReason: string): Promise<void> {
+async function enqueueProjectionRefresh(
+  supabase: TypedSupabaseClient,
+  appid: number,
+  triggerReason: string,
+  payload?: Record<string, unknown>
+): Promise<void> {
   await enqueueCaptureJobs(supabase, [
     {
       appid,
@@ -74,6 +79,7 @@ async function enqueueProjectionRefresh(supabase: TypedSupabaseClient, appid: nu
       triggerReason,
       triggerCursor: PROJECTION_REFRESH_CURSOR,
       priority: 80,
+      payload,
     },
   ]);
 }
@@ -312,6 +318,7 @@ export async function captureNewsForApp(
   let endDateUnix: number | undefined;
   let stopPagination = false;
   let projectionRefreshNeeded = false;
+  const changedNewsGids = new Set<string>();
 
   for (let page = 0; page < maxPages && !stopPagination; page += 1) {
     const batch = await fetchAppNews(appid, {
@@ -345,6 +352,9 @@ export async function captureNewsForApp(
       });
 
       projectionRefreshNeeded = projectionRefreshNeeded || events.length > 0;
+      if (events.length > 0) {
+        changedNewsGids.add(item.gid);
+      }
 
       if (previousVersion && !version.inserted && events.length === 0) {
         stopPagination = true;
@@ -365,7 +375,9 @@ export async function captureNewsForApp(
   }
 
   if (projectionRefreshNeeded) {
-    await enqueueProjectionRefresh(supabase, appid, 'news_change_event');
+    await enqueueProjectionRefresh(supabase, appid, 'news_change_event', {
+      news_gids: Array.from(changedNewsGids).slice(0, 200),
+    });
   }
 
   await updateSyncStatusFields(supabase, appid, {

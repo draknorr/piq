@@ -47,9 +47,17 @@ export interface LLMResponse {
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
 }
 
+export interface LLMStreamOptions {
+  signal?: AbortSignal;
+}
+
 export interface LLMProvider {
   chat(messages: Message[], tools?: Tool[]): Promise<LLMResponse>;
-  chatStream?(messages: Message[], tools?: Tool[]): AsyncGenerator<StreamChunk, void, unknown>;
+  chatStream?(
+    messages: Message[],
+    tools?: Tool[],
+    options?: LLMStreamOptions
+  ): AsyncGenerator<StreamChunk, void, unknown>;
 }
 
 // Chunk types from LLM provider streaming

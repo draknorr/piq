@@ -22,6 +22,8 @@
     "change-intel-worker": "tsx src/workers/change-intel-worker.ts",
     "change-intel-backfill-projection": "tsx src/scripts/backfill-change-activity-projection.ts",
     "repair-current-ccu-state": "tsx src/scripts/repair-current-ccu-state.ts",
+    "repair-dlc-discovered-apps": "tsx src/scripts/repair-dlc-discovered-apps.ts",
+    "hydrate-storefront-apps": "tsx src/scripts/hydrate-storefront-apps.ts",
     "repair-review-truth": "tsx src/scripts/repair-review-truth.ts",
     "reviews-queue-health": "tsx src/scripts/reviews-queue-health.ts",
     "storefront-sync": "tsx src/workers/storefront-worker.ts",
@@ -39,6 +41,7 @@
     "ccu-daily-sync": "tsx src/workers/ccu-daily-worker.ts",
     "alert-detection": "tsx src/workers/alert-detection-worker.ts",
     "test-steamspy-individual": "tsx src/scripts/test-steamspy-individual.ts",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "test:change-intel": "node --import tsx --test src/change-intel/**/*.test.ts"
   },
   "dependencies": {

@@ -31,6 +31,7 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-chat-evals-3003/types/**/*.ts",
     ".next-playwright/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts"

@@ -44,21 +44,32 @@ async function processApp(
 ): Promise<void> {
   // Increment processed count synchronously (before any await) to avoid race conditions
   stats.appsProcessed++;
+  const observedAt = new Date().toISOString();
 
   try {
     const result = await fetchStorefrontAppDetails(appid);
 
-    // Steam returned no data - app is private, removed, or age-gated
-    // Mark as inaccessible so we don't retry every day
+    // Steam returned no data - app is private, removed, or age-gated.
+    // If this was a relation-discovered stub, mark it inaccessible so it does
+    // not look like a healthy catalog row while remaining traceable.
     if (result.status === 'no_data') {
       log.debug('No storefront data for app (private/removed)', { appid });
       stats.appsSkipped++;
+
+      await (supabase as any)
+        .from('apps')
+        .update({
+          catalog_seed_state: 'inaccessible',
+          updated_at: observedAt,
+        })
+        .eq('appid', appid)
+        .eq('catalog_seed_state', 'stub');
 
       await supabase
         .from('sync_status')
         .update({
           storefront_accessible: false,
-          last_storefront_sync: new Date().toISOString(),
+          last_storefront_sync: observedAt,
         })
         .eq('appid', appid);
 
@@ -75,7 +86,7 @@ async function processApp(
         .update({
           last_error_source: 'storefront',
           last_error_message: result.error,
-          last_error_at: new Date().toISOString(),
+          last_error_at: observedAt,
         })
         .eq('appid', appid);
 
@@ -108,7 +119,7 @@ async function processApp(
       .update({
         last_error_source: 'storefront',
         last_error_message: error instanceof Error ? error.message : String(error),
-        last_error_at: new Date().toISOString(),
+        last_error_at: observedAt,
       })
       .eq('appid', appid);
   }

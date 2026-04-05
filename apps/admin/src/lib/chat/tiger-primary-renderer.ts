@@ -12,6 +12,7 @@ type TigerPrimaryRenderableIntent =
   | 'metric_history'
   | 'momentum_discovery'
   | 'news_search'
+  | 'relation_lookup'
   | 'semantic_search'
   | 'user_context';
 
@@ -27,8 +28,20 @@ interface TigerPrimaryCatalogItem {
 }
 
 interface TigerPrimaryCatalogResponse {
+  facets?: {
+    canonicalMatch?: {
+      name?: string;
+      type?: 'categories' | 'genres' | 'tags';
+    } | null;
+    categories?: string[];
+    genres?: string[];
+    tags?: string[];
+  } | null;
   interpretedFilters: {
     developerQuery: string | null;
+    facetQuery?: string | null;
+    includeAppTypes?: string[];
+    includeFacets?: Array<'categories' | 'genres' | 'tags'>;
     maxPriceCents?: number | null;
     minDiscountPercent?: number | null;
     minPriceCents?: number | null;
@@ -44,6 +57,41 @@ interface TigerPrimaryCatalogResponse {
     tags: string[];
   };
   items: TigerPrimaryCatalogItem[];
+}
+
+interface TigerPrimaryRelatedEntityItem {
+  appid: number;
+  name: string;
+  releaseDate?: string | null;
+  releaseYear?: number | null;
+  reviewScore?: number | null;
+  steamDeckCategory?: 'playable' | 'verified' | 'unsupported' | 'unknown' | null;
+  totalReviews?: number | null;
+}
+
+interface TigerPrimaryRelatedEntitiesResponse {
+  items: TigerPrimaryRelatedEntityItem[];
+  matchMode?: 'parent_appid' | 'relation_ids_only' | 'structured_relation' | 'title_family';
+  provenance?: {
+    source?: 'supabase-postgres' | 'tiger';
+  };
+  relationKind: 'dlc' | 'franchise_games';
+  source: {
+    appid: number;
+    displayName: string;
+    franchiseNames?: string[];
+  };
+  unresolvedAppids?: number[];
+  unresolvedCount?: number;
+}
+
+interface TigerPrimaryRelatedEntitiesRequest {
+  filters?: {
+    minReviewScore?: number | null;
+    reviewComparison?: 'any' | 'better_only';
+    steamDeck?: Array<'playable' | 'verified'>;
+  } | null;
+  relationKind: 'dlc' | 'franchise_games';
 }
 
 interface TigerPrimaryEntityOverviewGameItem {
@@ -105,6 +153,33 @@ interface TigerPrimaryRankEntitiesResponse {
   entityKind: 'developer' | 'game' | 'publisher';
   items: TigerPrimaryRankedEntity[];
   metric: 'ccu_peak' | 'game_count' | 'owners_midpoint' | 'review_score' | 'total_reviews';
+}
+
+interface TigerPrimaryRankRequest {
+  aggregateFilters?: {
+    minAverageReviewScore?: number | null;
+    minGameCount?: number | null;
+    minMinimumReviewScore?: number | null;
+  } | null;
+  catalogFilters?: {
+    isFree?: boolean | null;
+    platforms?: string[];
+    releaseYear?: {
+      gte?: number | null;
+      lte?: number | null;
+    } | null;
+    tags?: string[];
+  } | null;
+  entityKind: 'developer' | 'game' | 'publisher';
+  fallbackMode?: 'closest_match' | null;
+  metric: TigerPrimaryRankEntitiesResponse['metric'];
+  originalAggregateFilters?: {
+    minAverageReviewScore?: number | null;
+    minGameCount?: number | null;
+    minMinimumReviewScore?: number | null;
+  } | null;
+  recentReleaseDays?: number | null;
+  releaseDays?: number | null;
 }
 
 interface TigerPrimaryCompareEntity {
@@ -185,6 +260,11 @@ interface TigerPrimaryDiscoverMomentumResponse {
   items: TigerPrimaryDiscoverMomentumItem[];
   rankingDefinition: string;
   rankingLabel: string;
+  reference?: {
+    id?: number;
+    name?: string;
+    type?: string;
+  } | null;
   sortBy?:
     | 'ccu_peak'
     | 'momentum_score'
@@ -245,18 +325,28 @@ interface TigerPrimarySearchChangeActivityResponse {
 
 interface TigerPrimaryDiscoverChangePatternsResponse {
   interpretedFilters?: {
+    mode?: 'prospect_ranking';
     pattern?: string;
+    patterns?: string[];
   };
+  kind?: 'prospect_ranking';
   items: Array<{
     appid: number;
     confidence: 'high' | 'medium';
+    evidenceQualityScore?: number;
+    evidenceSummary?: string[];
+    latestSignalAt?: string;
     name: string;
+    needScore?: number;
     occurredAt: string;
+    patternSignals?: string[];
     primaryProof?: {
       headline?: string;
       summary?: string;
     } | null;
     reasons: string[];
+    timingScore?: number;
+    totalScore?: number;
   }>;
 }
 
@@ -273,6 +363,8 @@ interface TigerPrimarySemanticSearchResult {
 }
 
 interface TigerPrimarySemanticSearchResponse {
+  close_alternatives?: TigerPrimarySemanticSearchResult[];
+  close_alternatives_reason?: string;
   continuation_token?: string | null;
   entityType?: 'developer' | 'publisher';
   mode?: 'heuristic_portfolio' | 'semantic';
@@ -283,6 +375,19 @@ interface TigerPrimarySemanticSearchResponse {
     type: string;
   };
   results?: TigerPrimarySemanticSearchResult[];
+}
+
+interface TigerPrimarySemanticSearchRequest {
+  description?: string | null;
+  entityKind: 'developer' | 'game' | 'publisher';
+  filters?: {
+    max_price_cents?: number | null;
+    review_comparison?: 'any' | 'better_only' | 'similar_or_better';
+    steam_deck?: Array<'playable' | 'verified'>;
+    tags?: string[];
+  } | null;
+  mode: 'concept' | 'similarity';
+  referenceQuery?: string | null;
 }
 
 interface TigerPrimaryUserContextPin {
@@ -401,6 +506,46 @@ function formatPercent(value: unknown): string {
   return `${numericValue.toFixed(numericValue % 1 === 0 ? 0 : 1)}%`;
 }
 
+function normalizeReviewPercentage(value: unknown): number | null {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
+    return null;
+  }
+
+  return numericValue >= 0 && numericValue <= 10
+    ? numericValue * 10
+    : numericValue;
+}
+
+function formatReviewPercentage(value: unknown): string {
+  const normalized = normalizeReviewPercentage(value);
+  if (normalized == null) {
+    return 'n/a';
+  }
+
+  return formatPercent(normalized);
+}
+
+function formatMatchScore(value: unknown): string {
+  const numericValue = coerceNumber(value);
+  if (numericValue == null) {
+    return 'n/a';
+  }
+
+  const bounded = Math.max(0, Math.min(numericValue, 100));
+  return `${Math.round(bounded)}/100`;
+}
+
+function hasPositiveMetric(
+  items: Array<Record<string, unknown>>,
+  key: string
+): boolean {
+  return items.some((item) => {
+    const value = coerceNumber(item[key]);
+    return value != null && value > 0;
+  });
+}
+
 function formatSignedNumber(value: unknown): string {
   const numericValue = coerceNumber(value);
   if (numericValue == null) {
@@ -427,6 +572,13 @@ function formatDate(value: string | null | undefined): string {
   }
 
   return value.slice(0, 10);
+}
+
+function formatDateOffsetDays(days: number): string {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatGameLink(name: string, appid: number | null | undefined): string {
@@ -500,6 +652,33 @@ function formatCatalogIntro(response: TigerPrimaryCatalogResponse): string {
 }
 
 function renderCatalogSearch(response: TigerPrimaryCatalogResponse): string {
+  const facetEntries = [
+    ...(response.facets?.tags ?? []).map((name) => ({ name, type: 'Tag' })),
+    ...(response.facets?.genres ?? []).map((name) => ({ name, type: 'Genre' })),
+    ...(response.facets?.categories ?? []).map((name) => ({ name, type: 'Category' })),
+  ];
+  if ((response.items?.length ?? 0) === 0 && facetEntries.length > 0) {
+    const requestedFacet = response.interpretedFilters.includeFacets?.[0] ?? response.facets?.canonicalMatch?.type ?? 'tags';
+    const requestedLabel =
+      requestedFacet === 'genres' ? 'genres'
+      : requestedFacet === 'categories' ? 'categories'
+      : 'tags';
+    const subject =
+      response.facets?.canonicalMatch?.name
+      ?? response.interpretedFilters.facetQuery
+      ?? response.interpretedFilters.query
+      ?? 'that concept';
+    const rows = facetEntries.slice(0, 12).map((entry) => [entry.name, entry.type]);
+    const intro = response.facets?.canonicalMatch
+      ? `Here are the ${requestedLabel} most commonly paired with **${subject}**.`
+      : `Here are the closest matching ${requestedLabel} for **${subject}**.`;
+    return [
+      intro,
+      '',
+      buildMarkdownTable(['Name', 'Kind'], rows),
+    ].join('\n');
+  }
+
   const showPrice =
     response.interpretedFilters.minPriceCents != null
     || response.interpretedFilters.maxPriceCents != null
@@ -507,7 +686,7 @@ function renderCatalogSearch(response: TigerPrimaryCatalogResponse): string {
   const showDiscount =
     response.interpretedFilters.onSale === true
     || response.interpretedFilters.minDiscountPercent != null;
-  const columns = ['Game', 'Review Score', 'Total Reviews'];
+  const columns = ['Game', 'Review %', 'Total Reviews'];
   if (showPrice) {
     columns.push('Price');
   }
@@ -521,7 +700,7 @@ function renderCatalogSearch(response: TigerPrimaryCatalogResponse): string {
     .map((item) => {
       const row = [
         formatGameLink(item.name, item.appid),
-        item.reviewScore == null ? 'n/a' : `${formatNumber(item.reviewScore)}/10`,
+        formatReviewPercentage(item.reviewScore),
         formatNumber(item.totalReviews),
       ];
 
@@ -544,6 +723,82 @@ function renderCatalogSearch(response: TigerPrimaryCatalogResponse): string {
   ].join('\n');
 }
 
+function describeRelatedScope(request: TigerPrimaryRelatedEntitiesRequest | null | undefined): string[] {
+  if (!request?.filters) {
+    return [];
+  }
+
+  const scope: string[] = [];
+  if (request.filters.steamDeck?.length) {
+    scope.push(`Steam Deck ${joinHumanList(request.filters.steamDeck)}`);
+  }
+  if (typeof request.filters.minReviewScore === 'number') {
+    scope.push(`review score >= ${request.filters.minReviewScore}%`);
+  }
+  if (request.filters.reviewComparison === 'better_only') {
+    scope.push('better review score than the source title');
+  }
+
+  return scope;
+}
+
+function renderRelatedEntities(
+  response: TigerPrimaryRelatedEntitiesResponse,
+  request?: TigerPrimaryRelatedEntitiesRequest | null
+): string {
+  const sourceName = response.source.displayName;
+  const relationLabel = response.relationKind === 'dlc' ? 'DLC' : 'same-franchise games';
+  const appliedScope = describeRelatedScope(request);
+  const scopeSuffix = appliedScope.length > 0 ? ` after filtering to ${joinHumanList(appliedScope)}` : '';
+  const baselineFallbackNote =
+    response.provenance?.source === 'supabase-postgres'
+      ? ' I used the source baseline relation graph because Tiger does not yet carry the complete linked rows for this title.'
+      : '';
+  const matchModeNote =
+    response.matchMode === 'title_family'
+      ? ' I used title-family matching because exact franchise links are not fully backfilled in this data slice yet.'
+      : response.matchMode === 'relation_ids_only'
+        ? ' Tiger found structured relation links, but the current app snapshot is missing the linked titles.'
+      : response.matchMode === 'parent_appid'
+        ? ' This is based on current parent/child app links in the catalog.'
+        : '';
+  if (response.items.length === 0 && (response.unresolvedCount ?? 0) > 0) {
+    const linkedAppids = (response.unresolvedAppids ?? []).slice(0, 8).map((appid) => String(appid));
+    const linkedAppidNote = linkedAppids.length > 0 ? ` Linked appids: ${linkedAppids.join(', ')}.` : '';
+
+    return `Tiger found **${formatNumber(response.unresolvedCount ?? 0)}** ${relationLabel} link${(response.unresolvedCount ?? 0) === 1 ? '' : 's'} for **${sourceName}**, but the current app snapshot is missing those linked titles.${matchModeNote}${baselineFallbackNote}${linkedAppidNote}`;
+  }
+
+  const intro = response.relationKind === 'dlc'
+    ? `Here is the current **${relationLabel}** set for **${sourceName}**${scopeSuffix}.${matchModeNote}${baselineFallbackNote}`
+    : `Here are the current **${relationLabel}** for **${sourceName}**${scopeSuffix}.${matchModeNote}${baselineFallbackNote}`;
+  const singleItem = response.items[0] ?? null;
+  const franchiseLabel =
+    response.relationKind === 'franchise_games' && response.source.franchiseNames?.length
+      ? ` in the **${joinHumanList(response.source.franchiseNames.slice(0, 2))}** franchise`
+      : '';
+  const singleItemSupportNote =
+    response.items.length === 1 && singleItem
+      ? response.relationKind === 'franchise_games'
+        ? `**${singleItem.name}** is the only current same-franchise title${franchiseLabel}${scopeSuffix}.`
+        : `**${singleItem.name}** is the only current DLC entry${scopeSuffix}.`
+      : null;
+  const rows = response.items.slice(0, 12).map((item) => [
+    formatGameLink(item.name, item.appid),
+    item.releaseYear == null ? 'n/a' : String(item.releaseYear),
+    formatReviewPercentage(item.reviewScore),
+    formatNumber(item.totalReviews),
+    item.steamDeckCategory ?? 'n/a',
+  ]);
+
+  return [
+    intro,
+    ...(singleItemSupportNote ? ['', singleItemSupportNote] : []),
+    '',
+    buildMarkdownTable(['Game', 'Year', 'Review %', 'Total Reviews', 'Steam Deck'], rows),
+  ].join('\n');
+}
+
 function metricLabel(metric: TigerPrimaryRankEntitiesResponse['metric']): string {
   switch (metric) {
     case 'ccu_peak':
@@ -553,7 +808,7 @@ function metricLabel(metric: TigerPrimaryRankEntitiesResponse['metric']): string
     case 'owners_midpoint':
       return 'Owners';
     case 'review_score':
-      return 'Review Score';
+      return 'Review %';
     case 'total_reviews':
       return 'Total Reviews';
     default:
@@ -562,17 +817,97 @@ function metricLabel(metric: TigerPrimaryRankEntitiesResponse['metric']): string
 }
 
 function formatMetricValue(
+  entityKind: TigerPrimaryRankEntitiesResponse['entityKind'],
   metric: TigerPrimaryRankEntitiesResponse['metric'],
   value: number | null
 ): string {
   if (metric === 'review_score') {
-    return value == null ? 'n/a' : `${formatNumber(value)}/10`;
+    return formatReviewPercentage(value);
   }
 
   return formatNumber(value);
 }
 
-function renderRankEntities(response: TigerPrimaryRankEntitiesResponse): string {
+function describeReleaseWindow(request: TigerPrimaryRankRequest | null | undefined): string | null {
+  if (!request) {
+    return null;
+  }
+
+  if (typeof request.recentReleaseDays === 'number' && request.recentReleaseDays > 0) {
+    return `with at least one release from ${formatDateOffsetDays(request.recentReleaseDays)} through ${formatDateOffsetDays(0)}`;
+  }
+
+  if (typeof request.releaseDays === 'number' && request.releaseDays > 0) {
+    return `released from ${formatDateOffsetDays(request.releaseDays)} through ${formatDateOffsetDays(0)}`;
+  }
+
+  const releaseYear = request.catalogFilters?.releaseYear ?? null;
+  if (releaseYear?.gte != null && releaseYear?.lte != null && releaseYear.gte === releaseYear.lte) {
+    return `released in ${releaseYear.gte}`;
+  }
+
+  if (releaseYear?.gte != null && releaseYear?.lte != null) {
+    return `released from ${releaseYear.gte} through ${releaseYear.lte}`;
+  }
+
+  if (releaseYear?.gte != null) {
+    return `released since ${releaseYear.gte}`;
+  }
+
+  if (releaseYear?.lte != null) {
+    return `released through ${releaseYear.lte}`;
+  }
+
+  return null;
+}
+
+function describeRankingScope(request: TigerPrimaryRankRequest | null | undefined): string[] {
+  if (!request) {
+    return [];
+  }
+
+  const scope: string[] = [];
+  const aggregate = request.aggregateFilters ?? null;
+  const catalog = request.catalogFilters ?? null;
+
+  if (typeof aggregate?.minGameCount === 'number') {
+    scope.push(`at least ${formatNumber(aggregate.minGameCount)} games`);
+  }
+
+  if (typeof aggregate?.minAverageReviewScore === 'number') {
+    scope.push(`average review >= ${aggregate.minAverageReviewScore}%`);
+  }
+
+  if (typeof aggregate?.minMinimumReviewScore === 'number') {
+    scope.push(`every title >= ${aggregate.minMinimumReviewScore}% reviews`);
+  }
+
+  const releaseWindow = describeReleaseWindow(request);
+  if (releaseWindow) {
+    scope.push(releaseWindow);
+  }
+
+  if (catalog?.platforms?.length) {
+    scope.push(`${catalog.platforms.join('/')} only`);
+  }
+
+  if (catalog?.tags?.length) {
+    scope.push(`tagged ${joinHumanList(catalog.tags.slice(0, 3))}`);
+  }
+
+  if (catalog?.isFree === true) {
+    scope.push('free-to-play only');
+  } else if (catalog?.isFree === false) {
+    scope.push('premium only');
+  }
+
+  return scope;
+}
+
+function renderRankEntities(
+  response: TigerPrimaryRankEntitiesResponse,
+  request?: TigerPrimaryRankRequest | null
+): string {
   const nameColumn = response.entityKind === 'game' ? 'Game' : 'Entity';
   const secondaryColumn = response.entityKind === 'game'
     ? 'Release Year'
@@ -592,14 +927,34 @@ function renderRankEntities(response: TigerPrimaryRankEntitiesResponse): string 
       item.entityKind === 'game'
         ? formatGameLink(item.displayName, Number(item.platformEntityId))
         : item.displayName,
-      formatMetricValue(response.metric, item.metricValue),
+      formatMetricValue(response.entityKind, response.metric, item.metricValue),
       secondaryValue,
     ];
   });
   const leader = response.items[0];
-  const intro = leader
-    ? `**${leader.displayName}** currently leads this ranking by **${metricLabel(response.metric)}**.`
-    : `Here are the top ${response.entityKind === 'game' ? 'games' : `${response.entityKind}s`} by **${metricLabel(response.metric)}**.`;
+  const scope = describeRankingScope(request);
+  const requestedScope = request?.fallbackMode === 'closest_match'
+    ? describeRankingScope({
+        ...request,
+        aggregateFilters: request.originalAggregateFilters ?? request.aggregateFilters ?? null,
+      })
+    : scope;
+  const scopeSuffix = scope.length > 0 ? ` among ${joinHumanList(scope)}` : '';
+  const intro = request?.fallbackMode === 'closest_match'
+    ? `No rows met every original threshold, so here are the closest ${response.entityKind === 'game' ? 'games' : `${response.entityKind}s`} by **${metricLabel(response.metric)}**${scopeSuffix}.`
+    : leader
+      ? `**${leader.displayName}** currently leads this ranking by **${metricLabel(response.metric)}**${scopeSuffix}.`
+      : `Here are the top ${response.entityKind === 'game' ? 'games' : `${response.entityKind}s`} by **${metricLabel(response.metric)}**${scopeSuffix}.`;
+  const scopeNotes = request?.fallbackMode === 'closest_match'
+    ? [
+        requestedScope.length > 0 ? `Original thresholds: ${requestedScope.join('; ')}.` : null,
+        scope.length > 0 ? `Closest-match view: ${scope.join('; ')}.` : null,
+      ].filter((value): value is string => Boolean(value))
+    : (
+      scope.length > 0
+        ? [`Active filters: ${scope.join('; ')}.`]
+        : []
+    );
 
   return [
     intro,
@@ -608,6 +963,7 @@ function renderRankEntities(response: TigerPrimaryRankEntitiesResponse): string 
       ['Rank', nameColumn, metricLabel(response.metric), secondaryColumn],
       rows
     ),
+    ...(scopeNotes.length > 0 ? ['', ...scopeNotes] : []),
   ].join('\n');
 }
 
@@ -623,7 +979,9 @@ function renderCompareMetricValue(
     case 'owners_midpoint':
       return formatNumber(item.metrics.ownersMidpoint);
     case 'review_score':
-      return item.metrics.reviewScore == null ? 'n/a' : `${formatNumber(item.metrics.reviewScore)}/10`;
+      return item.metrics.reviewScore == null
+        ? 'n/a'
+        : formatReviewPercentage(item.metrics.reviewScore);
     case 'total_reviews':
       return formatNumber(item.metrics.totalReviews);
     default:
@@ -632,11 +990,12 @@ function renderCompareMetricValue(
 }
 
 function renderCompareScalarValue(
+  entityKind: TigerPrimaryCompareEntitiesResponse['entityKind'],
   metric: TigerPrimaryCompareEntitiesResponse['metrics'][number],
   value: number | null
 ): string {
   if (metric === 'review_score') {
-    return value == null ? 'n/a' : `${formatNumber(value)}/10`;
+    return formatReviewPercentage(value);
   }
 
   return formatNumber(value);
@@ -663,7 +1022,7 @@ function renderCompareEntities(response: TigerPrimaryCompareEntitiesResponse): s
   ]);
   const highlights = response.highlights
     .slice(0, 3)
-    .map((highlight) => `- **${metricLabel(highlight.metric)}** leader: ${highlight.displayName} (${renderCompareScalarValue(highlight.metric, highlight.value)})`);
+    .map((highlight) => `- **${metricLabel(highlight.metric)}** leader: ${highlight.displayName} (${renderCompareScalarValue(response.entityKind, highlight.metric, highlight.value)})`);
   const comparisonSummary = response.highlights.slice(0, 2).map((highlight) => {
     return `${highlight.displayName} leads on ${metricLabel(highlight.metric).toLowerCase()}`;
   });
@@ -696,7 +1055,7 @@ function historyMetricLabel(metric: TigerPrimaryTraceMetricHistorySeries['metric
     case 'price_cents':
       return 'Price';
     case 'review_score':
-      return 'Review Score';
+      return 'Review %';
     case 'total_reviews':
       return 'Total Reviews';
     default:
@@ -717,7 +1076,7 @@ function formatHistoryValue(
   }
 
   if (metric === 'review_score') {
-    return value == null ? 'n/a' : `${formatNumber(value)}/10`;
+    return formatReviewPercentage(value);
   }
 
   return formatNumber(value);
@@ -990,6 +1349,9 @@ function renderMomentumDiscovery(params: {
   const leaderReason = leader ? formatMomentumSupportReason(leader) : null;
   const windowLabel = buildMomentumWindowLabel(response);
   const appliedScope = describeMomentumAppliedFilters(response.filtersApplied);
+  const similarityScope = response.reference?.name
+    ? ` among games similar to **${response.reference.name}**`
+    : '';
   const scopeSuffix = appliedScope.length > 0 ? ` within the **${joinHumanList(appliedScope)}** set` : '';
   const tableMode = getMomentumTableMode(response, params.momentumPromptFamily);
   const sentimentDown = isReviewSentimentDown(response, params.momentumPromptFamily);
@@ -1001,21 +1363,23 @@ function renderMomentumDiscovery(params: {
   const sparseBroadeningNote = params.scopeAdjustedForSparseResults
     ? 'I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.'
     : null;
+  const itemsForSignalCheck = response.items as Array<Record<string, unknown>>;
+  const hasPeakCcuSignal = hasPositiveMetric(itemsForSignalCheck, 'ccuPeak');
   const intro = leader
     ? response.timeframe === 'current'
-      ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
+      ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${similarityScope}${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
+        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
         : tableMode === 'review_activity'
-          ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
-          : `From **${windowLabel}**, **${leader.name}** leads this set${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
+          ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          : `From **${windowLabel}**, **${leader.name}** leads this set${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
     : response.timeframe === 'current'
-      ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix}.`
+      ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${similarityScope}${scopeSuffix}.`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
+        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
         : tableMode === 'review_activity'
-          ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
-          : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${scopeSuffix} for **${response.timeframeLabel}**.`;
+          ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${similarityScope}${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${similarityScope}${scopeSuffix} for **${response.timeframeLabel}**.`;
   const reviewDeltaColumn = response.timeframe === '30d' ? 'Reviews Added (30d)' : 'Reviews Added (7d)';
   const rows = response.items.slice(0, 10).map((item) => {
     if (tableMode === 'current_players') {
@@ -1032,7 +1396,7 @@ function renderMomentumDiscovery(params: {
       return [
         formatGameLink(item.name, item.appid),
         `${formatSignedNumber(item.sentimentDelta)} pts`,
-        formatPercent(item.reviewPercentage),
+        formatReviewPercentage(item.reviewPercentage),
         formatNumber(response.timeframe === '30d' ? item.reviewsAdded30d : item.reviewsAdded7d),
         formatNumber(item.totalReviews),
         (Array.isArray(item.platformSupport) ? item.platformSupport : []).join(', ') || 'n/a',
@@ -1040,24 +1404,34 @@ function renderMomentumDiscovery(params: {
     }
 
     if (tableMode === 'review_activity') {
-      return [
+      const row = [
         formatGameLink(item.name, item.appid),
         formatNumber(response.timeframe === '30d' ? item.reviewsAdded30d : item.reviewsAdded7d),
-        formatPercent(item.reviewPercentage),
+        formatReviewPercentage(item.reviewPercentage),
         formatNumber(item.totalReviews),
-        formatNumber(item.ccuPeak),
         (Array.isArray(item.platformSupport) ? item.platformSupport : []).join(', ') || 'n/a',
       ];
+
+      if (hasPeakCcuSignal) {
+        row.splice(4, 0, formatNumber(item.ccuPeak));
+      }
+
+      return row;
     }
 
-    return [
+    const row = [
       formatGameLink(item.name, item.appid),
       formatMomentumSupportLevel(item.supportLevel),
       formatMomentumTrendDirection(item.trendDirection),
-      formatNumber(item.ccuPeak),
       formatNumber(response.timeframe === '30d' ? item.reviewsAdded30d : item.reviewsAdded7d),
       (Array.isArray(item.platformSupport) ? item.platformSupport : []).join(', ') || 'n/a',
     ];
+
+    if (hasPeakCcuSignal) {
+      row.splice(3, 0, formatNumber(item.ccuPeak));
+    }
+
+    return row;
   });
 
   const headers =
@@ -1066,8 +1440,22 @@ function renderMomentumDiscovery(params: {
       : tableMode === 'review_sentiment'
         ? ['Game', 'Sentiment Delta', 'Review %', reviewDeltaColumn, 'Total Reviews', 'Platforms']
         : tableMode === 'review_activity'
-        ? ['Game', reviewDeltaColumn, 'Review %', 'Total Reviews', 'Peak CCU', 'Platforms']
-        : ['Game', 'Support', 'Trend', 'Peak CCU', reviewDeltaColumn, 'Platforms'];
+        ? [
+            'Game',
+            reviewDeltaColumn,
+            'Review %',
+            'Total Reviews',
+            ...(hasPeakCcuSignal ? ['Peak CCU'] : []),
+            'Platforms',
+          ]
+        : [
+            'Game',
+            'Support',
+            'Trend',
+            ...(hasPeakCcuSignal ? ['Peak CCU'] : []),
+            reviewDeltaColumn,
+            'Platforms',
+          ];
 
   return [
     intro,
@@ -1097,7 +1485,7 @@ function renderUserContext(response: TigerPrimaryUserContextResponse): string {
       pin.displayName,
       pin.entityKind,
       formatNumber(pin.metrics.gameCount),
-      formatPercent(pin.metrics.reviewScore),
+      formatReviewPercentage(pin.metrics.reviewScore),
       formatNumber(pin.metrics.totalReviews),
       formatNumber(pin.metrics.ccuPeak),
     ]);
@@ -1170,7 +1558,26 @@ function renderSearchDocuments(response: TigerPrimarySearchDocumentsResponse): s
 function renderChangeDiscovery(
   response: TigerPrimaryDiscoverChangePatternsResponse | TigerPrimarySearchChangeActivityResponse
 ): string {
+  const isProspectRanking = 'kind' in response && response.kind === 'prospect_ranking';
   const isPatternResponse = response.items.some((item) => 'reasons' in item);
+
+  if (isProspectRanking) {
+    const prospectResponse = response as TigerPrimaryDiscoverChangePatternsResponse;
+    const rows = prospectResponse.items.slice(0, 8).map((item) => [
+      formatGameLink(item.name, item.appid),
+      formatNumber(item.needScore ?? null),
+      formatNumber(item.timingScore ?? null),
+      formatNumber(item.evidenceQualityScore ?? null),
+      formatDate(item.latestSignalAt ?? item.occurredAt),
+      item.evidenceSummary?.[0] ?? item.reasons[0] ?? 'Composite prospect evidence',
+    ]);
+
+    return [
+      'Here are the strongest current agency-style prospects by need, timing, and evidence quality.',
+      '',
+      buildMarkdownTable(['Game', 'Need', 'Timing', 'Evidence', 'Latest Signal', 'Why It Stands Out'], rows),
+    ].join('\n');
+  }
 
   if (isPatternResponse) {
     const patternResponse = response as TigerPrimaryDiscoverChangePatternsResponse;
@@ -1269,7 +1676,7 @@ function renderEntityOverview(response: TigerPrimaryEntityOverviewResponse): str
       `- **Release date**: ${formatDate(details.releaseDate)}`,
       `- **Release status**: ${formatReleaseStatus(details)}`,
       `- **Price**: ${details.isFree ? 'Free' : formatCurrencyCents(details.priceCents)}`,
-      `- **Review score**: ${formatPercent(entity.metrics.reviewScore)}`,
+      `- **Review %**: ${formatReviewPercentage(entity.metrics.reviewScore)}`,
       `- **Total reviews**: ${formatNumber(entity.metrics.totalReviews)}`,
       `- **Owners midpoint**: ${formatNumber(entity.metrics.ownersMidpoint)}`,
       `- **CCU peak**: ${formatNumber(entity.metrics.ccuPeak)}`,
@@ -1289,7 +1696,7 @@ function renderEntityOverview(response: TigerPrimaryEntityOverviewResponse): str
   const games = response.games.slice(0, 5).map((game) => [
     formatGameLink(game.name, game.appid),
     game.releaseYear == null ? 'n/a' : String(game.releaseYear),
-    game.reviewScore == null ? 'n/a' : formatPercent(game.reviewScore),
+    formatReviewPercentage(game.reviewScore),
     game.totalReviews == null ? 'n/a' : formatNumber(game.totalReviews),
     game.ownersMidpoint == null ? 'n/a' : formatNumber(game.ownersMidpoint),
   ]);
@@ -1298,7 +1705,7 @@ function renderEntityOverview(response: TigerPrimaryEntityOverviewResponse): str
     intro,
     '',
     `- **Game count**: ${formatNumber(entity.metrics.gameCount)}`,
-    `- **Portfolio review score**: ${formatPercent(entity.metrics.reviewScore)}`,
+    `- **Portfolio review %**: ${formatReviewPercentage(entity.metrics.reviewScore)}`,
     `- **Portfolio total reviews**: ${formatNumber(entity.metrics.totalReviews)}`,
     `- **Portfolio owners midpoint**: ${formatNumber(entity.metrics.ownersMidpoint)}`,
     `- **Portfolio CCU peak**: ${formatNumber(entity.metrics.ccuPeak)}`,
@@ -1318,29 +1725,87 @@ function renderEntityOverview(response: TigerPrimaryEntityOverviewResponse): str
   return sections.join('\n');
 }
 
-function renderSemanticSearch(response: TigerPrimarySemanticSearchResponse): string {
-  const rows = (response.results ?? []).slice(0, 10).map((item) => [
+function describeSemanticScope(request: TigerPrimarySemanticSearchRequest | null | undefined): string[] {
+  if (!request?.filters) {
+    return [];
+  }
+
+  const scope: string[] = [];
+
+  if (request.filters.review_comparison === 'better_only') {
+    scope.push('a higher review % than the reference');
+  } else if (request.filters.review_comparison === 'similar_or_better') {
+    scope.push('a review % at least as strong as the reference');
+  }
+
+  if (request.filters.steam_deck?.length) {
+    scope.push(`Steam Deck ${joinHumanList(request.filters.steam_deck)}`);
+  }
+
+  if (typeof request.filters.max_price_cents === 'number') {
+    scope.push(`priced under ${formatCurrencyCents(request.filters.max_price_cents)}`);
+  }
+
+  if (request.filters.tags?.length) {
+    scope.push(`tagged ${joinHumanList(request.filters.tags.slice(0, 3))}`);
+  }
+
+  return scope;
+}
+
+function renderSemanticSearch(
+  response: TigerPrimarySemanticSearchResponse,
+  request?: TigerPrimarySemanticSearchRequest | null
+): string {
+  const buildRows = (items: TigerPrimarySemanticSearchResult[]) => items.map((item) => [
     item.type === 'game' || !response.entityType
       ? formatGameLink(item.name, item.id)
       : item.name,
-    formatNumber(item.score),
-    item.review_percentage == null ? 'n/a' : formatPercent(item.review_percentage),
+    formatMatchScore(item.score),
+    formatReviewPercentage(item.review_percentage),
     formatNumber(item.total_reviews),
     item.price_cents == null ? 'n/a' : formatCurrencyCents(item.price_cents),
     item.matchReasons?.join(', ') || 'semantic match',
   ]);
+  const strictRows = buildRows((response.results ?? []).slice(0, 10));
+  const closeAlternativeRows = buildRows((response.close_alternatives ?? []).slice(0, 6));
 
-  const intro = response.reference
-    ? `Here are the closest matches for **${response.reference.name}**.`
+  const scope = describeSemanticScope(request);
+  const scopeSuffix = scope.length > 0 ? ` that keep ${joinHumanList(scope)}` : '';
+  const strictIntro = response.reference
+    ? `Here are the strongest matches for **${response.reference.name}**${scopeSuffix}.`
     : response.query_description
-      ? `Here are the closest matches for **${response.query_description}**.`
-      : 'Here are the closest matches.';
+      ? `Here are the strongest matching games for **${response.query_description}**${scopeSuffix}.`
+      : 'Here are the strongest matches.';
+  const fallbackIntro = response.reference
+    ? `I could not find exact matches for **${response.reference.name}**${scopeSuffix}. Here are the closest alternatives that still match the core similarity profile.`
+    : response.query_description
+      ? `I could not find exact matches for **${response.query_description}**${scopeSuffix}. Here are the closest alternatives that still match the core query.`
+      : 'I could not find exact matches, but here are the closest alternatives.';
+  const headers = ['Result', 'Match Score', 'Review %', 'Total Reviews', 'Price', 'Why It Matched'];
+  const sections: string[] = [strictRows.length > 0 ? strictIntro : fallbackIntro];
 
-  return [
-    intro,
-    '',
-    buildMarkdownTable(['Result', 'Score', 'Review %', 'Total Reviews', 'Price', 'Why It Matched'], rows),
-  ].join('\n');
+  if (strictRows.length > 0) {
+    sections.push('');
+    if (closeAlternativeRows.length > 0) {
+      sections.push('Strict matches');
+      sections.push('');
+    }
+    sections.push(buildMarkdownTable(headers, strictRows));
+  }
+
+  if (closeAlternativeRows.length > 0) {
+    sections.push('');
+    sections.push('Close alternatives');
+    if (response.close_alternatives_reason?.trim()) {
+      sections.push('');
+      sections.push(response.close_alternatives_reason.trim());
+    }
+    sections.push('');
+    sections.push(buildMarkdownTable(headers, closeAlternativeRows));
+  }
+
+  return sections.join('\n');
 }
 
 function renderExplainChangesEvent(event: TigerPrimaryExplainChangesEvent): string {
@@ -1401,6 +1866,7 @@ function renderExplainChanges(response: TigerPrimaryExplainChangesResponse): str
 export function renderTigerPrimaryResult(params: {
   matchedIntent: TigerPrimaryRenderableIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
+  request?: unknown;
   response: unknown;
   scopeAdjustedForSparseResults?: boolean;
 }): string {
@@ -1419,7 +1885,10 @@ export function renderTigerPrimaryResult(params: {
   }
 
   if (params.matchedIntent === 'entity_ranking') {
-    return renderRankEntities(params.response as TigerPrimaryRankEntitiesResponse);
+    return renderRankEntities(
+      params.response as TigerPrimaryRankEntitiesResponse,
+      (params.request as TigerPrimaryRankRequest | null | undefined) ?? null
+    );
   }
 
   if (params.matchedIntent === 'entity_compare') {
@@ -1442,8 +1911,18 @@ export function renderTigerPrimaryResult(params: {
     return renderSearchDocuments(params.response as TigerPrimarySearchDocumentsResponse);
   }
 
+  if (params.matchedIntent === 'relation_lookup') {
+    return renderRelatedEntities(
+      params.response as TigerPrimaryRelatedEntitiesResponse,
+      (params.request as TigerPrimaryRelatedEntitiesRequest | null | undefined) ?? null
+    );
+  }
+
   if (params.matchedIntent === 'semantic_search') {
-    return renderSemanticSearch(params.response as TigerPrimarySemanticSearchResponse);
+    return renderSemanticSearch(
+      params.response as TigerPrimarySemanticSearchResponse,
+      (params.request as TigerPrimarySemanticSearchRequest | null | undefined) ?? null
+    );
   }
 
   if (params.matchedIntent === 'user_context') {

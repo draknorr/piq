@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>News Topic Trend Report</title>
+    <style>
+      :root {
+        --paper: #faf6ef;
+        --page: #f2eadf;
+        --ink: #24201b;
+        --ink-soft: #61584f;
+        --rule: #ddd1bf;
+        --panel: rgba(255,255,255,0.72);
+        --accent: #9e5a4d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "DM Sans", "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+      main {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 32px 24px 48px;
+      }
+      h1, h2 { margin: 0; }
+      h1 {
+        font-family: "Iowan Old Style", Georgia, serif;
+        font-size: 42px;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        margin-bottom: 10px;
+      }
+      h2 {
+        font-family: "Iowan Old Style", Georgia, serif;
+        font-size: 24px;
+        line-height: 1.1;
+        margin-bottom: 12px;
+      }
+      p, li { color: var(--ink-soft); line-height: 1.55; }
+      .hero { display: grid; gap: 12px; margin-bottom: 24px; }
+      .eyebrow {
+        color: var(--ink-soft);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 11px;
+      }
+      .window-note {
+        margin: 4px 0 0;
+        padding: 14px 16px;
+        border: 1px solid var(--rule);
+        background: rgba(255,255,255,0.54);
+      }
+      .chart-card, .table-card {
+        background: var(--panel);
+        border: 1px solid var(--rule);
+        padding: 16px 18px;
+        backdrop-filter: blur(6px);
+      }
+      .scope-block {
+        display: grid;
+        gap: 18px;
+        margin-bottom: 28px;
+      }
+      .chart-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 12px;
+      }
+      .chart-head p {
+        margin: 6px 0 0;
+        max-width: 760px;
+      }
+      .chart-head-note {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        color: var(--ink-soft);
+        font-size: 12px;
+      }
+      .scope-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .tables {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 18px;
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px 10px;
+        border-top: 1px solid var(--rule);
+        vertical-align: top;
+      }
+      th {
+        color: var(--ink-soft);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .report-table {
+        table-layout: fixed;
+      }
+      .report-table th:nth-child(1),
+      .report-table td:nth-child(1) { width: 18%; }
+      .report-table th:nth-child(2),
+      .report-table td:nth-child(2) { width: 8%; }
+      .report-table th:nth-child(3),
+      .report-table td:nth-child(3),
+      .report-table th:nth-child(4),
+      .report-table td:nth-child(4) { width: 8%; }
+      .report-table th:nth-child(5),
+      .report-table td:nth-child(5) { width: 10%; }
+      .report-table th:nth-child(6),
+      .report-table td:nth-child(6) { width: 16%; }
+      .report-table th:nth-child(7),
+      .report-table td:nth-child(7) { width: 32%; }
+      .report-table--phrases th:nth-child(2),
+      .report-table--phrases td:nth-child(2) { width: 14%; }
+      .report-table--phrases th:nth-child(6),
+      .report-table--phrases td:nth-child(6) { width: 44%; }
+      .col-number,
+      .col-direction {
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .col-topic,
+      .col-phrase,
+      .col-phrases,
+      .col-examples {
+        overflow-wrap: anywhere;
+      }
+      .phrase-item,
+      .example-item {
+        line-height: 1.4;
+      }
+      .phrase-item + .phrase-item,
+      .example-item + .example-item {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(221, 209, 191, 0.55);
+      }
+      .heatmap-card { overflow: hidden; }
+      .heatmap-wrap { overflow-x: auto; }
+      .heatmap-table {
+        min-width: 980px;
+        font-size: 11px;
+      }
+      .heatmap-table th,
+      .heatmap-table td {
+        padding: 6px 8px;
+        white-space: nowrap;
+      }
+      .heatmap-table thead th {
+        position: sticky;
+        top: 0;
+        background: #fbf7f1;
+        z-index: 2;
+      }
+      .heat-label {
+        font-weight: 600;
+        min-width: 180px;
+        background: rgba(255,255,255,0.66);
+      }
+      .heat-cell {
+        min-width: 58px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      .heat-summary {
+        font-variant-numeric: tabular-nums;
+      }
+      @media (max-width: 980px) {
+        .tables { grid-template-columns: 1fr; }
+        .scope-header,
+        .chart-head {
+          display: grid;
+        }
+        .report-table {
+          min-width: 980px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="eyebrow">One-off news trend report</div>
+        <h1>News Topic Trend Report</h1>
+        <p>
+          This report looks at the game-news items we have captured so far and answers a simple question:
+          what topics are showing up more often, what topics are fading, and what language is driving that shift?
+        </p>
+        <p>
+          Capture window UTC: <strong>2026-03-14 06:48:45.792+00</strong> to
+          <strong>2026-03-26 20:02:43.306+00</strong>.
+          The charts use <strong>America/Los_Angeles</strong> days, covering
+          <strong>2026-03-13</strong> to
+          <strong>2026-03-26</strong>.
+        </p>
+        <p>
+          Important: this report uses when an item first entered our dataset, not the original article publish date.
+          That keeps the trend window aligned with the data we actually have.
+        </p>
+        <p class="window-note">
+          <strong>Capture window:</strong> 2026-03-14 06:48:45.792+00 to 2026-03-26 20:02:43.306+00 UTC.
+          In America/Los_Angeles, that covers 2026-03-13 to 2026-03-26.
+        </p>
+      </section>
+
+      
+          <section class="scope-block">
+            <div class="scope-header">
+              <h2>Developer / Publisher Posts</h2>
+              <p>First-party Steam posts published by the game teams themselves.</p>
+            </div>
+            
+    <section class="chart-card chart-card--wide">
+      <div class="chart-head">
+        <div>
+          <h2>Developer / Publisher Posts: What Showed Up More vs Less</h2>
+          <p>Hollow dots show the earlier part of the capture window. Solid dots show the most recent part.</p>
+        </div>
+        <div class="chart-head-note"><span>Earlier: 2026-03-13 to 2026-03-16</span><span>Recent: 2026-03-23 to 2026-03-26</span></div>
+      </div>
+      <svg viewBox="0 0 1040 532" role="img" aria-label="Developer / Publisher Posts: What Showed Up More vs Less">
+        <line x1="240" y1="42" x2="240" y2="504" stroke="#ece0cf" /><text x="240" y="524" text-anchor="middle" font-size="11" fill="#61584f">0.0%</text><line x1="419.5" y1="42" x2="419.5" y2="504" stroke="#ece0cf" /><text x="419.5" y="524" text-anchor="middle" font-size="11" fill="#61584f">13.2%</text><line x1="599" y1="42" x2="599" y2="504" stroke="#ece0cf" /><text x="599" y="524" text-anchor="middle" font-size="11" fill="#61584f">26.4%</text><line x1="778.5" y1="42" x2="778.5" y2="504" stroke="#ece0cf" /><text x="778.5" y="524" text-anchor="middle" font-size="11" fill="#61584f">39.6%</text><line x1="958" y1="42" x2="958" y2="504" stroke="#ece0cf" /><text x="958" y="524" text-anchor="middle" font-size="11" fill="#61584f">52.8%</text>
+        
+        <g>
+          <text x="228" y="68" text-anchor="end" font-size="12" fill="#302923">Launches &amp; Release Timing</text>
+          <line x1="240" y1="64" x2="958" y2="64" stroke="#f4ece0" />
+          <line x1="370.84982928459846" y1="64" x2="403.21557048681734" y2="64" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="370.84982928459846" cy="64" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="403.21557048681734" cy="64" r="5.5" fill="#b35c44" />
+          <text x="968" y="68" font-size="11" fill="#61584f">9.6% to 12.0%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="102" text-anchor="end" font-size="12" fill="#302923">Community / Creator / Social / UGC</text>
+          <line x1="240" y1="98" x2="958" y2="98" stroke="#f4ece0" />
+          <line x1="324.7683787664832" y1="98" x2="333.8562562068147" y2="98" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="324.7683787664832" cy="98" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="333.8562562068147" cy="98" r="5.5" fill="#b35c44" />
+          <text x="968" y="102" font-size="11" fill="#61584f">6.2% to 6.9%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="136" text-anchor="end" font-size="12" fill="#302923">Partnerships / Crossovers / IP Collaborations</text>
+          <line x1="240" y1="132" x2="958" y2="132" stroke="#f4ece0" />
+          <line x1="272.45722308631616" y1="132" x2="277.8095900948751" y2="132" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="272.45722308631616" cy="132" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="277.8095900948751" cy="132" r="5.5" fill="#b35c44" />
+          <text x="968" y="136" font-size="11" fill="#61584f">2.4% to 2.8%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="170" text-anchor="end" font-size="12" fill="#302923">Roadmaps / Devlogs / Feature Previews</text>
+          <line x1="240" y1="166" x2="958" y2="166" stroke="#f4ece0" />
+          <line x1="277.4302727353348" y1="166" x2="282.7340179438765" y2="166" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="277.4302727353348" cy="166" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="282.7340179438765" cy="166" r="5.5" fill="#b35c44" />
+          <text x="968" y="170" font-size="11" fill="#61584f">2.8% to 3.1%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="204" text-anchor="end" font-size="12" fill="#302923">Major Content Updates</text>
+          <line x1="240" y1="200" x2="958" y2="200" stroke="#f4ece0" />
+          <line x1="305.96293463356733" y1="200" x2="309.35931428000265" y2="200" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="305.96293463356733" cy="200" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="309.35931428000265" cy="200" r="5.5" fill="#b35c44" />
+          <text x="968" y="204" font-size="11" fill="#61584f">4.9% to 5.1%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="238" text-anchor="end" font-size="12" fill="#302923">Platform / Account / Crossplay / Technical Changes</text>
+          <line x1="240" y1="234" x2="958" y2="234" stroke="#f4ece0" />
+          <line x1="283.8696755895736" y1="234" x2="286.23954285333514" y2="234" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="283.8696755895736" cy="234" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="286.23954285333514" cy="234" r="5.5" fill="#b35c44" />
+          <text x="968" y="238" font-size="11" fill="#61584f">3.2% to 3.4%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="272" text-anchor="end" font-size="12" fill="#302923">Monetization / Store / Pass / Currency</text>
+          <line x1="240" y1="268" x2="958" y2="268" stroke="#f4ece0" />
+          <line x1="253.558409907974" y1="268" x2="255.90005941075873" y2="268" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="253.558409907974" cy="268" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="255.90005941075873" cy="268" r="5.5" fill="#b35c44" />
+          <text x="968" y="272" font-size="11" fill="#61584f">1.0% to 1.2%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="306" text-anchor="end" font-size="12" fill="#302923">Servers / Maintenance / Downtime / Apologies</text>
+          <line x1="240" y1="302" x2="958" y2="302" stroke="#f4ece0" />
+          <line x1="380.75460130023396" y1="302" x2="383.05880225743033" y2="302" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="380.75460130023396" cy="302" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="383.05880225743033" cy="302" r="5.5" fill="#b35c44" />
+          <text x="968" y="306" font-size="11" fill="#61584f">10.4% to 10.5%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="340" text-anchor="end" font-size="12" fill="#302923">DLC / Expansions / Episodes</text>
+          <line x1="240" y1="336" x2="958" y2="336" stroke="#f4ece0" />
+          <line x1="292.74279618525264" y1="336" x2="291.8734221721079" y2="336" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="292.74279618525264" cy="336" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="291.8734221721079" cy="336" r="5.5" fill="#b35c44" />
+          <text x="968" y="340" font-size="11" fill="#61584f">3.9% to 3.8%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="374" text-anchor="end" font-size="12" fill="#302923">Events / Seasonal / Anniversary</text>
+          <line x1="240" y1="370" x2="958" y2="370" stroke="#f4ece0" />
+          <line x1="341.4676621369953" y1="370" x2="336.02634305552715" y2="370" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="341.4676621369953" cy="370" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="336.02634305552715" cy="370" r="5.5" fill="#b35c44" />
+          <text x="968" y="374" font-size="11" fill="#61584f">7.5% to 7.1%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="408" text-anchor="end" font-size="12" fill="#302923">Balance / Characters / Items / Meta Changes</text>
+          <line x1="240" y1="404" x2="958" y2="404" stroke="#f4ece0" />
+          <line x1="319.6897149513265" y1="404" x2="313.24043114404617" y2="404" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="319.6897149513265" cy="404" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="313.24043114404617" cy="404" r="5.5" fill="#b35c44" />
+          <text x="968" y="408" font-size="11" fill="#61584f">5.9% to 5.4%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="442" text-anchor="end" font-size="12" fill="#302923">Discounts / Sales / Promotions</text>
+          <line x1="240" y1="438" x2="958" y2="438" stroke="#f4ece0" />
+          <line x1="380.997973074378" y1="438" x2="371.83277605928305" y2="438" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="380.997973074378" cy="438" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="371.83277605928305" cy="438" r="5.5" fill="#b35c44" />
+          <text x="968" y="442" font-size="11" fill="#61584f">10.4% to 9.7%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="476" text-anchor="end" font-size="12" fill="#302923">Patch / Hotfix / Bug Fixes</text>
+          <line x1="240" y1="472" x2="958" y2="472" stroke="#f4ece0" />
+          <line x1="838.3333333333334" y1="472" x2="827.3006196525137" y2="472" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="838.3333333333334" cy="472" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="827.3006196525137" cy="472" r="5.5" fill="#b35c44" />
+          <text x="968" y="476" font-size="11" fill="#61584f">44.0% to 43.2%</text>
+        </g>
+      
+      </svg>
+    </section>
+  
+            
+    <section class="chart-card heatmap-card">
+      <div class="chart-head">
+        <div>
+          <h2>Developer / Publisher Posts: Topic Share Over Time</h2>
+          <p>Each cell shows how much of that day or week was about that topic. One article can fit more than one topic.</p>
+        </div>
+      </div>
+      <div class="heatmap-wrap">
+        <table class="heatmap-table">
+          <thead>
+            <tr>
+              <th>Theme</th>
+              <th>03-13</th><th>03-14</th><th>03-15</th><th>03-16</th><th>03-17</th><th>03-18</th><th>03-19</th><th>03-20</th><th>03-21</th><th>03-22</th><th>03-23</th><th>03-24</th><th>03-25</th><th>03-26</th>
+              <th>Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+        <tr>
+          <td class="heat-label">Launches &amp; Release Timing</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.22237830319888732)">8.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22935326842837273)">9.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22545201668984702)">8.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2466133518776078)">10.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24082058414464536)">10.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.25134214186369963)">11.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2535883171070932)">11.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.23881084840055633)">10.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.23916550764951322)">10.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22710709318497913)">9.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.26789290681502087)">12.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.25961752433936025)">11.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2654102920723227)">12.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2602086230876217)">11.9%</td>
+          <td class="heat-summary">Up 2.4</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Community / Creator / Social / UGC</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.18052851182197496)">5.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19069541029207232)">6.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1958970792767733)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19424200278164117)">6.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19199582753824757)">6.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19353268428372739)">6.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19010431154381086)">5.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18596662030598055)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19672461752433934)">6.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.21587621696801113)">8.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.223442280945758)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19979833101529904)">6.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20594575799721837)">7.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19660639777468705)">6.5%</td>
+          <td class="heat-summary">Up 0.7</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Partnerships / Crossovers / IP Collaborations</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.15026425591098747)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15085535465924896)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14648122392211405)">2.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1475452016689847)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14801808066759387)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15026425591098747)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1495549374130737)">2.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1429346314325452)">1.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1363143254520167)">1.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14541724617524338)">2.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14671766342141862)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14813630041724618)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15050069541029207)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15558414464534076)">3.0%</td>
+          <td class="heat-summary">Up 0.4</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.1432892906815021)">2.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15014603616133518)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15274687065368567)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1546383866481224)">2.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1586578581363004)">3.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1544019471488178)">2.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14636300417246176)">2.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1425799721835883)">1.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16007649513212796)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1567663421418637)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17189847009735743)">4.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17343532684283727)">4.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17059805285118218)">4.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14766342141863698)">2.3%</td>
+          <td class="heat-summary">Up 0.4</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Major Content Updates</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.19447844228094574)">6.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17981919332406118)">5.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18041029207232268)">5.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17201668984700974)">4.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1752086230876217)">4.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17804589707927676)">4.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18147426981919332)">5.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17769123783031987)">4.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18573018080667592)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20689151599443673)">7.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18986787204450625)">5.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1866759388038943)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17662726008344923)">4.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17863699582753823)">5.0%</td>
+          <td class="heat-summary">Up 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Platform / Account / Crossplay / Technical Changes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.15262865090403338)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16669680111265647)">4.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1605493741307371)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14789986091794158)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14801808066759387)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1547566063977747)">2.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15842141863699583)">3.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15534770514603616)">3.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17059805285118218)">4.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1545201668984701)">2.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1567663421418637)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15593880389429762)">3.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15333796940194716)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1636230876216968)">3.7%</td>
+          <td class="heat-summary">Up 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Monetization / Store / Pass / Currency</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.1269749652294854)">0.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13643254520166898)">1.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12933936022253129)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13016689847009735)">0.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1314673157162726)">1.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13324061196105702)">1.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1288664812239221)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13099443671766342)">0.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12815716272600833)">0.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1289847009735744)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13158553546592489)">1.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13714186369958276)">1.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13454102920723227)">1.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13347705146036162)">1.1%</td>
+          <td class="heat-summary">Up 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.18750347705146037)">5.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2654102920723227)">12.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24708623087621698)">10.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2164673157162726)">8.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2443671766342142)">10.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22415159944367175)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2300625869262865)">9.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.23136300417246175)">9.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24554937413073713)">10.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22261474269819193)">8.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2507510431154381)">11.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2112656467315716)">7.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.25654381084840056)">11.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24519471488178024)">10.6%</td>
+          <td class="heat-summary">Up 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">DLC / Expansions / Episodes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.15960361613351878)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17461752433936023)">4.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16232267037552156)">3.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16161335187760778)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1630319888734353)">3.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15203755215577192)">2.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16043115438108485)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1497913769123783)">2.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15369262865090402)">2.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15073713490959667)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16255910987482614)">3.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14849095966620304)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16669680111265647)">4.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1678789986091794)">4.1%</td>
+          <td class="heat-summary">Down 0.1</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Events / Seasonal / Anniversary</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.18277468706536856)">5.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22379694019471488)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19802503477051459)">6.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20476356050069539)">7.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.21729485396383866)">8.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19471488178025034)">6.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19199582753824757)">6.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17449930458970792)">4.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16421418636995827)">3.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18372044506258692)">5.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17899165507649512)">5.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.21552155771905424)">8.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.21232962447844228)">7.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20346314325452014)">7.1%</td>
+          <td class="heat-summary">Down 0.4</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Balance / Characters / Items / Meta Changes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.2247426981919332)">8.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1932962447844228)">6.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1888038942976356)">5.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18596662030598055)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19211404728789985)">6.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1866759388038943)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18478442280945756)">5.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1954242002781641)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1955424200278164)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20168984700973575)">6.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19022253129346314)">5.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18230180806675939)">5.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19471488178025034)">6.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.179346314325452)">5.0%</td>
+          <td class="heat-summary">Down 0.5</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Discounts / Sales / Promotions</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.24105702364394993)">10.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22249652294853964)">8.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22379694019471488)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2805424200278164)">13.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24034770514603615)">10.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.26576495132127953)">12.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2519332406119611)">11.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.2188317107093185)">8.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16764255910987483)">4.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18738525730180805)">5.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18052851182197496)">5.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1962517385257302)">6.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.21008344923504868)">7.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.25867176634214184)">11.7%</td>
+          <td class="heat-summary">Down 0.7</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Patch / Hotfix / Bug Fixes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.6435952712100139)">44.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6471418636995827)">44.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6882823365785814)">48.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.5842489568845619)">39.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.634019471488178)">43.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6460778859527121)">44.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6672392211404728)">46.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.7106258692628651)">50.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.8)">57.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.7463282336578582)">53.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6933657858136301)">48.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6305910987482615)">43.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.6595549374130737)">45.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.610375521557719)">41.5%</td>
+          <td class="heat-summary">Down 0.8</td>
+        </tr>
+      </tbody>
+        </table>
+      </div>
+    </section>
+  
+            <section class="tables">
+              
+    <section class="table-card">
+      <h2>Developer / Publisher Posts: Topics Showing Up More Often</h2>
+      <div class="table-wrap">
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Direction</th>
+            <th>Common Phrases</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Launches &amp; Release Timing</td>
+          <td class="col-number">147,192</td>
+          <td class="col-number">9.6%</td>
+          <td class="col-number">12.0%</td>
+          <td class="col-direction">Up 2.4</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">playtest</div><div class="phrase-item">demo out</div></td>
+          <td class="col-examples"><div class="example-item">Pierhead Arcade 2: Desktop Colony Coming Soon</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: 👨‍🍳🍔Restaurant Owner🍔👨‍🍳 Launched!</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Builders of Greece Now in Full Release!🏛️⚒️</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Community / Creator / Social / UGC</td>
+          <td class="col-number">90,651</td>
+          <td class="col-number">6.2%</td>
+          <td class="col-number">6.9%</td>
+          <td class="col-direction">Up 0.7</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">playtest</div><div class="phrase-item">update</div></td>
+          <td class="col-examples"><div class="example-item">iREC: iREC price and publisher changes</div><div class="example-item">Mad Combat Marines: FreezeNova.Games Community</div><div class="example-item">G-Switch 4: Creator: Original Soundtrack Released!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Partnerships / Crossovers / IP Collaborations</td>
+          <td class="col-number">34,815</td>
+          <td class="col-number">2.4%</td>
+          <td class="col-number">2.8%</td>
+          <td class="col-direction">Up 0.4</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">sale</div><div class="phrase-item">collaboration</div></td>
+          <td class="col-examples"><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: 🎁❄️Steam Winter Sale❄️🎁</div><div class="example-item">Platypus Reclayed: Platypus Reclayed Fan Art Showcase (Handcrafted)</div><div class="example-item">Japanese School Life: Ditzy Demons Released + Announcements!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-number">40,566</td>
+          <td class="col-number">2.8%</td>
+          <td class="col-number">3.1%</td>
+          <td class="col-direction">Up 0.4</td>
+          <td class="col-phrases"><div class="phrase-item">devlog</div><div class="phrase-item">demo</div><div class="phrase-item">today devlog</div></td>
+          <td class="col-examples"><div class="example-item">Sniper Fury: UPDATE 69</div><div class="example-item">Sheepherds!: Sheepherds! Steam Next Fest Demo: Major Update Live</div><div class="example-item">STARDROP: Developer Update 2022</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-number">71,676</td>
+          <td class="col-number">4.9%</td>
+          <td class="col-number">5.1%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">major update</div><div class="phrase-item">chapter</div></td>
+          <td class="col-examples"><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Steam 🌞💲Spring Sale💲🌞</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Builders of Greece Now in Full Release!🏛️⚒️</div><div class="example-item">Speed0: Speed0 Update Announcement</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Platform / Account / Crossplay / Technical Changes</td>
+          <td class="col-number">44,883</td>
+          <td class="col-number">3.2%</td>
+          <td class="col-number">3.4%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">minor update</div><div class="phrase-item">update notes</div></td>
+          <td class="col-examples"><div class="example-item">Punch! Landscape Design for Mac v19: New patch update v19.0.8</div><div class="example-item">Lost Wing: A new update for Lost Wing is now live!</div><div class="example-item">Faerie Solitaire Dire: Faerie Solitaire Dire Version 0.9.2c</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-number">14,363</td>
+          <td class="col-number">1.0%</td>
+          <td class="col-number">1.2%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">update</div><div class="phrase-item">bug</div></td>
+          <td class="col-examples"><div class="example-item">Sheepherds!: Sheepherds!: FAQ</div><div class="example-item">Kalit: Untitled</div><div class="example-item">Card Shop Simulator Multiplayer: Happy Lunar New Year Update !</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-number">150,723</td>
+          <td class="col-number">10.4%</td>
+          <td class="col-number">10.5%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">bug</div><div class="phrase-item">demo</div><div class="phrase-item">update</div></td>
+          <td class="col-examples"><div class="example-item">Caretaker: Hotfix 1.23</div><div class="example-item">侠客风云传(Tale of Wuxia): New Version Update Announcement</div><div class="example-item">Driftwood: Hotfix</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+              
+    <section class="table-card">
+      <h2>Developer / Publisher Posts: Topics Showing Up Less Often</h2>
+      <div class="table-wrap">
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Direction</th>
+            <th>Common Phrases</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Patch / Hotfix / Bug Fixes</td>
+          <td class="col-number">659,420</td>
+          <td class="col-number">44.0%</td>
+          <td class="col-number">43.2%</td>
+          <td class="col-direction">Down 0.8</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">demo update</div><div class="phrase-item">bug</div></td>
+          <td class="col-examples"><div class="example-item">Caretaker: Hotfix 1.23</div><div class="example-item">Blue Crystal: Patch 1.4.0 notes</div><div class="example-item">Realms of Arkania: Star Trail: Version 1.03</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Discounts / Sales / Promotions</td>
+          <td class="col-number">150,432</td>
+          <td class="col-number">10.4%</td>
+          <td class="col-number">9.7%</td>
+          <td class="col-direction">Down 0.7</td>
+          <td class="col-phrases"><div class="phrase-item">spring sale</div><div class="phrase-item">sale</div><div class="phrase-item">publisher sale</div></td>
+          <td class="col-examples"><div class="example-item">My Friend Pedro: The six-year anniversary of My Friend Pedro 80% OFF</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: 🎁❄️Steam Winter Sale❄️🎁</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Steam 🌞💲Spring Sale💲🌞</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Balance / Characters / Items / Meta Changes</td>
+          <td class="col-number">87,421</td>
+          <td class="col-number">5.9%</td>
+          <td class="col-number">5.4%</td>
+          <td class="col-direction">Down 0.5</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">demo update</div><div class="phrase-item">update notes</div></td>
+          <td class="col-examples"><div class="example-item">Monochrome Echoes - white -: Update June 17, 2025</div><div class="example-item">Gladiator School: New Game from Gladiator School Devs!</div><div class="example-item">Bing in Wonderland: Update Log</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Events / Seasonal / Anniversary</td>
+          <td class="col-number">106,469</td>
+          <td class="col-number">7.5%</td>
+          <td class="col-number">7.1%</td>
+          <td class="col-direction">Down 0.4</td>
+          <td class="col-phrases"><div class="phrase-item">sale</div><div class="phrase-item">festival</div><div class="phrase-item">demo</div></td>
+          <td class="col-examples"><div class="example-item">My Friend Pedro: The six-year anniversary of My Friend Pedro 80% OFF</div><div class="example-item">Lurking Danger: Anniversary Update</div><div class="example-item">The Panic Room. House of secrets: Game update</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">DLC / Expansions / Episodes</td>
+          <td class="col-number">53,887</td>
+          <td class="col-number">3.9%</td>
+          <td class="col-number">3.8%</td>
+          <td class="col-direction">Down 0.1</td>
+          <td class="col-phrases"><div class="phrase-item">chapter</div><div class="phrase-item">demo</div><div class="phrase-item">bug</div></td>
+          <td class="col-examples"><div class="example-item">Seven Nexus: Seven Nexus Early Access - Chapter Four Update Available Now!</div><div class="example-item">100 hidden cats: Two great DLC! Soon!</div><div class="example-item">A-Tech Cybernetic VR: A-Tech Cybernetic Update - Small fixes</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-number">150,723</td>
+          <td class="col-number">10.4%</td>
+          <td class="col-number">10.5%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">bug</div><div class="phrase-item">demo</div><div class="phrase-item">update</div></td>
+          <td class="col-examples"><div class="example-item">Caretaker: Hotfix 1.23</div><div class="example-item">侠客风云传(Tale of Wuxia): New Version Update Announcement</div><div class="example-item">Driftwood: Hotfix</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-number">14,363</td>
+          <td class="col-number">1.0%</td>
+          <td class="col-number">1.2%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">update</div><div class="phrase-item">bug</div></td>
+          <td class="col-examples"><div class="example-item">Sheepherds!: Sheepherds!: FAQ</div><div class="example-item">Kalit: Untitled</div><div class="example-item">Card Shop Simulator Multiplayer: Happy Lunar New Year Update !</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Platform / Account / Crossplay / Technical Changes</td>
+          <td class="col-number">44,883</td>
+          <td class="col-number">3.2%</td>
+          <td class="col-number">3.4%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">minor update</div><div class="phrase-item">update notes</div></td>
+          <td class="col-examples"><div class="example-item">Punch! Landscape Design for Mac v19: New patch update v19.0.8</div><div class="example-item">Lost Wing: A new update for Lost Wing is now live!</div><div class="example-item">Faerie Solitaire Dire: Faerie Solitaire Dire Version 0.9.2c</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+            </section>
+          </section>
+        
+          <section class="scope-block">
+            <div class="scope-header">
+              <h2>Press / Editorial Coverage</h2>
+              <p>Editorial, newswire, and other third-party coverage outside the Steam announcement feed.</p>
+            </div>
+            
+    <section class="chart-card chart-card--wide">
+      <div class="chart-head">
+        <div>
+          <h2>Press / Editorial Coverage: What Showed Up More vs Less</h2>
+          <p>Hollow dots show the earlier part of the capture window. Solid dots show the most recent part.</p>
+        </div>
+        <div class="chart-head-note"><span>Earlier: 2026-03-13 to 2026-03-16</span><span>Recent: 2026-03-23 to 2026-03-26</span></div>
+      </div>
+      <svg viewBox="0 0 1040 532" role="img" aria-label="Press / Editorial Coverage: What Showed Up More vs Less">
+        <line x1="240" y1="42" x2="240" y2="504" stroke="#ece0cf" /><text x="240" y="524" text-anchor="middle" font-size="11" fill="#61584f">0.0%</text><line x1="419.5" y1="42" x2="419.5" y2="504" stroke="#ece0cf" /><text x="419.5" y="524" text-anchor="middle" font-size="11" fill="#61584f">5.0%</text><line x1="599" y1="42" x2="599" y2="504" stroke="#ece0cf" /><text x="599" y="524" text-anchor="middle" font-size="11" fill="#61584f">10.0%</text><line x1="778.5" y1="42" x2="778.5" y2="504" stroke="#ece0cf" /><text x="778.5" y="524" text-anchor="middle" font-size="11" fill="#61584f">15.0%</text><line x1="958" y1="42" x2="958" y2="504" stroke="#ece0cf" /><text x="958" y="524" text-anchor="middle" font-size="11" fill="#61584f">20.0%</text>
+        
+        <g>
+          <text x="228" y="68" text-anchor="end" font-size="12" fill="#302923">Discounts / Sales / Promotions</text>
+          <line x1="240" y1="64" x2="958" y2="64" stroke="#f4ece0" />
+          <line x1="613.6777547330327" y1="64" x2="838.3333333333334" y2="64" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="613.6777547330327" cy="64" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="838.3333333333334" cy="64" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="68" font-size="11" fill="#61584f">10.4% to 16.6%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="102" text-anchor="end" font-size="12" fill="#302923">Community / Creator / Social / UGC</text>
+          <line x1="240" y1="98" x2="958" y2="98" stroke="#f4ece0" />
+          <line x1="317.08606148388367" y1="98" x2="326.09112709832135" y2="98" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="317.08606148388367" cy="98" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="326.09112709832135" cy="98" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="102" font-size="11" fill="#61584f">2.1% to 2.4%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="136" text-anchor="end" font-size="12" fill="#302923">Partnerships / Crossovers / IP Collaborations</text>
+          <line x1="240" y1="132" x2="958" y2="132" stroke="#f4ece0" />
+          <line x1="343.04851878198997" y1="132" x2="349.7661870503597" y2="132" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="343.04851878198997" cy="132" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="349.7661870503597" cy="132" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="136" font-size="11" fill="#61584f">2.9% to 3.1%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="170" text-anchor="end" font-size="12" fill="#302923">Platform / Account / Crossplay / Technical Changes</text>
+          <line x1="240" y1="166" x2="958" y2="166" stroke="#f4ece0" />
+          <line x1="359.822616707104" y1="166" x2="362.6798561151079" y2="166" stroke="#3a7d44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="359.822616707104" cy="166" r="5.5" fill="#fdf9f2" stroke="#3a7d44" stroke-width="2" />
+          <circle cx="362.6798561151079" cy="166" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="170" font-size="11" fill="#61584f">3.3% to 3.4%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="204" text-anchor="end" font-size="12" fill="#302923">Monetization / Store / Pass / Currency</text>
+          <line x1="240" y1="200" x2="958" y2="200" stroke="#f4ece0" />
+          <line x1="262.4366914921907" y1="200" x2="261.5227817745803" y2="200" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="262.4366914921907" cy="200" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="261.5227817745803" cy="200" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="204" font-size="11" fill="#61584f">0.6% to 0.6%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="238" text-anchor="end" font-size="12" fill="#302923">Roadmaps / Devlogs / Feature Previews</text>
+          <line x1="240" y1="234" x2="958" y2="234" stroke="#f4ece0" />
+          <line x1="267.1377125667449" y1="234" x2="263.6750599520384" y2="234" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="267.1377125667449" cy="234" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="263.6750599520384" cy="234" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="238" font-size="11" fill="#61584f">0.8% to 0.7%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="272" text-anchor="end" font-size="12" fill="#302923">Servers / Maintenance / Downtime / Apologies</text>
+          <line x1="240" y1="268" x2="958" y2="268" stroke="#f4ece0" />
+          <line x1="336.3175113343328" y1="268" x2="328.24340527577937" y2="268" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="336.3175113343328" cy="268" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="328.24340527577937" cy="268" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="272" font-size="11" fill="#61584f">2.7% to 2.5%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="306" text-anchor="end" font-size="12" fill="#302923">Balance / Characters / Items / Meta Changes</text>
+          <line x1="240" y1="302" x2="958" y2="302" stroke="#f4ece0" />
+          <line x1="367.7288794233997" y1="302" x2="339.0047961630695" y2="302" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="367.7288794233997" cy="302" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="339.0047961630695" cy="302" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="306" font-size="11" fill="#61584f">3.6% to 2.8%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="340" text-anchor="end" font-size="12" fill="#302923">Launches &amp; Release Timing</text>
+          <line x1="240" y1="336" x2="958" y2="336" stroke="#f4ece0" />
+          <line x1="525.960975137373" y1="336" x2="496.121103117506" y2="336" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="525.960975137373" cy="336" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="496.121103117506" cy="336" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="340" font-size="11" fill="#61584f">8.0% to 7.1%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="374" text-anchor="end" font-size="12" fill="#302923">Major Content Updates</text>
+          <line x1="240" y1="370" x2="958" y2="370" stroke="#f4ece0" />
+          <line x1="316.5518545435934" y1="370" x2="270.13189448441244" y2="370" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="316.5518545435934" cy="370" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="270.13189448441244" cy="370" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="374" font-size="11" fill="#61584f">2.1% to 0.8%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="408" text-anchor="end" font-size="12" fill="#302923">Events / Seasonal / Anniversary</text>
+          <line x1="240" y1="404" x2="958" y2="404" stroke="#f4ece0" />
+          <line x1="398.3389371020313" y1="404" x2="345.46163069544366" y2="404" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="398.3389371020313" cy="404" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="345.46163069544366" cy="404" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="408" font-size="11" fill="#61584f">4.4% to 2.9%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="442" text-anchor="end" font-size="12" fill="#302923">DLC / Expansions / Episodes</text>
+          <line x1="240" y1="438" x2="958" y2="438" stroke="#f4ece0" />
+          <line x1="528.258064980621" y1="438" x2="366.984412470024" y2="438" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="528.258064980621" cy="438" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="366.984412470024" cy="438" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="442" font-size="11" fill="#61584f">8.0% to 3.5%</text>
+        </g>
+      
+        <g>
+          <text x="228" y="476" text-anchor="end" font-size="12" fill="#302923">Patch / Hotfix / Bug Fixes</text>
+          <line x1="240" y1="472" x2="958" y2="472" stroke="#f4ece0" />
+          <line x1="681.4151947618368" y1="472" x2="459.5323741007194" y2="472" stroke="#b35c44" stroke-width="3" stroke-linecap="round" />
+          <circle cx="681.4151947618368" cy="472" r="5.5" fill="#fdf9f2" stroke="#b35c44" stroke-width="2" />
+          <circle cx="459.5323741007194" cy="472" r="5.5" fill="#3f6f8f" />
+          <text x="968" y="476" font-size="11" fill="#61584f">12.3% to 6.1%</text>
+        </g>
+      
+      </svg>
+    </section>
+  
+            
+    <section class="chart-card heatmap-card">
+      <div class="chart-head">
+        <div>
+          <h2>Press / Editorial Coverage: Topic Share Over Time</h2>
+          <p>Each cell shows how much of that day or week was about that topic. One article can fit more than one topic.</p>
+        </div>
+      </div>
+      <div class="heatmap-wrap">
+        <table class="heatmap-table">
+          <thead>
+            <tr>
+              <th>Theme</th>
+              <th>03-13</th><th>03-14</th><th>03-15</th><th>03-16</th><th>03-17</th><th>03-18</th><th>03-19</th><th>03-20</th><th>03-21</th><th>03-22</th><th>03-23</th><th>03-24</th><th>03-25</th><th>03-26</th>
+              <th>Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+        <tr>
+          <td class="heat-label">Discounts / Sales / Promotions</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.30292)">13.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.248112)">9.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.173312)">3.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.177256)">4.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.162704)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.22132000000000002)">7.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.203368)">6.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.346712)">16.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.161208)">3.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.167736)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.213976)">6.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.396488)">20.3%</td>
+          <td class="heat-summary">Up 6.3</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Community / Creator / Social / UGC</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.151008)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.154)">2.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.139856)">1.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.138632)">1.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.136048)">1.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14651999999999998)">2.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.148424)">2.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.256)">10.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.130336)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1438)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17643999999999999)">4.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.151144)">2.3%</td>
+          <td class="heat-summary">Up 0.3</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Partnerships / Crossovers / IP Collaborations</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15672)">2.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.157944)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.165696)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.165288)">3.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.168008)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.190584)">5.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18908799999999998)">5.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.346712)">16.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.256)">10.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.161208)">3.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.23927199999999998)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.182696)">4.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.154408)">2.5%</td>
+          <td class="heat-summary">Up 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Platform / Account / Crossplay / Technical Changes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1642)">3.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.162296)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.171136)">3.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18215199999999998)">4.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.184056)">4.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19969599999999998)">5.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.207448)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20241599999999998)">6.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.215472)">7.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.20772000000000002)">6.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15332)">2.5%</td>
+          <td class="heat-summary">Up 0.1</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Monetization / Store / Pass / Currency</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.128568)">0.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.128296)">0.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.128568)">0.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13019999999999998)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.123264)">0.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12611999999999998)">0.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.132512)">0.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.128568)">0.6%</td>
+          <td class="heat-summary">Flat</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.129384)">0.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13006399999999999)">0.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13278399999999999)">0.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.133056)">1.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.141352)">1.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.129928)">0.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12816)">0.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.140672)">1.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.167736)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.126256)">0.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.126392)">0.5%</td>
+          <td class="heat-summary">Down 0.1</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16161599999999998)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.147336)">2.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.152912)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15128)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15739999999999998)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.137408)">1.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13428)">1.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.150872)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19153599999999998)">5.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.157536)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.151144)">2.3%</td>
+          <td class="heat-summary">Down 0.2</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Balance / Characters / Items / Meta Changes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.8)">50.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.165968)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.165832)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.176576)">4.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.178752)">4.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.146656)">2.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.154952)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.166784)">3.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.256)">10.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.150872)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.167736)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.145024)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.159848)">2.9%</td>
+          <td class="heat-summary">Down 0.8</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Launches &amp; Release Timing</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.8)">50.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.207312)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.25436800000000004)">9.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.252736)">9.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.26076)">10.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.242672)">9.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.27368000000000003)">11.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.280616)">11.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.195616)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.392)">20.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.346712)">16.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.215472)">7.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.245392)">9.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.198608)">5.8%</td>
+          <td class="heat-summary">Down 0.8</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Major Content Updates</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.152368)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14516)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14448)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.14094399999999999)">1.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.15195999999999998)">2.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.135776)">1.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13224)">0.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.195616)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.140672)">1.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.145024)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.128568)">0.6%</td>
+          <td class="heat-summary">Down 1.3</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Events / Seasonal / Anniversary</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.18446400000000002)">4.7%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.172768)">3.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.176032)">4.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17902400000000002)">4.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.146656)">2.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16148)">3.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.13835999999999998)">1.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.195616)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.130336)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.1438)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.16392800000000002)">3.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.162976)">3.2%</td>
+          <td class="heat-summary">Down 1.5</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">DLC / Expansions / Episodes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.24131200000000003)">8.9%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.221592)">7.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.206904)">6.4%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.184736)">4.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.130608)">0.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.155768)">2.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.144344)">1.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.256)">10.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.150872)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.167736)">3.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.157536)">2.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.17168)">3.8%</td>
+          <td class="heat-summary">Down 4.5</td>
+        </tr>
+      
+        <tr>
+          <td class="heat-label">Patch / Hotfix / Bug Fixes</td>
+          <td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.304824)">13.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.27164)">11.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.259128)">10.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.249064)">9.5%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.205272)">6.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.237096)">8.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.176984)">4.2%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.195616)">5.6%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.12)">0.0%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.150872)">2.3%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.23927199999999998)">8.8%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.270416)">11.1%</td><td class="heat-cell" style="background:rgba(63, 128, 111, 0.19534400000000002)">5.5%</td>
+          <td class="heat-summary">Down 6.2</td>
+        </tr>
+      </tbody>
+        </table>
+      </div>
+    </section>
+  
+            <section class="tables">
+              
+    <section class="table-card">
+      <h2>Press / Editorial Coverage: Topics Showing Up More Often</h2>
+      <div class="table-wrap">
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Direction</th>
+            <th>Common Phrases</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Discounts / Sales / Promotions</td>
+          <td class="col-number">7,877</td>
+          <td class="col-number">10.4%</td>
+          <td class="col-number">16.6%</td>
+          <td class="col-direction">Up 6.3</td>
+          <td class="col-phrases"><div class="phrase-item">sale</div><div class="phrase-item">sale 50%</div><div class="phrase-item">games sale</div></td>
+          <td class="col-examples"><div class="example-item">BLUE REFLECTION: Daily Deal - BLUE REFLECTION / BLUE REFLECTION , 60% Off</div><div class="example-item">Delicious - Emily's New Beginning: Gamehouse Publisher Sale - Up To 50% Off!</div><div class="example-item">Marvel's Avengers - The Definitive Edition: Marvel's Avengers might be having its last big sale</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Community / Creator / Social / UGC</td>
+          <td class="col-number">1,673</td>
+          <td class="col-number">2.1%</td>
+          <td class="col-number">2.4%</td>
+          <td class="col-direction">Up 0.3</td>
+          <td class="col-phrases"><div class="phrase-item">dlc</div><div class="phrase-item">sale</div><div class="phrase-item">server</div></td>
+          <td class="col-examples"><div class="example-item">to a T: 'The age of gameplay mechanics has already passed' says Shadow of The Colossus director as he praises Katamari Damacy creator's new game for not being systems-driven</div><div class="example-item">Mages of Mystralia: Grab Mages of Mystralia, a fantasy RPG from the creator of DnD's world, for free</div><div class="example-item">.hack//G.U. Last Recode: Fusing turn-based tactics and real-time action, Vaunted is a new strategy RPG from Starcraft creator James Phinney</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Partnerships / Crossovers / IP Collaborations</td>
+          <td class="col-number">2,452</td>
+          <td class="col-number">2.9%</td>
+          <td class="col-number">3.1%</td>
+          <td class="col-direction">Up 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">sale</div><div class="phrase-item">collab</div></td>
+          <td class="col-examples"><div class="example-item">Journey of the Garden Rose: Out now, Journey of the Garden Rose is a 3D action game with pulp comic art direction and an undertone of real darkness</div><div class="example-item">New World: Aeternum: After joking about buying Amazon MMO New World, Rust boss says to &quot;keep hope&quot; as he signs NDA with an &quot;unnamed company&quot;</div><div class="example-item">NBA 2KVR Experience: 2K makes changes to NBA 2K microtransactions to comply with Belgium and Dutch gambling laws</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Platform / Account / Crossplay / Technical Changes</td>
+          <td class="col-number">2,918</td>
+          <td class="col-number">3.3%</td>
+          <td class="col-number">3.4%</td>
+          <td class="col-direction">Up 0.1</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">release</div><div class="phrase-item">character</div></td>
+          <td class="col-examples"><div class="example-item">The Lamplighters League: Grab seven great Steam Deck games, and Warhammer 40,000: Darktide, for under $12</div><div class="example-item">Shadows of Adam: Inspired by classic JRPGs, Shadows of Adam gets improved Linux and Steam Deck support</div><div class="example-item">Goetia: Goetia, The Turing Test, and Tokyo Dark lead the latest Humble Bundle</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-number">514</td>
+          <td class="col-number">0.6%</td>
+          <td class="col-number">0.6%</td>
+          <td class="col-direction">Flat</td>
+          <td class="col-phrases"><div class="phrase-item">sale</div><div class="phrase-item">update</div><div class="phrase-item">event</div></td>
+          <td class="col-examples"><div class="example-item">Ys SEVEN: The fan who took the reins at a JRPG powerhouse</div><div class="example-item">Delicious - Emily's New Beginning: Gamehouse Publisher Sale - Up To 50% Off!</div><div class="example-item">Double Dragon IV: Double Dragon 4 brings throwback beatdowns</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-number">637</td>
+          <td class="col-number">0.8%</td>
+          <td class="col-number">0.7%</td>
+          <td class="col-direction">Down 0.1</td>
+          <td class="col-phrases"><div class="phrase-item">preview</div><div class="phrase-item">demo</div><div class="phrase-item">developer update</div></td>
+          <td class="col-examples"><div class="example-item">Ravenswatch: New Ravenswatch roadmap makes plans into 2027 despite publisher's financial struggles</div><div class="example-item">Football Manager Touch 2018: Football Manager 2019 preview: a meaningful step forward for the series</div><div class="example-item">DOOM: The Dark Ages: Diablo 4's next season is short, but it lets you become The Butcher, and it has Doom: The Dark Ages skins you probably can't afford</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-number">2,114</td>
+          <td class="col-number">2.7%</td>
+          <td class="col-number">2.5%</td>
+          <td class="col-direction">Down 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">soon</div><div class="phrase-item">coming</div><div class="phrase-item">product update</div></td>
+          <td class="col-examples"><div class="example-item">Pathway: Xbox Game Pass is losing a charming indie game later this month</div><div class="example-item">Marvel's Avengers - The Definitive Edition: Forget Spider-Man 2, Marvel's most ambitious superhero game just died</div><div class="example-item">Nioh: Complete Edition: Wo Long is already Team Ninja's biggest ever Steam launch, despite PC port issues</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Balance / Characters / Items / Meta Changes</td>
+          <td class="col-number">2,950</td>
+          <td class="col-number">3.6%</td>
+          <td class="col-number">2.8%</td>
+          <td class="col-direction">Down 0.8</td>
+          <td class="col-phrases"><div class="phrase-item">release</div><div class="phrase-item">balance</div><div class="phrase-item">episode</div></td>
+          <td class="col-examples"><div class="example-item">Double Dragon IV: Double Dragon 4 brings throwback beatdowns</div><div class="example-item">State of Decay 2: Juggernaut Edition: State of Decay 2 at a huge 90% discount while you can</div><div class="example-item">LEGO® MARVEL's Avengers: Five of the Best: Achievements or Trophies</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+              
+    <section class="table-card">
+      <h2>Press / Editorial Coverage: Topics Showing Up Less Often</h2>
+      <div class="table-wrap">
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Direction</th>
+            <th>Common Phrases</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Patch / Hotfix / Bug Fixes</td>
+          <td class="col-number">9,521</td>
+          <td class="col-number">12.3%</td>
+          <td class="col-number">6.1%</td>
+          <td class="col-direction">Down 6.2</td>
+          <td class="col-phrases"><div class="phrase-item">update version</div><div class="phrase-item">recent update</div><div class="phrase-item">first update</div></td>
+          <td class="col-examples"><div class="example-item">DOOM Eternal: The Ancient Gods - Part One: Doom Eternal's free next-gen update out late June</div><div class="example-item">Hollow Knight: Silksong: Ahead of Hollow Knight: Silksong's Sea of Sorrow expansion, Team Cherry have gotten their Traditional Chinese and German translation ducks in a row</div><div class="example-item">1... 2... 3... KICK IT! (Drop That Beat Like an Ugly Baby): Drop that Beat Like an Ugly Baby Update Released</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">DLC / Expansions / Episodes</td>
+          <td class="col-number">5,999</td>
+          <td class="col-number">8.0%</td>
+          <td class="col-number">3.5%</td>
+          <td class="col-direction">Down 4.5</td>
+          <td class="col-phrases"><div class="phrase-item">chapter</div><div class="phrase-item">episode</div><div class="phrase-item">demo</div></td>
+          <td class="col-examples"><div class="example-item">Hollow Knight: Silksong: Ahead of Hollow Knight: Silksong's Sea of Sorrow expansion, Team Cherry have gotten their Traditional Chinese and German translation ducks in a row</div><div class="example-item">ULTRAKILL: Brutal boomer shooter Ultrakill makes its new chapter even better with over 120 precision changes</div><div class="example-item">Double Dragon IV: Double Dragon 4 brings throwback beatdowns</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Events / Seasonal / Anniversary</td>
+          <td class="col-number">3,522</td>
+          <td class="col-number">4.4%</td>
+          <td class="col-number">2.9%</td>
+          <td class="col-direction">Down 1.5</td>
+          <td class="col-phrases"><div class="phrase-item">anniversary</div><div class="phrase-item">feature</div><div class="phrase-item">sale</div></td>
+          <td class="col-examples"><div class="example-item">Ys SEVEN: The fan who took the reins at a JRPG powerhouse</div><div class="example-item">ReCore: Definitive Edition: The Double-A Team: Recore's signature move is pretty wonderful</div><div class="example-item">Double Dragon IV: Double Dragon 4 brings throwback beatdowns</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-number">1,636</td>
+          <td class="col-number">2.1%</td>
+          <td class="col-number">0.8%</td>
+          <td class="col-direction">Down 1.3</td>
+          <td class="col-phrases"><div class="phrase-item">update out</div><div class="phrase-item">major update</div><div class="phrase-item">after launch</div></td>
+          <td class="col-examples"><div class="example-item">ULTRAKILL: Brutal boomer shooter Ultrakill makes its new chapter even better with over 120 precision changes</div><div class="example-item">The Elder Scrolls V: Skyrim Special Edition: Popular Skyrim mod returns after 9 years with a major update and a full source code release to keep it relevant 'for many years to come'</div><div class="example-item">Moonsigil Atlas: You absolutely have to try the expanded demo of Moonsigil Atlas</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Launches &amp; Release Timing</td>
+          <td class="col-number">6,820</td>
+          <td class="col-number">8.0%</td>
+          <td class="col-number">7.1%</td>
+          <td class="col-direction">Down 0.8</td>
+          <td class="col-phrases"><div class="phrase-item">demo</div><div class="phrase-item">playtest</div><div class="phrase-item">access release</div></td>
+          <td class="col-examples"><div class="example-item">Journey of the Garden Rose: Out now, Journey of the Garden Rose is a 3D action game with pulp comic art direction and an undertone of real darkness</div><div class="example-item">GOD'S GIFT: Inspired by Lemmings and Pikmin, puzzle-platformer GOD'S GIFT is out now</div><div class="example-item">Nioh: Complete Edition: Wo Long is already Team Ninja's biggest ever Steam launch, despite PC port issues</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Balance / Characters / Items / Meta Changes</td>
+          <td class="col-number">2,950</td>
+          <td class="col-number">3.6%</td>
+          <td class="col-number">2.8%</td>
+          <td class="col-direction">Down 0.8</td>
+          <td class="col-phrases"><div class="phrase-item">release</div><div class="phrase-item">balance</div><div class="phrase-item">episode</div></td>
+          <td class="col-examples"><div class="example-item">Double Dragon IV: Double Dragon 4 brings throwback beatdowns</div><div class="example-item">State of Decay 2: Juggernaut Edition: State of Decay 2 at a huge 90% discount while you can</div><div class="example-item">LEGO® MARVEL's Avengers: Five of the Best: Achievements or Trophies</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-number">2,114</td>
+          <td class="col-number">2.7%</td>
+          <td class="col-number">2.5%</td>
+          <td class="col-direction">Down 0.2</td>
+          <td class="col-phrases"><div class="phrase-item">soon</div><div class="phrase-item">coming</div><div class="phrase-item">product update</div></td>
+          <td class="col-examples"><div class="example-item">Pathway: Xbox Game Pass is losing a charming indie game later this month</div><div class="example-item">Marvel's Avengers - The Definitive Edition: Forget Spider-Man 2, Marvel's most ambitious superhero game just died</div><div class="example-item">Nioh: Complete Edition: Wo Long is already Team Ninja's biggest ever Steam launch, despite PC port issues</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-number">637</td>
+          <td class="col-number">0.8%</td>
+          <td class="col-number">0.7%</td>
+          <td class="col-direction">Down 0.1</td>
+          <td class="col-phrases"><div class="phrase-item">preview</div><div class="phrase-item">demo</div><div class="phrase-item">developer update</div></td>
+          <td class="col-examples"><div class="example-item">Ravenswatch: New Ravenswatch roadmap makes plans into 2027 despite publisher's financial struggles</div><div class="example-item">Football Manager Touch 2018: Football Manager 2019 preview: a meaningful step forward for the series</div><div class="example-item">DOOM: The Dark Ages: Diablo 4's next season is short, but it lets you become The Butcher, and it has Doom: The Dark Ages skins you probably can't afford</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+            </section>
+          </section>
+        
+
+      <section class="tables">
+        
+    <section class="table-card">
+      <h2>Phrases Showing Up More Often</h2>
+      <div class="table-wrap">
+      <table class="report-table report-table--phrases">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Phrase</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-phrase">preview</td>
+          <td class="col-number">308</td>
+          <td class="col-number">46.9%</td>
+          <td class="col-number">72.7%</td>
+          <td class="col-examples"><div class="example-item">Football Manager Touch 2018: Football Manager 2019 preview: a meaningful step forward for the series</div><div class="example-item">Animula Nook: Animula Nook Alpha Playtest Preview—Bigger On The Inside</div><div class="example-item">Solasta II: Solasta II Early Access Preview—Deep Strategic Roleplaying</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-phrase">sale</td>
+          <td class="col-number">11</td>
+          <td class="col-number">1.9%</td>
+          <td class="col-number">20.0%</td>
+          <td class="col-examples"><div class="example-item">Delicious - Emily's New Beginning: Gamehouse Publisher Sale - Up To 50% Off!</div><div class="example-item">PRO EVOLUTION SOCCER 2019: Konami stops PES 2019 in-game currency sales in Belgium</div><div class="example-item">Hellbreach: Vegas: The spiritual successor to old school pick-up-and-play Call of Duty Zombies is out now, on sale for $10 and gloriously free of battle pass nonsense</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-phrase">demo</td>
+          <td class="col-number">12</td>
+          <td class="col-number">1.8%</td>
+          <td class="col-number">18.2%</td>
+          <td class="col-examples"><div class="example-item">Luna Abyss: Luna Abyss Extended Demo (PC) Preview — Going Further Into The Abyss</div><div class="example-item">Circle of Sumo: Online Rumble!: The 10 most exciting indie games from Rezzed Digital 2020</div><div class="example-item">Deep Rock Galactic: Survivor: Deep Rock Galactic's first spin-off is out now in Early Access, and it's the best auto-shooter since Vampire Survivors</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-phrase">devlog</td>
+          <td class="col-number">11,810</td>
+          <td class="col-number">26.0%</td>
+          <td class="col-number">41.4%</td>
+          <td class="col-examples"><div class="example-item">Citadelum: DEVLOG XXIV - Ides of March</div><div class="example-item">Police Stories: Devlog #6 - Don't just shoot: use your surroundings to the fullest</div><div class="example-item">Wieldo: DEVLOG #0 - Steam Page, 0.3 Prototype</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Community / Creator / Social / UGC</td>
+          <td class="col-phrase">demo</td>
+          <td class="col-number">6,891</td>
+          <td class="col-number">5.1%</td>
+          <td class="col-number">18.9%</td>
+          <td class="col-examples"><div class="example-item">Sheepherds!: Sheepherds! Next Fest Demo FAQ</div><div class="example-item">Sheepherds!: Sheepherds! Next Fest Wrap-Up: Thank You!</div><div class="example-item">Water Margin Scrolls: Q&amp;A on some key questions</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">DLC / Expansions / Episodes</td>
+          <td class="col-phrase">chapter</td>
+          <td class="col-number">11,626</td>
+          <td class="col-number">18.0%</td>
+          <td class="col-number">31.5%</td>
+          <td class="col-examples"><div class="example-item">Seven Nexus: Seven Nexus Early Access - Chapter Four Update Available Now!</div><div class="example-item">A-Tech Cybernetic VR: A-Tech Cybernetic Update - Small fixes</div><div class="example-item">叛逆の守護者: Small Update Notice</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">update out</td>
+          <td class="col-number">36</td>
+          <td class="col-number">1.8%</td>
+          <td class="col-number">14.3%</td>
+          <td class="col-examples"><div class="example-item">Nuclear Throne: Classic roguelike top-down shooter Nuclear Throne major update 100 out now</div><div class="example-item">Retro City Rampage™ DX: 12 years after launch, this GTA style crime game just got a surprise update</div><div class="example-item">Brotato: Brotato gets a juicy free update out now - along with new Linux and macOS support</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Discounts / Sales / Promotions</td>
+          <td class="col-phrase">spring sale</td>
+          <td class="col-number">4,357</td>
+          <td class="col-number">1.8%</td>
+          <td class="col-number">13.9%</td>
+          <td class="col-examples"><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Steam 🌞💲Spring Sale💲🌞</div><div class="example-item">Motor Racing Battle: 🌷STEAM Spring Sale is Now Live! Don't Forget to Enjoy the Outdoor Scenery!🌸</div><div class="example-item">Arcana of Paradise —The Tower—: Arcana of Paradise 50% off for the Steam Spring Sale 2024</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Launches &amp; Release Timing</td>
+          <td class="col-phrase">demo</td>
+          <td class="col-number">8,044</td>
+          <td class="col-number">3.7%</td>
+          <td class="col-number">13.7%</td>
+          <td class="col-examples"><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: 🛢️Black Gold Demo available now!</div><div class="example-item">Sheepherds!: Launch Price &amp; Bonus Reveal! Sheepherds! Joins Steam Animal Fest</div><div class="example-item">Juno: New Origins: The SimplePlanes 2 Demo is LIVE!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Launches &amp; Release Timing</td>
+          <td class="col-phrase">playtest</td>
+          <td class="col-number">7,266</td>
+          <td class="col-number">4.0%</td>
+          <td class="col-number">13.8%</td>
+          <td class="col-examples"><div class="example-item">Juno: New Origins: The SimplePlanes 2 Demo is LIVE!</div><div class="example-item">GTTOD: GTTOD Playtest Day 1 Patch Notes</div><div class="example-item">NO EXIT: Play NO EXIT PLATEST NOW! (Full chapter 1 and 2)</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Discounts / Sales / Promotions</td>
+          <td class="col-phrase">sale</td>
+          <td class="col-number">79,868</td>
+          <td class="col-number">51.4%</td>
+          <td class="col-number">60.5%</td>
+          <td class="col-examples"><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: 🎁❄️Steam Winter Sale❄️🎁</div><div class="example-item">Crypto Miner Tycoon Simulator Starter Edition: Steam 🌞💲Spring Sale💲🌞</div><div class="example-item">FAIRY TAIL: Beach Volleyball Havoc: 10 New Outfits Added! 50% OFF Sale Now Live!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">major update</td>
+          <td class="col-number">228</td>
+          <td class="col-number">12.7%</td>
+          <td class="col-number">21.4%</td>
+          <td class="col-examples"><div class="example-item">The Elder Scrolls V: Skyrim Special Edition: Popular Skyrim mod returns after 9 years with a major update and a full source code release to keep it relevant 'for many years to come'</div><div class="example-item">Moonsigil Atlas: You absolutely have to try the expanded demo of Moonsigil Atlas</div><div class="example-item">Nuclear Throne: Classic roguelike top-down shooter Nuclear Throne major update 100 out now</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+        
+    <section class="table-card">
+      <h2>Phrases Showing Up Less Often</h2>
+      <div class="table-wrap">
+      <table class="report-table report-table--phrases">
+        <thead>
+          <tr>
+            <th>Topic</th>
+            <th>Phrase</th>
+            <th>Articles</th>
+            <th>Earlier</th>
+            <th>Recent</th>
+            <th>Example Headlines</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">content</td>
+          <td class="col-number">652</td>
+          <td class="col-number">41.0%</td>
+          <td class="col-number">14.3%</td>
+          <td class="col-examples"><div class="example-item">NEODUEL: Backpack Monsters: Inventory management battler NeoDuel: Backpack Monsters gets new content - we have keys to give away</div><div class="example-item">Call of Duty: Advanced Warfare - Gold Edition: New DLC Available - Call of Duty : Advanced Warfare - Reckoning</div><div class="example-item">Defenders of Ardania: New DLC Available - Defenders of Ardania: Battlemagic</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-phrase">season</td>
+          <td class="col-number">113</td>
+          <td class="col-number">23.3%</td>
+          <td class="col-number">0.0%</td>
+          <td class="col-examples"><div class="example-item">WWE 2K18: WWE 2K18 season pass includes the Hardy Boyz and the 'Pumphandle Death Valley Driver'</div><div class="example-item">WWE 2K18: WWE 2K18 won't have paid microtransactions, says 2K</div><div class="example-item">Quantum Conundrum: Pre-Purchase Now: Quantum Conundrum, receive 3 exclusive TF2 items!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-phrase">update released</td>
+          <td class="col-number">385</td>
+          <td class="col-number">19.9%</td>
+          <td class="col-number">0.0%</td>
+          <td class="col-examples"><div class="example-item">Emergency 2012: Emergency 2012 Update Released</div><div class="example-item">The Kings' Crusade: The Kings' Crusade Update Released</div><div class="example-item">Alternativa: AlternativA Update Released</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Launches &amp; Release Timing</td>
+          <td class="col-phrase">launch</td>
+          <td class="col-number">2,456</td>
+          <td class="col-number">37.4%</td>
+          <td class="col-number">17.7%</td>
+          <td class="col-examples"><div class="example-item">Nioh: Complete Edition: Wo Long is already Team Ninja's biggest ever Steam launch, despite PC port issues</div><div class="example-item">Quake II Mission Pack: The Reckoning: Carmack remembers Quake on 15th anniversary</div><div class="example-item">Lords Of The Fallen™ 2014: Somehow, Lords of the Fallen continues to get major patches - and its biggest one yet just gave everyone an unbeatable reason to play</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Servers / Maintenance / Downtime / Apologies</td>
+          <td class="col-phrase">update</td>
+          <td class="col-number">670</td>
+          <td class="col-number">33.6%</td>
+          <td class="col-number">14.6%</td>
+          <td class="col-examples"><div class="example-item">Left 4 Dead 2: Left 4 Dead 2 gets a compatibility update for Linux</div><div class="example-item">Fieldrunners 2: Fieldrunners 2 Product Update</div><div class="example-item">Tomb Raider I-III Remastered Starring Lara Croft: Tomb Raider Remastered studio denies using generative AI in latest update, says fixes for bugs and 'texture issues' are on the way</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Roadmaps / Devlogs / Feature Previews</td>
+          <td class="col-phrase">roadmap</td>
+          <td class="col-number">173</td>
+          <td class="col-number">27.6%</td>
+          <td class="col-number">9.1%</td>
+          <td class="col-examples"><div class="example-item">Ravenswatch: New Ravenswatch roadmap makes plans into 2027 despite publisher's financial struggles</div><div class="example-item">Rocket Arena: Rocket Arena - Details zur ersten Saison und Roadmap zum Live-Service</div><div class="example-item">Age of Empires IV: Anniversary Edition: Age of Empires 4 roadmap outlines next patch, mod tools, and ranked seasons</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">dlc</td>
+          <td class="col-number">382</td>
+          <td class="col-number">25.3%</td>
+          <td class="col-number">7.1%</td>
+          <td class="col-examples"><div class="example-item">Call of Duty: Advanced Warfare - Gold Edition: New DLC Available - Call of Duty : Advanced Warfare - Reckoning</div><div class="example-item">Defenders of Ardania: New DLC Available - Defenders of Ardania: Battlemagic</div><div class="example-item">Defenders of Ardania: New DLC Available - Defenders of Ardania: The Conjurer's Tricks</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Monetization / Store / Pass / Currency</td>
+          <td class="col-phrase">season pass</td>
+          <td class="col-number">82</td>
+          <td class="col-number">17.9%</td>
+          <td class="col-number">0.0%</td>
+          <td class="col-examples"><div class="example-item">WWE 2K18: WWE 2K18 season pass includes the Hardy Boyz and the 'Pumphandle Death Valley Driver'</div><div class="example-item">WWE 2K18: WWE 2K18 won't have paid microtransactions, says 2K</div><div class="example-item">Quantum Conundrum: Pre-Purchase Now: Quantum Conundrum, receive 3 exclusive TF2 items!</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">DLC / Expansions / Episodes</td>
+          <td class="col-phrase">expansion</td>
+          <td class="col-number">1,839</td>
+          <td class="col-number">31.3%</td>
+          <td class="col-number">17.0%</td>
+          <td class="col-examples"><div class="example-item">Hollow Knight: Silksong: Ahead of Hollow Knight: Silksong's Sea of Sorrow expansion, Team Cherry have gotten their Traditional Chinese and German translation ducks in a row</div><div class="example-item">The Surge: The Surge's new Wild West-themed expansion has robots in cowboy hats</div><div class="example-item">Company of Heroes 2 - Ardennes Assault: Company of Heroes 2 and expansion Ardennes Assault free to download and keep forever on Steam</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">content available</td>
+          <td class="col-number">305</td>
+          <td class="col-number">20.6%</td>
+          <td class="col-number">7.1%</td>
+          <td class="col-examples"><div class="example-item">Call of Duty: Advanced Warfare - Gold Edition: New DLC Available - Call of Duty : Advanced Warfare - Reckoning</div><div class="example-item">Assassin’s Creed III: New DLC Available - Assassin’s Creed® III – The Hidden Secrets Pack</div><div class="example-item">Assassin’s Creed III: New DLC Available - Assassin’s Creed® III: The Betrayal</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Events / Seasonal / Anniversary</td>
+          <td class="col-phrase">season</td>
+          <td class="col-number">1,105</td>
+          <td class="col-number">29.7%</td>
+          <td class="col-number">16.3%</td>
+          <td class="col-examples"><div class="example-item">The Walking Dead: Season Two: The Walking Dead s final season brings back Gary Whitta</div><div class="example-item">WRC 4 FIA World Rally Championship: Now Available on Steam - WRC 4 FIA World Rally Championship, 10% off!</div><div class="example-item">Clutch: Madden has 38 &quot;Clutch&quot; Players, but What the Hell Does That Mean, Really?</div></td>
+        </tr>
+      
+        <tr>
+          <td class="col-topic">Major Content Updates</td>
+          <td class="col-phrase">dlc available</td>
+          <td class="col-number">304</td>
+          <td class="col-number">20.3%</td>
+          <td class="col-number">7.1%</td>
+          <td class="col-examples"><div class="example-item">Call of Duty: Advanced Warfare - Gold Edition: New DLC Available - Call of Duty : Advanced Warfare - Reckoning</div><div class="example-item">Defenders of Ardania: New DLC Available - Defenders of Ardania: Battlemagic</div><div class="example-item">Defenders of Ardania: New DLC Available - Defenders of Ardania: The Conjurer's Tricks</div></td>
+        </tr>
+      </tbody>
+      </table>
+      </div>
+    </section>
+  
+      </section>
+    </main>
+  </body>
+</html>

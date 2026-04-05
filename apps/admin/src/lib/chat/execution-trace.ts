@@ -327,6 +327,21 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
     migrationNotes: 'Entity overview and company portfolio snapshots already run through the system.',
     recommendedTigerContracts: ['getEntityOverview'],
   },
+  getRelatedEntities: {
+    backendKinds: ['tiger_query_api'],
+    dataSources: [
+      'query_api:getRelatedEntities',
+      'relation:apps',
+      'relation:latest_daily_metrics',
+      'relation:app_dlc',
+      'relation:app_franchises',
+      'relation:franchises',
+      'relation:app_steam_deck',
+    ],
+    migrationDisposition: 'already_tiger',
+    migrationNotes: 'DLC and franchise relation lookups already run through the system.',
+    recommendedTigerContracts: ['getRelatedEntities'],
+  },
   getUserContext: {
     backendKinds: ['tiger_query_api'],
     dataSources: [

@@ -7,6 +7,13 @@ import { SUITE_ROWS as SECTIONS_3_4_ROWS } from '../run-critique-sections-3-4.mj
 import { SUITE_ROWS as SECTIONS_5_6_ROWS } from '../run-critique-sections-5-6.mjs';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+export const FULL_SUITE_INVENTORY_NAME = 'full-suite';
+const FULL_SUITE_UI_SMOKE_PROMPT_IDS = new Set([10, 89, 155, 132, 18, 158, 139]);
+const FULL_SUITE_UI_SMOKE_SCENARIO_IDS = new Set([
+  'publisher_followup_resolution',
+  'similarity_followup_narrowing',
+  'change_drilldown_chain',
+]);
 
 export const BLENDED_PERSONA = {
   name: 'Blended PublisherIQ Operator',
@@ -48,7 +55,8 @@ export const MULTI_TURN_SCENARIOS_PATH = path.join(
   'multi-turn-phase1-scenarios.json'
 );
 
-export function getFullSuitePromptInventory() {
+export function getFullSuitePromptInventory(params = {}) {
+  const smokeOnly = Boolean(params.smokeOnly);
   const deduped = new Map();
 
   for (const suite of PROMPT_SUITES) {
@@ -60,12 +68,18 @@ export function getFullSuitePromptInventory() {
         deduped.set(key, {
           critiqueId: row.critiqueId,
           family: row.family,
+          inventoryName: FULL_SUITE_INVENTORY_NAME,
+          isVariant: false,
           primaryPersona: row.primaryPersona,
           prompt: row.prompt,
+          seedPromptId: String(row.critiqueId),
           section: row.section,
+          sourceInventory: FULL_SUITE_INVENTORY_NAME,
           sourceFamilies: [row.family],
           sourceSections: [row.section],
           sourceSuites: [suite.suiteId],
+          uiSmoke: FULL_SUITE_UI_SMOKE_PROMPT_IDS.has(row.critiqueId),
+          variantKey: null,
         });
         continue;
       }
@@ -84,19 +98,25 @@ export function getFullSuitePromptInventory() {
     }
   }
 
-  return [...deduped.values()];
+  const prompts = [...deduped.values()];
+  return smokeOnly ? prompts.filter((prompt) => prompt.uiSmoke) : prompts;
 }
 
-export async function loadFullSuiteScenarioInventory() {
+export async function loadFullSuiteScenarioInventory(params = {}) {
+  const smokeOnly = Boolean(params.smokeOnly);
   const raw = JSON.parse(await fs.readFile(MULTI_TURN_SCENARIOS_PATH, 'utf8'));
   if (!Array.isArray(raw)) {
     throw new Error(`Scenario inventory must be an array: ${MULTI_TURN_SCENARIOS_PATH}`);
   }
 
-  return raw.map((scenario) => ({
+  const scenarios = raw.map((scenario) => ({
+    inventoryName: FULL_SUITE_INVENTORY_NAME,
+    isVariant: false,
     id: String(scenario.id || scenario.name),
     name: String(scenario.name || scenario.id),
     notes: typeof scenario.notes === 'string' ? scenario.notes : '',
+    seedPromptId: String(scenario.id || scenario.name),
+    sourceInventory: FULL_SUITE_INVENTORY_NAME,
     turns: Array.isArray(scenario.turns)
       ? scenario.turns.map((turn, turnIndex) => ({
           expectation: typeof turn.expectation === 'string' ? turn.expectation : '',
@@ -104,14 +124,22 @@ export async function loadFullSuiteScenarioInventory() {
           user: String(turn.user || ''),
         }))
       : [],
+    uiSmoke: FULL_SUITE_UI_SMOKE_SCENARIO_IDS.has(String(scenario.id || scenario.name)),
+    variantKey: null,
   }));
+
+  return smokeOnly ? scenarios.filter((scenario) => scenario.uiSmoke) : scenarios;
 }
 
 export async function buildFullSuiteManifest(params = {}) {
   const maxPrompts = Number(params.maxPrompts || 0);
   const maxScenarios = Number(params.maxScenarios || 0);
-  const prompts = getFullSuitePromptInventory();
-  const scenarios = await loadFullSuiteScenarioInventory();
+  const prompts = getFullSuitePromptInventory({
+    smokeOnly: params.smokeOnly,
+  });
+  const scenarios = await loadFullSuiteScenarioInventory({
+    smokeOnly: params.smokeOnly,
+  });
 
   return {
     blendedPersona: BLENDED_PERSONA,

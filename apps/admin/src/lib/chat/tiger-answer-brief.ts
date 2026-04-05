@@ -13,6 +13,7 @@ type TigerAnswerIntent = Exclude<TigerShadowMatchedIntent, null>;
 
 export interface TigerAnswerBrief {
   answerKind: 'clarification' | 'success';
+  allowNarration?: boolean;
   directAnswer: string;
   evidenceMarkdown?: string | null;
   fallbackMarkdown: string;
@@ -48,6 +49,14 @@ function getNumber(value: unknown): number | null {
   return null;
 }
 
+function hasMarkdownTable(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return /\|\s*---/.test(value) && /^\|.+\|$/m.test(value);
+}
+
 function normalizeForLooseMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -70,6 +79,30 @@ function formatPercent(value: number | null | undefined): string {
   }
 
   return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
+}
+
+function normalizeReviewPercentage(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null;
+  }
+
+  return value >= 0 && value <= 10
+    ? value * 10
+    : value;
+}
+
+function formatReviewPercentage(value: number | null | undefined): string {
+  const normalized = normalizeReviewPercentage(value);
+  return normalized == null ? 'n/a' : formatPercent(normalized);
+}
+
+function formatMatchScore(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'n/a';
+  }
+
+  const bounded = Math.max(0, Math.min(value, 100));
+  return `${Math.round(bounded)}/100`;
 }
 
 function formatSignedNumber(value: number | null | undefined): string {
@@ -115,7 +148,7 @@ function humanizeMetric(metric: string | null | undefined): string {
     case 'owners_midpoint':
       return 'owners';
     case 'review_score':
-      return 'review score';
+      return 'review percentage';
     case 'total_reviews':
       return 'total reviews';
     default:
@@ -449,6 +482,35 @@ function getTopDisplayNames(response: unknown, maxItems = 3): string[] {
   return Array.from(new Set(names)).slice(0, maxItems);
 }
 
+function getCatalogFacetNames(response: unknown, maxItems = 6): string[] {
+  if (!isRecord(response) || !isRecord(response.facets)) {
+    return [];
+  }
+
+  const facets = response.facets;
+  const names = [
+    ...(Array.isArray(facets.tags) ? facets.tags : []),
+    ...(Array.isArray(facets.genres) ? facets.genres : []),
+    ...(Array.isArray(facets.categories) ? facets.categories : []),
+  ]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean);
+
+  return Array.from(new Set(names)).slice(0, maxItems);
+}
+
+function getMomentumReferenceName(response: unknown): string | null {
+  if (!isRecord(response) || !isRecord(response.reference)) {
+    return null;
+  }
+
+  return getString(response.reference.name);
+}
+
+function isProspectRankingResponse(response: unknown): boolean {
+  return isRecord(response) && getString(response.kind) === 'prospect_ranking';
+}
+
 function buildIntentSuggestions(params: {
   intent: TigerAnswerIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
@@ -465,9 +527,11 @@ function buildIntentSuggestions(params: {
     const suggestions: QuerySuggestion[] = [];
     const firstName = topNames[0] ?? null;
     const secondName = topNames[1] ?? null;
+    const facetNames = getCatalogFacetNames(response, 3);
     const interpretedFilters = isRecord(response) && isRecord(response.interpretedFilters) ? response.interpretedFilters : null;
     const companyName =
       interpretedFilters && (getString(interpretedFilters.developerQuery) ?? getString(interpretedFilters.publisherQuery));
+    const facetQuery = interpretedFilters ? getString(interpretedFilters.facetQuery) ?? getString(interpretedFilters.query) : null;
 
     if (firstName) {
       suggestions.push({
@@ -488,6 +552,18 @@ function buildIntentSuggestions(params: {
         category: 'template',
         label: `${companyName} by player base`,
         query: `How many players do ${companyName} games have?`,
+      });
+    }
+    if (!firstName && facetQuery && facetNames[0]) {
+      suggestions.push({
+        category: 'template',
+        label: `${facetQuery} momentum`,
+        query: `What ${facetQuery} games are gaining momentum?`,
+      });
+      suggestions.push({
+        category: 'template',
+        label: `${facetQuery} with ${facetNames[0]}`,
+        query: `${facetQuery} games with ${facetNames[0]}`,
       });
     }
 
@@ -672,6 +748,7 @@ function buildIntentSuggestions(params: {
   if (intent === 'momentum_discovery') {
     const firstName = topNames[0] ?? null;
     const secondName = topNames[1] ?? null;
+    const referenceName = getMomentumReferenceName(response);
     const filtersApplied = isRecord(response) && Array.isArray(response.filtersApplied)
       ? response.filtersApplied.map((value) => String(value).toLowerCase())
       : [];
@@ -714,6 +791,13 @@ function buildIntentSuggestions(params: {
         category: 'template',
         label: `Compare ${firstName} and ${secondName}`,
         query: `Compare ${firstName} and ${secondName} by reviews`,
+      });
+    }
+    if (referenceName && firstName) {
+      suggestions.push({
+        category: 'template',
+        label: `Compare ${referenceName} and ${firstName}`,
+        query: `Compare ${referenceName} and ${firstName} by reviews`,
       });
     }
     if (sortBy !== 'ccu_peak' || timeframe !== 'current') {
@@ -791,6 +875,13 @@ function buildIntentSuggestions(params: {
     const firstName = topNames[0] ?? null;
     const secondName = topNames[1] ?? null;
     const suggestions: QuerySuggestion[] = [];
+    if (isProspectRankingResponse(response)) {
+      suggestions.push({
+        category: 'template',
+        label: 'Under-marketed leads',
+        query: 'Which live-service or frequently updated games look under-marketed and could be good agency prospects?',
+      });
+    }
     if (firstName) {
       suggestions.push({
         category: 'game',
@@ -810,6 +901,43 @@ function buildIntentSuggestions(params: {
         query: `Compare ${firstName} and ${secondName} by reviews`,
       });
     }
+    return suggestions;
+  }
+
+  if (intent === 'relation_lookup') {
+    const source = isRecord(response) && isRecord(response.source) ? response.source : null;
+    const sourceName = source ? getString(source.displayName) : null;
+    const firstName = topNames[0] ?? null;
+    const relationKind = isRecord(response) ? getString(response.relationKind) : null;
+    const suggestions: QuerySuggestion[] = [];
+
+    if (sourceName) {
+      suggestions.push({
+        category: 'game',
+        label: `Recent changes for ${sourceName}`,
+        query: `What changed for ${sourceName} this week?`,
+      });
+      suggestions.push({
+        category: 'game',
+        label: `Announcements for ${sourceName}`,
+        query: `Any recent announcements about ${sourceName}?`,
+      });
+    }
+    if (sourceName && relationKind === 'franchise_games') {
+      suggestions.push({
+        category: 'template',
+        label: `${sourceName} on Steam Deck`,
+        query: `Steam Deck games similar to ${sourceName} from the same franchise`,
+      });
+    }
+    if (firstName) {
+      suggestions.push({
+        category: 'game',
+        label: `Tell me about ${firstName}`,
+        query: `Tell me about ${firstName}`,
+      });
+    }
+
     return suggestions;
   }
 
@@ -1077,8 +1205,13 @@ function buildDirectAnswer(params: {
     const interpretedFilters = isRecord(response) && isRecord(response.interpretedFilters) ? response.interpretedFilters : null;
     const companyName =
       interpretedFilters && (getString(interpretedFilters.developerQuery) ?? getString(interpretedFilters.publisherQuery));
+    const facetNames = getCatalogFacetNames(response, 3);
+    const facetQuery = interpretedFilters ? getString(interpretedFilters.facetQuery) ?? getString(interpretedFilters.query) : null;
     if (companyName) {
       return `I found matching games from ${companyName}.`;
+    }
+    if (facetNames.length > 0 && facetQuery) {
+      return `I found the closest matching facet labels for ${facetQuery}, led by ${joinHumanList(facetNames.slice(0, 3))}.`;
     }
 
     return topNames[0]
@@ -1116,7 +1249,7 @@ function buildDirectAnswer(params: {
       const totalReviews = metrics ? getNumber(metrics.totalReviews) : null;
       const reviewScore = metrics ? getNumber(metrics.reviewScore) : null;
       if (totalReviews != null || reviewScore != null) {
-        return `${entityName} currently shows ${formatPercent(reviewScore)} positive reviews across ${formatNumber(totalReviews)} reviews.`;
+        return `${entityName} currently shows ${formatReviewPercentage(reviewScore)} positive reviews across ${formatNumber(totalReviews)} reviews.`;
       }
       return `Here is the current snapshot for ${entityName}.`;
     }
@@ -1173,6 +1306,7 @@ function buildDirectAnswer(params: {
   if (intent === 'momentum_discovery') {
     const firstItem = getItemsFromResponse(response)[0] ?? null;
     const firstName = firstItem ? getString(firstItem.name) ?? getString(firstItem.displayName) : null;
+    const referenceName = getMomentumReferenceName(response);
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
     const briefMode = getMomentumBriefMode(response, params.momentumPromptFamily);
@@ -1188,23 +1322,24 @@ function buildDirectAnswer(params: {
         ? firstItem.supportReasons.map((value) => String(value)).filter(Boolean)
         : [];
     const ccuPeak = firstItem ? getNumber(firstItem.ccuPeak) : null;
+    const referenceSuffix = referenceName ? ` among games similar to ${referenceName}` : '';
     const establishedSuffix = establishedTitlesNote ? ` ${establishedTitlesNote}` : '';
     const sparseBroadeningSuffix = sparseBroadeningNote ? ` ${sparseBroadeningNote}` : '';
 
     if (firstName) {
       if (briefMode === 'current_players') {
-        return `As of ${windowLabel}, ${firstName} has the highest player count in this snapshot${scopeSuffix}, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
+        return `As of ${windowLabel}, ${firstName} has the highest player count in this snapshot${referenceSuffix}${scopeSuffix}, reaching ${formatNumber(ccuPeak)} peak concurrent users.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
       }
 
       if (briefMode === 'review_sentiment') {
-        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${sparseBroadeningSuffix}`;
+        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${referenceSuffix}${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${sparseBroadeningSuffix}`;
       }
 
       if (briefMode === 'review_activity') {
-        return `From ${windowLabel}, ${firstName} ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity screen'}${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} by ${rankingLabel?.toLowerCase() ?? 'recent reviews added'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
+        return `From ${windowLabel}, ${firstName} ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity screen'}${referenceSuffix}${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} by ${rankingLabel?.toLowerCase() ?? 'recent reviews added'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
       }
 
-      return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
+      return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${referenceSuffix}${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
     }
 
     if (briefMode === 'current_players') {
@@ -1243,17 +1378,42 @@ function buildDirectAnswer(params: {
   }
 
   if (intent === 'change_discovery') {
+    if (isProspectRankingResponse(response)) {
+      const firstItem = getItemsFromResponse(response)[0] ?? null;
+      const leaderName = firstItem ? getString(firstItem.name) : null;
+      return leaderName
+        ? `${leaderName} currently leads this prospect screen on the combined need, timing, and evidence-quality score.`
+        : 'I found a shortlist of current prospects scored on need, timing, and evidence quality.';
+    }
+
     return topNames[0]
       ? `${topNames[0]} is one of the clearest recent change signals in this set.`
       : 'A few titles stand out in the recent change activity.';
+  }
+
+  if (intent === 'relation_lookup') {
+    const source = isRecord(response) && isRecord(response.source) ? response.source : null;
+    const sourceName = source ? getString(source.displayName) : null;
+    const relationKind = isRecord(response) ? getString(response.relationKind) : null;
+    const firstName = topNames[0] ?? null;
+    if (sourceName && relationKind === 'dlc') {
+      return firstName
+        ? `I found current DLC for ${sourceName}, led by ${firstName}.`
+        : `I found the current DLC set for ${sourceName}.`;
+    }
+    if (sourceName) {
+      return firstName
+        ? `I found same-franchise matches for ${sourceName}, led by ${firstName}.`
+        : `I found same-franchise matches for ${sourceName}.`;
+    }
   }
 
   if (intent === 'semantic_search') {
     const reference = isRecord(response) && isRecord(response.reference) ? response.reference : null;
     const referenceName = reference ? getString(reference.name) : null;
     return referenceName && topNames[0]
-      ? `${topNames[0]} looks like one of the closest matches to ${referenceName}.`
-      : 'I found a few close matches for that request.';
+      ? `${topNames[0]} looks like one of the strongest matches to ${referenceName}.`
+      : 'I found the strongest matching games for that request.';
   }
 
   return 'Here is the best matching answer I found.';
@@ -1269,6 +1429,17 @@ function buildKeyFacts(params: {
   const facts: string[] = [];
 
   if (intent === 'catalog_search') {
+    const facetNames = getCatalogFacetNames(response, 6);
+    if (facetNames.length > 0 && getItemsFromResponse(response).length === 0) {
+      const interpretedFilters = isRecord(response) && isRecord(response.interpretedFilters) ? response.interpretedFilters : null;
+      const facetQuery = interpretedFilters ? getString(interpretedFilters.facetQuery) ?? getString(interpretedFilters.query) : null;
+      if (facetQuery) {
+        facts.push(`Common paired facet labels for ${facetQuery}: ${joinHumanList(facetNames.slice(0, 6))}.`);
+      } else {
+        facts.push(`Common paired facet labels: ${joinHumanList(facetNames.slice(0, 6))}.`);
+      }
+    }
+
     for (const item of getItemsFromResponse(response).slice(0, 4)) {
       const name = getString(item.name) ?? getString(item.displayName);
       if (!name) {
@@ -1276,7 +1447,7 @@ function buildKeyFacts(params: {
       }
 
       const parts = [
-        getNumber(item.reviewScore) != null ? `${formatNumber(getNumber(item.reviewScore))}/10 reviews` : null,
+        getNumber(item.reviewScore) != null ? `${formatReviewPercentage(getNumber(item.reviewScore))} review percentage` : null,
         getNumber(item.totalReviews) != null ? `${formatNumber(getNumber(item.totalReviews))} total reviews` : null,
         getNumber(item.releaseYear) != null ? `released ${formatNumber(getNumber(item.releaseYear))}` : null,
       ].filter((value): value is string => Boolean(value));
@@ -1351,7 +1522,7 @@ function buildKeyFacts(params: {
       }
 
       facts.push(
-        `${name} (${entityKind}): ${formatNumber(getNumber(metrics.gameCount))} games, ${formatPercent(getNumber(metrics.reviewScore))} review score, ${formatNumber(getNumber(metrics.totalReviews))} total reviews, ${formatNumber(getNumber(metrics.ccuPeak))} peak CCU.`
+        `${name} (${entityKind}): ${formatNumber(getNumber(metrics.gameCount))} games, ${formatReviewPercentage(getNumber(metrics.reviewScore))} review percentage, ${formatNumber(getNumber(metrics.totalReviews))} total reviews, ${formatNumber(getNumber(metrics.ccuPeak))} peak CCU.`
       );
     }
 
@@ -1390,6 +1561,7 @@ function buildKeyFacts(params: {
       );
     }
   } else if (intent === 'momentum_discovery') {
+    const referenceName = getMomentumReferenceName(response);
     const rankingLabel = isRecord(response) ? getString(response.rankingLabel) : null;
     const timeframeLabel = isRecord(response) ? getString(response.timeframeLabel) : null;
     const timeframe = isRecord(response) ? getString(response.timeframe) : null;
@@ -1398,6 +1570,9 @@ function buildKeyFacts(params: {
     const appliedScope = formatMomentumAppliedScope(response);
     const establishedTitlesNote = getEstablishedTitlesNote(response);
     const sparseBroadeningNote = getSparseReviewSentimentBroadeningNote(params.scopeAdjustedForSparseResults);
+    if (referenceName) {
+      facts.push(`Similarity reference: ${referenceName}.`);
+    }
     if (appliedScope) {
       facts.push(`Applied filters: ${appliedScope}.`);
     }
@@ -1494,6 +1669,24 @@ function buildKeyFacts(params: {
       );
     }
   } else if (intent === 'change_discovery') {
+    if (isProspectRankingResponse(response)) {
+      for (const item of getItemsFromResponse(response).slice(0, 3)) {
+        const name = getString(item.name);
+        const evidenceSummary = Array.isArray(item.evidenceSummary)
+          ? item.evidenceSummary.map((value) => String(value)).filter(Boolean)
+          : [];
+        if (!name) {
+          continue;
+        }
+
+        facts.push(
+          `${name}: need ${formatNumber(getNumber(item.needScore))}, timing ${formatNumber(getNumber(item.timingScore))}, evidence ${formatNumber(getNumber(item.evidenceQualityScore))}.${evidenceSummary[0] ? ` ${evidenceSummary[0]}` : ''}`
+        );
+      }
+
+      return facts;
+    }
+
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name);
       const occurredAt = formatDate(getString(item.occurredAt));
@@ -1504,12 +1697,33 @@ function buildKeyFacts(params: {
         facts.push(`${name}${occurredAt ? ` on ${occurredAt}` : ''}: ${evidence ?? 'recent activity detected'}.`);
       }
     }
+  } else if (intent === 'relation_lookup') {
+    const source = isRecord(response) && isRecord(response.source) ? response.source : null;
+    const sourceName = source ? getString(source.displayName) : null;
+    const relationKind = isRecord(response) ? getString(response.relationKind) : null;
+    if (sourceName) {
+      facts.push(
+        relationKind === 'dlc'
+          ? `Source game: ${sourceName}.`
+          : `Source game: ${sourceName}.`
+      );
+    }
+    for (const item of getItemsFromResponse(response).slice(0, 4)) {
+      const name = getString(item.name);
+      if (!name) {
+        continue;
+      }
+
+      facts.push(
+        `${name}: ${formatReviewPercentage(getNumber(item.reviewScore))} review percentage, ${formatNumber(getNumber(item.totalReviews))} total reviews, ${formatDate(getString(item.releaseDate)) ?? 'n/a'} release date, Steam Deck ${getString(item.steamDeckCategory) ?? 'n/a'}.`
+      );
+    }
   } else if (intent === 'semantic_search') {
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name);
       const reasons = Array.isArray(item.matchReasons) ? item.matchReasons.join(', ') : null;
       if (name) {
-        facts.push(`${name}: score ${formatNumber(getNumber(item.score))}${reasons ? `, matched for ${reasons}` : ''}.`);
+        facts.push(`${name}: match score ${formatMatchScore(getNumber(item.score))}${reasons ? `, matched for ${reasons}` : ''}.`);
       }
     }
   }
@@ -1596,6 +1810,7 @@ export function buildTigerClarificationBrief(params: {
 }
 
 export function buildTigerSuccessBrief(params: {
+  allowNarration?: boolean;
   fallbackMarkdown: string;
   intent: TigerAnswerIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
@@ -1616,9 +1831,12 @@ export function buildTigerSuccessBrief(params: {
   const fallbackMarkdown = selectionNote
     ? `${params.fallbackMarkdown}\n\n${selectionNote}`
     : params.fallbackMarkdown;
+  const hasStructuredEvidence = hasMarkdownTable(fallbackMarkdown) || hasMarkdownTable(evidenceMarkdown);
 
   return {
     answerKind: 'success',
+    // Table-backed answers should stay deterministic so the prose cannot drift from the rows.
+    allowNarration: params.allowNarration ?? !hasStructuredEvidence,
     directAnswer: buildDirectAnswer({
       intent: params.intent,
       momentumPromptFamily: params.momentumPromptFamily ?? null,

@@ -34,6 +34,8 @@ function parseSelectedTables(envValue: string | undefined): Set<string> | null {
   );
 }
 
+const CRITICAL_COMPATIBILITY_TABLES = ['apps', 'app_dlc', 'latest_daily_metrics', 'app_steam_deck'] as const;
+
 const TABLE_PLANS: Array<{
   name: string;
   plan: TablePlan<QueryResultRow>;
@@ -76,7 +78,43 @@ const TABLE_PLANS: Array<{
       ],
       conflictColumns: ['appid'],
       orderBy: 'appid',
-      sourceRelation: 'public.apps',
+      sourceRelation: `
+        (
+          SELECT
+            appid,
+            name,
+            type,
+            is_free,
+            release_date,
+            release_date_raw,
+            store_asset_mtime,
+            has_workshop,
+            current_price_cents,
+            current_discount_percent,
+            is_released,
+            is_delisted,
+            created_at,
+            updated_at,
+            has_developer_info,
+            controller_support,
+            pics_review_score,
+            pics_review_percentage,
+            metacritic_score,
+            metacritic_url,
+            platforms,
+            release_state,
+            parent_appid,
+            homepage_url,
+            app_state,
+            last_content_update,
+            current_build_id,
+            content_descriptors,
+            languages,
+            last_seen_in_steam_applist_at
+          FROM public.apps
+          WHERE catalog_seed_state <> 'stub'
+        ) source_apps
+      `,
       targetRelation: 'legacy.apps',
       updateColumns: [
         'name',
@@ -199,6 +237,18 @@ const TABLE_PLANS: Array<{
       sourceRelation: 'public.app_publishers',
       targetRelation: 'legacy.app_publishers',
       updateColumns: ['appid', 'publisher_id'],
+    },
+  },
+  {
+    name: 'app_dlc',
+    plan: {
+      batchSize: 5000,
+      columns: ['parent_appid', 'dlc_appid', 'source', 'created_at'],
+      conflictColumns: ['parent_appid', 'dlc_appid'],
+      orderBy: 'parent_appid, dlc_appid',
+      sourceRelation: 'public.app_dlc',
+      targetRelation: 'legacy.app_dlc',
+      updateColumns: ['source', 'created_at'],
     },
   },
   {
@@ -481,6 +531,17 @@ function buildInsertSql(plan: TablePlan<QueryResultRow>, rowCount: number): stri
   `;
 }
 
+function assertCriticalTablePlansExist(selectedPlans: Array<{ name: string }>): void {
+  const selectedNames = new Set(selectedPlans.map(({ name }) => name));
+  const missingTables = CRITICAL_COMPATIBILITY_TABLES.filter((tableName) => !selectedNames.has(tableName));
+
+  if (missingTables.length > 0) {
+    throw new Error(
+      `Legacy compatibility backfill is missing critical table plans: ${missingTables.join(', ')}`
+    );
+  }
+}
+
 async function fetchCount(pool: Pool, relation: string): Promise<number> {
   const result = await pool.query<{ row_count: string }>(
     `SELECT count(*)::bigint AS row_count FROM ${relation}`
@@ -565,6 +626,10 @@ async function main(): Promise<void> {
       throw new Error(
         `Unknown LEGACY_BACKFILL_TABLES values: ${unknownTables.join(', ')}`
       );
+    }
+
+    if (!selectedTables) {
+      assertCriticalTablePlansExist(selectedPlans);
     }
 
     logger.info('Starting legacy compatibility backfill', {

@@ -89,6 +89,8 @@ export interface SemanticSearchDebugInfo {
 
 export interface SemanticSearchEngineResult {
   candidates?: SemanticSearchCandidate[];
+  close_alternatives?: SemanticSearchResultItem[];
+  close_alternatives_reason?: string;
   continuation_token?: string | null;
   debug?: SemanticSearchDebugInfo;
   entityType?: 'publisher' | 'developer';
@@ -160,12 +162,14 @@ export type ChangePattern =
   | 'rescue_candidate'
   | 'sustained_response'
   | 'announcement_weak_response';
+export type RelatedEntityKind = 'dlc' | 'franchise_games';
 export type CatalogFacetKind = 'tags' | 'genres' | 'categories';
 export type DataPlaneRelationKey =
   | 'apps'
   | 'developers'
   | 'publishers'
   | 'app_dlc'
+  | 'app_franchises'
   | 'app_developers'
   | 'app_steam_deck'
   | 'app_publishers'
@@ -179,6 +183,7 @@ export type DataPlaneRelationKey =
   | 'events_app_change_events'
   | 'docs_steam_news_items'
   | 'docs_steam_news_search_projection'
+  | 'franchises'
   | 'app_genres'
   | 'steam_genres'
   | 'app_steam_tags'
@@ -416,6 +421,7 @@ export interface RankEntitiesRequest {
   limit?: number;
   metric: RankMetric;
   query?: string | null;
+  recentReleaseDays?: number | null;
   releaseDays?: number | null;
   sortDirection?: 'asc' | 'desc';
 }
@@ -756,6 +762,7 @@ export interface DiscoverChangePatternsResponse {
 }
 
 export interface DiscoverMomentumRequest {
+  appids?: number[];
   excludeAppIds?: number[];
   filters?: {
     genres?: string[];
@@ -838,6 +845,49 @@ export interface DiscoverMomentumResponse {
   timeframe: '7d' | '30d' | 'current';
   timeframeLabel: string;
   trendType: DiscoverMomentumRequest['trendType'];
+}
+
+export interface GetRelatedEntitiesRequest {
+  excludeSource?: boolean;
+  filters?: {
+    minReviewScore?: number | null;
+    reviewComparison?: 'any' | 'better_only';
+    steamDeck?: Array<'playable' | 'verified'>;
+  } | null;
+  limit?: number;
+  relationKind: RelatedEntityKind;
+  sourceAppid?: number | null;
+  sourceEntityUid?: string | null;
+}
+
+export interface RelatedEntityResultItem {
+  appid: number;
+  entityUid: string;
+  name: string;
+  releaseDate: string | null;
+  releaseYear: number | null;
+  reviewScore: number | null;
+  steamDeckCategory: 'playable' | 'verified' | 'unsupported' | 'unknown' | null;
+  totalReviews: number | null;
+}
+
+export interface GetRelatedEntitiesResponse {
+  items: RelatedEntityResultItem[];
+  matchMode?: 'parent_appid' | 'relation_ids_only' | 'structured_relation' | 'title_family';
+  provenance: QueryProvenance;
+  relationKind: RelatedEntityKind;
+  source: {
+    appid: number;
+    displayName: string;
+    entityUid: string;
+    franchiseNames?: string[];
+    reviewScore: number | null;
+    steamDeckCategory: 'playable' | 'verified' | 'unsupported' | 'unknown' | null;
+    totalReviews: number | null;
+  };
+  sufficientToAnswer: boolean;
+  unresolvedAppids?: number[];
+  unresolvedCount?: number;
 }
 
 export interface SemanticSearchRequest {
@@ -1049,6 +1099,7 @@ export interface QueryContractDescriptor {
     | 'searchDocuments'
     | 'semanticSearch'
     | 'getUserContext'
+    | 'getRelatedEntities'
     | 'continueResultSet';
   naturalLanguageStrength: string[];
   requiredRelations: DataPlaneRelationKey[];

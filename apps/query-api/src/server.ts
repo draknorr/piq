@@ -12,8 +12,11 @@ import {
   DataPlaneService,
   type ExplainChangesRequest,
   type GetEntityOverviewRequest,
+  type GetRelatedEntitiesRequest,
+  type GetRelatedEntitiesResponse,
   type GetUserContextRequest,
   loadQueryApiConfig,
+  loadSourceBaselineConfig,
   type RankEntitiesRequest,
   type ResolveEntitiesRequest,
   type SearchCatalogRequest,
@@ -81,6 +84,7 @@ interface QueryApiService {
   continueResultSet: DataPlaneService['continueResultSet'];
   explainChanges: DataPlaneService['explainChanges'];
   getEntityOverview: DataPlaneService['getEntityOverview'];
+  getRelatedEntities: DataPlaneService['getRelatedEntities'];
   getUserContext: DataPlaneService['getUserContext'];
   healthCheck: DataPlaneService['healthCheck'];
   rankEntities: DataPlaneService['rankEntities'];
@@ -139,11 +143,78 @@ function routeRequiresAuthorization(
   return !(request.method === 'GET' && url.pathname === '/healthz');
 }
 
+function applyRelatedEntitiesFallbackSourceContext(params: {
+  fallbackService: QueryApiService;
+  primaryResult: GetRelatedEntitiesResponse;
+}): () => void {
+  const fallbackService = params.fallbackService as QueryApiService & Partial<{
+    queryRelatedDlcRows: () => Promise<[]>;
+    queryRelatedDlcRowsFromApps: () => Promise<[]>;
+    queryGameOverview: (appid: number) => Promise<{
+      display_name: string;
+      review_score: number | null;
+      total_reviews: number | null;
+    }>;
+    querySteamDeckCategoryByApp: (appid: number) => Promise<'playable' | 'verified' | 'unsupported' | 'unknown' | null>;
+  }>;
+  const originalQueryRelatedDlcRows = fallbackService.queryRelatedDlcRows;
+  const originalQueryRelatedDlcRowsFromApps = fallbackService.queryRelatedDlcRowsFromApps;
+  const originalQueryGameOverview = fallbackService.queryGameOverview;
+  const originalQuerySteamDeckCategoryByApp = fallbackService.querySteamDeckCategoryByApp;
+
+  if (typeof fallbackService.queryRelatedDlcRows === 'function') {
+    fallbackService.queryRelatedDlcRows = async () => [];
+  }
+
+  if (typeof fallbackService.queryRelatedDlcRowsFromApps === 'function') {
+    fallbackService.queryRelatedDlcRowsFromApps = async () => [];
+  }
+
+  if (typeof fallbackService.queryGameOverview === 'function') {
+    fallbackService.queryGameOverview = async () => ({
+      display_name: params.primaryResult.source.displayName,
+      review_score: params.primaryResult.source.reviewScore,
+      total_reviews: params.primaryResult.source.totalReviews,
+    });
+  }
+
+  if (typeof fallbackService.querySteamDeckCategoryByApp === 'function') {
+    fallbackService.querySteamDeckCategoryByApp = async () => params.primaryResult.source.steamDeckCategory;
+  }
+
+  return () => {
+    if (originalQueryRelatedDlcRows) {
+      fallbackService.queryRelatedDlcRows = originalQueryRelatedDlcRows;
+    } else {
+      delete fallbackService.queryRelatedDlcRows;
+    }
+
+    if (originalQueryRelatedDlcRowsFromApps) {
+      fallbackService.queryRelatedDlcRowsFromApps = originalQueryRelatedDlcRowsFromApps;
+    } else {
+      delete fallbackService.queryRelatedDlcRowsFromApps;
+    }
+
+    if (originalQueryGameOverview) {
+      fallbackService.queryGameOverview = originalQueryGameOverview;
+    } else {
+      delete fallbackService.queryGameOverview;
+    }
+
+    if (originalQuerySteamDeckCategoryByApp) {
+      fallbackService.querySteamDeckCategoryByApp = originalQuerySteamDeckCategoryByApp;
+    } else {
+      delete fallbackService.querySteamDeckCategoryByApp;
+    }
+  };
+}
+
 export function createQueryApiRequestHandler(params: {
   bearerToken: string | null;
   dataPlane: QueryApiService;
+  relatedEntitiesFallback?: QueryApiService | null;
 }): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
-  const { bearerToken, dataPlane } = params;
+  const { bearerToken, dataPlane, relatedEntitiesFallback = null } = params;
 
   return async (request, response) => {
     try {
@@ -184,6 +255,42 @@ export function createQueryApiRequestHandler(params: {
       if (request.method === 'POST' && url.pathname === '/v1/contracts/get-entity-overview') {
         const body = await readJsonBody<GetEntityOverviewRequest>(request);
         const result = await dataPlane.getEntityOverview(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-related-entities') {
+        const body = await readJsonBody<GetRelatedEntitiesRequest>(request);
+        let result = await dataPlane.getRelatedEntities(body);
+
+        if (
+          relatedEntitiesFallback
+          && (result.items?.length ?? 0) === 0
+          && (result.unresolvedCount ?? 0) === 0
+        ) {
+          const restoreFallbackContext =
+            body.relationKind === 'dlc'
+              ? applyRelatedEntitiesFallbackSourceContext({
+                  fallbackService: relatedEntitiesFallback,
+                  primaryResult: result,
+                })
+              : () => undefined;
+          try {
+            const fallbackResult = await relatedEntitiesFallback.getRelatedEntities(body);
+            if ((fallbackResult.items?.length ?? 0) > 0 || (fallbackResult.unresolvedCount ?? 0) > 0) {
+              result = fallbackResult;
+            }
+          } catch (error) {
+            logger.warn('Query API related-entities fallback failed', {
+              error,
+              relationKind: body.relationKind,
+              sourceAppid: body.sourceAppid ?? null,
+            });
+          } finally {
+            restoreFallbackContext();
+          }
+        }
+
         sendJson(response, 200, result);
         return;
       }
@@ -309,26 +416,40 @@ export function createQueryApiRequestHandler(params: {
 
 export function createQueryApiServer(params?: {
   bearerToken?: string | null;
+  config?: ReturnType<typeof loadQueryApiConfig> | null;
   dataPlane?: QueryApiService;
+  relatedEntitiesFallback?: QueryApiService | null;
 }): ReturnType<typeof createServer> {
   loadQueryApiEnvFiles();
 
-  const config = params?.dataPlane && params?.bearerToken !== undefined
-    ? null
-    : loadQueryApiConfig();
+  const config = params?.config
+    ?? (
+      params?.dataPlane && params?.bearerToken !== undefined
+        ? null
+        : loadQueryApiConfig()
+    );
   const dataPlane = params?.dataPlane ?? new DataPlaneService(config!);
+  const relatedEntitiesFallback =
+    params?.relatedEntitiesFallback
+    ?? (
+      !params?.dataPlane && config?.source === 'tiger'
+        ? createRelatedEntitiesFallback(config)
+        : null
+    );
 
   return createServer(
     createQueryApiRequestHandler({
       bearerToken: params?.bearerToken ?? config?.bearerToken ?? null,
       dataPlane,
+      relatedEntitiesFallback,
     })
   );
 }
 
 async function main(): Promise<void> {
+  loadQueryApiEnvFiles();
   const config = loadQueryApiConfig();
-  const server = createQueryApiServer();
+  const server = createQueryApiServer({ config });
 
   server.listen(config.port, config.host, () => {
     logger.info('Query API listening', {
@@ -337,6 +458,42 @@ async function main(): Promise<void> {
       source: config.source,
     });
   });
+}
+
+function createRelatedEntitiesFallback(
+  primaryConfig: ReturnType<typeof loadQueryApiConfig> | null
+): QueryApiService | null {
+  if (!primaryConfig || primaryConfig.source !== 'tiger') {
+    return null;
+  }
+
+  try {
+    const fallbackConfig = loadSourceBaselineConfig();
+    if (
+      fallbackConfig.source === primaryConfig.source
+      && fallbackConfig.connectionString === primaryConfig.connectionString
+    ) {
+      return null;
+    }
+
+    const fallbackService = new DataPlaneService(fallbackConfig);
+    const fallbackServiceWithOverride = fallbackService as unknown as {
+      assertContractRuntime: (contractName: string) => Promise<void>;
+    };
+    const originalAssertContractRuntime =
+      fallbackServiceWithOverride.assertContractRuntime.bind(fallbackService);
+    fallbackServiceWithOverride.assertContractRuntime = async (contractName: string) => {
+      if (contractName === 'getRelatedEntities') {
+        return;
+      }
+
+      await originalAssertContractRuntime(contractName);
+    };
+
+    return fallbackService;
+  } catch {
+    return null;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global clearTimeout, console, document, fetch, setTimeout, URL */
 
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
@@ -10,15 +11,21 @@ import { chromium } from '@playwright/test';
 
 import { loadAutolabEnv } from '../chat-autolab/lib/env.mjs';
 import {
-  buildFullSuiteManifest,
-  BLENDED_PERSONA,
-} from './lib/full-suite-inventory.mjs';
+  buildEvalManifest,
+  INVENTORY_ALL_NAME,
+} from './lib/eval-manifest.mjs';
 import {
   formatLatencyMs,
   scorePromptResponse,
   scoreScenarioResult,
 } from './lib/blended-persona-scoring.mjs';
 import { writeFullSuiteArtifacts } from './lib/full-suite-artifacts.mjs';
+import { BLENDED_PERSONA } from './lib/full-suite-inventory.mjs';
+import { assessPromptReview } from './lib/prompt-review.mjs';
+import {
+  TIGER_CUTOVER_INVENTORY_NAME,
+  TIGER_CUTOVER_UI_REPORT_TITLE,
+} from './lib/tiger-cutover-inventory.mjs';
 
 const ROOT = process.cwd();
 const DEFAULT_ADMIN_ORIGIN = process.env.CHAT_EVAL_ORIGIN || 'http://127.0.0.1:3003';
@@ -37,18 +44,32 @@ async function main() {
   const env = await loadAutolabEnv();
   const adminOrigin = args.origin || DEFAULT_ADMIN_ORIGIN;
   const queryApiBaseUrl = args.queryApiUrl || env.QUERY_API_BASE_URL || DEFAULT_QUERY_API_BASE_URL;
-  const manifest = await buildFullSuiteManifest({
+  const manifest = await buildEvalManifest({
+    inventoryName: args.inventory,
     maxPrompts: args.maxPrompts,
     maxScenarios: args.maxScenarios,
+    smokeOnly: args.smokeOnly,
+    shuffleSeed: args.shuffleSeed,
+    variantMode: args.variantMode,
   });
+  const reportTitle =
+    args.reportTitle
+    || (args.inventory === INVENTORY_ALL_NAME
+      ? 'Full Dev-Server Browser Chat Smoke'
+      : args.inventory === TIGER_CUTOVER_INVENTORY_NAME
+      ? TIGER_CUTOVER_UI_REPORT_TITLE
+      : 'Full Blended-Persona Browser Chat Eval');
   const runtimeConfig = {
     adminOrigin,
     delayMs: args.delayMs ?? DEFAULT_DELAY_MS,
     headless: !args.headed,
+    inventoryName: args.inventory || 'full-suite',
     maxPrompts: args.maxPrompts,
     maxScenarios: args.maxScenarios,
     queryApiBaseUrl,
+    shuffleSeed: args.shuffleSeed || '',
     turnTimeoutMs: args.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS,
+    variantMode: args.variantMode || 'off',
   };
 
   validateRunnerEnv(env, runtimeConfig);
@@ -64,7 +85,9 @@ async function main() {
       {
         blendedPersona: BLENDED_PERSONA,
         generatedAt: new Date().toISOString(),
+        inventoryName: runtimeConfig.inventoryName,
         prompts: manifest.prompts,
+        reportTitle,
         runtimeConfig,
         scenarios: manifest.scenarios,
       },
@@ -134,6 +157,7 @@ async function main() {
       await writeArtifacts({
         outDir,
         promptResults,
+        reportTitle,
         runEndedAt: new Date(),
         runStartedAt,
         runtimeConfig,
@@ -160,8 +184,10 @@ function parseArgs(argv) {
     origin: '',
     outDir: '',
     queryApiUrl: '',
+    shuffleSeed: '',
     slowMo: 0,
     turnTimeoutMs: null,
+    variantMode: 'off',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -169,6 +195,12 @@ function parseArgs(argv) {
 
     if (arg === '--origin') {
       args.origin = argv[index + 1] || '';
+      index += 1;
+      continue;
+    }
+
+    if (arg === '--inventory') {
+      args.inventory = argv[index + 1] || '';
       index += 1;
       continue;
     }
@@ -215,8 +247,31 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === '--variant-mode') {
+      args.variantMode = argv[index + 1] || 'off';
+      index += 1;
+      continue;
+    }
+
+    if (arg === '--shuffle-seed') {
+      args.shuffleSeed = argv[index + 1] || '';
+      index += 1;
+      continue;
+    }
+
     if (arg === '--headed') {
       args.headed = true;
+      continue;
+    }
+
+    if (arg === '--report-title') {
+      args.reportTitle = argv[index + 1] || '';
+      index += 1;
+      continue;
+    }
+
+    if (arg === '--smoke-only') {
+      args.smokeOnly = true;
       continue;
     }
 
@@ -526,33 +581,62 @@ async function runPromptEvaluation(params) {
       renderedText: turn.responseText,
       status: turn.status,
     });
+    const review = assessPromptReview({
+      diagnostics: {
+        chatResponseStatuses: diagnostics.chatResponseStatuses,
+        consoleErrors: diagnostics.consoleErrors,
+        pageErrors: diagnostics.pageErrors,
+      },
+      latencyMs: turn.visibleLatencyMs,
+      promptRow,
+      responseMetrics: turn.responseMetrics,
+      responseText: turn.responseText,
+      routeMetadata: null,
+      status: turn.status,
+    });
 
     if (delayMs > 0) {
       await page.waitForTimeout(delayMs);
     }
 
     return {
+      antiAnchors: promptRow.antiAnchors,
       critiqueId: promptRow.critiqueId,
       diagnostics: {
         chatResponseStatuses: diagnostics.chatResponseStatuses,
         consoleErrors: diagnostics.consoleErrors,
         pageErrors: diagnostics.pageErrors,
       },
+      ...review,
       draftScore: scoring.draftScore,
+      expectedBehavior: promptRow.expectedBehavior,
+      expectedContracts: promptRow.expectedContracts,
+      expectedRoutes: promptRow.expectedRoutes,
+      factualAnchors: promptRow.factualAnchors,
       family: promptRow.family,
+      inventoryName: promptRow.inventoryName || promptRow.sourceInventory || null,
+      isVariant: promptRow.isVariant === true,
+      latencyBudgetMs: promptRow.latencyBudgetMs ?? null,
+      mustAvoidBackends: promptRow.mustAvoidBackends,
+      notes: promptRow.notes,
       primaryPersona: promptRow.primaryPersona,
+      priority: promptRow.priority ?? null,
       prompt: promptRow.prompt,
       qualityNotes: scoring.qualityNotes,
       responseMetrics: turn.responseMetrics,
       responseText: turn.responseText,
       scoreBreakdown: scoring.scoreBreakdown,
       screenshotPath: turn.screenshotPath,
+      seedPromptId: promptRow.seedPromptId || String(promptRow.critiqueId),
       section: promptRow.section,
+      sourceInventory: promptRow.sourceInventory || promptRow.inventoryName || null,
       sourceFamilies: promptRow.sourceFamilies,
       sourceSections: promptRow.sourceSections,
       sourceSuites: promptRow.sourceSuites,
       status: turn.status,
+      uiSmoke: promptRow.uiSmoke === true,
       usefulnessSummary: scoring.usefulnessSummary,
+      variantKey: promptRow.variantKey || null,
       verdict: scoring.verdict,
       visibleLatencyMs: turn.visibleLatencyMs,
       visibleLatencyText: formatLatencyMs(turn.visibleLatencyMs),
@@ -615,11 +699,15 @@ async function runScenarioEvaluation(params) {
         pageErrors: diagnostics.pageErrors,
       },
       draftScore: scoring.draftScore,
+      inventoryName: scenario.inventoryName || scenario.sourceInventory || null,
+      isVariant: scenario.isVariant === true,
       notes: scenario.notes,
       qualityNotes: scoring.qualityNotes,
       scenarioId: scenario.id,
       scenarioName: scenario.name,
       scoreBreakdown: scoring.scoreBreakdown,
+      seedPromptId: scenario.seedPromptId || String(scenario.id),
+      sourceInventory: scenario.sourceInventory || scenario.inventoryName || null,
       turns: turns.map((turn, index) => ({
         ...turn,
         autoScore: scoring.turnScores[index]?.draftScore ?? null,
@@ -629,6 +717,7 @@ async function runScenarioEvaluation(params) {
         usefulnessSummary: scoring.turnScores[index]?.usefulnessSummary ?? null,
       })),
       usefulnessSummary: scoring.usefulnessSummary,
+      variantKey: scenario.variantKey || null,
       verdict: scoring.verdict,
     };
   } finally {
@@ -665,6 +754,7 @@ function attachDiagnostics(page) {
 async function openChat(page, timeoutMs) {
   await page.goto('/chat', { waitUntil: 'domcontentloaded', timeout: timeoutMs });
   await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: timeoutMs });
+  await waitForChatComposerReady(page, timeoutMs);
 }
 
 async function submitChatTurn(params) {
@@ -675,14 +765,22 @@ async function submitChatTurn(params) {
   const assistantContent = page.getByTestId('chat-message-assistant-content');
   const beforeAssistantCount = await assistantMessages.count();
 
-  await input.fill(promptText);
+  await populateChatInput({ input, page, promptText, sendButton });
 
   const startedAt = Date.now();
   await sendButton.click();
 
   await page.waitForFunction(
     ({ count }) => {
-      return document.querySelectorAll('[data-testid="chat-message-assistant"]').length > count;
+      const assistantContents = document.querySelectorAll('[data-testid="chat-message-assistant-content"]');
+      const currentContent = assistantContents.item(count);
+      const errorBanner = document.querySelector('[data-testid="chat-error-banner"]');
+
+      if (errorBanner) {
+        return true;
+      }
+
+      return Boolean(currentContent && currentContent.textContent && currentContent.textContent.trim().length > 0);
     },
     { count: beforeAssistantCount },
     { timeout: Math.min(turnTimeoutMs, 10_000) }
@@ -690,10 +788,7 @@ async function submitChatTurn(params) {
 
   let status = 'success';
   try {
-    await page.waitForFunction(() => {
-      const send = document.querySelector('[data-testid="chat-send"]');
-      return Boolean(send && !send.hasAttribute('disabled'));
-    }, { timeout: turnTimeoutMs });
+    await waitForChatTurnToSettle(page, turnTimeoutMs);
   } catch {
     status = 'incomplete';
   }
@@ -761,10 +856,82 @@ async function submitChatTurn(params) {
   };
 }
 
+async function populateChatInput(params) {
+  const { input, page, promptText, sendButton } = params;
+
+  await input.fill(promptText);
+  if (!(await sendButton.isDisabled())) {
+    return;
+  }
+
+  await input.click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.keyboard.type(promptText);
+  if (!(await sendButton.isDisabled())) {
+    return;
+  }
+
+  await input.evaluate((element, value) => {
+    const prototype = window.HTMLTextAreaElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+    descriptor?.set?.call(element, value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, promptText);
+
+  await page.waitForFunction(() => {
+    const send = document.querySelector('[data-testid="chat-send"]');
+    return Boolean(send && !send.hasAttribute('disabled'));
+  }, { timeout: 5_000 });
+}
+
+async function waitForChatComposerReady(page, timeoutMs) {
+  await page.waitForFunction(() => {
+    const input = document.querySelector('[data-testid="chat-input"]');
+    const send = document.querySelector('[data-testid="chat-send"]');
+    if (!(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement)) {
+      return false;
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+    const setValue = descriptor?.set;
+    if (typeof setValue !== 'function') {
+      return false;
+    }
+
+    const originalValue = input.value;
+    const wasDisabled = send.hasAttribute('disabled');
+
+    setValue.call(input, '__piq_ready__');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const becameEnabled = !send.hasAttribute('disabled');
+
+    setValue.call(input, originalValue);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    return wasDisabled && becameEnabled;
+  }, { timeout: Math.min(timeoutMs, 10_000) });
+}
+
+async function waitForChatTurnToSettle(page, timeoutMs) {
+  await page.waitForFunction(() => {
+    const input = document.querySelector('[data-testid="chat-input"]');
+    const stop = document.querySelector('[data-testid="chat-stop"]');
+    const pendingTools = document.querySelector('[data-testid="chat-pending-tools"]');
+
+    if (!(input instanceof HTMLTextAreaElement)) {
+      return false;
+    }
+
+    return !input.disabled && !stop && !pendingTools;
+  }, { timeout: turnTimeoutMs });
+}
+
 async function writeArtifacts(params) {
   const {
     outDir,
     promptResults,
+    reportTitle,
     runEndedAt,
     runStartedAt,
     runtimeConfig,
@@ -783,49 +950,10 @@ async function writeArtifacts(params) {
   await writeFullSuiteArtifacts({
     outDir,
     promptResults,
-    reportTitle: 'Full Blended-Persona Browser Chat Eval',
+    reportTitle,
     runSummary,
     scenarioResults,
   });
-}
-
-function buildRankings(results, type) {
-  return [...results]
-    .sort((left, right) => {
-      if (right.draftScore !== left.draftScore) {
-        return right.draftScore - left.draftScore;
-      }
-
-      const leftLatency = inferRankingLatency(left, type);
-      const rightLatency = inferRankingLatency(right, type);
-      return leftLatency - rightLatency;
-    })
-    .map((result, index) => ({
-      rank: index + 1,
-      ...(type === 'prompt'
-        ? {
-            critiqueId: result.critiqueId,
-            family: result.family,
-            prompt: result.prompt,
-          }
-        : {
-            scenarioId: result.scenarioId,
-            scenarioName: result.scenarioName,
-          }),
-      draftScore: result.draftScore,
-      status: result.status ?? 'scenario',
-      usefulnessSummary: result.usefulnessSummary,
-      verdict: result.verdict,
-      visibleLatencyMs: inferRankingLatency(result, type),
-    }));
-}
-
-function inferRankingLatency(result, type) {
-  if (type === 'prompt') {
-    return result.visibleLatencyMs ?? Number.MAX_SAFE_INTEGER;
-  }
-
-  return result.turns.reduce((sum, turn) => sum + (turn.visibleLatencyMs ?? 0), 0);
 }
 
 function buildRunSummary(params) {
@@ -844,6 +972,7 @@ function buildRunSummary(params) {
     adminOrigin: runtimeConfig.adminOrigin,
     blendedPersona: BLENDED_PERSONA,
     generatedAt: runEndedAt.toISOString(),
+    inventoryName: runtimeConfig.inventoryName,
     promptAverageScore: roundToTenth(promptAverage),
     promptCount: promptResults.length,
     promptFailures: promptResults.filter((result) => result.status !== 'success').length,
@@ -854,7 +983,11 @@ function buildRunSummary(params) {
     runStartedAt: runStartedAt.toISOString(),
     scenarioAverageScore: roundToTenth(scenarioAverage),
     scenarioCount: scenarioResults.length,
+    seedPromptCount: promptResults.filter((result) => result.isVariant !== true).length,
+    shuffleSeed: runtimeConfig.shuffleSeed || null,
     turnTimeoutMs: runtimeConfig.turnTimeoutMs,
+    variantMode: runtimeConfig.variantMode || 'off',
+    variantPromptCount: promptResults.filter((result) => result.isVariant === true).length,
     weakestPrompts: [...promptResults]
       .sort((left, right) => left.draftScore - right.draftScore)
       .slice(0, 5)
@@ -876,143 +1009,6 @@ function buildRunSummary(params) {
   };
 }
 
-function buildCurationTemplate(promptResults, scenarioResults) {
-  return {
-    blendedPersona: BLENDED_PERSONA,
-    prompts: promptResults.map((result) => ({
-      critiqueId: result.critiqueId,
-      draftScore: result.draftScore,
-      draftVerdict: result.verdict,
-      prompt: result.prompt,
-      qualityNotes: result.qualityNotes,
-      scoreBreakdown: result.scoreBreakdown,
-      usefulnessSummary: result.usefulnessSummary,
-      curatorNotes: null,
-      overrideScore: null,
-      overrideUsefulnessSummary: null,
-      overrideVerdict: null,
-    })),
-    scenarios: scenarioResults.map((result) => ({
-      scenarioId: result.scenarioId,
-      scenarioName: result.scenarioName,
-      draftScore: result.draftScore,
-      draftVerdict: result.verdict,
-      qualityNotes: result.qualityNotes,
-      usefulnessSummary: result.usefulnessSummary,
-      carryForwardQuality: result.carryForwardQuality,
-      curatorNotes: null,
-      overrideScore: null,
-      overrideUsefulnessSummary: null,
-      overrideVerdict: null,
-      turns: result.turns.map((turn) => ({
-        turnIndex: turn.turnIndex,
-        userPrompt: turn.userPrompt,
-        expectation: turn.expectation,
-        autoScore: turn.autoScore,
-        autoVerdict: turn.autoVerdict,
-        usefulnessSummary: turn.usefulnessSummary,
-        qualityNotes: turn.qualityNotes,
-        overrideScore: null,
-        notes: null,
-      })),
-    })),
-  };
-}
-
-function renderLedgerRunDraft(params) {
-  const { promptRankings, promptResults, runSummary, scenarioRankings, scenarioResults } = params;
-  const lines = [
-    '# Full Blended-Persona Browser Chat Eval',
-    '',
-    `- Generated: ${runSummary.generatedAt}`,
-    `- Admin origin: ${runSummary.adminOrigin}`,
-    `- Query API: ${runSummary.queryApiBaseUrl} (${runSummary.queryApiSource})`,
-    `- Prompt count: ${runSummary.promptCount}`,
-    `- Scenario count: ${runSummary.scenarioCount}`,
-    `- Prompt average score: ${runSummary.promptAverageScore}/10`,
-    `- Scenario average score: ${runSummary.scenarioAverageScore}/10`,
-    `- Run duration: ${formatLatencyMs(runSummary.runDurationMs)}`,
-    '',
-    '## Blended Persona',
-    '',
-    `- Name: ${BLENDED_PERSONA.name}`,
-    `- Summary: ${BLENDED_PERSONA.summary}`,
-    '',
-    '## Prompt Ranking',
-    '',
-    '| Rank | Critique ID | Score | Verdict | Prompt | Latency | Summary |',
-    '|---:|---|---:|---|---|---:|---|',
-  ];
-
-  for (const row of promptRankings) {
-    lines.push(
-      `| ${row.rank} | ${escapeTable(row.critiqueId)} | ${row.draftScore.toFixed(1)} | ${row.verdict} | ${escapeTable(row.prompt)} | ${escapeTable(formatLatencyMs(row.visibleLatencyMs) || '-')} | ${escapeTable(row.usefulnessSummary)} |`
-    );
-  }
-
-  lines.push('', '## Scenario Ranking', '', '| Rank | Scenario | Score | Verdict | Carry-forward | Summary |', '|---:|---|---:|---|---|---|');
-
-  for (const row of scenarioRankings) {
-    const scenario = scenarioResults.find((result) => result.scenarioId === row.scenarioId);
-    lines.push(
-      `| ${row.rank} | ${escapeTable(row.scenarioName)} | ${row.draftScore.toFixed(1)} | ${row.verdict} | ${escapeTable(scenario?.carryForwardQuality || '-')} | ${escapeTable(row.usefulnessSummary)} |`
-    );
-  }
-
-  lines.push('', '## Prompt Details', '');
-
-  for (const result of promptResults) {
-    lines.push(`### #${result.critiqueId} ${result.prompt}`);
-    lines.push('');
-    lines.push(`- Section: ${result.section}`);
-    lines.push(`- Family: ${result.family}`);
-    lines.push(`- Status: ${result.status}`);
-    lines.push(`- Draft score: ${result.draftScore}/10`);
-    lines.push(`- Verdict: ${result.verdict}`);
-    lines.push(`- Visible latency: ${result.visibleLatencyText || '-'}`);
-    lines.push(`- Usefulness summary: ${result.usefulnessSummary}`);
-    lines.push(`- Notes: ${result.qualityNotes.map((note) => `\`${note}\``).join(', ') || '-'}`);
-    if (result.screenshotPath) {
-      lines.push(`- Screenshot: ${result.screenshotPath}`);
-    }
-    lines.push('', '```md', result.responseText || '[no visible assistant text captured]', '```', '');
-  }
-
-  lines.push('## Scenario Details', '');
-
-  for (const result of scenarioResults) {
-    lines.push(`### ${result.scenarioName}`);
-    lines.push('');
-    lines.push(`- Scenario ID: ${result.scenarioId}`);
-    lines.push(`- Draft score: ${result.draftScore}/10`);
-    lines.push(`- Verdict: ${result.verdict}`);
-    lines.push(`- Carry-forward quality: ${result.carryForwardQuality}`);
-    lines.push(`- Usefulness summary: ${result.usefulnessSummary}`);
-    lines.push(`- Notes: ${result.qualityNotes.map((note) => `\`${note}\``).join(', ') || '-'}`);
-    lines.push('');
-
-    for (const turn of result.turns) {
-      lines.push(`#### Turn ${turn.turnIndex}`);
-      lines.push(`- User prompt: ${turn.userPrompt}`);
-      if (turn.expectation) {
-        lines.push(`- Expectation: ${turn.expectation}`);
-      }
-      lines.push(`- Status: ${turn.status}`);
-      lines.push(`- Draft score: ${turn.autoScore ?? '-'}`);
-      lines.push(`- Verdict: ${turn.autoVerdict ?? '-'}`);
-      lines.push(`- Visible latency: ${turn.visibleLatencyText || '-'}`);
-      lines.push(`- Usefulness summary: ${turn.usefulnessSummary || '-'}`);
-      lines.push(`- Notes: ${turn.qualityNotes.map((note) => `\`${note}\``).join(', ') || '-'}`);
-      if (turn.screenshotPath) {
-        lines.push(`- Screenshot: ${turn.screenshotPath}`);
-      }
-      lines.push('', '```md', turn.responseText || '[no visible assistant text captured]', '```', '');
-    }
-  }
-
-  return `${lines.join('\n')}\n`;
-}
-
 function averageOf(values) {
   if (values.length === 0) {
     return 0;
@@ -1023,10 +1019,6 @@ function averageOf(values) {
 
 function roundToTenth(value) {
   return Math.round(value * 10) / 10;
-}
-
-function escapeTable(value) {
-  return String(value || '').replace(/\|/g, '\\|');
 }
 
 function sanitizeForFileName(value) {

@@ -16,11 +16,13 @@ import {
   claimCaptureQueue,
   completeCaptureQueueItems,
   createSyncJobRecord,
+  deleteSteamNewsSearchProjectionForGids,
   refreshChangeActivityBurstsForApp,
   refreshChangePatternAppWindowsForApp,
   refreshChangePatternActivityDaysForApp,
-  refreshSteamNewsLatestProjectionForApp,
+  refreshSteamNewsSearchProjectionForApp,
   requeueStaleCaptureClaims,
+  upsertSteamNewsSearchProjectionForGids,
   updateSyncStatusFields,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
@@ -48,15 +50,57 @@ function normalizeTriggerCursor(triggerCursor: string | null): string | null {
   return triggerCursor && triggerCursor.length > 0 ? triggerCursor : null;
 }
 
+function extractProjectionNewsGids(payload: Record<string, unknown>): string[] {
+  const value = payload.news_gids;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((gid) => gid.trim())
+        .filter((gid) => gid.length > 0)
+    )
+  );
+}
+
+function extractProjectionDeletedGids(payload: Record<string, unknown>): string[] {
+  const value = payload.deleted_news_gids;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((gid) => gid.trim())
+        .filter((gid) => gid.length > 0)
+    )
+  );
+}
+
 async function processStorefrontJob(supabase: SupabaseClient, appid: number, triggerCursor: string | null): Promise<void> {
   const result = await fetchStorefrontAppDetails(appid);
+  const observedAt = new Date().toISOString();
 
   if (result.status === 'no_data') {
+    await (supabase as any)
+      .from('apps')
+      .update({
+        catalog_seed_state: 'inaccessible',
+        updated_at: observedAt,
+      })
+      .eq('appid', appid)
+      .eq('catalog_seed_state', 'stub');
+
     await (supabase as any).from('sync_status').upsert(
       {
         appid,
         storefront_accessible: false,
-        last_storefront_sync: new Date().toISOString(),
+        last_storefront_sync: observedAt,
       },
       { onConflict: 'appid' }
     );
@@ -74,8 +118,31 @@ async function processStorefrontJob(supabase: SupabaseClient, appid: number, tri
   await upsertLatestStorefrontState(supabase, appid, result.data);
 }
 
-async function processProjectionRefreshJob(supabase: SupabaseClient, appid: number): Promise<void> {
-  await refreshSteamNewsLatestProjectionForApp(supabase, appid);
+async function processProjectionRefreshJob(
+  supabase: SupabaseClient,
+  appid: number,
+  triggerReason: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const newsGids = extractProjectionNewsGids(payload);
+  const deletedNewsGids = extractProjectionDeletedGids(payload);
+  const shouldRunFullProjectionRefresh =
+    triggerReason === 'projection_backfill' ||
+    triggerReason === 'projection_reconcile' ||
+    (triggerReason === 'news_change_event' && newsGids.length === 0 && deletedNewsGids.length === 0);
+
+  if (shouldRunFullProjectionRefresh) {
+    await refreshSteamNewsSearchProjectionForApp(supabase, appid);
+  } else {
+    if (deletedNewsGids.length > 0) {
+      await deleteSteamNewsSearchProjectionForGids(supabase, deletedNewsGids);
+    }
+
+    if (newsGids.length > 0) {
+      await upsertSteamNewsSearchProjectionForGids(supabase, newsGids);
+    }
+  }
+
   await refreshChangeActivityBurstsForApp(supabase, appid);
   await refreshChangePatternActivityDaysForApp(supabase, appid);
   await refreshChangePatternAppWindowsForApp(supabase, appid);
@@ -86,7 +153,8 @@ async function processJob(
   source: QueueSource,
   appid: number,
   triggerCursor: string | null,
-  triggerReason: string
+  triggerReason: string,
+  payload: Record<string, unknown>
 ): Promise<void> {
   switch (source) {
     case 'storefront':
@@ -99,7 +167,7 @@ async function processJob(
       });
       break;
     case 'projection_refresh':
-      await processProjectionRefreshJob(supabase, appid);
+      await processProjectionRefreshJob(supabase, appid, triggerReason, payload);
       break;
     case 'hero_asset':
       await archiveHeroAssetsForApp(supabase, appid);
@@ -134,7 +202,8 @@ async function processClaimedJobs(
           source,
           claimedJob.appid,
           normalizeTriggerCursor(claimedJob.triggerCursor),
-          claimedJob.triggerReason
+          claimedJob.triggerReason,
+          claimedJob.payload
         );
         completedJobIds.push(claimedJob.id);
       } catch (error) {

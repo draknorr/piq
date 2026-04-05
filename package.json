@@ -23,6 +23,8 @@
     "chat-evals:tiger-shadow-expanded": "node scripts/chat-evals/run-tiger-shadow-expanded.mjs",
     "chat-evals:full-blended-endpoint": "node scripts/chat-evals/run-full-blended-endpoint.mjs",
     "chat-evals:full-blended-ui": "node scripts/chat-evals/run-full-blended-ui.mjs",
+    "chat-evals:tiger-cutover-endpoint": "node scripts/chat-evals/run-tiger-cutover-endpoint.mjs",
+    "chat-evals:tiger-cutover-ui": "node scripts/chat-evals/run-tiger-cutover-ui.mjs",
     "chat-evals:cycle": "node scripts/chat-evals/run-cycle.mjs",
     "chat-evals:resume": "node scripts/chat-evals/resume-loop.mjs",
     "chat-autolab:start": "node scripts/chat-autolab/start.mjs",

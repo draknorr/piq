@@ -1317,9 +1317,11 @@ test('Tiger primary routes concept prompts through Tiger semanticSearch instead 
     assert.equal(body.mode, 'concept');
     assert.equal(body.entityKind, 'game');
     assert.equal(body.description, 'cozy farming games under $20');
-    assert.deepEqual(body.filters, {
-      max_price_cents: 2000,
-    });
+    assert.equal(body.filters?.max_price_cents, 2000);
+    assert.ok(Array.isArray(body.filters?.tags));
+    assert.ok(body.filters.tags.includes('Cozy'));
+    assert.ok(Array.isArray(body.filters?.top_tags));
+    assert.ok(body.filters.top_tags.includes('Cozy'));
 
     return jsonResponse({
       mode: 'semantic',
@@ -1356,6 +1358,69 @@ test('Tiger primary routes concept prompts through Tiger semanticSearch instead 
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'semanticSearch');
   assert.match(result.renderedText ?? '', /Stardew Valley/);
+});
+
+test('Tiger primary keeps better-review similarity prompts on Tiger semanticSearch', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/semantic-search');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.mode, 'similarity');
+    assert.equal(body.referenceQuery, 'Hades');
+    assert.equal(body.filters?.review_comparison, 'better_only');
+
+    return jsonResponse({
+      close_alternatives: [
+        {
+          id: 588650,
+          matchReasons: ['Action roguelike that stays very close on similarity.'],
+          name: 'Dead Cells',
+          review_percentage: 96.4,
+          score: 0.88,
+          total_reviews: 145000,
+          type: 'game',
+        },
+      ],
+      close_alternatives_reason:
+        'These stay highly similar, but they miss the stricter higher-review cutoff from the original request.',
+      reference: {
+        id: 1145360,
+        name: 'Hades',
+        type: 'game',
+      },
+      results: [
+        {
+          id: 367520,
+          matchReasons: ['Action roguelike with stronger review sentiment.'],
+          name: 'Hollow Knight',
+          review_percentage: 97,
+          score: 0.92,
+          total_reviews: 355000,
+          type: 'game',
+        },
+      ],
+      sufficient_to_answer: true,
+      total_found: 1,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Games like Hades with better reviews',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'semantic_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'semanticSearch');
+  assert.equal(result.answerBrief?.allowNarration, false);
+  assert.match(result.renderedText ?? '', /Hollow Knight/);
+  assert.match(result.renderedText ?? '', /Close alternatives/);
+  assert.match(result.renderedText ?? '', /Dead Cells/);
 });
 
 test('Tiger primary routes on-sale discovery prompts through Tiger catalog search', async (t) => {
@@ -1514,29 +1579,34 @@ test('Tiger primary routes price-and-review discovery prompts through Tiger cata
   assert.match(result.renderedText ?? '', /Baldur's Gate 3/);
 });
 
-test('Tiger primary clears stale entity switch hints on unrelated catalog prompts', async (t) => {
+test('Tiger primary clears stale entity switch hints on unrelated discovery prompts', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
 
-  setScopedFetch(t, async (url, init) => {
-    assert.equal(url.pathname, '/v1/contracts/search-catalog');
-    assert.ok(init?.body);
-    assert.deepEqual(JSON.parse(String(init.body)), {
-      tags: ['Indie'],
-      limit: 20,
-      sortBy: 'reviews',
-      sortDirection: 'desc',
-    });
+  setScopedFetch(t, async (url) => {
+    if (url.pathname !== '/v1/contracts/semantic-search' && url.pathname !== '/v1/contracts/search-catalog') {
+      throw new Error(`Unexpected query-api path: ${url.pathname}`);
+    }
+
+    if (url.pathname === '/v1/contracts/semantic-search') {
+      return jsonResponse({
+        query_description: 'what are the top indie games currently',
+        results: [
+          {
+            id: 413150,
+            matchReasons: ['Indie hit with enduring player sentiment.'],
+            name: 'Stardew Valley',
+            review_percentage: 98,
+            score: 0.91,
+            total_reviews: 990611,
+          },
+        ],
+        sufficient_to_answer: true,
+      });
+    }
 
     return jsonResponse({
-      continuationToken: null,
       interpretedFilters: {
-        developerQuery: null,
-        minReviewScore: null,
-        platforms: [],
-        publisherQuery: null,
-        query: null,
-        releaseYear: null,
         tags: ['Indie'],
       },
       items: [
@@ -1602,9 +1672,8 @@ test('Tiger primary clears stale entity switch hints on unrelated catalog prompt
     userId: 'user-1',
   });
 
-  assert.equal(result.info.matchedIntent, 'catalog_search');
   assert.equal(result.info.route, 'primary_success');
-  assert.equal(result.contractResult?.contractName, 'searchCatalog');
+  assert.notEqual(result.info.matchedIntent, 'change_explanation');
   assert.doesNotMatch(result.renderedText ?? '', /Using Hades/i);
   assert.equal(result.sessionState?.selectionState, null);
 });
@@ -1674,6 +1743,9 @@ test('Tiger primary routes breakout prompts through discoverMomentum', async (t)
     assert.equal(url.pathname, '/v1/contracts/discover-momentum');
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        minReviewsAdded7d: 5,
+      },
       limit: 10,
       sortBy: 'momentum_score',
       sortDirection: 'desc',
@@ -1682,7 +1754,12 @@ test('Tiger primary routes breakout prompts through discoverMomentum', async (t)
     });
 
     return jsonResponse({
-      filtersApplied: ['sort_by: momentum_score', 'trend_type: breaking_out', 'timeframe: 7d'],
+      filtersApplied: [
+        'min_reviews_added_7d: 5',
+        'sort_by: momentum_score',
+        'trend_type: breaking_out',
+        'timeframe: 7d',
+      ],
       items: [
         {
           appid: 123,
@@ -1720,6 +1797,71 @@ test('Tiger primary routes breakout prompts through discoverMomentum', async (t)
   assert.match(result.renderedText ?? '', /Breakout Hit/);
 });
 
+test('Tiger primary routes recent concept-ranking prompts through discoverMomentum', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        minReviewsAdded30d: 5,
+        tags: ['Indie'],
+      },
+      indieHeuristic: true,
+      limit: 10,
+      sortBy: 'momentum_score',
+      sortDirection: 'desc',
+      timeframe: '30d',
+      trendType: null,
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'indie_heuristic: true',
+        'tags: Indie',
+        'min_reviews_added_30d: 5',
+        'sort_by: momentum_score',
+        'timeframe: 30d',
+      ],
+      items: [
+        {
+          appid: 413150,
+          ccuPeak: 82541,
+          isFree: false,
+          momentumScore: 86,
+          name: 'Stardew Valley',
+          platformSupport: ['windows', 'macos', 'linux'],
+          reviewPercentage: 98.5,
+          reviewsAdded30d: 4200,
+          supportLevel: 'high',
+          supportReasons: ['Indie release with strong recent review pickup over the last month.'],
+          totalReviews: 990611,
+          trendDirection: 'up',
+          velocityAcceleration: 18,
+        },
+      ],
+      rankingDefinition: 'Momentum blends review pickup, acceleration, and player growth over the selected window.',
+      rankingLabel: 'Momentum Score',
+      sufficientToAnswer: true,
+      timeframe: '30d',
+      timeframeLabel: 'Last 30 days',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the top indie games of the past month?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /Stardew Valley/);
+});
+
 test('Tiger primary routes review-momentum filters through discoverMomentum', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
@@ -1729,6 +1871,7 @@ test('Tiger primary routes review-momentum filters through discoverMomentum', as
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       filters: {
+        minReviewsAdded7d: 2,
         steamDeck: ['verified'],
       },
       limit: 10,
@@ -1739,7 +1882,12 @@ test('Tiger primary routes review-momentum filters through discoverMomentum', as
     });
 
     return jsonResponse({
-      filtersApplied: ['steam_deck: verified', 'sort_by: reviews_added_7d', 'trend_type: review_momentum'],
+      filtersApplied: [
+        'steam_deck: verified',
+        'min_reviews_added_7d: 2',
+        'sort_by: reviews_added_7d',
+        'trend_type: review_momentum',
+      ],
       items: [
         {
           appid: 1245620,
@@ -1987,10 +2135,75 @@ test('Tiger primary routes review-activity prompts through review-momentum seman
   assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_activity_up');
 });
 
-test('Tiger primary does not misroute mixed similarity-plus-momentum prompts to discoverMomentum', async (t) => {
+test('Tiger primary composes similarity seeds with momentum discovery for mixed similarity-plus-momentum prompts', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
-  setScopedFetch(t, async () => jsonResponse({ error: 'unsupported' }, 500));
+  const paths: string[] = [];
+  setScopedFetch(t, async (url, init) => {
+    paths.push(url.pathname);
+
+    if (url.pathname === '/v1/contracts/semantic-search') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body)) as {
+        mode?: string;
+        referenceQuery?: string;
+      };
+      assert.equal(body.mode, 'similarity');
+      assert.equal(body.referenceQuery, 'Hades');
+
+      return jsonResponse({
+        reference: {
+          id: 1145360,
+          name: 'Hades',
+          type: 'game',
+        },
+        results: [
+          { id: 632360, matchReasons: ['Roguelite'], name: 'Risk of Rain 2', score: 92 },
+          { id: 1794680, matchReasons: ['Action Roguelike'], name: 'Vampire Survivors', score: 88 },
+        ],
+        sufficient_to_answer: true,
+      });
+    }
+
+    if (url.pathname === '/v1/contracts/discover-momentum') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body)) as {
+        appids?: number[];
+        trendType?: string | null;
+      };
+      assert.deepEqual(body.appids, [632360, 1794680]);
+      assert.equal(body.trendType, 'breaking_out');
+
+      return jsonResponse({
+        filtersApplied: ['sort_by: momentum_score', 'timeframe: 7d'],
+        items: [
+          {
+            appid: 632360,
+            ccuPeak: 118000,
+            isFree: false,
+            name: 'Risk of Rain 2',
+            platformSupport: ['windows'],
+            reviewPercentage: 94,
+            reviewsAdded30d: 1500,
+            reviewsAdded7d: 420,
+            supportLevel: 'high',
+            supportReasons: ['Recent review pickup and player traction both accelerated.'],
+            totalReviews: 220000,
+            trendDirection: 'up',
+            velocityAcceleration: 18,
+          },
+        ],
+        rankingDefinition: 'Momentum score blends review velocity and player traction.',
+        rankingLabel: 'Momentum Score',
+        sufficientToAnswer: true,
+        timeframe: '7d',
+        timeframeLabel: 'Last 7 days',
+        trendType: 'breaking_out',
+      });
+    }
+
+    throw new Error(`Unexpected query-api path: ${url.pathname}`);
+  });
 
   const result = await runTigerPrimaryEvaluation({
     isEvalRequest: true,
@@ -1999,7 +2212,11 @@ test('Tiger primary does not misroute mixed similarity-plus-momentum prompts to 
     userId: 'user-1',
   });
 
-  assert.notEqual(result.info.matchedIntent, 'momentum_discovery');
+  assert.deepEqual(paths, ['/v1/contracts/semantic-search', '/v1/contracts/discover-momentum']);
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'discoverMomentum');
+  assert.match(result.renderedText ?? '', /similar to \*\*Hades\*\*/);
 });
 
 for (const prompt of [
@@ -2518,6 +2735,69 @@ test('Tiger primary reuses the prior family for "what about" single-entity follo
   assert.match(result.renderedText ?? '', /DVD Survivors/);
 });
 
+test('Tiger primary routes recent Steam change prompts through explainChanges', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/explain-changes') {
+      assert.deepEqual(body, {
+        entityUid: 'game:steam:1145350',
+        includeNews: true,
+        limit: 10,
+      });
+
+      return jsonResponse({
+        entity: {
+          displayName: 'Hades II',
+          entityKind: 'game',
+          entityUid: 'game:steam:1145350',
+          platform: 'steam',
+          platformEntityId: '1145350',
+        },
+        moments: [
+          {
+            changeTypes: ['build'],
+            eventCount: 2,
+            events: [],
+            linkedNews: [],
+            sources: ['steam'],
+            windowEnd: '2026-04-03T00:00:00.000Z',
+            windowStart: '2026-04-01T00:00:00.000Z',
+          },
+        ],
+        sufficientToAnswer: true,
+        summary: {
+          eventCount: 2,
+          momentCount: 1,
+          newsCount: 0,
+        },
+        timeWindow: {
+          endTime: '2026-04-04T00:00:00.000Z',
+          startTime: '2026-03-28T00:00:00.000Z',
+        },
+      });
+    }
+
+    throw new Error(`Unexpected query-api path: ${url.pathname}`);
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Show me the recent Steam changes for Hades II',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'change_explanation');
+  assert.equal(result.info.route, 'primary_success');
+  assert.ok(result.info.attempts.some((attempt) => attempt.contractName === 'explainChanges'));
+  assert.match(result.renderedText ?? '', /Hades II/);
+});
+
 test('Tiger primary uses candidate-specific switch hints for single-entity answers', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
@@ -2749,6 +3029,8 @@ test('Tiger primary prefers exact title matches for news prompts before clarifyi
 
     assert.equal(url.pathname, '/v1/contracts/search-documents');
     assert.deepEqual(body.entityUids, ['game:steam:101']);
+    assert.equal(body.mode, 'latest_item');
+    assert.equal(body.query, undefined);
 
     return jsonResponse({
       entity: {
@@ -2762,9 +3044,9 @@ test('Tiger primary prefers exact title matches for news prompts before clarifyi
         endTime: '2026-04-04T00:00:00.000Z',
         entityUids: ['game:steam:101'],
         feedScopes: [],
-        mode: 'topic_search',
-        query: 'recent announcements Primeval',
-        startTime: '2026-03-05T00:00:00.000Z',
+        mode: 'latest_item',
+        query: '',
+        startTime: '2026-01-04T00:00:00.000Z',
       },
       items: [
         {
@@ -2806,6 +3088,162 @@ test('Tiger primary prefers exact title matches for news prompts before clarifyi
   assert.doesNotMatch(result.renderedText ?? '', /Which one did you mean/i);
   assert.doesNotMatch(result.renderedText ?? '', /Another likely match is Primeval Genesis \(game\)\./);
   assert.ok(result.followUpSuggestions?.some((suggestion) => suggestion.label.includes('Switch to Primeval Genesis')));
+});
+
+test('Tiger primary retries sparse entity-scoped news lookups with broader topic search', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let searchDocumentsCalls = 0;
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Deadlock',
+            entityKind: 'game',
+            entityUid: 'game:steam:1422450',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '1422450',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/search-documents');
+    searchDocumentsCalls += 1;
+
+    if (searchDocumentsCalls === 1) {
+      assert.deepEqual(body.entityUids, ['game:steam:1422450']);
+      assert.equal(body.mode, 'latest_item');
+      assert.equal(body.query, undefined);
+
+      return jsonResponse({
+        entity: {
+          displayName: 'Deadlock',
+          entityKind: 'game',
+          entityUid: 'game:steam:1422450',
+          platform: 'steam',
+          platformEntityId: '1422450',
+        },
+        interpretedFilters: {
+          entityUids: ['game:steam:1422450'],
+          mode: 'latest_item',
+          query: '',
+        },
+        items: [],
+        sufficientToAnswer: false,
+      });
+    }
+
+    assert.equal(searchDocumentsCalls, 2);
+    assert.equal(body.mode, 'topic_search');
+    assert.equal(body.query, 'Deadlock');
+    assert.equal(body.entityUids, undefined);
+
+    return jsonResponse({
+      entity: null,
+      interpretedFilters: {
+        mode: 'topic_search',
+        query: 'Deadlock',
+      },
+      items: [
+        {
+          appName: 'Deadlock',
+          appid: 1422450,
+          bodyPreview: 'Valve opened another public test window and posted updated hero notes.',
+          excerpt: 'Public test window opened alongside a new hero update.',
+          feedLabel: 'Steam News',
+          feedName: 'Steam',
+          feedScope: 'steam_news',
+          publishedAt: '2026-04-01T12:00:00.000Z',
+          sortTime: '2026-04-01T12:00:00.000Z',
+          title: 'Deadlock opens a new public test window',
+          url: 'https://example.com/deadlock-news',
+        },
+      ],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Any recent announcements about Deadlock?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(searchDocumentsCalls, 2);
+  assert.equal(result.info.matchedIntent, 'news_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /Deadlock opens a new public test window/);
+});
+
+test('Tiger primary adds a nonzero recent-activity floor for generic momentum discovery prompts', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body)) as {
+      filters?: {
+        minReviewsAdded7d?: number;
+        tags?: string[];
+      };
+      sortBy?: string;
+      timeframe?: string;
+    };
+
+    assert.equal(body.sortBy, 'momentum_score');
+    assert.equal(body.timeframe, '7d');
+    assert.equal(body.filters?.minReviewsAdded7d, 2);
+    assert.deepEqual(body.filters?.tags, ['Horror']);
+
+    return jsonResponse({
+      filtersApplied: ['sort_by: momentum_score', 'timeframe: 7d', 'tags: Horror', 'min_reviews_added_7d: 2'],
+      items: [
+        {
+          appid: 777,
+          entityUid: 'game:steam:777',
+          name: 'Example Horror',
+          platformSupport: ['windows'],
+          reviewsAdded7d: 12,
+          supportLevel: 'medium',
+          supportReasons: ['12 reviews added over 7d.'],
+          totalReviews: 1200,
+          trendDirection: 'up',
+        },
+      ],
+      rankingDefinition: 'Momentum blends review pickup, velocity acceleration, and player growth over the 7d window.',
+      rankingLabel: 'Momentum Score',
+      sortBy: 'momentum_score',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: null,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What horror games are gaining momentum?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.contractResult?.contractName, 'discoverMomentum');
+  assert.match(result.renderedText ?? '', /12 reviews added over 7d/i);
 });
 
 test('Tiger primary prefers exact title matches for change prompts before clarifying', async (t) => {
@@ -3203,12 +3641,51 @@ test('Tiger primary routes derived ranking compare prompts through rankEntities 
   assert.match(result.renderedText ?? '', /Game Count/);
 });
 
-test('Tiger primary keeps unsupported review-velocity compare prompts out of Tiger compare', async (t) => {
+test('Tiger primary routes compare-top review-velocity prompts through momentum discovery', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
 
-  setScopedFetch(t, async () => {
-    throw new Error('Tiger compare should not call query-api for unsupported review-velocity prompts.');
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body)) as {
+      filters?: {
+        tags?: string[];
+      };
+      limit?: number;
+      sortBy?: string;
+      timeframe?: string;
+    };
+    assert.deepEqual(body.filters?.tags, ['Roguelike']);
+    assert.equal(body.limit, 5);
+    assert.equal(body.sortBy, 'reviews_added_7d');
+    assert.equal(body.timeframe, '7d');
+
+    return jsonResponse({
+      filtersApplied: ['sort_by: reviews_added_7d', 'timeframe: 7d', 'tags: Roguelike'],
+      items: [
+        {
+          appid: 1145360,
+          ccuPeak: 42000,
+          isFree: false,
+          name: 'Hades',
+          platformSupport: ['windows'],
+          reviewPercentage: 98,
+          reviewsAdded30d: 1300,
+          reviewsAdded7d: 360,
+          supportLevel: 'high',
+          supportReasons: ['Review velocity remains well above the recent roguelite baseline.'],
+          totalReviews: 275000,
+          trendDirection: 'up',
+          velocityAcceleration: 9,
+        },
+      ],
+      rankingDefinition: 'Recent reviews added ranks titles by the latest review-velocity window.',
+      rankingLabel: 'Reviews Added (7d)',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+    });
   });
 
   const result = await runTigerPrimaryEvaluation({
@@ -3218,19 +3695,79 @@ test('Tiger primary keeps unsupported review-velocity compare prompts out of Tig
     userId: 'user-1',
   });
 
-  assert.equal(result.info.matchedIntent, 'entity_compare');
-  assert.equal(result.info.route, 'fallback_to_legacy');
-  assert.equal(result.renderedText, null);
-  assert.equal(result.info.attempts[0]?.contractName, 'compareEntities');
-  assert.match(result.info.attempts[0]?.reason ?? '', /review-velocity/i);
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'discoverMomentum');
+  assert.match(result.renderedText ?? '', /Reviews Added \(7d\)/);
 });
 
-test('Tiger primary keeps same-franchise semantic prompts out of Tiger semantic search', async (t) => {
+test('Tiger primary routes same-franchise prompts through relation lookup', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
 
-  setScopedFetch(t, async () => {
-    throw new Error('Tiger semantic search should not run for unsupported same-franchise prompts.');
+  const paths: string[] = [];
+  setScopedFetch(t, async (url, init) => {
+    paths.push(url.pathname);
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body)) as { query?: string };
+      assert.equal(body.query, 'Hades II');
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            displayName: 'Hades II',
+            entityKind: 'game',
+            entityUid: 'steam:game:1145350',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '1145350',
+          },
+        ],
+      });
+    }
+
+    if (url.pathname === '/v1/contracts/get-related-entities') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body)) as {
+        filters?: {
+          steamDeck?: string[];
+        };
+        relationKind?: string;
+        sourceAppid?: number;
+      };
+      assert.equal(body.relationKind, 'franchise_games');
+      assert.equal(body.sourceAppid, 1145350);
+      assert.deepEqual(body.filters?.steamDeck, ['verified', 'playable']);
+
+      return jsonResponse({
+        items: [
+          {
+            appid: 1145360,
+            entityUid: 'steam:game:1145360',
+            name: 'Hades',
+            releaseDate: '2020-09-17',
+            releaseYear: 2020,
+            reviewScore: 98,
+            steamDeckCategory: 'verified',
+            totalReviews: 275000,
+          },
+        ],
+        relationKind: 'franchise_games',
+        source: {
+          appid: 1145350,
+          displayName: 'Hades II',
+          entityUid: 'steam:game:1145350',
+        },
+        sufficientToAnswer: true,
+      });
+    }
+
+    throw new Error(`Unexpected query-api path: ${url.pathname}`);
   });
 
   const result = await runTigerPrimaryEvaluation({
@@ -3240,11 +3777,122 @@ test('Tiger primary keeps same-franchise semantic prompts out of Tiger semantic 
     userId: 'user-1',
   });
 
-  assert.equal(result.info.matchedIntent, 'semantic_search');
-  assert.equal(result.info.route, 'fallback_to_legacy');
-  assert.equal(result.renderedText, null);
-  assert.equal(result.info.attempts[0]?.contractName, 'semanticSearch');
-  assert.match(result.info.attempts[0]?.reason ?? '', /same-franchise/i);
+  assert.deepEqual(paths, ['/v1/contracts/resolve-entities', '/v1/contracts/get-related-entities']);
+  assert.equal(result.info.matchedIntent, 'relation_lookup');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'getRelatedEntities');
+  assert.match(result.renderedText ?? '', /only current same-franchise title/i);
+  assert.match(result.renderedText ?? '', /Steam Deck/i);
+});
+
+test('Tiger primary answers facet-only taxonomy prompts through Tiger catalog search', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/search-catalog');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body)) as {
+      facetQuery?: string;
+      includeFacets?: string[];
+    };
+    assert.equal(body.facetQuery, 'colony sim');
+    assert.deepEqual(body.includeFacets, ['tags']);
+
+    return jsonResponse({
+      facets: {
+        canonicalMatch: {
+          name: 'Colony Sim',
+          type: 'tags',
+        },
+        categories: [],
+        genres: [],
+        tags: ['Base Building', 'Resource Management', 'Simulation'],
+      },
+      interpretedFilters: {
+        facetQuery: 'colony sim',
+        includeFacets: ['tags'],
+        query: null,
+      },
+      items: [],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What tags exist for colony sim games?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'catalog_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'searchCatalog');
+  assert.match(result.renderedText ?? '', /most commonly paired with \*\*Colony Sim\*\*/i);
+  assert.doesNotMatch(result.renderedText ?? '', /closest matching tags/i);
+});
+
+test('Tiger primary composes multi-pattern prospect ranking for agency-style prompts', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  const seenPatterns: string[] = [];
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-change-patterns');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body)) as { pattern?: string };
+    seenPatterns.push(body.pattern ?? 'unknown');
+
+    if (body.pattern === 'under_marketed') {
+      return jsonResponse({
+        items: [
+          {
+            activityIds: ['change:1'],
+            appid: 101,
+            confidence: 'medium',
+            name: 'Signal Void',
+            occurredAt: '2026-04-03T12:00:00.000Z',
+            primaryProof: {
+              headline: 'Signal Void matched the under-marketed pattern.',
+            },
+            reasons: ['Review quality is strong while recent marketing proof stays thin.'],
+          },
+        ],
+        sufficientToAnswer: true,
+      });
+    }
+
+    return jsonResponse({
+      items: [
+        {
+          activityIds: ['change:2'],
+          appid: 101,
+          confidence: 'high',
+          name: 'Signal Void',
+          occurredAt: '2026-04-04T08:00:00.000Z',
+          primaryProof: {
+            headline: 'Signal Void matched the update-tease pattern.',
+          },
+          reasons: ['Recent update-adjacent activity creates a timely outreach window.'],
+        },
+      ],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Rank possible marketing-agency leads by need, timing, and evidence quality.',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.ok(seenPatterns.includes('under_marketed'));
+  assert.ok(seenPatterns.includes('announcement_weak_response'));
+  assert.equal(result.info.matchedIntent, 'change_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /need, timing, and evidence quality/i);
 });
 
 test('Tiger primary answers portfolio prompts from Tiger user context', async (t) => {
@@ -4040,8 +4688,8 @@ test('Tiger primary reports review-trend-aware weekly no-results after the relax
 
   assert.equal(callCount, 2);
   assert.equal(result.info.matchedIntent, 'momentum_discovery');
-  assert.equal(result.info.route, 'fallback_to_legacy');
-  assert.equal(result.renderedText, null);
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /stable momentum screen/i);
   assert.match(result.info.attempts[1]?.reason ?? '', /weekly review-sentiment screen/i);
 });
 

@@ -11,6 +11,7 @@ export type TigerShadowMatchedIntent =
   | 'metric_history'
   | 'momentum_discovery'
   | 'news_search'
+  | 'relation_lookup'
   | 'semantic_search'
   | 'user_context'
   | null;
@@ -37,6 +38,7 @@ export type TigerShadowContractName =
   | 'searchDocuments'
   | 'discoverChangePatterns'
   | 'explainChanges'
+  | 'getRelatedEntities'
   | 'getUserContext'
   | 'semanticSearch'
   | 'traceMetricHistory';

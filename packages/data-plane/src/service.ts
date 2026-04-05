@@ -2,11 +2,11 @@ import type { QueryResultRow } from 'pg';
 import { logger, PublisherIQError } from '@publisheriq/shared';
 
 import type {
-  CatalogFacetKind,
   ChangeActivitySignalFamily,
   ChangeActivitySort,
   ChangeActivityStoryKind,
   ChangeActivityView,
+  CatalogFacetKind,
   ChangePattern,
   CompareEntitiesRequest,
   CompareEntitiesResponse,
@@ -29,6 +29,8 @@ import type {
   ExplainChangesResponse,
   GetEntityOverviewRequest,
   GetEntityOverviewResponse,
+  GetRelatedEntitiesRequest,
+  GetRelatedEntitiesResponse,
   GetUserContextRequest,
   GetUserContextResponse,
   MatchQuality,
@@ -37,6 +39,8 @@ import type {
   RankEntitiesResponse,
   RankMetric,
   RankedEntity,
+  RelatedEntityKind,
+  RelatedEntityResultItem,
   ResolveEntitiesRequest,
   ResolveEntitiesResponse,
   ResolvedEntity,
@@ -64,7 +68,6 @@ import type {
   UserContextAlert,
   UserContextAlertPreferences,
   UserContextPin,
-  UserContextPinAlertSettings,
 } from './contracts.js';
 import { CONTRACT_REGISTRY } from './contract-registry.js';
 import { loadDataPlaneConfig, type DataPlaneConfig } from './config.js';
@@ -131,6 +134,18 @@ interface EntityOverviewRow extends QueryResultRow {
   release_year: number | null;
   review_score: number | null;
   total_reviews: number | null;
+}
+
+interface RelatedEntityRow extends QueryResultRow {
+  appid: number;
+  franchise_name: string | null;
+  name: string;
+  positive_percentage: number | null;
+  review_score: number | null;
+  steam_deck_category: 'playable' | 'verified' | 'unsupported' | 'unknown' | null;
+  total_reviews: number | null;
+  release_date: string | null;
+  release_year: number | null;
 }
 
 interface EntityOverviewGameRow extends QueryResultRow {
@@ -588,6 +603,7 @@ interface RelationLocation {
 const DEFAULT_ENTITY_LIMIT = 8;
 const DEFAULT_CATALOG_LIMIT = 25;
 const DEFAULT_ENTITY_GAMES_LIMIT = 10;
+const DEFAULT_RELATED_LIMIT = 10;
 const DEFAULT_MOMENTUM_LIMIT = 10;
 const DEFAULT_RANK_LIMIT = 10;
 const DEFAULT_CONTINUE_LIMIT = 5;
@@ -612,6 +628,7 @@ const DEFAULT_USER_ALERT_LIMIT = 10;
 const MAX_ENTITY_LIMIT = 15;
 const MAX_CATALOG_LIMIT = 50;
 const MAX_ENTITY_GAMES_LIMIT = 25;
+const MAX_RELATED_LIMIT = 25;
 const MAX_MOMENTUM_LIMIT = 20;
 const MAX_RANK_LIMIT = 25;
 const MAX_CONTINUE_LIMIT = 20;
@@ -788,6 +805,7 @@ const RELATION_LOCATIONS: Record<
   'supabase-postgres': {
     app_dlc: { schema: 'public', sql: 'public.app_dlc', table: 'app_dlc' },
     app_developers: { schema: 'public', sql: 'public.app_developers', table: 'app_developers' },
+    app_franchises: { schema: 'public', sql: 'public.app_franchises', table: 'app_franchises' },
     app_genres: { schema: 'public', sql: 'public.app_genres', table: 'app_genres' },
     app_publishers: { schema: 'public', sql: 'public.app_publishers', table: 'app_publishers' },
     app_steam_deck: { schema: 'public', sql: 'public.app_steam_deck', table: 'app_steam_deck' },
@@ -824,6 +842,7 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.app_change_events',
       table: 'app_change_events',
     },
+    franchises: { schema: 'public', sql: 'public.franchises', table: 'franchises' },
     publishers: { schema: 'public', sql: 'public.publishers', table: 'publishers' },
     user_alert_preferences: {
       schema: 'public',
@@ -844,6 +863,7 @@ const RELATION_LOCATIONS: Record<
   tiger: {
     app_dlc: { schema: 'legacy', sql: 'legacy.app_dlc', table: 'app_dlc' },
     app_developers: { schema: 'legacy', sql: 'legacy.app_developers', table: 'app_developers' },
+    app_franchises: { schema: 'legacy', sql: 'legacy.app_franchises', table: 'app_franchises' },
     app_genres: { schema: 'legacy', sql: 'legacy.app_genres', table: 'app_genres' },
     app_publishers: { schema: 'legacy', sql: 'legacy.app_publishers', table: 'app_publishers' },
     app_steam_deck: { schema: 'legacy', sql: 'legacy.app_steam_deck', table: 'app_steam_deck' },
@@ -880,6 +900,7 @@ const RELATION_LOCATIONS: Record<
       sql: 'events.app_change_events',
       table: 'app_change_events',
     },
+    franchises: { schema: 'legacy', sql: 'legacy.franchises', table: 'franchises' },
     publishers: { schema: 'legacy', sql: 'legacy.publishers', table: 'publishers' },
     user_alert_preferences: {
       schema: 'legacy',
@@ -909,6 +930,63 @@ function normalizeLimit(value: number | undefined, fallback: number, max: number
 
 function normalizeLikeValue(value: string): string {
   return `%${value.trim().toLowerCase()}%`;
+}
+
+function sanitizeTitleFamilyValue(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[™®]/g, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripTitleFamilySuffixes(value: string): string {
+  return value
+    .replace(
+      /\b(?:digital deluxe|deluxe edition|definitive edition|complete edition|ultimate edition|collector'?s edition|anniversary edition|director'?s cut|remaster(?:ed)?|game of the year edition|goty edition)\b.*$/i,
+      ''
+    )
+    .replace(/\b(?:ii|iii|iv|v|vi|vii|viii|ix|x|2|3|4|5|6|7|8|9|10)\b(?:\s+.*)?$/i, '')
+    .trim();
+}
+
+function deriveTitleFamilyQuery(sourceName: string): {
+  patterns: string[];
+  primaryKey: string;
+  requiresSharedCompany: boolean;
+} | null {
+  const normalized = sanitizeTitleFamilyValue(sourceName);
+  if (!normalized) {
+    return null;
+  }
+
+  const candidates = new Set<string>();
+  const addCandidate = (value: string): void => {
+    const stripped = stripTitleFamilySuffixes(sanitizeTitleFamilyValue(value));
+    if (stripped.length >= 4) {
+      candidates.add(stripped);
+    }
+  };
+
+  addCandidate(normalized);
+
+  const colonPrefix = normalized.split(/\s[:\-–]\s|:/, 1)[0]?.trim();
+  if (colonPrefix) {
+    addCandidate(colonPrefix);
+  }
+
+  const ordered = [...candidates].sort((left, right) => right.length - left.length);
+  const primaryKey = ordered[0] ?? null;
+  if (!primaryKey) {
+    return null;
+  }
+
+  return {
+    patterns: ordered.map((entry) => `${entry}%`),
+    primaryKey,
+    requiresSharedCompany: primaryKey.split(/\s+/).length < 2,
+  };
 }
 
 function formatDateOnly(value: Date): string {
@@ -1063,22 +1141,6 @@ function normalizeChangeStoryKind(value: string | null | undefined): ChangeActiv
   return storyKinds[0] ?? 'change-roundup';
 }
 
-function metricDelta(afterValue: number | null, beforeValue: number | null): number | null {
-  if (afterValue == null || beforeValue == null) {
-    return null;
-  }
-
-  return afterValue - beforeValue;
-}
-
-function percentLift(afterValue: number | null, beforeValue: number | null): number | null {
-  if (afterValue == null || beforeValue == null || beforeValue <= 0) {
-    return null;
-  }
-
-  return ((afterValue - beforeValue) / beforeValue) * 100;
-}
-
 function resolveOwnersMidpoint(row: DailyMetricHistoryRow): number | null {
   if (row.owners_min === null && row.owners_max === null) {
     return null;
@@ -1112,10 +1174,29 @@ function traceMetricValue(metric: TraceMetric, row: DailyMetricHistoryRow): numb
     case 'price_cents':
       return row.price_cents;
     case 'review_score':
-      return row.review_score;
+      return normalizeReviewPercentageValue(row.review_score);
     case 'total_reviews':
       return row.total_reviews;
   }
+}
+
+function normalizeReviewPercentageValue(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null;
+  }
+
+  return value >= 0 && value <= 10
+    ? roundNumber(value * 10, 2)
+    : value;
+}
+
+function reviewPercentageSql(alias: string): string {
+  return `CASE
+    WHEN ${alias}.positive_percentage IS NOT NULL THEN ${alias}.positive_percentage
+    WHEN ${alias}.review_score IS NOT NULL AND ${alias}.review_score <= 10
+      THEN ROUND((${alias}.review_score::numeric * 10), 2)::double precision
+    ELSE ${alias}.review_score
+  END`;
 }
 
 function metricValueForRow(metric: RankMetric, row: RankRow): number | null {
@@ -1127,7 +1208,7 @@ function metricValueForRow(metric: RankMetric, row: RankRow): number | null {
     case 'owners_midpoint':
       return row.owners_midpoint;
     case 'review_score':
-      return row.review_score;
+      return normalizeReviewPercentageValue(row.review_score);
     case 'total_reviews':
       return row.total_reviews;
   }
@@ -1142,7 +1223,7 @@ function comparedMetricValue(metric: CompareMetric, item: ComparedEntity): numbe
     case 'owners_midpoint':
       return item.metrics.ownersMidpoint;
     case 'review_score':
-      return item.metrics.reviewScore;
+      return normalizeReviewPercentageValue(item.metrics.reviewScore);
     case 'total_reviews':
       return item.metrics.totalReviews;
   }
@@ -1598,6 +1679,108 @@ export class DataPlaneService {
     };
   }
 
+  async getRelatedEntities(
+    request: GetRelatedEntitiesRequest
+  ): Promise<GetRelatedEntitiesResponse> {
+    await this.assertContractRuntime('getRelatedEntities');
+
+    const relationKind = request.relationKind;
+    const limit = normalizeLimit(request.limit, DEFAULT_RELATED_LIMIT, MAX_RELATED_LIMIT);
+    let sourceAppid = Number.isInteger(request.sourceAppid) ? Number(request.sourceAppid) : null;
+
+    if (!sourceAppid && request.sourceEntityUid?.trim()) {
+      const sourceEntity = await this.resolveCoreEntity(request.sourceEntityUid.trim(), {
+        invalidCode: 'INVALID_RELATED_SOURCE_UID',
+        notFoundCode: 'RELATED_SOURCE_NOT_FOUND',
+      });
+
+      if (sourceEntity.entity_kind !== 'game' || sourceEntity.platform !== 'steam') {
+        throw new PublisherIQError(
+          'getRelatedEntities currently requires a Steam game source entity.',
+          'INVALID_RELATED_SOURCE_KIND',
+          {
+            entityKind: sourceEntity.entity_kind,
+            platform: sourceEntity.platform,
+            sourceEntityUid: request.sourceEntityUid,
+          }
+        );
+      }
+
+      sourceAppid = Number(sourceEntity.platform_entity_id);
+    }
+
+    if (!Number.isInteger(sourceAppid) || (sourceAppid ?? 0) <= 0) {
+      throw new PublisherIQError(
+        'getRelatedEntities requires a numeric sourceAppid or a resolvable Steam game sourceEntityUid.',
+        'INVALID_RELATED_SOURCE_ID',
+        {
+          sourceAppid: request.sourceAppid,
+          sourceEntityUid: request.sourceEntityUid ?? null,
+        }
+      );
+    }
+
+    const resolvedSourceAppid = Number(sourceAppid);
+    const sourceOverview = await this.queryGameOverview(resolvedSourceAppid);
+    if (!sourceOverview) {
+      throw new PublisherIQError(
+        'No source game was found for the provided related-entity lookup.',
+        'RELATED_SOURCE_NOT_FOUND',
+        {
+          sourceAppid: resolvedSourceAppid,
+        }
+      );
+    }
+
+    const sourceSteamDeckCategory = await this.querySteamDeckCategoryByApp(resolvedSourceAppid);
+    const relatedLookup = relationKind === 'dlc'
+      ? await this.lookupRelatedDlcRows({
+          excludeSource: request.excludeSource !== false,
+          filters: request.filters ?? null,
+          limit,
+          sourceAppid: resolvedSourceAppid,
+          sourceReviewScore: sourceOverview.review_score,
+        })
+      : await this.lookupRelatedFranchiseRows({
+          excludeSource: request.excludeSource !== false,
+          filters: request.filters ?? null,
+          limit,
+          sourceAppid: resolvedSourceAppid,
+          sourceDeveloperIds: sourceOverview.developer_ids ?? [],
+          sourceName: sourceOverview.display_name,
+          sourcePublisherIds: sourceOverview.publisher_ids ?? [],
+          sourceReviewScore: sourceOverview.review_score,
+        });
+
+    const sourceFranchiseNames =
+      relationKind === 'franchise_games' && relatedLookup.matchMode === 'structured_relation'
+        ? await this.queryFranchiseNamesByApp(resolvedSourceAppid)
+        : [];
+
+    return {
+      items: relatedLookup.items.map((item) => this.mapRelatedEntityItem(item)),
+      matchMode: relatedLookup.matchMode,
+      provenance: buildProvenance(this.config.source, relatedLookup.tables),
+      relationKind,
+      source: {
+        appid: resolvedSourceAppid,
+        displayName: sourceOverview.display_name,
+        entityUid: buildEntityUid('steam', 'game', String(resolvedSourceAppid)),
+        ...(sourceFranchiseNames.length > 0 ? { franchiseNames: sourceFranchiseNames } : {}),
+        reviewScore: sourceOverview.review_score,
+        steamDeckCategory: sourceSteamDeckCategory,
+        totalReviews: sourceOverview.total_reviews,
+      },
+      sufficientToAnswer: relatedLookup.items.length > 0,
+      ...(relatedLookup.unresolvedAppids?.length
+        ? {
+            unresolvedAppids: relatedLookup.unresolvedAppids,
+            unresolvedCount: relatedLookup.unresolvedAppids.length,
+          }
+        : {}),
+    };
+  }
+
   async searchCatalog(request: SearchCatalogRequest): Promise<SearchCatalogResponse> {
     await this.assertContractRuntime('searchCatalog');
     await this.assertTigerSearchFiltersSupported(request);
@@ -1728,11 +1911,7 @@ export class DataPlaneService {
 
       if (typeof request.minReviewScore === 'number') {
         params.push(request.minReviewScore);
-        conditions.push(
-          request.minReviewScore > 10
-            ? `COALESCE(ldm.positive_percentage, 0) >= $${params.length}`
-            : `COALESCE(ldm.review_score, 0) >= $${params.length}`
-        );
+        conditions.push(`${reviewPercentageSql('ldm')} >= $${params.length}`);
       }
 
       if (typeof request.minPriceCents === 'number') {
@@ -1844,7 +2023,7 @@ export class DataPlaneService {
           a.release_date::text,
           EXTRACT(YEAR FROM a.release_date)::int AS release_year,
           ldm.total_reviews,
-          ldm.review_score,
+          ${reviewPercentageSql('ldm')} AS review_score,
           ldm.owners_midpoint,
           ldm.ccu_peak,
           COALESCE((
@@ -1984,6 +2163,7 @@ export class DataPlaneService {
     const candidateLimitBase = Math.min(limit + excludedAppIds.size, 200);
     const candidateLimit = candidateLimitBase;
     const rows = await this.queryMomentumRows({
+      appids: request.appids ?? null,
       filters: request.filters ?? null,
       indieHeuristic: request.indieHeuristic ?? false,
       limit: candidateLimit,
@@ -1999,7 +2179,11 @@ export class DataPlaneService {
 
     return {
       filtersApplied: this.buildMomentumFiltersApplied(request, timeframe),
-      items: pageRows.map((row) => this.mapMomentumItem(row)),
+      items: pageRows.map((row) => this.mapMomentumItem(row, {
+        sortBy: request.sortBy,
+        timeframe,
+        trendType: request.trendType ?? null,
+      })),
       provenance: buildProvenance(this.config.source, [
         this.relation('apps').sql,
         this.relation('latest_daily_metrics').sql,
@@ -2922,10 +3106,7 @@ export class DataPlaneService {
       MAX_SEMANTIC_RESULTS
     );
     const { offset } = decodeContinuationToken(request.continuationToken);
-    const searchLimit = Math.min(
-      Math.max((offset + requestedLimit) * 4, 30),
-      MAX_SEMANTIC_SEARCH_WINDOW
-    );
+    const searchLimit = this.resolveSemanticGameSearchLimit(request.filters, offset, requestedLimit);
     const terms = tokenizeSemanticConcept(description);
 
     if (terms.length === 0) {
@@ -3265,10 +3446,7 @@ export class DataPlaneService {
       };
     }
 
-    const searchLimit = Math.min(
-      Math.max((offset + requestedLimit) * 4, 30),
-      MAX_SEMANTIC_SEARCH_WINDOW
-    );
+    const searchLimit = this.resolveSemanticGameSearchLimit(request.filters, offset, requestedLimit);
     const candidates = await this.queryTigerSemanticGameCandidates({
       filters: request.filters,
       limit: searchLimit,
@@ -3277,8 +3455,20 @@ export class DataPlaneService {
     const ranked = this.rankTigerGameSimilarityCandidates(referenceProfile, candidates, request.filters);
     const pageResults = ranked.slice(offset, offset + requestedLimit);
     const nextOffset = offset + pageResults.length;
+    const closeAlternatives = offset === 0
+      ? this.buildGameSimilarityCloseAlternatives({
+          candidates,
+          filters: request.filters,
+          reference: referenceProfile,
+          requestedLimit,
+          strictRanked: ranked,
+        })
+      : { items: [], reason: null };
+    const hasAnswer = ranked.length > 0 || closeAlternatives.items.length > 0;
 
     return {
+      close_alternatives: closeAlternatives.items.length > 0 ? closeAlternatives.items : undefined,
+      close_alternatives_reason: closeAlternatives.reason ?? undefined,
       continuation_token:
         nextOffset < ranked.length
           ? encodeContinuationToken({ offset: nextOffset })
@@ -3298,14 +3488,156 @@ export class DataPlaneService {
         type: reference.type,
       },
       results: pageResults.map((result) => result.item),
-      sufficient_to_answer: ranked.length > 0,
+      sufficient_to_answer: hasAnswer,
       sufficiency_reason:
         ranked.length > 0
-          ? 'Returned similarity rows that already answer the request. Respond directly instead of broadening.'
-          : undefined,
+          ? closeAlternatives.items.length > 0
+            ? 'Returned exact similarity matches and close alternatives. Use the strict rows first, then surface the near misses as a secondary section.'
+            : 'Returned similarity rows that already answer the request. Respond directly instead of broadening.'
+          : closeAlternatives.items.length > 0
+            ? 'No exact similarity matches cleared the requested comparison cutoff, so returned close alternatives that still match the core similarity profile.'
+            : undefined,
       success: true,
       total_found: ranked.length,
     };
+  }
+
+  private buildGameSimilarityCloseAlternatives(params: {
+    candidates: SemanticGameCandidateRow[];
+    filters: SemanticSearchFilters | undefined;
+    reference: TigerSemanticGameProfile;
+    requestedLimit: number;
+    strictRanked: RankedSemanticItem[];
+  }): { items: SemanticSearchResultItem[]; reason: string | null } {
+    if (!this.shouldBuildSemanticCloseAlternatives(params.filters, params.strictRanked.length, params.requestedLimit)) {
+      return { items: [], reason: null };
+    }
+
+    const desiredCount = Math.min(Math.max(params.requestedLimit - params.strictRanked.length, 2), 4);
+    const strictIds = new Set(params.strictRanked.map((result) => result.item.id));
+    const selectedIds = new Set<number>();
+    const items: SemanticSearchResultItem[] = [];
+    let reason: string | null = null;
+
+    for (const stage of this.buildRelaxedSemanticSimilarityStages(params.filters)) {
+      const ranked = this.rankTigerGameSimilarityCandidates(params.reference, params.candidates, stage.filters);
+      for (const result of ranked) {
+        if (strictIds.has(result.item.id) || selectedIds.has(result.item.id)) {
+          continue;
+        }
+
+        selectedIds.add(result.item.id);
+        items.push(result.item);
+        if (!reason) {
+          reason = stage.reason;
+        }
+
+        if (items.length >= desiredCount) {
+          return { items, reason };
+        }
+      }
+    }
+
+    return { items, reason };
+  }
+
+  private shouldBuildSemanticCloseAlternatives(
+    filters: SemanticSearchFilters | undefined,
+    strictResultCount: number,
+    requestedLimit: number
+  ): boolean {
+    if (!filters) {
+      return false;
+    }
+
+    const hasSoftComparisonConstraint =
+      (filters.review_comparison != null && filters.review_comparison !== 'any')
+      || (filters.popularity_comparison != null && filters.popularity_comparison !== 'any');
+    if (!hasSoftComparisonConstraint) {
+      return false;
+    }
+
+    const minimumStrictTarget = Math.min(Math.max(requestedLimit, 1), 5);
+    return strictResultCount < minimumStrictTarget;
+  }
+
+  private buildRelaxedSemanticSimilarityStages(
+    filters: SemanticSearchFilters | undefined
+  ): Array<{ filters: SemanticSearchFilters; reason: string }> {
+    if (!filters) {
+      return [];
+    }
+
+    const stages: Array<{ filters: SemanticSearchFilters; reason: string }> = [];
+    const comparisonReason = this.describeSemanticCloseAlternativeReason(filters);
+
+    const firstStage: SemanticSearchFilters = {
+      ...filters,
+    };
+    let firstChanged = false;
+
+    if (firstStage.review_comparison === 'better_only') {
+      firstStage.review_comparison = 'similar_or_better';
+      firstChanged = true;
+    }
+    if (firstStage.popularity_comparison && firstStage.popularity_comparison !== 'any') {
+      firstStage.popularity_comparison = 'any';
+      firstChanged = true;
+    }
+
+    if (firstChanged) {
+      stages.push({
+        filters: firstStage,
+        reason: comparisonReason,
+      });
+    }
+
+    const secondStage: SemanticSearchFilters = {
+      ...(firstChanged ? firstStage : filters),
+    };
+    let secondChanged = false;
+
+    if (secondStage.review_comparison && secondStage.review_comparison !== 'any') {
+      secondStage.review_comparison = 'any';
+      secondChanged = true;
+    }
+
+    if (secondChanged) {
+      stages.push({
+        filters: secondStage,
+        reason: 'These stay highly similar, but they miss one or more of the stricter comparison cutoffs from the original request.',
+      });
+    }
+
+    return stages;
+  }
+
+  private describeSemanticCloseAlternativeReason(filters: SemanticSearchFilters | undefined): string {
+    if (!filters) {
+      return 'These stay highly similar, but they miss one or more of the stricter comparison cutoffs from the original request.';
+    }
+
+    const hasReviewConstraint = filters.review_comparison != null && filters.review_comparison !== 'any';
+    const hasPopularityConstraint =
+      filters.popularity_comparison != null && filters.popularity_comparison !== 'any';
+
+    if (hasReviewConstraint && hasPopularityConstraint) {
+      return 'These stay highly similar, but they miss one or more of the stricter review or popularity cutoffs from the original request.';
+    }
+
+    if (filters.review_comparison === 'better_only') {
+      return 'These stay highly similar, but they miss the stricter higher-review cutoff from the original request.';
+    }
+
+    if (filters.review_comparison === 'similar_or_better') {
+      return 'These stay highly similar, but they fall outside the requested review-quality band.';
+    }
+
+    if (hasPopularityConstraint) {
+      return 'These stay highly similar, but they miss the requested popularity comparison cutoff.';
+    }
+
+    return 'These stay highly similar, but they miss one or more of the stricter comparison cutoffs from the original request.';
   }
 
   private async runTigerCompanySimilaritySearch(
@@ -3428,6 +3760,8 @@ export class DataPlaneService {
     rows: SemanticGameCandidateRow[],
     filters: SemanticSearchFilters | undefined
   ): RankedSemanticItem[] {
+    const minimumScore = this.resolveSemanticSimilarityThreshold(filters);
+
     return rows
       .map((row) => {
         const candidate = this.mapTigerSemanticGameProfile(row);
@@ -3539,8 +3873,87 @@ export class DataPlaneService {
           score: boundedScore,
         };
       })
-      .filter((result) => result.score >= 0.16)
+      .filter((result) => result.score >= minimumScore)
       .sort((left, right) => right.score - left.score);
+  }
+
+  private countSemanticNarrowingFilters(filters: SemanticSearchFilters | undefined): number {
+    if (!filters) {
+      return 0;
+    }
+
+    let count = 0;
+    if (filters.review_comparison && filters.review_comparison !== 'any') {
+      count += 1;
+    }
+    if (filters.popularity_comparison && filters.popularity_comparison !== 'any') {
+      count += 1;
+    }
+    if (filters.steam_deck?.length) {
+      count += 1;
+    }
+    if (filters.platforms?.length) {
+      count += 1;
+    }
+    if (typeof filters.is_free === 'boolean') {
+      count += 1;
+    }
+    if (typeof filters.max_price_cents === 'number') {
+      count += 1;
+    }
+    if (typeof filters.min_reviews === 'number' || typeof filters.max_reviews === 'number') {
+      count += 1;
+    }
+    if (filters.review_percentage?.gte != null || filters.review_percentage?.lte != null) {
+      count += 1;
+    }
+    if (filters.release_year?.gte != null || filters.release_year?.lte != null) {
+      count += 1;
+    }
+    if (filters.genres?.length) {
+      count += 1;
+    }
+    if (filters.tags?.length) {
+      count += 1;
+    }
+
+    return count;
+  }
+
+  private resolveSemanticGameSearchLimit(
+    filters: SemanticSearchFilters | undefined,
+    offset: number,
+    requestedLimit: number
+  ): number {
+    const narrowingCount = this.countSemanticNarrowingFilters(filters);
+    const reviewConstrained = filters?.review_comparison != null && filters.review_comparison !== 'any';
+    const multiplier = reviewConstrained
+      ? Math.max(narrowingCount >= 2 ? 8 : narrowingCount === 1 ? 6 : 4, 10)
+      : narrowingCount >= 2 ? 8 : narrowingCount === 1 ? 6 : 4;
+    const minimumWindow = reviewConstrained
+      ? Math.max(narrowingCount >= 2 ? 60 : narrowingCount === 1 ? 42 : 30, 72)
+      : narrowingCount >= 2 ? 60 : narrowingCount === 1 ? 42 : 30;
+
+    return Math.min(
+      Math.max((offset + requestedLimit) * multiplier, minimumWindow),
+      MAX_SEMANTIC_SEARCH_WINDOW
+    );
+  }
+
+  private resolveSemanticSimilarityThreshold(filters: SemanticSearchFilters | undefined): number {
+    const narrowingCount = this.countSemanticNarrowingFilters(filters);
+    const reviewConstrained = filters?.review_comparison != null && filters.review_comparison !== 'any';
+    if (reviewConstrained) {
+      return narrowingCount >= 2 ? 0.08 : 0.1;
+    }
+    if (narrowingCount >= 2) {
+      return 0.1;
+    }
+    if (narrowingCount === 1) {
+      return 0.12;
+    }
+
+    return 0.16;
   }
 
   private rankTigerCompanySimilarityCandidates(
@@ -3782,12 +4195,12 @@ export class DataPlaneService {
 
     if (filters?.review_percentage?.gte != null) {
       queryParams.push(filters.review_percentage.gte);
-      conditions.push(`COALESCE(ldm.positive_percentage, 0) >= $${queryParams.length}`);
+      conditions.push(`COALESCE(${reviewPercentageSql('ldm')}, 0) >= $${queryParams.length}`);
     }
 
     if (filters?.review_percentage?.lte != null) {
       queryParams.push(filters.review_percentage.lte);
-      conditions.push(`COALESCE(ldm.positive_percentage, 0) <= $${queryParams.length}`);
+      conditions.push(`COALESCE(${reviewPercentageSql('ldm')}, 0) <= $${queryParams.length}`);
     }
 
     if (filters?.release_year?.gte != null) {
@@ -4247,7 +4660,7 @@ export class DataPlaneService {
         a.name AS display_name,
         EXTRACT(YEAR FROM a.release_date)::int AS release_year,
         ldm.total_reviews,
-        ldm.review_score,
+        ${reviewPercentageSql('ldm')} AS review_score,
         ldm.owners_midpoint,
         ldm.ccu_peak,
         CASE
@@ -6106,7 +6519,7 @@ export class DataPlaneService {
           a.release_date::text AS release_date,
           EXTRACT(YEAR FROM a.release_date)::int AS release_year,
           ldm.total_reviews,
-          ldm.review_score,
+          ${reviewPercentageSql('ldm')} AS review_score,
           ldm.owners_midpoint,
           ldm.ccu_peak,
           NULL::int AS game_count,
@@ -6176,7 +6589,7 @@ export class DataPlaneService {
             WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
               THEN ROUND(
                 (
-                  SUM(COALESCE(ldm.review_score, 0) * COALESCE(ldm.total_reviews, 0))::numeric
+                  SUM(COALESCE(${reviewPercentageSql('ldm')}, 0) * COALESCE(ldm.total_reviews, 0))::numeric
                   / NULLIF(SUM(COALESCE(ldm.total_reviews, 0)), 0)
                 ),
                 2
@@ -6222,7 +6635,7 @@ export class DataPlaneService {
     const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
     const orderClause =
       sortBy === 'reviews'
-        ? 'COALESCE(ldm.total_reviews, 0) DESC, COALESCE(ldm.review_score, 0) DESC, COALESCE(ldm.owners_midpoint, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC'
+        ? `COALESCE(ldm.total_reviews, 0) DESC, COALESCE(${reviewPercentageSql('ldm')}, 0) DESC, COALESCE(ldm.owners_midpoint, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC`
         : 'a.release_date DESC NULLS LAST, COALESCE(ldm.total_reviews, 0) DESC, a.name ASC';
     const result = await runQuery<EntityOverviewGameRow>(
       `
@@ -6232,7 +6645,7 @@ export class DataPlaneService {
           a.release_date::text AS release_date,
           EXTRACT(YEAR FROM a.release_date)::int AS release_year,
           ldm.total_reviews,
-          ldm.review_score,
+          ${reviewPercentageSql('ldm')} AS review_score,
           ldm.owners_midpoint
         FROM ${relationTable} rel
         JOIN ${appsTable} a
@@ -6245,6 +6658,519 @@ export class DataPlaneService {
         LIMIT $2
       `,
       [entityId, limit],
+      this.config
+    );
+
+    return result.rows;
+  }
+
+  private mapRelatedEntityItem(row: RelatedEntityRow): RelatedEntityResultItem {
+    return {
+      appid: row.appid,
+      entityUid: buildEntityUid('steam', 'game', String(row.appid)),
+      name: row.name,
+      releaseDate: row.release_date,
+      releaseYear: row.release_year,
+      reviewScore: normalizeReviewPercentageValue(row.positive_percentage ?? row.review_score),
+      steamDeckCategory: row.steam_deck_category,
+      totalReviews: row.total_reviews,
+    };
+  }
+
+  private async querySteamDeckCategoryByApp(
+    appid: number
+  ): Promise<'playable' | 'verified' | 'unsupported' | 'unknown' | null> {
+    const appSteamDeckTable = this.relation('app_steam_deck').sql;
+    const result = await runQuery<{ category: 'playable' | 'verified' | 'unsupported' | 'unknown' | null }>(
+      `
+        SELECT category::text AS category
+        FROM ${appSteamDeckTable}
+        WHERE appid = $1
+        LIMIT 1
+      `,
+      [appid],
+      this.config
+    );
+
+    return result.rows[0]?.category ?? null;
+  }
+
+  private async queryFranchiseNamesByApp(appid: number): Promise<string[]> {
+    const appFranchisesTable = this.relation('app_franchises').sql;
+    const franchisesTable = this.relation('franchises').sql;
+    const result = await runQuery<{ name: string }>(
+      `
+        SELECT f.name
+        FROM ${appFranchisesTable} af
+        JOIN ${franchisesTable} f ON f.id = af.franchise_id
+        WHERE af.appid = $1
+        ORDER BY f.name ASC
+      `,
+      [appid],
+      this.config
+    );
+
+    return result.rows
+      .map((row) => row.name)
+      .filter((name, index, values) => values.indexOf(name) === index);
+  }
+
+  private async lookupRelatedDlcRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceReviewScore: number | null;
+  }): Promise<{
+    items: RelatedEntityRow[];
+    matchMode: GetRelatedEntitiesResponse['matchMode'];
+    tables: string[];
+    unresolvedAppids?: number[];
+  }> {
+    const exactTablesBlocked = await this.getBlockingTables(['app_dlc', 'app_steam_deck']);
+    if (exactTablesBlocked.length === 0) {
+      const exactRows = await this.queryRelatedDlcRows(params);
+      if (exactRows.length > 0) {
+        return {
+          items: exactRows,
+          matchMode: 'structured_relation',
+          tables: [
+            this.relation('apps').sql,
+            this.relation('latest_daily_metrics').sql,
+            this.relation('app_dlc').sql,
+            this.relation('app_steam_deck').sql,
+          ],
+        };
+      }
+    }
+
+    const fallbackRows = await this.queryRelatedDlcRowsFromApps(params);
+    if (fallbackRows.length > 0) {
+      return {
+        items: fallbackRows,
+        matchMode: 'parent_appid',
+        tables: [
+          this.relation('apps').sql,
+          this.relation('latest_daily_metrics').sql,
+          this.relation('app_steam_deck').sql,
+        ],
+      };
+    }
+
+    const unresolvedRelationBlocked = await this.getBlockingTables(['app_dlc']);
+    if (unresolvedRelationBlocked.length > 0) {
+      return {
+        items: [],
+        matchMode: 'parent_appid',
+        tables: [
+          this.relation('apps').sql,
+          this.relation('latest_daily_metrics').sql,
+          this.relation('app_steam_deck').sql,
+        ],
+      };
+    }
+
+    const unresolvedAppids = await this.queryRelatedDlcAppids(params.sourceAppid, params.limit);
+    return {
+      items: [],
+      matchMode: unresolvedAppids.length > 0 ? 'relation_ids_only' : 'parent_appid',
+      tables: [this.relation('app_dlc').sql],
+      ...(unresolvedAppids.length > 0 ? { unresolvedAppids } : {}),
+    };
+  }
+
+  private async lookupRelatedFranchiseRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceDeveloperIds: number[];
+    sourceName: string;
+    sourcePublisherIds: number[];
+    sourceReviewScore: number | null;
+  }): Promise<{
+    items: RelatedEntityRow[];
+    matchMode: GetRelatedEntitiesResponse['matchMode'];
+    tables: string[];
+    unresolvedAppids?: number[];
+  }> {
+    const exactTablesBlocked = await this.getBlockingTables(['app_franchises', 'franchises', 'app_steam_deck']);
+    if (exactTablesBlocked.length === 0) {
+      const exactRows = await this.queryRelatedFranchiseRows(params);
+      if (exactRows.length > 0) {
+        return {
+          items: exactRows,
+          matchMode: 'structured_relation',
+          tables: [
+            this.relation('apps').sql,
+            this.relation('latest_daily_metrics').sql,
+            this.relation('app_franchises').sql,
+            this.relation('franchises').sql,
+            this.relation('app_steam_deck').sql,
+          ],
+        };
+      }
+    }
+
+    return {
+      items: await this.queryRelatedTitleFamilyRows(params),
+      matchMode: 'title_family',
+      tables: [
+        this.relation('apps').sql,
+        this.relation('latest_daily_metrics').sql,
+        this.relation('app_publishers').sql,
+        this.relation('app_developers').sql,
+        this.relation('app_steam_deck').sql,
+      ],
+    };
+  }
+
+  private async queryRelatedEntityRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    relationKind: RelatedEntityKind;
+    sourceAppid: number;
+    sourceReviewScore: number | null;
+  }): Promise<RelatedEntityRow[]> {
+    if (params.relationKind === 'dlc') {
+      return this.queryRelatedDlcRows(params);
+    }
+
+    return this.queryRelatedFranchiseRows(params);
+  }
+
+  private async queryRelatedDlcRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceReviewScore: number | null;
+  }): Promise<RelatedEntityRow[]> {
+    const appDlcTable = this.relation('app_dlc').sql;
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appSteamDeckTable = this.relation('app_steam_deck').sql;
+    const sqlParams: unknown[] = [params.sourceAppid];
+    const conditions: string[] = [
+      'a.is_delisted = false',
+    ];
+
+    if (typeof params.filters?.minReviewScore === 'number') {
+      sqlParams.push(params.filters.minReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} >= $${sqlParams.length}`);
+    }
+
+    if (params.filters?.reviewComparison === 'better_only' && typeof params.sourceReviewScore === 'number') {
+      sqlParams.push(params.sourceReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} > $${sqlParams.length}`);
+    }
+
+    if (params.filters?.steamDeck?.length) {
+      sqlParams.push(params.filters.steamDeck);
+      conditions.push(`COALESCE(asd.category::text, 'unknown') = ANY($${sqlParams.length}::text[])`);
+    }
+
+    sqlParams.push(params.limit);
+
+    const result = await runQuery<RelatedEntityRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ${reviewPercentageSql('ldm')} AS review_score,
+          ldm.positive_percentage,
+          ldm.total_reviews,
+          asd.category::text AS steam_deck_category,
+          NULL::text AS franchise_name
+        FROM ${appDlcTable} ad
+        JOIN ${appsTable} a ON a.appid = ad.dlc_appid
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        LEFT JOIN ${appSteamDeckTable} asd ON asd.appid = a.appid
+        WHERE ad.parent_appid = $1
+          AND ${conditions.join('\n          AND ')}
+        ORDER BY COALESCE(ldm.total_reviews, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC
+        LIMIT $${sqlParams.length}
+      `,
+      sqlParams,
+      this.config
+    );
+
+    return result.rows;
+  }
+
+  private async queryRelatedDlcRowsFromApps(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceReviewScore: number | null;
+  }): Promise<RelatedEntityRow[]> {
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appSteamDeckTable = this.relation('app_steam_deck').sql;
+    const sqlParams: unknown[] = [params.sourceAppid];
+    const conditions: string[] = [
+      'a.parent_appid = $1',
+      'a.is_delisted = false',
+    ];
+
+    if (typeof params.filters?.minReviewScore === 'number') {
+      sqlParams.push(params.filters.minReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} >= $${sqlParams.length}`);
+    }
+
+    if (params.filters?.reviewComparison === 'better_only' && typeof params.sourceReviewScore === 'number') {
+      sqlParams.push(params.sourceReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} > $${sqlParams.length}`);
+    }
+
+    if (params.filters?.steamDeck?.length) {
+      sqlParams.push(params.filters.steamDeck);
+      conditions.push(`COALESCE(asd.category::text, 'unknown') = ANY($${sqlParams.length}::text[])`);
+    }
+
+    sqlParams.push(params.limit);
+
+    const result = await runQuery<RelatedEntityRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ${reviewPercentageSql('ldm')} AS review_score,
+          ldm.positive_percentage,
+          ldm.total_reviews,
+          asd.category::text AS steam_deck_category,
+          NULL::text AS franchise_name
+        FROM ${appsTable} a
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        LEFT JOIN ${appSteamDeckTable} asd ON asd.appid = a.appid
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY COALESCE(ldm.total_reviews, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC
+        LIMIT $${sqlParams.length}
+      `,
+      sqlParams,
+      this.config
+    );
+
+    return result.rows;
+  }
+
+  private async queryRelatedDlcAppids(sourceAppid: number, limit: number): Promise<number[]> {
+    const appDlcTable = this.relation('app_dlc').sql;
+    const result = await runQuery<{ dlc_appid: number }>(
+      `
+        SELECT DISTINCT ad.dlc_appid
+        FROM ${appDlcTable} ad
+        WHERE ad.parent_appid = $1
+        ORDER BY ad.dlc_appid ASC
+        LIMIT $2
+      `,
+      [sourceAppid, limit],
+      this.config
+    );
+
+    return result.rows
+      .map((row) => row.dlc_appid)
+      .filter((appid): appid is number => Number.isInteger(appid) && appid > 0);
+  }
+
+  private async queryRelatedFranchiseRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceReviewScore: number | null;
+  }): Promise<RelatedEntityRow[]> {
+    const appFranchisesTable = this.relation('app_franchises').sql;
+    const franchisesTable = this.relation('franchises').sql;
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appSteamDeckTable = this.relation('app_steam_deck').sql;
+    const sqlParams: unknown[] = [params.sourceAppid];
+    const conditions: string[] = [
+      'a.is_delisted = false',
+      GAME_TYPE_PREDICATE[this.config.source],
+    ];
+
+    if (params.excludeSource) {
+      conditions.push('af.appid <> $1');
+    }
+
+    if (typeof params.filters?.minReviewScore === 'number') {
+      sqlParams.push(params.filters.minReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} >= $${sqlParams.length}`);
+    }
+
+    if (params.filters?.reviewComparison === 'better_only' && typeof params.sourceReviewScore === 'number') {
+      sqlParams.push(params.sourceReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} > $${sqlParams.length}`);
+    }
+
+    if (params.filters?.steamDeck?.length) {
+      sqlParams.push(params.filters.steamDeck);
+      conditions.push(`COALESCE(asd.category::text, 'unknown') = ANY($${sqlParams.length}::text[])`);
+    }
+
+    sqlParams.push(params.limit);
+
+    const result = await runQuery<RelatedEntityRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ${reviewPercentageSql('ldm')} AS review_score,
+          ldm.positive_percentage,
+          ldm.total_reviews,
+          asd.category::text AS steam_deck_category,
+          MIN(f.name)::text AS franchise_name
+        FROM ${appFranchisesTable} src
+        JOIN ${appFranchisesTable} af ON af.franchise_id = src.franchise_id
+        JOIN ${franchisesTable} f ON f.id = af.franchise_id
+        JOIN ${appsTable} a ON a.appid = af.appid
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        LEFT JOIN ${appSteamDeckTable} asd ON asd.appid = a.appid
+        WHERE src.appid = $1
+          AND ${conditions.join('\n          AND ')}
+        GROUP BY
+          a.appid,
+          a.name,
+          a.release_date,
+          ldm.review_score,
+          ldm.positive_percentage,
+          ldm.total_reviews,
+          asd.category
+        ORDER BY COALESCE(ldm.total_reviews, 0) DESC, a.release_date DESC NULLS LAST, a.name ASC
+        LIMIT $${sqlParams.length}
+      `,
+      sqlParams,
+      this.config
+    );
+
+    return result.rows;
+  }
+
+  private async queryRelatedTitleFamilyRows(params: {
+    excludeSource: boolean;
+    filters: GetRelatedEntitiesRequest['filters'] | null;
+    limit: number;
+    sourceAppid: number;
+    sourceDeveloperIds: number[];
+    sourceName: string;
+    sourcePublisherIds: number[];
+    sourceReviewScore: number | null;
+  }): Promise<RelatedEntityRow[]> {
+    const titleFamily = deriveTitleFamilyQuery(params.sourceName);
+    if (!titleFamily) {
+      return [];
+    }
+
+    const appsTable = this.relation('apps').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const appSteamDeckTable = this.relation('app_steam_deck').sql;
+    const appPublishersTable = this.relation('app_publishers').sql;
+    const appDevelopersTable = this.relation('app_developers').sql;
+    const sqlParams: unknown[] = [
+      params.sourceAppid,
+      titleFamily.patterns,
+    ];
+    const conditions: string[] = [
+      'lower(a.name) LIKE ANY($2::text[])',
+      'a.is_delisted = false',
+      GAME_TYPE_PREDICATE[this.config.source],
+    ];
+
+    if (params.excludeSource) {
+      conditions.push('a.appid <> $1');
+    }
+
+    if (typeof params.filters?.minReviewScore === 'number') {
+      sqlParams.push(params.filters.minReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} >= $${sqlParams.length}`);
+    }
+
+    if (params.filters?.reviewComparison === 'better_only' && typeof params.sourceReviewScore === 'number') {
+      sqlParams.push(params.sourceReviewScore);
+      conditions.push(`${reviewPercentageSql('ldm')} > $${sqlParams.length}`);
+    }
+
+    if (params.filters?.steamDeck?.length) {
+      sqlParams.push(params.filters.steamDeck);
+      conditions.push(`COALESCE(asd.category::text, 'unknown') = ANY($${sqlParams.length}::text[])`);
+    }
+
+    if (titleFamily.requiresSharedCompany) {
+      const companySignalClauses: string[] = [];
+
+      if (params.sourceDeveloperIds.length > 0) {
+        sqlParams.push(params.sourceDeveloperIds);
+        companySignalClauses.push(
+          `EXISTS (
+            SELECT 1
+            FROM ${appDevelopersTable} ad
+            WHERE ad.appid = a.appid
+              AND ad.developer_id = ANY($${sqlParams.length}::int[])
+          )`
+        );
+      }
+
+      if (params.sourcePublisherIds.length > 0) {
+        sqlParams.push(params.sourcePublisherIds);
+        companySignalClauses.push(
+          `EXISTS (
+            SELECT 1
+            FROM ${appPublishersTable} ap
+            WHERE ap.appid = a.appid
+              AND ap.publisher_id = ANY($${sqlParams.length}::int[])
+          )`
+        );
+      }
+
+      if (companySignalClauses.length === 0) {
+        return [];
+      }
+
+      conditions.push(`(${companySignalClauses.join(' OR ')})`);
+    }
+
+    sqlParams.push(titleFamily.primaryKey);
+    const primaryKeyParam = sqlParams.length;
+    sqlParams.push(params.limit);
+    const limitParam = sqlParams.length;
+
+    const result = await runQuery<RelatedEntityRow>(
+      `
+        SELECT
+          a.appid,
+          a.name,
+          a.release_date::text AS release_date,
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ${reviewPercentageSql('ldm')} AS review_score,
+          ldm.positive_percentage,
+          ldm.total_reviews,
+          asd.category::text AS steam_deck_category,
+          NULL::text AS franchise_name
+        FROM ${appsTable} a
+        LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
+        LEFT JOIN ${appSteamDeckTable} asd ON asd.appid = a.appid
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY
+          CASE
+            WHEN lower(a.name) = lower($${primaryKeyParam}::text) THEN 0
+            ELSE 1
+          END,
+          COALESCE(ldm.total_reviews, 0) DESC,
+          a.release_date DESC NULLS LAST,
+          a.name ASC
+        LIMIT $${limitParam}
+      `,
+      sqlParams,
       this.config
     );
 
@@ -6278,14 +7204,18 @@ export class DataPlaneService {
         a.name AS display_name,
         EXTRACT(YEAR FROM a.release_date)::int AS release_year,
         ldm.total_reviews,
-        ldm.review_score,
+        ${reviewPercentageSql('ldm')} AS review_score,
         ldm.owners_midpoint,
         ldm.ccu_peak,
         NULL::int AS game_count
       FROM ${appsTable} a
       LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = a.appid
       WHERE ${conditions.join('\n        AND ')}
-      ORDER BY COALESCE(ldm.${metric}, 0) ${direction}, COALESCE(ldm.total_reviews, 0) DESC, a.name ASC
+      ORDER BY ${
+        metric === 'review_score'
+          ? `COALESCE(${reviewPercentageSql('ldm')}, 0)`
+          : `COALESCE(ldm.${metric}, 0)`
+      } ${direction}, COALESCE(ldm.total_reviews, 0) DESC, a.name ASC
       LIMIT $${params.length}
     `;
 
@@ -6386,7 +7316,7 @@ export class DataPlaneService {
 
     if (typeof filters?.minReviewScore === 'number') {
       params.push(filters.minReviewScore);
-      conditions.push(`COALESCE(ldm.positive_percentage, 0) >= $${params.length}`);
+      conditions.push(`${reviewPercentageSql('ldm')} >= $${params.length}`);
     }
 
     if (typeof filters?.minPriceCents === 'number') {
@@ -6444,13 +7374,23 @@ export class DataPlaneService {
       WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
         THEN ROUND(
           (
-            SUM(COALESCE(ldm.review_score, 0) * COALESCE(ldm.total_reviews, 0))::numeric
+            SUM(COALESCE(${reviewPercentageSql('ldm')}, 0) * COALESCE(ldm.total_reviews, 0))::numeric
             / NULLIF(SUM(COALESCE(ldm.total_reviews, 0)), 0)
           ),
           2
         )::double precision
       ELSE NULL
     END`;
+    const metricOrderExpression =
+      metric === 'game_count'
+        ? 'COUNT(DISTINCT a.appid)'
+        : metric === 'total_reviews'
+          ? 'SUM(COALESCE(ldm.total_reviews, 0))'
+          : metric === 'owners_midpoint'
+            ? 'SUM(COALESCE(ldm.owners_midpoint, 0))'
+            : metric === 'ccu_peak'
+              ? 'MAX(COALESCE(ldm.ccu_peak, 0))'
+              : averageReviewExpression;
     const havingConditions: string[] = ['COUNT(DISTINCT a.appid) > 0'];
 
     if (typeof aggregateFilters?.minGameCount === 'number') {
@@ -6465,7 +7405,14 @@ export class DataPlaneService {
 
     if (typeof aggregateFilters?.minMinimumReviewScore === 'number') {
       params.push(aggregateFilters.minMinimumReviewScore);
-      havingConditions.push(`MIN(COALESCE(ldm.review_score, 0)) >= $${params.length}`);
+      havingConditions.push(`MIN(COALESCE(${reviewPercentageSql('ldm')}, 0)) >= $${params.length}`);
+    }
+
+    if (typeof request.recentReleaseDays === 'number' && Number.isFinite(request.recentReleaseDays) && request.recentReleaseDays > 0) {
+      params.push(Math.trunc(request.recentReleaseDays));
+      havingConditions.push(
+        `MAX(CASE WHEN a.release_date >= CURRENT_DATE - ($${params.length}::int * INTERVAL '1 day') THEN 1 ELSE 0 END) = 1`
+      );
     }
 
     params.push(limit);
@@ -6487,7 +7434,7 @@ export class DataPlaneService {
       WHERE ${conditions.join('\n        AND ')}
       GROUP BY c.id, c.name
       HAVING ${havingConditions.join('\n        AND ')}
-      ORDER BY COALESCE(${metric}, 0) ${direction}, total_reviews DESC, c.name ASC
+      ORDER BY COALESCE(${metricOrderExpression}, 0) ${direction}, SUM(COALESCE(ldm.total_reviews, 0)) DESC, c.name ASC
       LIMIT $${params.length}
     `;
 
@@ -6544,7 +7491,7 @@ export class DataPlaneService {
           a.name AS display_name,
           EXTRACT(YEAR FROM a.release_date)::int AS release_year,
           ldm.total_reviews,
-          ldm.review_score,
+          ${reviewPercentageSql('ldm')} AS review_score,
           ldm.owners_midpoint,
           ldm.ccu_peak,
           NULL::int AS game_count
@@ -6585,7 +7532,7 @@ export class DataPlaneService {
             WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
               THEN ROUND(
                 (
-                  SUM(COALESCE(ldm.review_score, 0) * COALESCE(ldm.total_reviews, 0))::numeric
+                  SUM(COALESCE(${reviewPercentageSql('ldm')}, 0) * COALESCE(ldm.total_reviews, 0))::numeric
                   / NULLIF(SUM(COALESCE(ldm.total_reviews, 0)), 0)
                 ),
                 2
@@ -6796,14 +7743,22 @@ export class DataPlaneService {
     return applied;
   }
 
-  private mapMomentumItem(row: MomentumRow): DiscoverMomentumItem {
+  private mapMomentumItem(
+    row: MomentumRow,
+    context: {
+      sortBy: DiscoverMomentumRequest['sortBy'];
+      timeframe: '7d' | '30d' | 'current';
+      trendType: DiscoverMomentumRequest['trendType'];
+    }
+  ): DiscoverMomentumItem {
     const ccuGrowth30dPercent = coerceNullableNumber(row.ccu_growth_30d_percent);
     const ccuGrowth7dPercent = coerceNullableNumber(row.ccu_growth_7d_percent);
     const ccuPeak = coerceNullableNumber(row.ccu_peak);
+    const normalizedCcuPeak = ccuPeak != null && ccuPeak > 0 ? ccuPeak : null;
     const discountPercent = coerceNullableNumber(row.discount_percent);
     const priceCents = coerceNullableNumber(row.price_cents);
     const releaseYear = coerceNullableNumber(row.release_year);
-    const reviewPercentage = coerceNullableNumber(row.positive_percentage);
+    const reviewPercentage = normalizeReviewPercentageValue(coerceNullableNumber(row.positive_percentage));
     const reviewsAdded30d = coerceNullableNumber(row.reviews_added_30d);
     const reviewsAdded7d = coerceNullableNumber(row.reviews_added_7d);
     const sentimentDelta = coerceNullableNumber(row.sentiment_delta);
@@ -6811,29 +7766,20 @@ export class DataPlaneService {
     const velocity30d = coerceNullableNumber(row.velocity_30d);
     const velocity7d = coerceNullableNumber(row.velocity_7d);
     const velocityAcceleration = coerceNullableNumber(row.velocity_acceleration);
-    const supportReasons: string[] = [];
-
-    if ((reviewsAdded7d ?? 0) >= 25) {
-      supportReasons.push(`${Math.round(reviewsAdded7d ?? 0).toLocaleString()} reviews added over 7d.`);
-    }
-    if ((velocityAcceleration ?? 0) >= 25) {
-      supportReasons.push(`Review velocity is up ${Math.round(velocityAcceleration ?? 0)}% versus the trailing baseline.`);
-    }
-    if ((ccuGrowth7dPercent ?? 0) >= 20) {
-      supportReasons.push(`Peak CCU is up ${Math.round(ccuGrowth7dPercent ?? 0)}% over 7d.`);
-    }
-    if ((sentimentDelta ?? 0) >= 2) {
-      supportReasons.push(`Sentiment improved by ${roundNumber(sentimentDelta ?? 0, 1)} points.`);
-    }
-    if ((sentimentDelta ?? 0) <= -2) {
-      supportReasons.push(`Sentiment fell by ${roundNumber(Math.abs(sentimentDelta ?? 0), 1)} points.`);
-    }
-    if ((velocityAcceleration ?? 0) <= -25) {
-      supportReasons.push(`Review velocity is down ${Math.round(Math.abs(velocityAcceleration ?? 0))}% versus the trailing baseline.`);
-    }
-    if ((ccuGrowth7dPercent ?? 0) <= -20) {
-      supportReasons.push(`Peak CCU is down ${Math.round(Math.abs(ccuGrowth7dPercent ?? 0))}% over 7d.`);
-    }
+    const supportReasons = this.buildMomentumSupportReasons({
+      ccuGrowth30dPercent,
+      ccuGrowth7dPercent,
+      ccuPeak: normalizedCcuPeak,
+      context,
+      reviewPercentage,
+      reviewsAdded30d,
+      reviewsAdded7d,
+      sentimentDelta,
+      totalReviews,
+      velocity30d,
+      velocity7d,
+      velocityAcceleration,
+    });
 
     const supportLevel: DiscoverMomentumItem['supportLevel'] =
       supportReasons.length >= 3 ? 'high' : supportReasons.length >= 2 ? 'medium' : 'low';
@@ -6849,7 +7795,7 @@ export class DataPlaneService {
       appid: row.appid,
       ccuGrowth30dPercent,
       ccuGrowth7dPercent,
-      ccuPeak,
+      ccuPeak: normalizedCcuPeak,
       developerName: row.developer_name,
       discountPercent,
       entityUid: buildEntityUid('steam', 'game', String(row.appid)),
@@ -6880,7 +7826,78 @@ export class DataPlaneService {
     };
   }
 
+  private buildMomentumSupportReasons(params: {
+    ccuGrowth30dPercent: number | null;
+    ccuGrowth7dPercent: number | null;
+    ccuPeak: number | null;
+    context: {
+      sortBy: DiscoverMomentumRequest['sortBy'];
+      timeframe: '7d' | '30d' | 'current';
+      trendType: DiscoverMomentumRequest['trendType'];
+    };
+    reviewPercentage: number | null;
+    reviewsAdded30d: number | null;
+    reviewsAdded7d: number | null;
+    sentimentDelta: number | null;
+    totalReviews: number | null;
+    velocity30d: number | null;
+    velocity7d: number | null;
+    velocityAcceleration: number | null;
+  }): string[] {
+    const reasons: string[] = [];
+    const reviewWindow =
+      params.context.sortBy === 'reviews_added_30d'
+      || params.context.timeframe === '30d'
+      || params.context.trendType === 'breaking_out'
+        ? '30d'
+        : '7d';
+    const primaryReviewsAdded = reviewWindow === '30d' ? params.reviewsAdded30d : params.reviewsAdded7d;
+    const primaryVelocity = reviewWindow === '30d' ? params.velocity30d : params.velocity7d;
+    const primaryCcuGrowth = reviewWindow === '30d' ? params.ccuGrowth30dPercent : params.ccuGrowth7dPercent;
+
+    if (params.context.sortBy === 'ccu_peak' && params.ccuPeak != null) {
+      reasons.push(`${Math.round(params.ccuPeak).toLocaleString()} peak CCU in the latest snapshot.`);
+    }
+
+    if ((primaryReviewsAdded ?? 0) >= 25) {
+      reasons.push(`${Math.round(primaryReviewsAdded ?? 0).toLocaleString()} reviews added over ${reviewWindow}.`);
+    }
+
+    if ((params.velocityAcceleration ?? 0) >= 25) {
+      reasons.push(`Review velocity is up ${Math.round(params.velocityAcceleration ?? 0)}% versus the trailing baseline.`);
+    } else if ((params.velocityAcceleration ?? 0) <= -25) {
+      reasons.push(`Review velocity is down ${Math.round(Math.abs(params.velocityAcceleration ?? 0))}% versus the trailing baseline.`);
+    }
+
+    if ((primaryVelocity ?? 0) >= 10 && params.context.sortBy === 'velocity_7d') {
+      reasons.push(`${roundNumber(primaryVelocity ?? 0, 1)} reviews per day over ${reviewWindow}.`);
+    }
+
+    if (params.ccuPeak != null && (primaryCcuGrowth ?? 0) >= 20) {
+      reasons.push(`Peak CCU is up ${Math.round(primaryCcuGrowth ?? 0)}% over ${reviewWindow}.`);
+    } else if (params.ccuPeak != null && (primaryCcuGrowth ?? 0) <= -20) {
+      reasons.push(`Peak CCU is down ${Math.round(Math.abs(primaryCcuGrowth ?? 0))}% over ${reviewWindow}.`);
+    }
+
+    if ((params.sentimentDelta ?? 0) >= 2) {
+      reasons.push(`Sentiment improved by ${roundNumber(params.sentimentDelta ?? 0, 1)} points.`);
+    } else if ((params.sentimentDelta ?? 0) <= -2) {
+      reasons.push(`Sentiment fell by ${roundNumber(Math.abs(params.sentimentDelta ?? 0), 1)} points.`);
+    }
+
+    if (
+      params.context.sortBy === 'review_score'
+      && (params.reviewPercentage ?? 0) >= 85
+      && (params.totalReviews ?? 0) >= 1000
+    ) {
+      reasons.push(`${roundNumber(params.reviewPercentage ?? 0, 1)}% positive across ${Math.round(params.totalReviews ?? 0).toLocaleString()} reviews.`);
+    }
+
+    return reasons.length > 0 ? reasons.slice(0, 4) : ['Current-state momentum evidence is limited.'];
+  }
+
   private async queryMomentumRows(params: {
+    appids: number[] | null;
     filters: DiscoverMomentumRequest['filters'] | null;
     indieHeuristic: boolean;
     limit: number;
@@ -6910,6 +7927,11 @@ export class DataPlaneService {
     const filters = params.filters;
     const needsBaseline7 = this.requiresMomentumBaseline7(params);
     const needsBaseline30 = this.requiresMomentumBaseline30(params);
+
+    if (params.appids?.length) {
+      paramsList.push(params.appids);
+      candidateConditions.push(`a.appid = ANY($${paramsList.length}::int[])`);
+    }
 
     if (filters?.tags?.length) {
       paramsList.push(filters.tags.map((tag) => tag.toLowerCase()));
@@ -6973,7 +7995,7 @@ export class DataPlaneService {
 
     if (typeof filters?.minReviewScore === 'number') {
       paramsList.push(filters.minReviewScore);
-      candidateConditions.push(`COALESCE(ldm.positive_percentage, 0) >= $${paramsList.length}`);
+      candidateConditions.push(`COALESCE(${reviewPercentageSql('ldm')}, 0) >= $${paramsList.length}`);
     }
 
     if (typeof filters?.maxPriceCents === 'number') {
@@ -8059,18 +9081,118 @@ export class DataPlaneService {
     const canonicalMatchName = canonicalMatchRow?.names.find(
       (name) => name.trim().toLowerCase() === normalizedQuery
     ) ?? null;
-
-    return {
-      canonicalMatch: canonicalMatchName && canonicalMatchRow
+    const canonicalMatch =
+      canonicalMatchName && canonicalMatchRow
         ? {
             name: canonicalMatchName,
             type: canonicalMatchRow.facetKind,
           }
-        : null,
+        : null;
+
+    if (canonicalMatch?.type === 'tags' || canonicalMatch?.type === 'genres') {
+      const canonicalFacetKind: 'genres' | 'tags' = canonicalMatch.type;
+      const pairedFacetRows = await Promise.all(
+        includeFacets.map(async (facetKind) => ({
+          facetKind,
+          names: await this.queryFacetCooccurrenceNames({
+            canonicalFacetKind,
+            canonicalFacetName: canonicalMatch.name,
+            limit,
+            targetFacetKind: facetKind,
+          }),
+        }))
+      );
+      const hasPairedFacetRows = pairedFacetRows.some((row) => row.names.length > 0);
+
+      if (hasPairedFacetRows) {
+        return {
+          canonicalMatch,
+          categories: pairedFacetRows.find((row) => row.facetKind === 'categories')?.names ?? categories,
+          genres: pairedFacetRows.find((row) => row.facetKind === 'genres')?.names ?? genres,
+          tags: pairedFacetRows.find((row) => row.facetKind === 'tags')?.names ?? tags,
+        };
+      }
+    }
+
+    return {
+      canonicalMatch,
       categories,
       genres,
       tags,
     };
+  }
+
+  private async queryFacetCooccurrenceNames(params: {
+    canonicalFacetKind: 'genres' | 'tags';
+    canonicalFacetName: string;
+    limit: number;
+    targetFacetKind: CatalogFacetKind;
+  }): Promise<string[]> {
+    const seedConfig =
+      params.canonicalFacetKind === 'tags'
+        ? {
+            edgeTable: this.relation('app_steam_tags').sql,
+            edgeIdColumn: 'tag_id',
+            facetTable: this.relation('steam_tags').sql,
+            facetIdColumn: 'tag_id',
+          }
+        : {
+            edgeTable: this.relation('app_genres').sql,
+            edgeIdColumn: 'genre_id',
+            facetTable: this.relation('steam_genres').sql,
+            facetIdColumn: 'genre_id',
+          };
+    const targetConfig =
+      params.targetFacetKind === 'tags'
+        ? {
+            edgeTable: this.relation('app_steam_tags').sql,
+            edgeIdColumn: 'tag_id',
+            facetTable: this.relation('steam_tags').sql,
+            facetIdColumn: 'tag_id',
+          }
+        : params.targetFacetKind === 'genres'
+          ? {
+              edgeTable: this.relation('app_genres').sql,
+              edgeIdColumn: 'genre_id',
+              facetTable: this.relation('steam_genres').sql,
+              facetIdColumn: 'genre_id',
+            }
+          : null;
+
+    if (!targetConfig) {
+      return [];
+    }
+
+    const sqlParams: unknown[] = [params.canonicalFacetName.trim().toLowerCase(), params.limit];
+    const excludeCanonicalClause =
+      params.canonicalFacetKind === params.targetFacetKind
+        ? 'AND lower(target.name) <> $1'
+        : '';
+    const result = await runQuery<{ name: string }>(
+      `
+        WITH matched_apps AS (
+          SELECT DISTINCT seed_rel.appid
+          FROM ${seedConfig.edgeTable} seed_rel
+          JOIN ${seedConfig.facetTable} seed
+            ON seed.${seedConfig.facetIdColumn} = seed_rel.${seedConfig.edgeIdColumn}
+          WHERE lower(seed.name) = $1
+        )
+        SELECT target.name
+        FROM matched_apps matched
+        JOIN ${targetConfig.edgeTable} target_rel ON target_rel.appid = matched.appid
+        JOIN ${targetConfig.facetTable} target
+          ON target.${targetConfig.facetIdColumn} = target_rel.${targetConfig.edgeIdColumn}
+        WHERE 1 = 1
+          ${excludeCanonicalClause}
+        GROUP BY target.name
+        ORDER BY COUNT(*) DESC, target.name ASC
+        LIMIT $2
+      `,
+      sqlParams,
+      this.config
+    );
+
+    return result.rows.map((row) => row.name).filter(Boolean);
   }
 
   private async queryUserContextPins(userId: string): Promise<UserContextPin[]> {
@@ -8096,7 +9218,7 @@ export class DataPlaneService {
           EXTRACT(YEAR FROM a.release_date)::int AS release_year,
           ldm.ccu_peak,
           ldm.owners_midpoint,
-          ldm.review_score,
+          ${reviewPercentageSql('ldm')} AS review_score,
           ldm.total_reviews,
           pub.game_count AS publisher_game_count,
           dev.game_count AS developer_game_count,
@@ -8261,7 +9383,7 @@ export class DataPlaneService {
         ccuPeak: row.ccu_peak,
         gameCount,
         ownersMidpoint: row.owners_midpoint,
-        reviewScore: row.review_score,
+        reviewScore: normalizeReviewPercentageValue(row.review_score),
         totalReviews: row.total_reviews,
       },
       pinId: row.pin_id,
@@ -8386,7 +9508,11 @@ export class DataPlaneService {
   private async getContractBlockers(
     contract: Pick<RuntimeQueryContractDescriptor, 'name' | 'requiredRelations'>
   ): Promise<string[]> {
-    const blockingTables = await this.getBlockingTables(contract.requiredRelations);
+    const requiredRelations =
+      contract.name === 'getRelatedEntities'
+        ? (['apps', 'latest_daily_metrics'] as DataPlaneRelationKey[])
+        : contract.requiredRelations;
+    const blockingTables = await this.getBlockingTables(requiredRelations);
     return [...blockingTables, ...this.getAdditionalContractBlockers(contract.name)];
   }
 

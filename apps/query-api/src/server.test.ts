@@ -14,6 +14,7 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
     describeContracts: async () => ({ contracts: [], source: 'tiger' }),
     explainChanges: async () => ({ ok: true }),
     getEntityOverview: async () => ({ ok: true }),
+    getRelatedEntities: async () => ({ ok: true }),
     getUserContext: async () => ({ ok: true }),
     healthCheck: async () => ({
       capturedAt: '2026-04-01T00:00:00.000Z',
@@ -43,11 +44,17 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
 async function withServer(
   dataPlane: Record<string, unknown>,
   bearerToken: string | null,
-  callback: (origin: string) => Promise<void>
+  callback: (origin: string) => Promise<void>,
+  params?: {
+    relatedEntitiesFallback?: Record<string, unknown> | null;
+  }
 ): Promise<void> {
   const server = createQueryApiServer({
     bearerToken,
     dataPlane: dataPlane as any,
+    ...(params?.relatedEntitiesFallback
+      ? { relatedEntitiesFallback: params.relatedEntitiesFallback as any }
+      : {}),
   });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -523,6 +530,145 @@ test('query-api routes get-entity-overview requests to the data-plane service', 
         };
       };
       assert.equal(payload.entity.displayName, 'FromSoftware');
+    }
+  );
+});
+
+test('query-api routes get-related-entities requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      getRelatedEntities: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          items: [
+            {
+              appid: 1145360,
+              entityUid: 'steam:game:1145360',
+              name: 'Hades',
+              releaseDate: '2020-09-17',
+              releaseYear: 2020,
+              reviewScore: 98,
+              steamDeckCategory: 'verified',
+              totalReviews: 275000,
+            },
+          ],
+          provenance: {
+            capturedAt: '2026-04-04T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['legacy.app_franchises', 'legacy.apps'],
+          },
+          relationKind: 'franchise_games',
+          source: {
+            appid: 1145350,
+            displayName: 'Hades II',
+            entityUid: 'steam:game:1145350',
+          },
+          sufficientToAnswer: true,
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-related-entities`, {
+        body: JSON.stringify({
+          filters: { steamDeck: ['verified'] },
+          limit: 10,
+          relationKind: 'franchise_games',
+          sourceAppid: 1145350,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {
+        filters: { steamDeck: ['verified'] },
+        limit: 10,
+        relationKind: 'franchise_games',
+        sourceAppid: 1145350,
+      });
+      const payload = await response.json() as { items: Array<{ name: string }> };
+      assert.equal(payload.items[0]?.name, 'Hades');
+    }
+  );
+});
+
+test('query-api uses the related-entities fallback service when Tiger returns an empty relation set', async () => {
+  await withServer(
+    createDataPlaneStub({
+      getRelatedEntities: async () => ({
+        items: [],
+        provenance: {
+          capturedAt: '2026-04-04T00:00:00.000Z',
+          source: 'tiger',
+          tables: ['legacy.apps'],
+        },
+        relationKind: 'dlc',
+        source: {
+          appid: 1245620,
+          displayName: 'ELDEN RING',
+          entityUid: 'steam:game:1245620',
+          reviewScore: 93,
+          steamDeckCategory: 'verified',
+          totalReviews: 1000000,
+        },
+        sufficientToAnswer: false,
+      }),
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-related-entities`, {
+        body: JSON.stringify({
+          limit: 10,
+          relationKind: 'dlc',
+          sourceAppid: 1245620,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        items: Array<{ name: string }>;
+        provenance: { source: string };
+      };
+      assert.equal(payload.provenance.source, 'supabase-postgres');
+      assert.equal(payload.items[0]?.name, 'ELDEN RING Shadow of the Erdtree');
+    },
+    {
+      relatedEntitiesFallback: createDataPlaneStub({
+        getRelatedEntities: async () => ({
+          items: [
+            {
+              appid: 2778580,
+              entityUid: 'steam:game:2778580',
+              name: 'ELDEN RING Shadow of the Erdtree',
+              releaseDate: '2024-06-20',
+              releaseYear: 2024,
+              reviewScore: 94,
+              steamDeckCategory: 'verified',
+              totalReviews: 54000,
+            },
+          ],
+          provenance: {
+            capturedAt: '2026-04-04T00:00:00.000Z',
+            source: 'supabase-postgres',
+            tables: ['public.app_dlc', 'public.apps'],
+          },
+          relationKind: 'dlc',
+          source: {
+            appid: 1245620,
+            displayName: 'ELDEN RING',
+            entityUid: 'steam:game:1245620',
+            reviewScore: 93,
+            steamDeckCategory: 'verified',
+            totalReviews: 1000000,
+          },
+          sufficientToAnswer: true,
+        }),
+      }),
     }
   );
 });

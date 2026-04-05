@@ -1,0 +1,393 @@
+scope,bucket_granularity,bucket_key,bucket_label,theme,doc_count,bucket_total_docs,doc_share,early_share,late_share,trend_delta
+community_announcements,day,2026-03-13,03-13,Launches & Release Timing,44,508,0.0866,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-14,03-14,Launches & Release Timing,25459,275362,0.0925,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-15,03-15,Launches & Release Timing,27848,312045,0.0892,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-16,03-16,Launches & Release Timing,32136,300178,0.1071,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-17,03-17,Launches & Release Timing,29478,288490,0.1022,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-18,03-18,Launches & Release Timing,1889,17008,0.1111,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-19,03-19,Launches & Release Timing,11659,103174,0.1130,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-20,03-20,Launches & Release Timing,14420,143456,0.1005,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-21,03-21,Launches & Release Timing,205,2034,0.1008,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-22,03-22,Launches & Release Timing,143,1578,0.0906,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-23,03-23,Launches & Release Timing,459,3670,0.1251,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-24,03-24,Launches & Release Timing,392,3318,0.1181,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-25,03-25,Launches & Release Timing,729,5929,0.1230,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-26,03-26,Launches & Release Timing,2331,19656,0.1186,0.0963,0.1201,0.0238
+community_announcements,day,2026-03-13,03-13,Major Content Updates,32,508,0.0630,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-14,03-14,Major Content Updates,13929,275362,0.0506,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-15,03-15,Major Content Updates,15941,312045,0.0511,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-16,03-16,Major Content Updates,13193,300178,0.0440,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-17,03-17,Major Content Updates,13483,288490,0.0467,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-18,03-18,Major Content Updates,835,17008,0.0491,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-19,03-19,Major Content Updates,5366,103174,0.0520,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-20,03-20,Major Content Updates,7006,143456,0.0488,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-21,03-21,Major Content Updates,113,2034,0.0556,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-22,03-22,Major Content Updates,116,1578,0.0735,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-23,03-23,Major Content Updates,217,3670,0.0591,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-24,03-24,Major Content Updates,187,3318,0.0564,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-25,03-25,Major Content Updates,284,5929,0.0479,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-26,03-26,Major Content Updates,974,19656,0.0496,0.0485,0.0510,0.0025
+community_announcements,day,2026-03-13,03-13,Patch / Hotfix / Bug Fixes,225,508,0.4429,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-14,03-14,Patch / Hotfix / Bug Fixes,122774,275362,0.4459,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-15,03-15,Patch / Hotfix / Bug Fixes,150014,312045,0.4807,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-16,03-16,Patch / Hotfix / Bug Fixes,117891,300178,0.3927,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-17,03-17,Patch / Hotfix / Bug Fixes,125433,288490,0.4348,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-18,03-18,Patch / Hotfix / Bug Fixes,7568,17008,0.4450,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-19,03-19,Patch / Hotfix / Bug Fixes,47764,103174,0.4629,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-20,03-20,Patch / Hotfix / Bug Fixes,71672,143456,0.4996,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-21,03-21,Patch / Hotfix / Bug Fixes,1170,2034,0.5752,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-22,03-22,Patch / Hotfix / Bug Fixes,836,1578,0.5298,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-23,03-23,Patch / Hotfix / Bug Fixes,1780,3670,0.4850,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-24,03-24,Patch / Hotfix / Bug Fixes,1433,3318,0.4319,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-25,03-25,Patch / Hotfix / Bug Fixes,2706,5929,0.4564,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-26,03-26,Patch / Hotfix / Bug Fixes,8154,19656,0.4148,0.4402,0.4320,-0.0081
+community_announcements,day,2026-03-13,03-13,Discounts / Sales / Promotions,52,508,0.1024,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-14,03-14,Discounts / Sales / Promotions,23875,275362,0.0867,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-15,03-15,Discounts / Sales / Promotions,27411,312045,0.0878,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-16,03-16,Discounts / Sales / Promotions,40779,300178,0.1358,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-17,03-17,Discounts / Sales / Promotions,29382,288490,0.1018,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-18,03-18,Discounts / Sales / Promotions,2097,17008,0.1233,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-19,03-19,Discounts / Sales / Promotions,11516,103174,0.1116,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-20,03-20,Discounts / Sales / Promotions,11989,143456,0.0836,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-21,03-21,Discounts / Sales / Promotions,82,2034,0.0403,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-22,03-22,Discounts / Sales / Promotions,90,1578,0.0570,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-23,03-23,Discounts / Sales / Promotions,188,3670,0.0512,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-24,03-24,Discounts / Sales / Promotions,214,3318,0.0645,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-25,03-25,Discounts / Sales / Promotions,452,5929,0.0762,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-26,03-26,Discounts / Sales / Promotions,2305,19656,0.1173,0.1037,0.0970,-0.0067
+community_announcements,day,2026-03-13,03-13,Events / Seasonal / Anniversary,27,508,0.0531,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-14,03-14,Events / Seasonal / Anniversary,24165,275362,0.0878,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-15,03-15,Events / Seasonal / Anniversary,20587,312045,0.0660,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-16,03-16,Events / Seasonal / Anniversary,21512,300178,0.0717,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-17,03-17,Events / Seasonal / Anniversary,23740,288490,0.0823,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-18,03-18,Events / Seasonal / Anniversary,1075,17008,0.0632,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-19,03-19,Events / Seasonal / Anniversary,6283,103174,0.0609,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-20,03-20,Events / Seasonal / Anniversary,6618,143456,0.0461,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-21,03-21,Events / Seasonal / Anniversary,76,2034,0.0374,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-22,03-22,Events / Seasonal / Anniversary,85,1578,0.0539,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-23,03-23,Events / Seasonal / Anniversary,183,3670,0.0499,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-24,03-24,Events / Seasonal / Anniversary,268,3318,0.0808,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-25,03-25,Events / Seasonal / Anniversary,463,5929,0.0781,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-26,03-26,Events / Seasonal / Anniversary,1387,19656,0.0706,0.0746,0.0706,-0.0040
+community_announcements,day,2026-03-13,03-13,DLC / Expansions / Episodes,17,508,0.0335,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-14,03-14,DLC / Expansions / Episodes,12709,275362,0.0462,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-15,03-15,DLC / Expansions / Episodes,11163,312045,0.0358,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-16,03-16,DLC / Expansions / Episodes,10569,300178,0.0352,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-17,03-17,DLC / Expansions / Episodes,10490,288490,0.0364,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-18,03-18,DLC / Expansions / Episodes,461,17008,0.0271,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-19,03-19,DLC / Expansions / Episodes,3524,103174,0.0342,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-20,03-20,DLC / Expansions / Episodes,3612,143456,0.0252,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-21,03-21,DLC / Expansions / Episodes,58,2034,0.0285,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-22,03-22,DLC / Expansions / Episodes,41,1578,0.0260,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-23,03-23,DLC / Expansions / Episodes,132,3670,0.0360,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-24,03-24,DLC / Expansions / Episodes,80,3318,0.0241,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-25,03-25,DLC / Expansions / Episodes,234,5929,0.0395,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-26,03-26,DLC / Expansions / Episodes,797,19656,0.0405,0.0388,0.0382,-0.0006
+community_announcements,day,2026-03-13,03-13,Servers / Maintenance / Downtime / Apologies,29,508,0.0571,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-14,03-14,Servers / Maintenance / Downtime / Apologies,33879,275362,0.1230,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-15,03-15,Servers / Maintenance / Downtime / Apologies,33556,312045,0.1075,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-16,03-16,Servers / Maintenance / Downtime / Apologies,24494,300178,0.0816,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-17,03-17,Servers / Maintenance / Downtime / Apologies,30363,288490,0.1052,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-18,03-18,Servers / Maintenance / Downtime / Apologies,1499,17008,0.0881,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-19,03-19,Servers / Maintenance / Downtime / Apologies,9609,103174,0.0931,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-20,03-20,Servers / Maintenance / Downtime / Apologies,13513,143456,0.0942,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-21,03-21,Servers / Maintenance / Downtime / Apologies,216,2034,0.1062,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-22,03-22,Servers / Maintenance / Downtime / Apologies,137,1578,0.0868,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-23,03-23,Servers / Maintenance / Downtime / Apologies,406,3670,0.1106,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-24,03-24,Servers / Maintenance / Downtime / Apologies,256,3318,0.0772,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-25,03-25,Servers / Maintenance / Downtime / Apologies,685,5929,0.1155,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-26,03-26,Servers / Maintenance / Downtime / Apologies,2081,19656,0.1059,0.1035,0.1052,0.0017
+community_announcements,day,2026-03-13,03-13,Roadmaps / Devlogs / Feature Previews,10,508,0.0197,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-14,03-14,Roadmaps / Devlogs / Feature Previews,7016,275362,0.0255,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-15,03-15,Roadmaps / Devlogs / Feature Previews,8643,312045,0.0277,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-16,03-16,Roadmaps / Devlogs / Feature Previews,8785,300178,0.0293,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-17,03-17,Roadmaps / Devlogs / Feature Previews,9433,288490,0.0327,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-18,03-18,Roadmaps / Devlogs / Feature Previews,495,17008,0.0291,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-19,03-19,Roadmaps / Devlogs / Feature Previews,2302,103174,0.0223,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-20,03-20,Roadmaps / Devlogs / Feature Previews,2740,143456,0.0191,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-21,03-21,Roadmaps / Devlogs / Feature Previews,69,2034,0.0339,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-22,03-22,Roadmaps / Devlogs / Feature Previews,49,1578,0.0311,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-23,03-23,Roadmaps / Devlogs / Feature Previews,161,3670,0.0439,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-24,03-24,Roadmaps / Devlogs / Feature Previews,150,3318,0.0452,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-25,03-25,Roadmaps / Devlogs / Feature Previews,254,5929,0.0428,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-26,03-26,Roadmaps / Devlogs / Feature Previews,459,19656,0.0234,0.0275,0.0314,0.0039
+community_announcements,day,2026-03-13,03-13,Balance / Characters / Items / Meta Changes,45,508,0.0886,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-14,03-14,Balance / Characters / Items / Meta Changes,17081,275362,0.0620,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-15,03-15,Balance / Characters / Items / Meta Changes,18173,312045,0.0582,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-16,03-16,Balance / Characters / Items / Meta Changes,16764,300178,0.0558,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-17,03-17,Balance / Characters / Items / Meta Changes,17589,288490,0.0610,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-18,03-18,Balance / Characters / Items / Meta Changes,959,17008,0.0564,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-19,03-19,Balance / Characters / Items / Meta Changes,5659,103174,0.0548,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-20,03-20,Balance / Characters / Items / Meta Changes,9157,143456,0.0638,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-21,03-21,Balance / Characters / Items / Meta Changes,130,2034,0.0639,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-22,03-22,Balance / Characters / Items / Meta Changes,109,1578,0.0691,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-23,03-23,Balance / Characters / Items / Meta Changes,218,3670,0.0594,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-24,03-24,Balance / Characters / Items / Meta Changes,175,3318,0.0527,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-25,03-25,Balance / Characters / Items / Meta Changes,375,5929,0.0632,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-26,03-26,Balance / Characters / Items / Meta Changes,987,19656,0.0502,0.0586,0.0539,-0.0047
+community_announcements,day,2026-03-13,03-13,Platform / Account / Crossplay / Technical Changes,14,508,0.0276,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-14,03-14,Platform / Account / Crossplay / Technical Changes,10866,275362,0.0395,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-15,03-15,Platform / Account / Crossplay / Technical Changes,10692,312045,0.0343,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-16,03-16,Platform / Account / Crossplay / Technical Changes,7089,300178,0.0236,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-17,03-17,Platform / Account / Crossplay / Technical Changes,6830,288490,0.0237,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-18,03-18,Platform / Account / Crossplay / Technical Changes,500,17008,0.0294,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-19,03-19,Platform / Account / Crossplay / Technical Changes,3356,103174,0.0325,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-20,03-20,Platform / Account / Crossplay / Technical Changes,4295,143456,0.0299,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-21,03-21,Platform / Account / Crossplay / Technical Changes,87,2034,0.0428,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-22,03-22,Platform / Account / Crossplay / Technical Changes,46,1578,0.0292,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-23,03-23,Platform / Account / Crossplay / Technical Changes,114,3670,0.0311,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-24,03-24,Platform / Account / Crossplay / Technical Changes,101,3318,0.0304,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-25,03-25,Platform / Account / Crossplay / Technical Changes,167,5929,0.0282,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-26,03-26,Platform / Account / Crossplay / Technical Changes,726,19656,0.0369,0.0323,0.0340,0.0017
+community_announcements,day,2026-03-13,03-13,Monetization / Store / Pass / Currency,3,508,0.0059,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-14,03-14,Monetization / Store / Pass / Currency,3815,275362,0.0139,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-15,03-15,Monetization / Store / Pass / Currency,2450,312045,0.0079,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-16,03-16,Monetization / Store / Pass / Currency,2590,300178,0.0086,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-17,03-17,Monetization / Store / Pass / Currency,2803,288490,0.0097,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-18,03-18,Monetization / Store / Pass / Currency,191,17008,0.0112,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-19,03-19,Monetization / Store / Pass / Currency,772,103174,0.0075,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-20,03-20,Monetization / Store / Pass / Currency,1332,143456,0.0093,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-21,03-21,Monetization / Store / Pass / Currency,14,2034,0.0069,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-22,03-22,Monetization / Store / Pass / Currency,12,1578,0.0076,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-23,03-23,Monetization / Store / Pass / Currency,36,3670,0.0098,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-24,03-24,Monetization / Store / Pass / Currency,48,3318,0.0145,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-25,03-25,Monetization / Store / Pass / Currency,73,5929,0.0123,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-26,03-26,Monetization / Store / Pass / Currency,224,19656,0.0114,0.0100,0.0117,0.0017
+community_announcements,day,2026-03-13,03-13,Community / Creator / Social / UGC,26,508,0.0512,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-14,03-14,Community / Creator / Social / UGC,16472,275362,0.0598,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-15,03-15,Community / Creator / Social / UGC,20042,312045,0.0642,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-16,03-16,Community / Creator / Social / UGC,18841,300178,0.0628,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-17,03-17,Community / Creator / Social / UGC,17583,288490,0.0609,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-18,03-18,Community / Creator / Social / UGC,1058,17008,0.0622,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-19,03-19,Community / Creator / Social / UGC,6120,103174,0.0593,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-20,03-20,Community / Creator / Social / UGC,8000,143456,0.0558,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-21,03-21,Community / Creator / Social / UGC,132,2034,0.0649,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-22,03-22,Community / Creator / Social / UGC,128,1578,0.0811,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-23,03-23,Community / Creator / Social / UGC,321,3670,0.0875,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-24,03-24,Community / Creator / Social / UGC,224,3318,0.0675,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-25,03-25,Community / Creator / Social / UGC,431,5929,0.0727,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-26,03-26,Community / Creator / Social / UGC,1273,19656,0.0648,0.0624,0.0690,0.0067
+community_announcements,day,2026-03-13,03-13,Partnerships / Crossovers / IP Collaborations,13,508,0.0256,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-14,03-14,Partnerships / Crossovers / IP Collaborations,7195,275362,0.0261,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-15,03-15,Partnerships / Crossovers / IP Collaborations,7001,312045,0.0224,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-16,03-16,Partnerships / Crossovers / IP Collaborations,6996,300178,0.0233,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-17,03-17,Partnerships / Crossovers / IP Collaborations,6847,288490,0.0237,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-18,03-18,Partnerships / Crossovers / IP Collaborations,435,17008,0.0256,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-19,03-19,Partnerships / Crossovers / IP Collaborations,2582,103174,0.0250,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-20,03-20,Partnerships / Crossovers / IP Collaborations,2778,143456,0.0194,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-21,03-21,Partnerships / Crossovers / IP Collaborations,28,2034,0.0138,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-22,03-22,Partnerships / Crossovers / IP Collaborations,34,1578,0.0215,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-23,03-23,Partnerships / Crossovers / IP Collaborations,83,3670,0.0226,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-24,03-24,Partnerships / Crossovers / IP Collaborations,79,3318,0.0238,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-25,03-25,Partnerships / Crossovers / IP Collaborations,153,5929,0.0258,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-26,03-26,Partnerships / Crossovers / IP Collaborations,591,19656,0.0301,0.0239,0.0278,0.0039
+community_announcements,day,2026-03-13,03-13,Other,149,508,0.2933,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-14,03-14,Other,68797,275362,0.2498,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-15,03-15,Other,78357,312045,0.2511,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-16,03-16,Other,81618,300178,0.2719,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-17,03-17,Other,73476,288490,0.2547,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-18,03-18,Other,4250,17008,0.2499,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-19,03-19,Other,25699,103174,0.2491,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-20,03-20,Other,37250,143456,0.2597,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-21,03-21,Other,435,2034,0.2139,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-22,03-22,Other,374,1578,0.2370,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-23,03-23,Other,889,3670,0.2422,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-24,03-24,Other,935,3318,0.2818,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-25,03-25,Other,1381,5929,0.2329,0.2578,0.2540,-0.0038
+community_announcements,day,2026-03-26,03-26,Other,5067,19656,0.2578,0.2578,0.2540,-0.0038
+external_coverage,day,2026-03-13,03-13,Launches & Release Timing,1,2,0.5000,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-14,03-14,Launches & Release Timing,2368,36893,0.0642,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-15,03-15,Launches & Release Timing,1512,15311,0.0988,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-16,03-16,Launches & Release Timing,1472,15077,0.0976,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-17,03-17,Launches & Release Timing,1058,10220,0.1035,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-18,03-18,Launches & Release Timing,23,255,0.0902,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-19,03-19,Launches & Release Timing,185,1637,0.1130,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-20,03-20,Launches & Release Timing,79,669,0.1181,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-21,03-21,Launches & Release Timing,1,18,0.0556,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-22,03-22,Launches & Release Timing,2,10,0.2000,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-23,03-23,Launches & Release Timing,22,132,0.1667,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-24,03-24,Launches & Release Timing,4,57,0.0702,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-25,03-25,Launches & Release Timing,20,217,0.0922,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-26,03-26,Launches & Release Timing,73,1264,0.0578,0.0796,0.0713,-0.0083
+external_coverage,day,2026-03-13,03-13,Major Content Updates,0,2,0.0000,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-14,03-14,Major Content Updates,878,36893,0.0238,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-15,03-15,Major Content Updates,283,15311,0.0185,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-16,03-16,Major Content Updates,272,15077,0.0180,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-17,03-17,Major Content Updates,157,10220,0.0154,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-18,03-18,Major Content Updates,6,255,0.0235,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-19,03-19,Major Content Updates,19,1637,0.0116,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-20,03-20,Major Content Updates,6,669,0.0090,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-21,03-21,Major Content Updates,1,18,0.0556,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-22,03-22,Major Content Updates,0,10,0.0000,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-23,03-23,Major Content Updates,2,132,0.0152,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-24,03-24,Major Content Updates,0,57,0.0000,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-25,03-25,Major Content Updates,4,217,0.0184,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-26,03-26,Major Content Updates,8,1264,0.0063,0.0213,0.0084,-0.0129
+external_coverage,day,2026-03-13,03-13,Patch / Hotfix / Bug Fixes,0,2,0.0000,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-14,03-14,Patch / Hotfix / Bug Fixes,5014,36893,0.1359,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-15,03-15,Patch / Hotfix / Bug Fixes,1707,15311,0.1115,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-16,03-16,Patch / Hotfix / Bug Fixes,1542,15077,0.1023,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-17,03-17,Patch / Hotfix / Bug Fixes,970,10220,0.0949,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-18,03-18,Patch / Hotfix / Bug Fixes,16,255,0.0627,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-19,03-19,Patch / Hotfix / Bug Fixes,141,1637,0.0861,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-20,03-20,Patch / Hotfix / Bug Fixes,28,669,0.0419,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-21,03-21,Patch / Hotfix / Bug Fixes,1,18,0.0556,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-22,03-22,Patch / Hotfix / Bug Fixes,0,10,0.0000,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-23,03-23,Patch / Hotfix / Bug Fixes,3,132,0.0227,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-24,03-24,Patch / Hotfix / Bug Fixes,5,57,0.0877,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-25,03-25,Patch / Hotfix / Bug Fixes,24,217,0.1106,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-26,03-26,Patch / Hotfix / Bug Fixes,70,1264,0.0554,0.1228,0.0611,-0.0617
+external_coverage,day,2026-03-13,03-13,Discounts / Sales / Promotions,0,2,0.0000,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-14,03-14,Discounts / Sales / Promotions,4961,36893,0.1345,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-15,03-15,Discounts / Sales / Promotions,1443,15311,0.0942,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-16,03-16,Discounts / Sales / Promotions,591,15077,0.0392,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-17,03-17,Discounts / Sales / Promotions,430,10220,0.0421,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-18,03-18,Discounts / Sales / Promotions,8,255,0.0314,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-19,03-19,Discounts / Sales / Promotions,122,1637,0.0745,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-20,03-20,Discounts / Sales / Promotions,41,669,0.0613,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-21,03-21,Discounts / Sales / Promotions,3,18,0.1667,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-22,03-22,Discounts / Sales / Promotions,0,10,0.0000,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-23,03-23,Discounts / Sales / Promotions,4,132,0.0303,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-24,03-24,Discounts / Sales / Promotions,2,57,0.0351,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-25,03-25,Discounts / Sales / Promotions,15,217,0.0691,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-26,03-26,Discounts / Sales / Promotions,257,1264,0.2033,0.1040,0.1665,0.0625
+external_coverage,day,2026-03-13,03-13,Events / Seasonal / Anniversary,0,2,0.0000,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-14,03-14,Events / Seasonal / Anniversary,1749,36893,0.0474,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-15,03-15,Events / Seasonal / Anniversary,594,15311,0.0388,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-16,03-16,Events / Seasonal / Anniversary,621,15077,0.0412,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-17,03-17,Events / Seasonal / Anniversary,444,10220,0.0434,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-18,03-18,Events / Seasonal / Anniversary,5,255,0.0196,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-19,03-19,Events / Seasonal / Anniversary,50,1637,0.0305,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-20,03-20,Events / Seasonal / Anniversary,9,669,0.0135,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-21,03-21,Events / Seasonal / Anniversary,1,18,0.0556,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-22,03-22,Events / Seasonal / Anniversary,0,10,0.0000,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-23,03-23,Events / Seasonal / Anniversary,1,132,0.0076,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-24,03-24,Events / Seasonal / Anniversary,1,57,0.0175,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-25,03-25,Events / Seasonal / Anniversary,7,217,0.0323,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-26,03-26,Events / Seasonal / Anniversary,40,1264,0.0316,0.0441,0.0293,-0.0147
+external_coverage,day,2026-03-13,03-13,DLC / Expansions / Episodes,0,2,0.0000,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-14,03-14,DLC / Expansions / Episodes,3290,36893,0.0892,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-15,03-15,DLC / Expansions / Episodes,1143,15311,0.0747,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-16,03-16,DLC / Expansions / Episodes,963,15077,0.0639,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-17,03-17,DLC / Expansions / Episodes,486,10220,0.0476,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-18,03-18,DLC / Expansions / Episodes,2,255,0.0078,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-19,03-19,DLC / Expansions / Episodes,43,1637,0.0263,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-20,03-20,DLC / Expansions / Episodes,12,669,0.0179,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-21,03-21,DLC / Expansions / Episodes,0,18,0.0000,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-22,03-22,DLC / Expansions / Episodes,1,10,0.1000,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-23,03-23,DLC / Expansions / Episodes,3,132,0.0227,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-24,03-24,DLC / Expansions / Episodes,2,57,0.0351,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-25,03-25,DLC / Expansions / Episodes,6,217,0.0276,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-26,03-26,DLC / Expansions / Episodes,48,1264,0.0380,0.0802,0.0353,-0.0449
+external_coverage,day,2026-03-13,03-13,Servers / Maintenance / Downtime / Apologies,0,2,0.0000,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-14,03-14,Servers / Maintenance / Downtime / Apologies,1130,36893,0.0306,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-15,03-15,Servers / Maintenance / Downtime / Apologies,308,15311,0.0201,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-16,03-16,Servers / Maintenance / Downtime / Apologies,365,15077,0.0242,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-17,03-17,Servers / Maintenance / Downtime / Apologies,235,10220,0.0230,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-18,03-18,Servers / Maintenance / Downtime / Apologies,7,255,0.0275,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-19,03-19,Servers / Maintenance / Downtime / Apologies,21,1637,0.0128,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-20,03-20,Servers / Maintenance / Downtime / Apologies,7,669,0.0105,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-21,03-21,Servers / Maintenance / Downtime / Apologies,0,18,0.0000,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-22,03-22,Servers / Maintenance / Downtime / Apologies,0,10,0.0000,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-23,03-23,Servers / Maintenance / Downtime / Apologies,3,132,0.0227,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-24,03-24,Servers / Maintenance / Downtime / Apologies,3,57,0.0526,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-25,03-25,Servers / Maintenance / Downtime / Apologies,6,217,0.0276,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-26,03-26,Servers / Maintenance / Downtime / Apologies,29,1264,0.0229,0.0268,0.0246,-0.0022
+external_coverage,day,2026-03-13,03-13,Roadmaps / Devlogs / Feature Previews,0,2,0.0000,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-14,03-14,Roadmaps / Devlogs / Feature Previews,254,36893,0.0069,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-15,03-15,Roadmaps / Devlogs / Feature Previews,113,15311,0.0074,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-16,03-16,Roadmaps / Devlogs / Feature Previews,141,15077,0.0094,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-17,03-17,Roadmaps / Devlogs / Feature Previews,98,10220,0.0096,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-18,03-18,Roadmaps / Devlogs / Feature Previews,4,255,0.0157,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-19,03-19,Roadmaps / Devlogs / Feature Previews,12,1637,0.0073,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-20,03-20,Roadmaps / Devlogs / Feature Previews,4,669,0.0060,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-21,03-21,Roadmaps / Devlogs / Feature Previews,0,18,0.0000,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-22,03-22,Roadmaps / Devlogs / Feature Previews,0,10,0.0000,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-23,03-23,Roadmaps / Devlogs / Feature Previews,2,132,0.0152,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-24,03-24,Roadmaps / Devlogs / Feature Previews,2,57,0.0351,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-25,03-25,Roadmaps / Devlogs / Feature Previews,1,217,0.0046,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-26,03-26,Roadmaps / Devlogs / Feature Previews,6,1264,0.0047,0.0076,0.0066,-0.0010
+external_coverage,day,2026-03-13,03-13,Balance / Characters / Items / Meta Changes,1,2,0.5000,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-14,03-14,Balance / Characters / Items / Meta Changes,1247,36893,0.0338,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-15,03-15,Balance / Characters / Items / Meta Changes,516,15311,0.0337,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-16,03-16,Balance / Characters / Items / Meta Changes,627,15077,0.0416,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-17,03-17,Balance / Characters / Items / Meta Changes,442,10220,0.0432,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-18,03-18,Balance / Characters / Items / Meta Changes,5,255,0.0196,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-19,03-19,Balance / Characters / Items / Meta Changes,42,1637,0.0257,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-20,03-20,Balance / Characters / Items / Meta Changes,23,669,0.0344,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-21,03-21,Balance / Characters / Items / Meta Changes,0,18,0.0000,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-22,03-22,Balance / Characters / Items / Meta Changes,1,10,0.1000,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-23,03-23,Balance / Characters / Items / Meta Changes,3,132,0.0227,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-24,03-24,Balance / Characters / Items / Meta Changes,2,57,0.0351,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-25,03-25,Balance / Characters / Items / Meta Changes,4,217,0.0184,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-26,03-26,Balance / Characters / Items / Meta Changes,37,1264,0.0293,0.0355,0.0275,-0.0080
+external_coverage,day,2026-03-13,03-13,Platform / Account / Crossplay / Technical Changes,0,2,0.0000,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-14,03-14,Platform / Account / Crossplay / Technical Changes,1200,36893,0.0325,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-15,03-15,Platform / Account / Crossplay / Technical Changes,476,15311,0.0311,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-16,03-16,Platform / Account / Crossplay / Technical Changes,567,15077,0.0376,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-17,03-17,Platform / Account / Crossplay / Technical Changes,467,10220,0.0457,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-18,03-18,Platform / Account / Crossplay / Technical Changes,12,255,0.0471,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-19,03-19,Platform / Account / Crossplay / Technical Changes,96,1637,0.0586,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-20,03-20,Platform / Account / Crossplay / Technical Changes,43,669,0.0643,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-21,03-21,Platform / Account / Crossplay / Technical Changes,0,18,0.0000,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-22,03-22,Platform / Account / Crossplay / Technical Changes,0,10,0.0000,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-23,03-23,Platform / Account / Crossplay / Technical Changes,8,132,0.0606,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-24,03-24,Platform / Account / Crossplay / Technical Changes,4,57,0.0702,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-25,03-25,Platform / Account / Crossplay / Technical Changes,14,217,0.0645,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-26,03-26,Platform / Account / Crossplay / Technical Changes,31,1264,0.0245,0.0333,0.0341,0.0008
+external_coverage,day,2026-03-13,03-13,Monetization / Store / Pass / Currency,0,2,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-14,03-14,Monetization / Store / Pass / Currency,232,36893,0.0063,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-15,03-15,Monetization / Store / Pass / Currency,93,15311,0.0061,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-16,03-16,Monetization / Store / Pass / Currency,95,15077,0.0063,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-17,03-17,Monetization / Store / Pass / Currency,77,10220,0.0075,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-18,03-18,Monetization / Store / Pass / Currency,0,255,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-19,03-19,Monetization / Store / Pass / Currency,4,1637,0.0024,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-20,03-20,Monetization / Store / Pass / Currency,3,669,0.0045,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-21,03-21,Monetization / Store / Pass / Currency,0,18,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-22,03-22,Monetization / Store / Pass / Currency,0,10,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-23,03-23,Monetization / Store / Pass / Currency,0,132,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-24,03-24,Monetization / Store / Pass / Currency,0,57,0.0000,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-25,03-25,Monetization / Store / Pass / Currency,2,217,0.0092,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-26,03-26,Monetization / Store / Pass / Currency,8,1264,0.0063,0.0062,0.0060,-0.0003
+external_coverage,day,2026-03-13,03-13,Community / Creator / Social / UGC,0,2,0.0000,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-14,03-14,Community / Creator / Social / UGC,840,36893,0.0228,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-15,03-15,Community / Creator / Social / UGC,383,15311,0.0250,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-16,03-16,Community / Creator / Social / UGC,220,15077,0.0146,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-17,03-17,Community / Creator / Social / UGC,140,10220,0.0137,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-18,03-18,Community / Creator / Social / UGC,3,255,0.0118,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-19,03-19,Community / Creator / Social / UGC,32,1637,0.0195,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-20,03-20,Community / Creator / Social / UGC,14,669,0.0209,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-21,03-21,Community / Creator / Social / UGC,0,18,0.0000,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-22,03-22,Community / Creator / Social / UGC,1,10,0.1000,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-23,03-23,Community / Creator / Social / UGC,1,132,0.0076,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-24,03-24,Community / Creator / Social / UGC,1,57,0.0175,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-25,03-25,Community / Creator / Social / UGC,9,217,0.0415,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-26,03-26,Community / Creator / Social / UGC,29,1264,0.0229,0.0214,0.0240,0.0025
+external_coverage,day,2026-03-13,03-13,Partnerships / Crossovers / IP Collaborations,0,2,0.0000,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-14,03-14,Partnerships / Crossovers / IP Collaborations,995,36893,0.0270,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-15,03-15,Partnerships / Crossovers / IP Collaborations,427,15311,0.0279,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-16,03-16,Partnerships / Crossovers / IP Collaborations,507,15077,0.0336,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-17,03-17,Partnerships / Crossovers / IP Collaborations,340,10220,0.0333,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-18,03-18,Partnerships / Crossovers / IP Collaborations,9,255,0.0353,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-19,03-19,Partnerships / Crossovers / IP Collaborations,85,1637,0.0519,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-20,03-20,Partnerships / Crossovers / IP Collaborations,34,669,0.0508,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-21,03-21,Partnerships / Crossovers / IP Collaborations,3,18,0.1667,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-22,03-22,Partnerships / Crossovers / IP Collaborations,1,10,0.1000,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-23,03-23,Partnerships / Crossovers / IP Collaborations,4,132,0.0303,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-24,03-24,Partnerships / Crossovers / IP Collaborations,5,57,0.0877,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-25,03-25,Partnerships / Crossovers / IP Collaborations,10,217,0.0461,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-26,03-26,Partnerships / Crossovers / IP Collaborations,32,1264,0.0253,0.0287,0.0305,0.0019
+external_coverage,day,2026-03-13,03-13,Other,0,2,0.0000,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-14,03-14,Other,18585,36893,0.5038,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-15,03-15,Other,8445,15311,0.5516,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-16,03-16,Other,9098,15077,0.6034,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-17,03-17,Other,6269,10220,0.6134,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-18,03-18,Other,175,255,0.6863,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-19,03-19,Other,971,1637,0.5932,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-20,03-20,Other,422,669,0.6308,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-21,03-21,Other,12,18,0.6667,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-22,03-22,Other,6,10,0.6000,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-23,03-23,Other,84,132,0.6364,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-24,03-24,Other,32,57,0.5614,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-25,03-25,Other,122,217,0.5622,0.5370,0.5725,0.0355
+external_coverage,day,2026-03-26,03-26,Other,718,1264,0.5680,0.5370,0.5725,0.0355

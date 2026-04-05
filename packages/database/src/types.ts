@@ -1034,6 +1034,7 @@ export type Database = {
         Row: {
           app_state: string | null
           appid: number
+          catalog_seed_state: string
           content_descriptors: Json | null
           controller_support: string | null
           created_at: string | null
@@ -1066,6 +1067,7 @@ export type Database = {
         Insert: {
           app_state?: string | null
           appid: number
+          catalog_seed_state?: string
           content_descriptors?: Json | null
           controller_support?: string | null
           created_at?: string | null
@@ -1098,6 +1100,7 @@ export type Database = {
         Update: {
           app_state?: string | null
           appid?: number
+          catalog_seed_state?: string
           content_descriptors?: Json | null
           controller_support?: string | null
           created_at?: string | null
@@ -4327,6 +4330,10 @@ export type Database = {
       upsert_developer: { Args: { p_name: string }; Returns: number }
       upsert_franchise: { Args: { p_name: string }; Returns: number }
       upsert_publisher: { Args: { p_name: string }; Returns: number }
+      seed_discovered_apps: {
+        Args: { p_records: Json }
+        Returns: number
+      }
       upsert_steam_tag: {
         Args: { p_name: string; p_tag_id: number }
         Returns: number

@@ -9,6 +9,7 @@ import type {
   AppCaptureSource,
   AppChangeEventDraft,
   CaptureQueueJob,
+  DiscoveredAppSeed,
   HeroAssetKind,
   NormalizedMediaVersion,
   NormalizedNewsVersion,
@@ -559,6 +560,77 @@ export async function refreshSteamNewsLatestProjectionForApp(
   return Number(data ?? 0);
 }
 
+export async function refreshSteamNewsSearchProjectionForApp(
+  supabase: TypedSupabaseClient,
+  appid: number
+): Promise<number> {
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'refresh_steam_news_search_projection_for_app',
+    () =>
+      getDb(supabase).rpc('refresh_steam_news_search_projection_for_app', {
+        p_appid: appid,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to refresh steam_news_search_projection: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
+export async function upsertSteamNewsSearchProjectionForGids(
+  supabase: TypedSupabaseClient,
+  gids: string[]
+): Promise<number> {
+  const normalizedGids = Array.from(
+    new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0))
+  );
+  if (normalizedGids.length === 0) {
+    return 0;
+  }
+
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'upsert_steam_news_search_projection_for_gids',
+    () =>
+      getDb(supabase).rpc('upsert_steam_news_search_projection_for_gids', {
+        p_gids: normalizedGids,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to upsert steam_news_search_projection rows: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
+export async function deleteSteamNewsSearchProjectionForGids(
+  supabase: TypedSupabaseClient,
+  gids: string[]
+): Promise<number> {
+  const normalizedGids = Array.from(
+    new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0))
+  );
+  if (normalizedGids.length === 0) {
+    return 0;
+  }
+
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'delete_steam_news_search_projection_for_gids',
+    () =>
+      getDb(supabase).rpc('delete_steam_news_search_projection_for_gids', {
+        p_gids: normalizedGids,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to delete steam_news_search_projection rows: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
 export async function listRecentChangeActivityAppIds(
   supabase: TypedSupabaseClient,
   lookbackDays = 180,
@@ -610,6 +682,10 @@ export async function claimCaptureQueue(
     source: String(row.source) as AppCaptureSource,
     triggerReason: String(row.trigger_reason),
     triggerCursor: String(row.trigger_cursor ?? ''),
+    payload:
+      row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+        ? (row.payload as Record<string, unknown>)
+        : {},
     attempts: Number(row.attempts ?? 0),
   }));
 }
@@ -661,6 +737,38 @@ export async function requeueStaleCaptureClaims(
 
   if (error) {
     throw new Error(`Failed to requeue stale app capture work items: ${error.message}`);
+  }
+
+  return Number(data ?? 0);
+}
+
+export async function seedDiscoveredApps(
+  supabase: TypedSupabaseClient,
+  records: DiscoveredAppSeed[]
+): Promise<number> {
+  if (records.length === 0) {
+    return 0;
+  }
+
+  const payload = records.map((record) => ({
+    appid: record.appid,
+    app_type: record.appType ?? 'game',
+    discovery_reason: record.discoveryReason ?? 'discovered_reference',
+    ...(record.placeholderName?.trim()
+      ? { placeholder_name: record.placeholderName.trim() }
+      : {}),
+  }));
+
+  const { data, error } = await runSupabaseOperation<number | null>(
+    'seed_discovered_apps',
+    () =>
+      getDb(supabase).rpc('seed_discovered_apps', {
+        p_records: payload,
+      })
+  );
+
+  if (error) {
+    throw new Error(`Failed to seed discovered apps: ${formatSupabaseError(error)}`);
   }
 
   return Number(data ?? 0);

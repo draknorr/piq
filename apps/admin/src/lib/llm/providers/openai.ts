@@ -1,5 +1,5 @@
 import { BaseLLMProvider } from './base';
-import type { Message, Tool, LLMResponse, ToolCall, StreamChunk } from '../types';
+import type { Message, Tool, LLMResponse, ToolCall, StreamChunk, LLMStreamOptions } from '../types';
 
 interface OpenAIMessage {
   role: string;
@@ -71,7 +71,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     return this.parseResponse(data);
   }
 
-  async *chatStream(messages: Message[], tools?: Tool[]): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chatStream(
+    messages: Message[],
+    tools?: Tool[],
+    options?: LLMStreamOptions
+  ): AsyncGenerator<StreamChunk, void, unknown> {
     const openaiMessages = this.formatMessages(messages);
 
     const body: Record<string, unknown> = {
@@ -95,6 +99,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!response.ok) {

@@ -187,7 +187,9 @@ COMMENT ON FUNCTION public.refresh_ccu_quality_stats() IS
 REVOKE EXECUTE ON FUNCTION public.refresh_ccu_quality_stats() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.refresh_ccu_quality_stats() TO service_role;
 
-CREATE OR REPLACE FUNCTION public.get_ccu_quality_stats()
+DROP FUNCTION IF EXISTS public.get_ccu_quality_stats();
+
+CREATE FUNCTION public.get_ccu_quality_stats()
 RETURNS TABLE(
   current_catalog_apps BIGINT,
   tier_assigned BIGINT,
