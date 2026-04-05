@@ -46,7 +46,7 @@ export const AutocompleteDropdown = forwardRef<HTMLDivElement, AutocompleteDropd
       >
         {isLoading && suggestions.length === 0 && (
           <div className="px-4 py-3 text-body-sm text-text-muted flex items-center gap-2">
-            <div className="w-4 h-4 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
+            <div className="w-4 h-4 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
             Searching...
           </div>
         )}
@@ -74,7 +74,7 @@ export const AutocompleteDropdown = forwardRef<HTMLDivElement, AutocompleteDropd
                   className={`
                     w-full px-4 py-2 text-left text-body-sm
                     transition-colors cursor-pointer
-                    ${isSelected ? 'bg-accent-blue/10 text-text-primary' : 'text-text-secondary hover:bg-surface-elevated'}
+                    ${isSelected ? 'chat-accent-soft text-text-primary' : 'text-text-secondary hover:bg-surface-elevated'}
                   `}
                   onClick={() => onSelect(suggestion)}
                   onMouseEnter={() => onHover(globalIndex)}
@@ -158,7 +158,7 @@ function HighlightedText({ text, highlight }: { text: string; highlight: string 
     <span>
       {segments.map((segment, i) => (
         segment.isMatch ? (
-          <span key={i} className="font-medium text-accent-blue">{segment.text}</span>
+          <span key={i} className="chat-accent-icon font-medium">{segment.text}</span>
         ) : (
           <span key={i}>{segment.text}</span>
         )

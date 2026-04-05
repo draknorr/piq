@@ -215,13 +215,21 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   }, [input, disabled, onSend]);
 
   const handleSelectSuggestion = useCallback((suggestion: AutocompleteSuggestion) => {
+    if (disabled) {
+      return;
+    }
+
     onSend(suggestion.query);
     setInput('');
     setIsDropdownOpen(false);
     setEntityResults([]);
-  }, [onSend]);
+  }, [disabled, onSend]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (disabled && e.key === 'Enter' && !e.shiftKey) {
+      return;
+    }
+
     // Handle dropdown navigation
     if (isDropdownOpen && allSuggestions.length > 0) {
       switch (e.key) {
@@ -252,6 +260,9 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
           return;
 
         case 'Enter':
+          if (disabled) {
+            return;
+          }
           if (!e.shiftKey && allSuggestions[selectedIndex]) {
             e.preventDefault();
             handleSelectSuggestion(allSuggestions[selectedIndex]);
@@ -263,6 +274,9 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
     // Default Enter behavior (submit without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (disabled) {
+        return;
+      }
       e.preventDefault();
       handleSubmit();
     }
@@ -316,22 +330,22 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
           onFocus={handleFocus}
           onBlur={handleBlur}
           placeholder="Ask about Steam games, publishers, or trends..."
-          disabled={disabled}
+          aria-disabled={disabled}
           rows={1}
           autoComplete="off"
           role={INPUT_AUTOCOMPLETE_ENABLED ? 'combobox' : undefined}
           aria-expanded={INPUT_AUTOCOMPLETE_ENABLED ? isDropdownOpen : undefined}
           aria-haspopup={INPUT_AUTOCOMPLETE_ENABLED ? 'listbox' : undefined}
           aria-autocomplete={INPUT_AUTOCOMPLETE_ENABLED ? 'list' : undefined}
-          className="
+          className={`
             w-full min-h-[40px] max-h-[200px] py-2.5 px-4 rounded-lg resize-none
             bg-surface-elevated border border-border-muted
             text-body text-text-primary placeholder:text-text-muted
             transition-colors duration-150
             hover:border-border-prominent
-            focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue
-            disabled:opacity-50 disabled:cursor-not-allowed
-          "
+            focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary
+            ${disabled ? 'opacity-90' : 'opacity-100'}
+          `}
         />
       </div>
 

@@ -18,7 +18,7 @@ function getMermaid() {
           startOnLoad: false,
           theme: 'dark',
           themeVariables: {
-            primaryColor: '#3b82f6',
+            primaryColor: '#e07d75',
             primaryTextColor: '#f4f4f5',
             primaryBorderColor: '#36363e',
             lineColor: '#6e6e78',
@@ -102,7 +102,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
     return (
       <div className="my-3 p-4 rounded-lg border border-border-subtle bg-surface-elevated">
         <div className="flex items-center gap-2 text-text-muted">
-          <div className="w-4 h-4 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
+          <div className="w-4 h-4 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
           <span className="text-body-sm">Rendering diagram...</span>
         </div>
       </div>

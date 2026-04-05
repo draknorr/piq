@@ -69,7 +69,7 @@ export function CollapsibleSection({
         onClick={() => setIsExpanded(!isExpanded)}
         className="
           flex items-center gap-1.5 mt-2
-          text-body-sm text-accent-blue hover:text-accent-blue/80
+          text-body-sm text-accent-primary hover:text-accent-primary/80
           transition-colors duration-150
         "
       >

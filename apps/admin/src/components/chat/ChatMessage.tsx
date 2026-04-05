@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Bot, ChevronDown, ChevronRight, Clock, Database, User } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Clock, Database, ShieldCheck, User } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Card } from '@/components/ui/Card';
 import type { ChatToolCall, ChatTiming } from '@/lib/llm/types';
@@ -25,6 +25,10 @@ interface DisplayMessage {
   tigerPrimary?: TigerPrimaryInfo;
   tigerShadow?: TigerShadowInfo;
   timestamp: Date;
+}
+
+interface PendingToolCallSummary {
+  name: string;
 }
 
 function formatMs(ms: number): string {
@@ -100,7 +104,7 @@ function getTigerDebugBadge(message: DisplayMessage): {
 
   if (message.tigerPrimary?.route === 'primary_success') {
     return {
-      label: 'System primary',
+      label: 'Structured answer',
       detail: titleCaseIntent(message.tigerPrimary.matchedIntent) ?? undefined,
       tone: 'blue',
     };
@@ -108,7 +112,7 @@ function getTigerDebugBadge(message: DisplayMessage): {
 
   if (message.tigerShadow?.route === 'shadow_success_legacy_answer') {
     return {
-      label: 'System shadow',
+      label: 'Verification check',
       detail: titleCaseIntent(message.tigerShadow.matchedIntent) ?? undefined,
       tone: 'blue',
     };
@@ -116,7 +120,7 @@ function getTigerDebugBadge(message: DisplayMessage): {
 
   if (message.tigerPrimary?.enabled && message.tigerPrimary.route !== 'disabled') {
     return {
-      label: 'Legacy fallback',
+      label: 'Fallback path',
       detail:
         titleCaseIntent(message.tigerPrimary.matchedIntent) ??
         message.tigerPrimary.route.replaceAll('_', ' '),
@@ -135,6 +139,61 @@ function getTigerDebugBadge(message: DisplayMessage): {
   }
 
   return null;
+}
+
+function getTigerProvenanceLine(message: DisplayMessage): string | null {
+  if (message.tigerPrimary?.route === 'primary_success') {
+    const intent = titleCaseIntent(message.tigerPrimary.matchedIntent);
+    return intent
+      ? `${intent} came from the structured data path.`
+      : 'This answer came from the structured data path.';
+  }
+
+  if (message.tigerShadow?.route === 'shadow_success_legacy_answer') {
+    const intent = titleCaseIntent(message.tigerShadow.matchedIntent);
+    return intent
+      ? `${intent} matched the verified legacy answer.`
+      : 'This turn used a verified legacy answer.';
+  }
+
+  if (message.tigerPrimary?.enabled && message.tigerPrimary.route === 'fallback_to_legacy') {
+    const intent = titleCaseIntent(message.tigerPrimary.matchedIntent);
+    return intent
+      ? `${intent} needed the legacy fallback path.`
+      : 'This turn used the legacy fallback path.';
+  }
+
+  if (message.tigerShadow?.enabled && message.tigerShadow.route === 'shadow_failed_legacy_answer') {
+    return 'The verification pass did not replace the legacy answer.';
+  }
+
+  return null;
+}
+
+function summarizePendingToolCalls(pendingToolCalls: PendingToolCallSummary[]): string | null {
+  if (pendingToolCalls.length === 0) {
+    return null;
+  }
+
+  const names = [...new Set(pendingToolCalls.map((call) => formatToolName(call.name)))];
+  const visible = names.slice(0, 2);
+  return names.length > 2 ? `${visible.join(' · ')} +${names.length - 2}` : visible.join(' · ');
+}
+
+function getStreamingStatusLine(
+  isStreaming: boolean,
+  pendingToolCalls: PendingToolCallSummary[]
+): string | null {
+  if (!isStreaming) {
+    return null;
+  }
+
+  const pendingSummary = summarizePendingToolCalls(pendingToolCalls);
+  if (pendingSummary) {
+    return `Checking ${pendingSummary} before I finish the answer.`;
+  }
+
+  return 'Working on the answer now.';
 }
 
 function Chip({
@@ -159,7 +218,7 @@ function Chip({
 function Dot({ tone }: { tone: 'blue' | 'green' | 'red' | 'slate' }): ReactNode {
   const className =
     tone === 'blue'
-      ? 'bg-accent-blue'
+      ? 'chat-accent-dot'
       : tone === 'green'
         ? 'bg-accent-green'
         : tone === 'red'
@@ -208,12 +267,60 @@ function StreamDebugPanel({
   return (
     <details className="rounded-xl border border-border-subtle bg-surface-base/80 p-3">
       <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-        Stream Debug Info
+        Execution trace
       </summary>
       <pre className="mt-2 max-h-48 overflow-x-auto rounded-lg bg-surface-raised p-2 text-xs">
         {JSON.stringify(debug, null, 2)}
       </pre>
     </details>
+  );
+}
+
+function TrustStrip({
+  badge,
+  provenanceLine,
+  statusLine,
+  isStreaming,
+}: {
+  badge: ReturnType<typeof getTigerDebugBadge>;
+  provenanceLine: string | null;
+  statusLine: string | null;
+  isStreaming: boolean;
+}): ReactNode {
+  if (!badge && !provenanceLine && !statusLine) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 space-y-2 rounded-2xl border border-border-subtle bg-surface-base/75 p-3">
+      {badge && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip tone={badge.tone}>
+            <Dot tone={badge.tone} />
+            <span>{badge.label}</span>
+            {badge.detail ? <span className="text-text-muted">· {badge.detail}</span> : null}
+          </Chip>
+        </div>
+      )}
+
+      {statusLine && (
+        <div
+          data-testid={isStreaming ? 'chat-pending-tools' : undefined}
+          className="flex items-start gap-2 text-body-sm text-text-secondary"
+        >
+          <div className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-raised text-text-muted">
+            <ShieldCheck className={`h-3.5 w-3.5 ${isStreaming ? 'animate-pulse' : ''}`} />
+          </div>
+          <p>{statusLine}</p>
+        </div>
+      )}
+
+      {provenanceLine && (
+        <p className="text-caption leading-6 text-text-muted">
+          {provenanceLine}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -241,7 +348,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
         {result.debug && (
           <details>
             <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-              Debug Info
+              Trace details
             </summary>
             <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
               {JSON.stringify(result.debug, null, 2)}
@@ -270,7 +377,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
         {result.debug && (
           <details>
             <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-              Debug Info
+              Trace details
             </summary>
             <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
               {JSON.stringify(result.debug, null, 2)}
@@ -299,7 +406,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
         {result.debug && (
           <details>
             <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-              Debug Info
+              Trace details
             </summary>
             <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
               {JSON.stringify(result.debug, null, 2)}
@@ -372,7 +479,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
         {result.debug && !result.debug.steps && (
           <details>
             <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-              Debug Info
+              Trace details
             </summary>
             <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
               {JSON.stringify(result.debug, null, 2)}
@@ -414,7 +521,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
         {result.debug && (
           <details>
             <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-              Debug Info
+              Trace details
             </summary>
             <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
               {JSON.stringify(result.debug, null, 2)}
@@ -571,7 +678,7 @@ function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
       </div>
       <details>
         <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-          Raw Result
+          Raw output
         </summary>
         <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
           {JSON.stringify(genericResult, null, 2)}
@@ -586,6 +693,7 @@ interface ChatMessageProps {
   isStreaming?: boolean;
   suggestions?: QuerySuggestion[];
   onSuggestionClick?: (query: string) => void;
+  pendingToolCallNames?: string[];
 }
 
 export function ChatMessage({
@@ -593,10 +701,16 @@ export function ChatMessage({
   isStreaming = false,
   suggestions,
   onSuggestionClick,
+  pendingToolCallNames = [],
 }: ChatMessageProps) {
   const [showQueries, setShowQueries] = useState(false);
   const isUser = message.role === 'user';
   const tigerDebugBadge = getTigerDebugBadge(message);
+  const provenanceLine = getTigerProvenanceLine(message);
+  const streamingStatusLine = getStreamingStatusLine(
+    isStreaming,
+    pendingToolCallNames.map((name) => ({ name }))
+  );
   const querySummary = message.toolCalls ? summarizeToolCalls(message.toolCalls) : null;
 
   return (
@@ -608,17 +722,17 @@ export function ChatMessage({
       <div
         className={`
           flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full
-          ${isUser ? 'bg-accent-blue' : 'border border-border-muted bg-surface-elevated'}
+          ${isUser ? 'bg-accent-primary' : 'border border-border-muted bg-surface-elevated'}
         `}
       >
-        {isUser ? <User className="h-4 w-4 text-white" /> : <Bot className="h-4 w-4 text-accent-blue" />}
+        {isUser ? <User className="h-4 w-4 text-white" /> : <Bot className="chat-accent-icon h-4 w-4" />}
       </div>
 
       <div className={`flex-1 max-w-[85%] ${isUser ? 'flex flex-col items-end' : ''}`}>
         <Card
           variant={isUser ? 'default' : 'elevated'}
           padding="md"
-          className={`relative group overflow-hidden ${isUser ? 'bg-accent-blue/10 border-accent-blue/20' : ''}`}
+          className={`relative group overflow-hidden ${isUser ? 'chat-accent-soft-border' : ''}`}
         >
           {!isUser && (
             <div className="absolute right-3 top-3 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
@@ -642,24 +756,25 @@ export function ChatMessage({
                 <StreamingContent content={message.content} isStreaming={isStreaming} />
               </EntityLinkProvider>
 
+              <TrustStrip
+                badge={tigerDebugBadge}
+                provenanceLine={provenanceLine}
+                statusLine={streamingStatusLine}
+                isStreaming={isStreaming}
+              />
+
               {!isStreaming && suggestions && suggestions.length > 0 && onSuggestionClick && (
-                <SuggestionChips suggestions={suggestions} onSuggestionClick={onSuggestionClick} />
+                <SuggestionChips
+                  suggestions={suggestions}
+                  onSuggestionClick={onSuggestionClick}
+                  label="Ask next"
+                />
               )}
             </div>
           )}
 
-          {!isUser && (tigerDebugBadge || (message.toolCalls && message.toolCalls.length > 0) || message.debug) && (
+          {!isUser && ((message.toolCalls && message.toolCalls.length > 0) || message.debug) && (
             <div className="mt-4 space-y-4 border-t border-border-subtle/80 pt-4">
-              {tigerDebugBadge && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Chip tone={tigerDebugBadge.tone}>
-                    <Dot tone={tigerDebugBadge.tone} />
-                    <span>{tigerDebugBadge.label}</span>
-                    {tigerDebugBadge.detail ? <span className="text-text-muted">· {tigerDebugBadge.detail}</span> : null}
-                  </Chip>
-                </div>
-              )}
-
               {message.toolCalls && message.toolCalls.length > 0 && (
                 <div className="space-y-3 rounded-2xl border border-border-subtle bg-surface-base/70 p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -670,7 +785,7 @@ export function ChatMessage({
                     >
                       {showQueries ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       <Database className="h-4 w-4" />
-                      <span>Query details</span>
+                      <span>Source trail</span>
                     </button>
                     <Chip tone="slate">
                       {message.toolCalls.length} {message.toolCalls.length === 1 ? 'query' : 'queries'}

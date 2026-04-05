@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
-import { MessageSquare, StopCircle, Database } from 'lucide-react';
+import { MessageSquare, StopCircle } from 'lucide-react';
 import { getExamplePrompts } from '@/lib/example-prompts';
 import { useChatStream } from '@/hooks/useChatStream';
 import { generatePostResponseSuggestions } from '@/lib/chat/suggestion-generator';
@@ -125,8 +125,8 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
       >
         {messages.length === 0 && !isStreaming && (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="w-16 h-16 rounded-full bg-accent-blue/10 flex items-center justify-center mb-4">
-              <MessageSquare className="w-8 h-8 text-accent-blue" />
+            <div className="chat-accent-soft mb-4 flex h-16 w-16 items-center justify-center rounded-full">
+              <MessageSquare className="chat-accent-icon h-8 w-8" />
             </div>
             <h3 className="text-subheading text-text-primary mb-2">Ask about Steam data</h3>
             <p className="text-body-sm text-text-secondary max-w-md mb-6">
@@ -153,25 +153,16 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
               key={message.id}
               message={message}
               isStreaming={isLastMessageStreaming && idx === messages.length - 1}
+              pendingToolCallNames={
+                isLastAssistant && isLastMessageStreaming
+                  ? pendingToolCalls.map((toolCall) => toolCall.name)
+                  : undefined
+              }
               suggestions={isLastAssistant ? followUpSuggestions : undefined}
               onSuggestionClick={isLastAssistant ? handleSend : undefined}
             />
           );
         })}
-
-        {/* Pending tool calls indicator */}
-        {isStreaming && pendingToolCalls.length > 0 && (
-          <div
-            data-testid="chat-pending-tools"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-elevated border border-border-subtle"
-          >
-            <div className="w-4 h-4 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
-            <Database className="w-4 h-4 text-text-muted" />
-            <span className="text-body-sm text-text-secondary">
-              Executing {pendingToolCalls.map(tc => tc.name).join(', ')}...
-            </span>
-          </div>
-        )}
 
         {error && (
           <div

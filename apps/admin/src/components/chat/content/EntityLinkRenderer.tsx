@@ -43,7 +43,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
         href={`/apps/${appId}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
         data-entity-link
       >
         {children}
@@ -59,7 +59,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
         href={`/publishers/${publisherMatch[1]}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
         data-entity-link
       >
         {children}
@@ -75,7 +75,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
         href={`/developers/${developerMatch[1]}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
         data-entity-link
       >
         {children}
@@ -97,7 +97,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
           href={`/publishers/${publisherId}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+          className="chat-accent-link"
           data-entity-link
         >
           {children}
@@ -111,7 +111,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
           href={`/developers/${developerId}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+          className="chat-accent-link"
           data-entity-link
         >
           {children}
@@ -129,7 +129,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:underline"
+        className="chat-accent-link"
         {...props}
       >
         {children}
@@ -139,7 +139,7 @@ export function EntityLinkRenderer({ href, children, ...props }: AnchorProps) {
 
   // Internal link
   return (
-    <Link href={href} className="text-accent-blue hover:underline" {...props}>
+    <Link href={href} className="chat-accent-link" {...props}>
       {children}
     </Link>
   );

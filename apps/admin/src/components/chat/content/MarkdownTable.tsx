@@ -88,7 +88,7 @@ function formatCellContent(content: string): React.ReactNode {
         href={`/apps/${gameLinkMatch[2]}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
       >
         {gameLinkMatch[1]}
       </Link>
@@ -103,7 +103,7 @@ function formatCellContent(content: string): React.ReactNode {
         href={`/publishers/${publisherLinkMatch[2]}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
       >
         {publisherLinkMatch[1]}
       </Link>
@@ -118,7 +118,7 @@ function formatCellContent(content: string): React.ReactNode {
         href={`/developers/${developerLinkMatch[2]}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+        className="chat-accent-link"
       >
         {developerLinkMatch[1]}
       </Link>

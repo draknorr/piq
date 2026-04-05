@@ -786,6 +786,35 @@
     background-color: var(--surface-base);
   }
 
+  .chat-accent-link {
+    color: var(--accent-primary);
+    transition:
+      color 150ms ease,
+      text-decoration-color 150ms ease;
+  }
+
+  .chat-accent-link:hover {
+    color: color-mix(in srgb, var(--accent-primary) 82%, transparent);
+    text-decoration-line: underline;
+  }
+
+  .chat-accent-icon {
+    color: var(--accent-primary);
+  }
+
+  .chat-accent-dot {
+    background-color: var(--accent-primary);
+  }
+
+  .chat-accent-soft {
+    background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  }
+
+  .chat-accent-soft-border {
+    background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  }
+
   /* Smooth fade-in for new messages */
   .message-fade-in {
     animation: messageFadeIn 0.2s ease-out;

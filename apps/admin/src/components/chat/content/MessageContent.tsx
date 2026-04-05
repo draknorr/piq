@@ -146,7 +146,7 @@ function formatTextContent(text: string): React.ReactNode {
             href={`/apps/${segment.appId}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+            className="chat-accent-link"
           >
             {segment.name}
           </Link>
@@ -158,7 +158,7 @@ function formatTextContent(text: string): React.ReactNode {
             href={`/publishers/${segment.id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+            className="chat-accent-link"
           >
             {segment.name}
           </Link>
@@ -170,7 +170,7 @@ function formatTextContent(text: string): React.ReactNode {
             href={`/developers/${segment.id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent-blue hover:text-accent-blue/80 hover:underline transition-colors"
+            className="chat-accent-link"
           >
             {segment.name}
           </Link>
@@ -185,7 +185,7 @@ function formatTextContent(text: string): React.ReactNode {
         return (
           <code
             key={idx}
-            className="px-1.5 py-0.5 rounded bg-surface-overlay text-accent-cyan font-mono text-[0.9em]"
+            className="px-1.5 py-0.5 rounded bg-surface-overlay text-accent-primary font-mono text-[0.9em]"
           >
             {segment.content}
           </code>

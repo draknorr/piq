@@ -248,15 +248,15 @@ test('chat reflects debug surface visibility from the streamed payload', async (
   await sendButton.click();
 
   const assistantContent = page.getByTestId('chat-message-assistant').last();
-  await expect(assistantContent).toContainText('Stream Debug Info');
-  await expect(assistantContent).toContainText('System primary');
+  await expect(assistantContent).toContainText('Execution trace');
+  await expect(assistantContent).toContainText('Structured answer');
   await expect(assistantContent).toContainText('News Search');
-  await expect(assistantContent).toContainText('Query details');
+  await expect(assistantContent).toContainText('Source trail');
   await expect(assistantContent).toContainText('1 query');
 
-  await assistantContent.getByRole('button', { name: /query details/i }).click();
-  await expect(assistantContent).toContainText('Debug Info');
-  await assistantContent.getByText('Debug Info', { exact: true }).click();
+  await assistantContent.getByRole('button', { name: /source trail/i }).click();
+  await expect(assistantContent).toContainText('Trace details');
+  await assistantContent.getByText('Trace details', { exact: true }).click();
   await expect(
     assistantContent.locator('pre').filter({ hasText: 'select * from apps limit 1' })
   ).toContainText('select * from apps limit 1');
@@ -265,9 +265,9 @@ test('chat reflects debug surface visibility from the streamed payload', async (
   await sendButton.click();
 
   const hiddenAssistant = page.getByTestId('chat-message-assistant').last();
-  await expect(hiddenAssistant).not.toContainText('Stream Debug Info');
-  await expect(hiddenAssistant).not.toContainText('System primary');
-  await expect(hiddenAssistant).not.toContainText('Debug Info');
+  await expect(hiddenAssistant).not.toContainText('Execution trace');
+  await expect(hiddenAssistant).not.toContainText('Structured answer');
+  await expect(hiddenAssistant).not.toContainText('Trace details');
 });
 
 test('chat renders streamed errors without getting stuck', async ({ page }) => {

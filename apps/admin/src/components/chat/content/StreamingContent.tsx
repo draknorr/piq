@@ -253,7 +253,7 @@ function buildInlineTokens(
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent-blue transition-colors hover:text-accent-blue/80 hover:underline"
+            className="chat-accent-link"
             data-entity-link
           >
             {displayLabel}
