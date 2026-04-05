@@ -394,6 +394,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function stripDebugFields<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripDebugFields(entry)) as T;
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'debug') {
+      continue;
+    }
+
+    sanitized[key] = stripDebugFields(entry);
+  }
+
+  return sanitized as T;
+}
+
+function sanitizeToolResultForClient<
+  T extends { success: boolean; error?: string } & Record<string, unknown>,
+>(result: T, canViewAdminDebug: boolean): T {
+  return canViewAdminDebug ? result : stripDebugFields(result);
+}
+
+function sanitizeMessageEndEventForClient(
+  event: MessageEndEvent,
+  canViewAdminDebug: boolean
+): MessageEndEvent {
+  if (canViewAdminDebug) {
+    return event;
+  }
+
+  const {
+    debug: _debug,
+    tigerPrimary: _tigerPrimary,
+    tigerShadow: _tigerShadow,
+    ...sanitizedEvent
+  } = event;
+
+  return sanitizedEvent;
+}
+
 class ClientDisconnectError extends Error {
   constructor() {
     super('Client disconnected');
@@ -1102,7 +1148,7 @@ async function executeResolvedToolCall(params: {
   toolCall: ToolCall;
   lastUserPrompt: string;
   phase1State: ReturnType<typeof createPhase1GuardrailState> | null;
-  emitEvent?: (event: ToolResultEvent) => void;
+  emitToolResultEvent?: (event: ToolResultEvent) => void;
   emitResultEvent?: boolean;
 }): Promise<{
   result: QueryResult | SimilarityResult | Record<string, unknown>;
@@ -1114,7 +1160,7 @@ async function executeResolvedToolCall(params: {
     toolCall,
     lastUserPrompt,
     phase1State,
-    emitEvent,
+    emitToolResultEvent,
     emitResultEvent = true,
   } = params;
   const toolStart = deps.now();
@@ -1146,7 +1192,7 @@ async function executeResolvedToolCall(params: {
       result,
       timing: { executionMs: Math.round(toolExecutionMs) },
     };
-    emitEvent?.(toolResultEvent);
+    emitToolResultEvent?.(toolResultEvent);
   }
 
   return {
@@ -1231,21 +1277,27 @@ export async function handleChatStreamRequest(
   const skipUsageAccounting = isEvalRequest || usedLocalBrowserBypass;
   const creditsEnabled = readCreditsEnabled() && !skipUsageAccounting;
   let reservationId: string | null = null;
+  const serviceSupabase = deps.getServiceClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: chatProfile } = userId
+    ? await ((serviceSupabase.from('user_profiles') as any)
+        .select('credit_balance, role')
+        .eq('id', userId)
+        .maybeSingle() as Promise<{
+          data: { credit_balance: number; role: string | null } | null;
+          error: { message?: string } | null;
+        }>)
+    : { data: null, error: null };
+  const canViewAdminDebug = chatProfile?.role === 'admin';
 
   // Check credits if enabled
   if (creditsEnabled) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: profile } = await (supabase.from('user_profiles') as any)
-      .select('credit_balance')
-      .eq('id', userId)
-      .single() as { data: { credit_balance: number } | null };
-
-    if (!profile || profile.credit_balance < MINIMUM_CHARGE) {
+    if (!chatProfile || chatProfile.credit_balance < MINIMUM_CHARGE) {
       return new Response(
         JSON.stringify({
           error: 'insufficient_credits',
           message: "You don't have enough credits to use chat. Please contact your administrator.",
-          balance: profile?.credit_balance ?? 0,
+          balance: chatProfile?.credit_balance ?? 0,
         }),
         { status: 402, headers: { 'Content-Type': 'application/json' } }
       );
@@ -1287,7 +1339,7 @@ export async function handleChatStreamRequest(
         JSON.stringify({
           error: 'insufficient_credits',
           message: "Failed to reserve credits. You may not have enough credits.",
-          balance: profile.credit_balance,
+          balance: chatProfile.credit_balance,
         }),
         { status: 402, headers: { 'Content-Type': 'application/json' } }
       );
@@ -1318,6 +1370,15 @@ export async function handleChatStreamRequest(
           }
           throw error;
         }
+      };
+      const emitToolResultEvent = (event: ToolResultEvent) => {
+        emitEvent({
+          ...event,
+          result: sanitizeToolResultForClient(event.result, canViewAdminDebug),
+        });
+      };
+      const emitMessageEndEvent = (event: MessageEndEvent) => {
+        emitEvent(sanitizeMessageEndEventForClient(event, canViewAdminDebug));
       };
       const closeStream = () => {
         if (streamClosed) {
@@ -1554,7 +1615,7 @@ export async function handleChatStreamRequest(
             },
             creditsCharged: creditsEnabled ? creditsCharged : undefined,
           };
-          emitEvent(endEvent);
+          emitMessageEndEvent(endEvent);
           return;
         }
 
@@ -1774,7 +1835,7 @@ export async function handleChatStreamRequest(
               result: continuationResult,
               timing: { executionMs: Math.round(executionMs) },
             };
-            emitEvent(continuationToolResultEvent);
+            emitToolResultEvent(continuationToolResultEvent);
 
             if (syntheticToolCall) {
               executedToolCalls.push({
@@ -1845,7 +1906,7 @@ export async function handleChatStreamRequest(
               toolCall: continuationToolCall,
               lastUserPrompt,
               phase1State: null,
-              emitEvent,
+              emitToolResultEvent,
               emitResultEvent: false,
             });
 
@@ -1918,7 +1979,7 @@ export async function handleChatStreamRequest(
               result: continuationResult as { success: boolean; error?: string } & Record<string, unknown>,
               timing: { executionMs: Math.round(executed.toolExecutionMs) },
             };
-            emitEvent(continuationToolResultEvent);
+            emitToolResultEvent(continuationToolResultEvent);
 
             executedToolCalls.push({
               name: continuationToolCall.name,
@@ -2143,7 +2204,7 @@ export async function handleChatStreamRequest(
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
-              emitEvent(toolResultEvent);
+              emitToolResultEvent(toolResultEvent);
 
               toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
@@ -2200,7 +2261,7 @@ export async function handleChatStreamRequest(
                 result: phase1Result,
                 timing: { executionMs: 0 },
               };
-              emitEvent(toolResultEvent);
+              emitToolResultEvent(toolResultEvent);
 
               toolResults.push({ toolCall: routedToolCall, result: phase1Result });
               allToolCalls.push({
@@ -2264,7 +2325,7 @@ export async function handleChatStreamRequest(
               result,
               timing: { executionMs: Math.round(toolExecutionMs) },
             };
-            emitEvent(toolResultEvent);
+            emitToolResultEvent(toolResultEvent);
             {
               const traceEntry = buildToolExecutionTraceEntry({
                 latencyMs: Math.round(toolExecutionMs),
@@ -2499,7 +2560,7 @@ export async function handleChatStreamRequest(
           },
           creditsCharged: creditsEnabled ? creditsCharged : undefined,
         };
-        emitEvent(endEvent);
+        emitMessageEndEvent(endEvent);
 
       } catch (error) {
         const clientDisconnected = request.signal.aborted || isClientDisconnectError(error);

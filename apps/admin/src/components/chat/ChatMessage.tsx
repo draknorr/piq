@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import { Bot, ChevronDown, ChevronRight, Clock, Database, User } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { Card } from '@/components/ui/Card';
-import { ChevronDown, ChevronRight, Database, User, Bot } from 'lucide-react';
 import type { ChatToolCall, ChatTiming } from '@/lib/llm/types';
 import type { StreamDebugInfo } from '@/lib/llm/streaming-types';
 import type { TigerPrimaryInfo, TigerShadowInfo } from '@/lib/chat/tiger-shadow-types';
-import { Clock } from 'lucide-react';
 import { StreamingContent, CopyButton, CodeBlock } from './content';
 import { EntityLinkProvider } from './content/EntityLinkContext';
 import { SuggestionChips } from './SuggestionChips';
@@ -67,6 +67,28 @@ function titleCaseIntent(intent: string | null | undefined): string | null {
     .join(' ');
 }
 
+function formatToolName(name: string): string {
+  return (
+    titleCaseIntent(name) ??
+    name
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  );
+}
+
+function summarizeToolCalls(toolCalls: ChatToolCall[]): string | null {
+  const uniqueLabels = [...new Set(toolCalls.map((toolCall) => formatToolName(toolCall.name)))];
+  if (uniqueLabels.length === 0) {
+    return null;
+  }
+
+  const visibleLabels = uniqueLabels.slice(0, 2);
+  return uniqueLabels.length > 2
+    ? `${visibleLabels.join(' · ')} +${uniqueLabels.length - 2}`
+    : visibleLabels.join(' · ');
+}
+
 function getTigerDebugBadge(message: DisplayMessage): {
   detail?: string;
   label: string;
@@ -115,6 +137,450 @@ function getTigerDebugBadge(message: DisplayMessage): {
   return null;
 }
 
+function Chip({
+  tone = 'slate',
+  children,
+}: {
+  tone?: 'blue' | 'green' | 'red' | 'slate';
+  children: ReactNode;
+}): ReactNode {
+  const className =
+    tone === 'blue'
+      ? 'chat-response-chip chat-response-chip-primary'
+      : tone === 'green'
+        ? 'chat-response-chip chat-response-chip-success'
+        : tone === 'red'
+          ? 'chat-response-chip chat-response-chip-danger'
+          : 'chat-response-chip chat-response-chip-quiet';
+
+  return <span className={className}>{children}</span>;
+}
+
+function Dot({ tone }: { tone: 'blue' | 'green' | 'red' | 'slate' }): ReactNode {
+  const className =
+    tone === 'blue'
+      ? 'bg-accent-blue'
+      : tone === 'green'
+        ? 'bg-accent-green'
+        : tone === 'red'
+          ? 'bg-accent-red'
+          : 'bg-text-muted';
+
+  return <span className={`h-1.5 w-1.5 rounded-full ${className}`} />;
+}
+
+function TimeChip({ ms }: { ms: number }): ReactNode {
+  return (
+    <Chip tone="slate">
+      <Clock className="h-3 w-3" />
+      {formatMs(ms)}
+    </Chip>
+  );
+}
+
+function ResultChip({
+  success,
+  children,
+}: {
+  success: boolean;
+  children: ReactNode;
+}): ReactNode {
+  return success ? <Chip tone="green">{children}</Chip> : <Chip tone="red">{children}</Chip>;
+}
+
+function ToolPanel({
+  children,
+}: {
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <div className="space-y-2 rounded-xl border border-border-subtle/70 bg-surface-raised/70 p-3">
+      {children}
+    </div>
+  );
+}
+
+function StreamDebugPanel({
+  debug,
+}: {
+  debug: StreamDebugInfo;
+}): ReactNode {
+  return (
+    <details className="rounded-xl border border-border-subtle bg-surface-base/80 p-3">
+      <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+        Stream Debug Info
+      </summary>
+      <pre className="mt-2 max-h-48 overflow-x-auto rounded-lg bg-surface-raised p-2 text-xs">
+        {JSON.stringify(debug, null, 2)}
+      </pre>
+    </details>
+  );
+}
+
+function renderToolCall(tc: ChatToolCall, idx: number): ReactNode {
+  if (tc.name === 'query_database') {
+    const args = tc.arguments as { reasoning?: string; sql?: string };
+    const result = tc.result as {
+      success: boolean;
+      rowCount?: number;
+      truncated?: boolean;
+      error?: string;
+      debug?: Record<string, unknown>;
+    };
+
+    return (
+      <ToolPanel key={idx}>
+        {args.reasoning && <p className="text-body-sm italic text-text-secondary">{args.reasoning}</p>}
+        {args.sql && <CodeBlock code={args.sql} language="sql" />}
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.rowCount ?? 0} rows returned${result.truncated ? ' (truncated)' : ''}` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+        {result.debug && (
+          <details>
+            <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+              Debug Info
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+              {JSON.stringify(result.debug, null, 2)}
+            </pre>
+          </details>
+        )}
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'find_similar') {
+    const args = tc.arguments as { reference_name?: string; entity_type?: string };
+    const result = tc.result as { success: boolean; total_found?: number; error?: string; debug?: Record<string, unknown> };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">
+          Finding {args.entity_type}s similar to &quot;{args.reference_name}&quot;
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.total_found ?? 0} similar results found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+        {result.debug && (
+          <details>
+            <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+              Debug Info
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+              {JSON.stringify(result.debug, null, 2)}
+            </pre>
+          </details>
+        )}
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'query_analytics') {
+    const args = tc.arguments as { reasoning?: string; cube?: string };
+    const result = tc.result as { success: boolean; rowCount?: number; cached?: boolean; error?: string; debug?: Record<string, unknown> };
+
+    return (
+      <ToolPanel key={idx}>
+        {args.reasoning && <p className="text-body-sm italic text-text-secondary">{args.reasoning}</p>}
+        {args.cube && <p className="text-body-sm text-text-muted">Querying: {args.cube}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.rowCount ?? 0} rows returned${result.cached ? ' (cached)' : ''}` : `Error: ${result.error}`}
+          </ResultChip>
+          {tc.timing && <TimeChip ms={tc.timing.executionMs} />}
+        </div>
+        {result.debug && (
+          <details>
+            <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+              Debug Info
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+              {JSON.stringify(result.debug, null, 2)}
+            </pre>
+          </details>
+        )}
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'search_games') {
+    const args = tc.arguments as {
+      tags?: string[];
+      genres?: string[];
+      categories?: string[];
+      platforms?: string[];
+      steam_deck?: string[];
+      review_percentage?: { gte?: number };
+      metacritic_score?: { gte?: number };
+      release_year?: { gte?: number; lte?: number };
+      controller_support?: string;
+      is_free?: boolean;
+    };
+    const result = tc.result as {
+      success: boolean;
+      total_found?: number;
+      error?: string;
+      debug?: {
+        steps?: string[];
+      };
+    };
+
+    const filters: string[] = [];
+    if (args.tags?.length) filters.push(args.tags.join(', '));
+    if (args.genres?.length) filters.push(args.genres.join(', '));
+    if (args.categories?.length) filters.push(args.categories.join(', '));
+    if (args.steam_deck?.length) filters.push(`Steam Deck ${args.steam_deck.join('/')}`);
+    if (args.platforms?.length) filters.push(args.platforms.join(', '));
+    if (args.review_percentage?.gte) filters.push(`${args.review_percentage.gte}%+ reviews`);
+    if (args.metacritic_score?.gte) filters.push(`${args.metacritic_score.gte}+ metacritic`);
+    if (args.controller_support) filters.push(`${args.controller_support} controller`);
+    if (args.is_free !== undefined) filters.push(args.is_free ? 'free' : 'paid');
+    if (args.release_year?.gte || args.release_year?.lte) {
+      const yearParts: string[] = [];
+      if (args.release_year.gte) yearParts.push(`from ${args.release_year.gte}`);
+      if (args.release_year.lte) yearParts.push(`to ${args.release_year.lte}`);
+      filters.push(yearParts.join(' '));
+    }
+    const filterText = filters.length > 0 ? filters.join(', ') : 'all games';
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Searching games for &quot;{filterText}&quot;</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.total_found ?? 0} games found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+        {result.debug?.steps && result.debug.steps.length > 0 && (
+          <div className="rounded-lg border border-border-subtle bg-surface-base p-2 text-xs">
+            <div className="mb-1 font-medium text-text-secondary">Search trace:</div>
+            {result.debug.steps.map((step, i) => (
+              <div key={i} className="pl-2 text-text-muted">
+                {step}
+              </div>
+            ))}
+          </div>
+        )}
+        {result.debug && !result.debug.steps && (
+          <details>
+            <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+              Debug Info
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+              {JSON.stringify(result.debug, null, 2)}
+            </pre>
+          </details>
+        )}
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'lookup_tags') {
+    const args = tc.arguments as { query?: string; type?: string };
+    const result = tc.result as {
+      success: boolean;
+      found?: number;
+      canonicalMatch?: { type: string; name: string };
+      adjacentTags?: string[];
+      error?: string;
+      debug?: Record<string, unknown>;
+    };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Looking up tags: {args.query || 'unknown'}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.found ?? 0} tags found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+        {result.success && result.canonicalMatch && (
+          <div className="text-xs text-text-secondary">
+            Canonical {result.canonicalMatch.type}: <span className="font-medium text-text-primary">{result.canonicalMatch.name}</span>
+          </div>
+        )}
+        {result.success && result.adjacentTags && result.adjacentTags.length > 0 && (
+          <div className="text-xs text-text-secondary">Adjacent tags: {result.adjacentTags.join(', ')}</div>
+        )}
+        {result.debug && (
+          <details>
+            <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+              Debug Info
+            </summary>
+            <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+              {JSON.stringify(result.debug, null, 2)}
+            </pre>
+          </details>
+        )}
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'lookup_publishers') {
+    const args = tc.arguments as { query?: string };
+    const result = tc.result as { success: boolean; results?: Array<{ id: number; name: string }>; error?: string };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Looking up publishers: &ldquo;{args.query || 'unknown'}&rdquo;</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.results?.length || 0} publishers found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'lookup_developers') {
+    const args = tc.arguments as { query?: string };
+    const result = tc.result as { success: boolean; results?: Array<{ id: number; name: string }>; error?: string };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Looking up developers: &ldquo;{args.query || 'unknown'}&rdquo;</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.results?.length || 0} developers found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'search_by_concept') {
+    const args = tc.arguments as { description?: string };
+    const result = tc.result as { success: boolean; total_found?: number; error?: string };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Searching by concept: &ldquo;{args.description || 'unknown'}&rdquo;</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.total_found ?? 0} games found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'discover_trending') {
+    const args = tc.arguments as { trend_type?: string; timeframe?: string };
+    const result = tc.result as { success: boolean; total_found?: number; error?: string };
+    const trendLabels: Record<string, string> = {
+      review_momentum: 'high momentum',
+      accelerating: 'accelerating',
+      breaking_out: 'breaking out',
+      declining: 'declining',
+    };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">
+          Discovering {trendLabels[args.trend_type || ''] || args.trend_type} games ({args.timeframe || '7d'})
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.total_found ?? 0} games found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'screen_games') {
+    const args = tc.arguments as { sort_by?: string; timeframe?: string; indie_heuristic?: boolean };
+    const result = tc.result as { success: boolean; total_found?: number; error?: string };
+    const sortLabels: Record<string, string> = {
+      ccu_peak: 'Peak CCU',
+      momentum_score: 'Momentum score',
+      velocity_7d: 'Review velocity (7d)',
+      velocity_acceleration: 'Velocity acceleration',
+      reviews_added_7d: 'Reviews added (7d)',
+      reviews_added_30d: 'Reviews added (30d)',
+      sentiment_delta: 'Sentiment delta',
+      total_reviews: 'Total reviews',
+      review_score: 'Review percentage',
+    };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">
+          Screening games by {sortLabels[args.sort_by || ''] || args.sort_by || 'ranking metric'} ({args.timeframe || '7d'})
+          {args.indie_heuristic ? ', indie heuristic' : ''}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.total_found ?? 0} games found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  if (tc.name === 'lookup_games') {
+    const args = tc.arguments as { query?: string };
+    const result = tc.result as { success: boolean; results?: Array<{ appid: number; name: string }>; error?: string };
+
+    return (
+      <ToolPanel key={idx}>
+        <p className="text-body-sm italic text-text-secondary">Looking up games: &ldquo;{args.query || 'unknown'}&rdquo;</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultChip success={result.success}>
+            <span className={result.success ? 'h-1.5 w-1.5 rounded-full bg-accent-green' : 'h-1.5 w-1.5 rounded-full bg-accent-red'} />
+            {result.success ? `${result.results?.length || 0} games found` : `Error: ${result.error}`}
+          </ResultChip>
+        </div>
+      </ToolPanel>
+    );
+  }
+
+  const genericResult = tc.result as Record<string, unknown>;
+
+  return (
+    <ToolPanel key={idx}>
+      <p className="text-body-sm italic text-text-secondary">Executed {tc.name}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <ResultChip success={genericResult.success !== false}>
+          <span
+            className={
+              genericResult.success !== false
+                ? 'h-1.5 w-1.5 rounded-full bg-accent-green'
+                : 'h-1.5 w-1.5 rounded-full bg-accent-red'
+            }
+          />
+          {genericResult.success !== false
+            ? summarizeToolResult(genericResult)
+            : `Error: ${typeof genericResult.error === 'string' ? genericResult.error : 'Unknown error'}`}
+        </ResultChip>
+        {tc.timing && <TimeChip ms={tc.timing.executionMs} />}
+      </div>
+      <details>
+        <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
+          Raw Result
+        </summary>
+        <pre className="mt-1 max-h-48 overflow-x-auto rounded-lg bg-surface-base p-2 text-xs">
+          {JSON.stringify(genericResult, null, 2)}
+        </pre>
+      </details>
+    </ToolPanel>
+  );
+}
+
 interface ChatMessageProps {
   message: DisplayMessage;
   isStreaming?: boolean;
@@ -131,6 +597,7 @@ export function ChatMessage({
   const [showQueries, setShowQueries] = useState(false);
   const isUser = message.role === 'user';
   const tigerDebugBadge = getTigerDebugBadge(message);
+  const querySummary = message.toolCalls ? summarizeToolCalls(message.toolCalls) : null;
 
   return (
     <div
@@ -138,609 +605,96 @@ export function ChatMessage({
       data-message-id={message.id}
       className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}
     >
-      {/* Avatar */}
       <div
         className={`
-        flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
-        ${isUser ? 'bg-accent-blue' : 'bg-surface-elevated border border-border-muted'}
-      `}
+          flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full
+          ${isUser ? 'bg-accent-blue' : 'border border-border-muted bg-surface-elevated'}
+        `}
       >
-        {isUser ? (
-          <User className="w-4 h-4 text-white" />
-        ) : (
-          <Bot className="w-4 h-4 text-accent-blue" />
-        )}
+        {isUser ? <User className="h-4 w-4 text-white" /> : <Bot className="h-4 w-4 text-accent-blue" />}
       </div>
 
-      {/* Message content */}
       <div className={`flex-1 max-w-[85%] ${isUser ? 'flex flex-col items-end' : ''}`}>
         <Card
           variant={isUser ? 'default' : 'elevated'}
           padding="md"
-          className={`relative group ${isUser ? 'bg-accent-blue/10 border-accent-blue/20' : ''}`}
+          className={`relative group overflow-hidden ${isUser ? 'bg-accent-blue/10 border-accent-blue/20' : ''}`}
         >
-          {/* Copy button for assistant messages */}
           {!isUser && (
-            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute right-3 top-3 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
               <CopyButton text={message.content} size="sm" />
             </div>
           )}
 
-          {/* Message text */}
           {isUser ? (
             <div
               data-testid="chat-message-user-content"
-              className="text-body text-text-primary whitespace-pre-wrap"
+              className="text-body whitespace-pre-wrap text-text-primary"
             >
               {message.content}
             </div>
           ) : (
-            <div data-testid="chat-message-assistant-content" className="pr-8">
+            <div
+              data-testid="chat-message-assistant-content"
+              className="space-y-4 pr-10 sm:pr-12"
+            >
               <EntityLinkProvider toolCalls={message.toolCalls}>
                 <StreamingContent content={message.content} isStreaming={isStreaming} />
               </EntityLinkProvider>
-            </div>
-          )}
 
-          {!isUser && tigerDebugBadge && (
-            <div className="mt-3">
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-caption ${
-                  tigerDebugBadge.tone === 'blue'
-                    ? 'border-accent-blue/20 bg-accent-blue/10 text-accent-blue'
-                    : 'border-border-subtle bg-surface-overlay text-text-secondary'
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    tigerDebugBadge.tone === 'blue' ? 'bg-accent-blue' : 'bg-text-muted'
-                  }`}
-                />
-                <span>{tigerDebugBadge.label}</span>
-                {tigerDebugBadge.detail ? <span className="text-text-muted">· {tigerDebugBadge.detail}</span> : null}
-              </span>
-            </div>
-          )}
-
-          {/* Follow-up suggestions (only for assistant messages when not streaming) */}
-          {!isUser && !isStreaming && suggestions && suggestions.length > 0 && onSuggestionClick && (
-            <SuggestionChips
-              suggestions={suggestions}
-              onSuggestionClick={onSuggestionClick}
-            />
-          )}
-
-          {/* Query details (for assistant messages with tool calls) */}
-          {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-border-subtle">
-              <button
-                onClick={() => setShowQueries(!showQueries)}
-                className="flex items-center gap-2 text-body-sm text-text-secondary hover:text-text-primary transition-colors"
-              >
-                {showQueries ? (
-                  <ChevronDown className="w-4 h-4" />
-                ) : (
-                  <ChevronRight className="w-4 h-4" />
-                )}
-                <Database className="w-4 h-4" />
-                <span>
-                  {message.toolCalls.length} tool{' '}
-                  {message.toolCalls.length === 1 ? 'call' : 'calls'}
-                </span>
-                {message.timing && (
-                  <span className="flex items-center gap-1 text-text-muted">
-                    <Clock className="w-3 h-3" />
-                    {formatMs(message.timing.totalMs)}
-                    <span className="text-caption">
-                      (LLM: {formatMs(message.timing.llmMs)} | Tools: {formatMs(message.timing.toolsMs)})
-                    </span>
-                  </span>
-                )}
-              </button>
-
-              {showQueries && (
-                <div className="mt-3 space-y-4">
-                  {message.toolCalls.map((tc, idx) => {
-                    // Handle database query results
-                    if (tc.name === 'query_database') {
-                      const args = tc.arguments as { reasoning?: string; sql?: string };
-                      const result = tc.result as { success: boolean; rowCount?: number; truncated?: boolean; error?: string; debug?: Record<string, unknown> };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          {args.reasoning && (
-                            <p className="text-body-sm text-text-secondary italic">
-                              {args.reasoning}
-                            </p>
-                          )}
-                          {args.sql && <CodeBlock code={args.sql} language="sql" />}
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.rowCount} rows returned
-                                {result.truncated && ' (truncated)'}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                          {result.debug && (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                                Debug Info
-                              </summary>
-                              <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                                {JSON.stringify(result.debug, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Handle similarity search results
-                    if (tc.name === 'find_similar') {
-                      const args = tc.arguments as { reference_name?: string; entity_type?: string };
-                      const result = tc.result as { success: boolean; total_found?: number; error?: string; debug?: Record<string, unknown> };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Finding {args.entity_type}s similar to &quot;{args.reference_name}&quot;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.total_found} similar results found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                          {result.debug && (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                                Debug Info
-                              </summary>
-                              <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                                {JSON.stringify(result.debug, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Handle Cube.dev analytics queries
-                    if (tc.name === 'query_analytics') {
-                      const args = tc.arguments as { reasoning?: string; cube?: string };
-                      const result = tc.result as { success: boolean; rowCount?: number; cached?: boolean; error?: string; debug?: Record<string, unknown> };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          {args.reasoning && (
-                            <p className="text-body-sm text-text-secondary italic">
-                              {args.reasoning}
-                            </p>
-                          )}
-                          {args.cube && (
-                            <p className="text-body-sm text-text-muted">
-                              Querying: {args.cube}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.rowCount} rows returned
-                                {result.cached && ' (cached)'}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                            {tc.timing && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-caption bg-surface-elevated text-text-muted">
-                                <Clock className="w-3 h-3" />
-                                {formatMs(tc.timing.executionMs)}
-                              </span>
-                            )}
-                          </div>
-                          {result.debug && (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                                Debug Info
-                              </summary>
-                              <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                                {JSON.stringify(result.debug, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Handle search_games results
-                    if (tc.name === 'search_games') {
-                      const args = tc.arguments as {
-                        tags?: string[];
-                        genres?: string[];
-                        categories?: string[];
-                        platforms?: string[];
-                        steam_deck?: string[];
-                        review_percentage?: { gte?: number };
-                        metacritic_score?: { gte?: number };
-                        release_year?: { gte?: number; lte?: number };
-                        controller_support?: string;
-                        is_free?: boolean;
-                      };
-                      const result = tc.result as {
-                        success: boolean;
-                        total_found?: number;
-                        error?: string;
-                        debug?: {
-                          input_args?: Record<string, unknown>;
-                          steps?: string[];
-                          tag_candidates?: number;
-                          steam_deck_candidates?: number;
-                          final_candidates?: number | null;
-                          query_rows_returned?: number;
-                          after_review_filter?: number;
-                          final_count?: number;
-                        };
-                      };
-
-                      // Build filter summary
-                      const filters: string[] = [];
-                      if (args.tags?.length) filters.push(args.tags.join(', '));
-                      if (args.genres?.length) filters.push(args.genres.join(', '));
-                      if (args.categories?.length) filters.push(args.categories.join(', '));
-                      if (args.steam_deck?.length) filters.push(`Steam Deck ${args.steam_deck.join('/')}`);
-                      if (args.platforms?.length) filters.push(args.platforms.join(', '));
-                      if (args.review_percentage?.gte) filters.push(`${args.review_percentage.gte}%+ reviews`);
-                      if (args.metacritic_score?.gte) filters.push(`${args.metacritic_score.gte}+ metacritic`);
-                      if (args.controller_support) filters.push(`${args.controller_support} controller`);
-                      if (args.is_free !== undefined) filters.push(args.is_free ? 'free' : 'paid');
-                      if (args.release_year?.gte || args.release_year?.lte) {
-                        const yearParts = [];
-                        if (args.release_year.gte) yearParts.push(`from ${args.release_year.gte}`);
-                        if (args.release_year.lte) yearParts.push(`to ${args.release_year.lte}`);
-                        filters.push(yearParts.join(' '));
-                      }
-                      const filterText = filters.length > 0 ? filters.join(', ') : 'all games';
-
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Searching games for &quot;{filterText}&quot;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.total_found ?? 0} games found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                          {/* Always show debug steps for search_games to help diagnose issues */}
-                          {result.debug?.steps && result.debug.steps.length > 0 && (
-                            <div className="mt-2 p-2 bg-surface-base rounded text-xs border border-border-subtle">
-                              <div className="font-medium text-text-secondary mb-1">Search trace:</div>
-                              {result.debug.steps.map((step, i) => (
-                                <div key={i} className="text-text-muted pl-2">{step}</div>
-                              ))}
-                            </div>
-                          )}
-                          {result.debug && !result.debug.steps && (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                                Debug Info
-                              </summary>
-                              <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                                {JSON.stringify(result.debug, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Handle lookup_tags results
-                    if (tc.name === 'lookup_tags') {
-                      const args = tc.arguments as { query?: string; type?: string };
-                      const result = tc.result as {
-                        success: boolean;
-                        found?: number;
-                        canonicalMatch?: { type: string; name: string };
-                        adjacentTags?: string[];
-                        error?: string;
-                        debug?: Record<string, unknown>;
-                      };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Looking up tags: {args.query || 'unknown'}
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.found} tags found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                          {result.success && result.canonicalMatch && (
-                            <div className="text-xs text-text-secondary">
-                              Canonical {result.canonicalMatch.type}: <span className="font-medium text-text-primary">{result.canonicalMatch.name}</span>
-                            </div>
-                          )}
-                          {result.success && result.adjacentTags && result.adjacentTags.length > 0 && (
-                            <div className="text-xs text-text-secondary">
-                              Adjacent tags: {result.adjacentTags.join(', ')}
-                            </div>
-                          )}
-                          {result.debug && (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                                Debug Info
-                              </summary>
-                              <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                                {JSON.stringify(result.debug, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Handle lookup_publishers results
-                    if (tc.name === 'lookup_publishers') {
-                      const args = tc.arguments as { query?: string };
-                      const result = tc.result as { success: boolean; results?: Array<{ id: number; name: string }>; error?: string };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Looking up publishers: &ldquo;{args.query || 'unknown'}&rdquo;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.results?.length || 0} publishers found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // Handle lookup_developers results
-                    if (tc.name === 'lookup_developers') {
-                      const args = tc.arguments as { query?: string };
-                      const result = tc.result as { success: boolean; results?: Array<{ id: number; name: string }>; error?: string };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Looking up developers: &ldquo;{args.query || 'unknown'}&rdquo;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.results?.length || 0} developers found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // Handle search_by_concept results (v2.4)
-                    if (tc.name === 'search_by_concept') {
-                      const args = tc.arguments as { description?: string; filters?: Record<string, unknown>; limit?: number };
-                      const result = tc.result as { success: boolean; total_found?: number; error?: string };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Searching by concept: &ldquo;{args.description || 'unknown'}&rdquo;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.total_found ?? 0} games found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // Handle discover_trending results (v2.4)
-                    if (tc.name === 'discover_trending') {
-                      const args = tc.arguments as { trend_type?: string; timeframe?: string; filters?: Record<string, unknown> };
-                      const result = tc.result as { success: boolean; total_found?: number; error?: string };
-                      const trendLabels: Record<string, string> = {
-                        review_momentum: 'high momentum',
-                        accelerating: 'accelerating',
-                        breaking_out: 'breaking out',
-                        declining: 'declining',
-                      };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Discovering {trendLabels[args.trend_type || ''] || args.trend_type} games ({args.timeframe || '7d'})
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.total_found ?? 0} games found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    if (tc.name === 'screen_games') {
-                      const args = tc.arguments as { sort_by?: string; timeframe?: string; indie_heuristic?: boolean };
-                      const result = tc.result as { success: boolean; total_found?: number; error?: string };
-                      const sortLabels: Record<string, string> = {
-                        ccu_peak: 'Peak CCU',
-                        momentum_score: 'Momentum score',
-                        velocity_7d: 'Review velocity (7d)',
-                        velocity_acceleration: 'Velocity acceleration',
-                        reviews_added_7d: 'Reviews added (7d)',
-                        reviews_added_30d: 'Reviews added (30d)',
-                        sentiment_delta: 'Sentiment delta',
-                        total_reviews: 'Total reviews',
-                        review_score: 'Review percentage',
-                      };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Screening games by {sortLabels[args.sort_by || ''] || args.sort_by || 'ranking metric'} ({args.timeframe || '7d'})
-                            {args.indie_heuristic ? ', indie heuristic' : ''}
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.total_found ?? 0} games found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // Handle lookup_games results (v2.4)
-                    if (tc.name === 'lookup_games') {
-                      const args = tc.arguments as { query?: string };
-                      const result = tc.result as { success: boolean; results?: Array<{ appid: number; name: string }>; error?: string };
-                      return (
-                        <div key={idx} className="space-y-2">
-                          <p className="text-body-sm text-text-secondary italic">
-                            Looking up games: &ldquo;{args.query || 'unknown'}&rdquo;
-                          </p>
-                          <div className="flex items-center gap-2">
-                            {result.success ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                                {result.results?.length || 0} games found
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                                Error: {result.error}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const genericResult = tc.result as Record<string, unknown>;
-
-                    // Generic fallback for newer tools
-                    return (
-                      <div key={idx} className="space-y-2">
-                        <p className="text-body-sm text-text-secondary italic">
-                          Executed {tc.name}
-                        </p>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {genericResult.success !== false ? (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-green/10 text-accent-green">
-                              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-                              {summarizeToolResult(genericResult)}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-caption bg-accent-red/10 text-accent-red">
-                              <span className="w-1.5 h-1.5 rounded-full bg-accent-red" />
-                              Error: {typeof genericResult.error === 'string' ? genericResult.error : 'Unknown error'}
-                            </span>
-                          )}
-                          {tc.timing && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-caption bg-surface-elevated text-text-muted">
-                              <Clock className="w-3 h-3" />
-                              {formatMs(tc.timing.executionMs)}
-                            </span>
-                          )}
-                        </div>
-                        <details className="mt-2">
-                          <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                            Raw Result
-                          </summary>
-                          <pre className="mt-1 p-2 bg-surface-base rounded text-xs overflow-x-auto max-h-48">
-                            {JSON.stringify(genericResult, null, 2)}
-                          </pre>
-                        </details>
-                      </div>
-                    );
-                  })}
-                </div>
+              {!isStreaming && suggestions && suggestions.length > 0 && onSuggestionClick && (
+                <SuggestionChips suggestions={suggestions} onSuggestionClick={onSuggestionClick} />
               )}
             </div>
           )}
 
-          {/* Stream debug info (collapsed by default) */}
-          {!isUser && message.debug && (
-            <details className="mt-3 pt-3 border-t border-border-subtle">
-              <summary className="cursor-pointer text-caption text-text-muted hover:text-text-secondary">
-                Stream Debug Info
-              </summary>
-              <pre className="mt-2 p-2 bg-surface-base rounded text-xs overflow-x-auto">
-                {JSON.stringify(message.debug, null, 2)}
-              </pre>
-            </details>
+          {!isUser && (tigerDebugBadge || (message.toolCalls && message.toolCalls.length > 0) || message.debug) && (
+            <div className="mt-4 space-y-4 border-t border-border-subtle/80 pt-4">
+              {tigerDebugBadge && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip tone={tigerDebugBadge.tone}>
+                    <Dot tone={tigerDebugBadge.tone} />
+                    <span>{tigerDebugBadge.label}</span>
+                    {tigerDebugBadge.detail ? <span className="text-text-muted">· {tigerDebugBadge.detail}</span> : null}
+                  </Chip>
+                </div>
+              )}
+
+              {message.toolCalls && message.toolCalls.length > 0 && (
+                <div className="space-y-3 rounded-2xl border border-border-subtle bg-surface-base/70 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setShowQueries(!showQueries)}
+                      className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-raised px-3 py-1.5 text-left text-body-sm font-medium text-text-secondary transition-colors hover:text-text-primary"
+                      aria-expanded={showQueries}
+                    >
+                      {showQueries ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      <Database className="h-4 w-4" />
+                      <span>Query details</span>
+                    </button>
+                    <Chip tone="slate">
+                      {message.toolCalls.length} {message.toolCalls.length === 1 ? 'query' : 'queries'}
+                    </Chip>
+                    {message.timing && <TimeChip ms={message.timing.totalMs} />}
+                    {querySummary && <Chip tone="slate">{querySummary}</Chip>}
+                  </div>
+
+                  {message.timing && (
+                    <p className="text-caption text-text-muted">
+                      LLM {formatMs(message.timing.llmMs)} · Tools {formatMs(message.timing.toolsMs)}
+                    </p>
+                  )}
+
+                  {showQueries && <div className="space-y-4">{message.toolCalls.map(renderToolCall)}</div>}
+                </div>
+              )}
+
+              {message.debug && <StreamDebugPanel debug={message.debug} />}
+            </div>
           )}
         </Card>
 
-        {/* Timestamp */}
-        <p className={`text-caption text-text-muted mt-1.5 px-1 ${isUser ? 'text-right' : ''}`}>
+        <p className={`mt-1.5 px-1 text-caption text-text-muted ${isUser ? 'text-right' : ''}`}>
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </p>
       </div>

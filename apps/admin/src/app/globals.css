@@ -639,7 +639,7 @@
 @layer components {
   /* Chat prose styling for rich markdown */
   .prose-chat {
-    @apply text-text-primary;
+    @apply text-text-primary leading-7;
   }
 
   .prose-chat > *:first-child {
@@ -648,6 +648,142 @@
 
   .prose-chat > *:last-child {
     @apply mb-0;
+  }
+
+  .prose-chat h1 {
+    @apply mt-5 mb-2 text-heading font-semibold text-text-primary tracking-tight;
+  }
+
+  .prose-chat h2 {
+    @apply mt-5 mb-2 text-subheading font-semibold text-text-primary tracking-tight;
+  }
+
+  .prose-chat h3 {
+    @apply mt-4 mb-1.5 text-body font-semibold text-text-primary;
+  }
+
+  .prose-chat h4 {
+    @apply mt-3 mb-1 text-body font-medium text-text-primary;
+  }
+
+  .prose-chat p {
+    @apply mb-3 text-body leading-7 text-text-primary;
+  }
+
+  .prose-chat ul {
+    @apply my-2 ml-5 list-disc space-y-1 text-text-primary;
+  }
+
+  .prose-chat ol {
+    @apply my-2 ml-5 list-decimal space-y-1 text-text-primary;
+  }
+
+  .prose-chat li {
+    @apply pl-1;
+  }
+
+  .prose-chat blockquote {
+    @apply my-3 border-l-2 pl-4 italic text-text-secondary;
+    border-left-color: color-mix(in srgb, var(--accent-primary) 60%, transparent);
+  }
+
+  .prose-chat hr {
+    @apply my-4 border-border-muted;
+  }
+
+  .prose-chat code:not(pre code) {
+    @apply rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-[0.9em] text-accent-primary;
+  }
+
+  .chat-response-table-shell {
+    @apply my-4 overflow-hidden rounded-2xl border border-border-subtle bg-surface-raised shadow-card;
+  }
+
+  .chat-response-table-scroll {
+    @apply max-h-[32rem] overflow-auto scrollbar-thin;
+  }
+
+  .chat-response-table {
+    @apply w-full border-separate border-spacing-0 text-body-sm;
+  }
+
+  .chat-response-table thead th {
+    @apply sticky top-0 z-20 border-b border-border-subtle px-3 py-2 text-caption font-semibold uppercase tracking-wide text-text-secondary backdrop-blur;
+    background-color: color-mix(in srgb, var(--surface-raised) 95%, transparent);
+  }
+
+  .chat-response-table tbody td {
+    @apply border-b px-3 py-2.5 align-top text-text-primary;
+    border-bottom-color: color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  }
+
+  .chat-response-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .chat-response-table tbody tr:nth-child(even) td {
+    background-color: color-mix(in srgb, var(--surface-elevated) 20%, transparent);
+  }
+
+  .chat-response-table tbody tr:hover td {
+    background-color: color-mix(in srgb, var(--surface-overlay) 45%, transparent);
+  }
+
+  .chat-response-table th:first-child,
+  .chat-response-table td:first-child {
+    @apply pl-4 font-medium text-text-primary;
+  }
+
+  .chat-response-table th:last-child,
+  .chat-response-table td:last-child {
+    @apply pr-4;
+  }
+
+  .chat-response-table [data-align='left'] {
+    @apply text-left;
+  }
+
+  .chat-response-table [data-align='center'] {
+    @apply text-center;
+  }
+
+  .chat-response-table [data-align='right'] {
+    @apply text-right;
+  }
+
+  .chat-response-table [data-cell-kind='numeric'] {
+    @apply whitespace-nowrap tabular-nums;
+  }
+
+  .chat-response-chip {
+    @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-caption;
+  }
+
+  .chat-response-chip-muted {
+    @apply border-border-subtle bg-surface-overlay text-text-secondary;
+  }
+
+  .chat-response-chip-primary {
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+    background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  }
+
+  .chat-response-chip-success {
+    color: var(--semantic-success);
+    border-color: color-mix(in srgb, var(--semantic-success) 22%, transparent);
+    background-color: color-mix(in srgb, var(--semantic-success) 10%, transparent);
+  }
+
+  .chat-response-chip-danger {
+    color: var(--semantic-error);
+    border-color: color-mix(in srgb, var(--semantic-error) 22%, transparent);
+    background-color: color-mix(in srgb, var(--semantic-error) 10%, transparent);
+  }
+
+  .chat-response-chip-quiet {
+    @apply border-border-subtle text-text-muted;
+    background-color: var(--surface-base);
   }
 
   /* Smooth fade-in for new messages */

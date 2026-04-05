@@ -167,7 +167,10 @@ export function createScriptedChatDeps(params: {
   tigerPrimaryCalls?: TigerPrimaryPlan[];
   tigerShadowCalls?: TigerShadowPlan[];
   toolExecutions?: ToolExecutionPlan[];
+  userCreditBalance?: number;
+  userEmail?: string;
   userId?: string | null;
+  userRole?: 'admin' | 'user';
 }): {
   assertExhausted: () => void;
   deps: Partial<ChatRouteDependencies>;
@@ -186,6 +189,10 @@ export function createScriptedChatDeps(params: {
     tigerShadowCalls: [],
   };
   let nowTick = 0;
+  const scriptedUserId = params.userId ?? 'user-1';
+  const scriptedUserEmail = params.userEmail ?? 'user@example.com';
+  const scriptedUserRole = params.userRole ?? 'admin';
+  const scriptedCreditBalance = params.userCreditBalance ?? 1000;
 
   const deps: Partial<ChatRouteDependencies> = {
     createProvider: () =>
@@ -236,9 +243,46 @@ export function createScriptedChatDeps(params: {
         ? attachToolExecutionProvenance(resultSnapshot, provenance)
         : resultSnapshot;
     },
-    getServiceClient: (() => {
-      throw new Error('getServiceClient should not be used in scripted chat tests');
-    }) as ChatRouteDependencies['getServiceClient'],
+    getServiceClient: (() =>
+      ({
+        from: (table: string) => {
+          assert.equal(table, 'user_profiles', `Unexpected scripted service table lookup: ${table}`);
+
+          const filters = new Map<string, unknown>();
+          const chain = {
+            eq(column: string, value: unknown) {
+              filters.set(column, value);
+              return chain;
+            },
+            async maybeSingle() {
+              const lookupById = filters.get('id');
+              const lookupByEmail = filters.get('email');
+              const matchesId = lookupById == null || lookupById === scriptedUserId;
+              const matchesEmail = lookupByEmail == null || lookupByEmail === scriptedUserEmail;
+
+              if (!matchesId || !matchesEmail || scriptedUserId == null) {
+                return { data: null, error: null };
+              }
+
+              return {
+                data: {
+                  credit_balance: scriptedCreditBalance,
+                  email: scriptedUserEmail,
+                  id: scriptedUserId,
+                  role: scriptedUserRole,
+                },
+                error: null,
+              };
+            },
+          };
+
+          return {
+            select(_columns: string) {
+              return chain;
+            },
+          };
+        },
+      }) as ReturnType<ChatRouteDependencies['getServiceClient']>) as ChatRouteDependencies['getServiceClient'],
     logChatQuery: async () => undefined,
     now: () => {
       nowTick += 5;

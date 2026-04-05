@@ -79,6 +79,166 @@ test('chat route returns 401 when the request is unauthenticated', async () => {
   });
 });
 
+test('chat route strips tool debug and message debug for non-admin users', async () => {
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'find cozy games' }],
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    providerInvocations: [
+      {
+        chunks: [
+          {
+            type: 'tool_use_start',
+            toolCall: {
+              id: 'tool-1',
+              name: 'search_games',
+              arguments: { query: 'cozy games', limit: 2 },
+            },
+          },
+          {
+            type: 'tool_use_end',
+            toolCall: {
+              id: 'tool-1',
+              name: 'search_games',
+              arguments: { query: 'cozy games', limit: 2 },
+            },
+          },
+          { type: 'done' },
+        ],
+      },
+      {
+        chunks: [
+          { type: 'text', text: 'A Short Hike and Unpacking are two good starting points.' },
+          { type: 'done' },
+        ],
+      },
+    ],
+    toolExecutions: [
+      {
+        expectedName: 'search_games',
+        result: {
+          results: [
+            { appid: 1, name: 'A Short Hike' },
+            { appid: 2, name: 'Unpacking' },
+          ],
+          success: true,
+          total_found: 2,
+          debug: {
+            searchCounts: {
+              final_count: 2,
+            },
+            searchSteps: ['catalog lookup'],
+          },
+        },
+      },
+    ],
+    userRole: 'user',
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const toolResultEvents = getToolResultEvents(events);
+  const endEvent = getEndEvent(events);
+
+  assert.equal(toolResultEvents.length, 1);
+  assert.equal(toolResultEvents[0]?.result.debug, undefined);
+  assert.ok(endEvent);
+  assert.equal(endEvent.debug, undefined);
+  assertExhausted();
+});
+
+test('chat route strips tiger routing metadata for non-admin users', async () => {
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'games like Hades' }],
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    tigerPrimaryCalls: [
+      {
+        response: {
+          contractResult: null,
+          info: {
+            attempts: [{ contractName: 'searchCatalog', status: 'success', timingMs: 5 }],
+            cohort: 'default',
+            enabled: true,
+            matchedIntent: 'catalog_search',
+            mode: 'all',
+            renderMode: 'deterministic',
+            route: 'primary_success',
+          },
+          renderedText: 'Tiger answer',
+        },
+      },
+    ],
+    userRole: 'user',
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const endEvent = getEndEvent(events);
+
+  assert.ok(endEvent);
+  assert.equal(endEvent.debug, undefined);
+  assert.equal(endEvent.tigerPrimary, undefined);
+  assert.equal(endEvent.tigerShadow, undefined);
+  assertExhausted();
+});
+
+test('chat route keeps tiger routing metadata for admin users', async () => {
+  const request = createJsonNextRequest({
+    body: {
+      messages: [{ role: 'user', content: 'games like Hades' }],
+    },
+  });
+
+  const { assertExhausted, deps } = createScriptedChatDeps({
+    tigerPrimaryCalls: [
+      {
+        response: {
+          contractResult: null,
+          info: {
+            attempts: [{ contractName: 'searchCatalog', status: 'success', timingMs: 5 }],
+            cohort: 'default',
+            enabled: true,
+            matchedIntent: 'catalog_search',
+            mode: 'all',
+            renderMode: 'deterministic',
+            route: 'primary_success',
+          },
+          renderedText: 'Tiger answer',
+        },
+      },
+    ],
+    userRole: 'admin',
+  });
+
+  const response = await handleChatStreamRequest(request, {
+    deps,
+    requireEvalSecret: false,
+  });
+
+  const events = await collectStreamEvents(response);
+  const endEvent = getEndEvent(events);
+
+  assert.ok(endEvent);
+  assert.ok(endEvent.debug);
+  assert.equal(endEvent.tigerPrimary?.route, 'primary_success');
+  assertExhausted();
+});
+
 test('chat route can return a Tiger primary deterministic answer with continuable session state', async () => {
   const request = createJsonNextRequest({
     body: {
