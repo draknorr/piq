@@ -115,7 +115,7 @@ test('renderTigerPrimaryResult uses sentiment-centric columns for review-sentime
   assert.match(markdown, /established titles/i);
 });
 
-test('renderTigerPrimaryResult renders numeric-string review percentages and sparse weekly broadening notes', () => {
+test('renderTigerPrimaryResult renders numeric-string review percentages and broadening notes', () => {
   const markdown = renderTigerPrimaryResult({
     matchedIntent: 'momentum_discovery',
     momentumPromptFamily: 'review_sentiment_down',
@@ -155,8 +155,50 @@ test('renderTigerPrimaryResult renders numeric-string review percentages and spa
   });
 
   assert.match(markdown, /74\.4%/);
-  assert.match(markdown, /broad weekly screen was too sparse/i);
+  assert.match(markdown, /widened the default popularity floor to fill out this list/i);
   assert.doesNotMatch(markdown, /established titles/i);
+});
+
+test('renderTigerPrimaryResult explains when broadened review discovery still cannot fill five spots', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'momentum_discovery',
+    response: {
+      broadeningApplied: true,
+      filtersApplied: [
+        'sort_by: reviews_added_7d',
+        'timeframe: 7d',
+        'min_reviews: 250',
+        'min_reviews_added_7d: 2',
+      ],
+      items: [
+        {
+          appid: 1245620,
+          ccuPeak: 923,
+          name: 'Assassin’s Creed IV Black Flag',
+          platformSupport: ['windows'],
+          reviewPercentage: 88.4,
+          reviewsAdded7d: 25,
+          supportLevel: 'high',
+          supportReasons: ['25 reviews added over 7d.'],
+          totalReviews: 76582,
+          trendDirection: 'up',
+        },
+      ],
+      minimumItems: 5,
+      rankingDefinition: 'Reviews added (7d) counts net new reviews in the last 7 days.',
+      rankingLabel: 'Reviews Added (7d)',
+      resultCount: 1,
+      shortfallReason:
+        'Only 1 title qualified even after relaxing the default popularity floor for this 7-day review-activity screen, so I could not fill 5 spots. The current window or recent history coverage is still too thin to fill the usual list.',
+      sortBy: 'reviews_added_7d',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: 'review_momentum',
+    },
+  });
+
+  assert.match(markdown, /Only 1 title qualified even after relaxing the default popularity floor/i);
 });
 
 test('renderTigerPrimaryResult names applied Steam Deck filters in momentum intros', () => {
@@ -249,6 +291,38 @@ test('renderTigerPrimaryResult labels semantic scores as match scores out of 100
   assert.match(markdown, /\| Result \| Match Score \| Review % \| Total Reviews \|/);
   assert.match(markdown, /\| \[Hades II\]\(game:1\) \| 47\/100 \| 95% \| 54,000 \|/);
   assert.doesNotMatch(markdown, /\| Score \|/);
+});
+
+test('renderTigerPrimaryResult sanitizes news table cells so titles cannot break markdown rows', () => {
+  const markdown = renderTigerPrimaryResult({
+    matchedIntent: 'news_search',
+    response: {
+      entity: null,
+      interpretedFilters: {
+        mode: 'topic_search',
+        query: 'developer diary',
+      },
+      items: [
+        {
+          appName: 'The Legend of Khimori',
+          bodyPreview: null,
+          excerpt: null,
+          feedLabel: 'Community Announcements',
+          feedScope: 'community_announcements',
+          publishedAt: '2026-01-16T12:00:00.000Z',
+          sortTime: '2026-01-16T12:00:00.000Z',
+          title: 'Developer Diary #18\nTaming the Open Wilds of 13th Century Mongolia',
+          url: 'https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1821922921815466',
+        },
+      ],
+    },
+  });
+
+  assert.match(
+    markdown,
+    /\| 2026-01-16 \| \[Developer Diary #18 Taming the Open Wilds of 13th Century Mongolia\]\(<https:\/\/steamstore-a\.akamaihd\.net\/news\/externalpost\/steam_community_announcements\/1821922921815466>\) \| The Legend of Khimori \| Community Announcements \|/
+  );
+  assert.doesNotMatch(markdown, /Developer Diary #18\nTaming the Open Wilds/);
 });
 
 test('renderTigerPrimaryResult separates strict semantic matches from close alternatives', () => {

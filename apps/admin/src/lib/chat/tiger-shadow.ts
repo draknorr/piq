@@ -14,6 +14,10 @@ import type {
 } from '@/lib/chat/chat-context-types';
 import { COMMON_TAGS, type QuerySuggestion } from '@/lib/chat/query-templates';
 import { buildChatEntityUid } from '@/lib/chat/entity-uid';
+import type {
+  TigerPromptEntityHint,
+  TigerPromptInterpretation,
+} from '@/lib/chat/tiger-prompt-interpreter';
 import {
   buildTigerClarificationBrief,
   buildTigerSuccessBrief,
@@ -85,7 +89,7 @@ const RELATION_PROMPT_PATTERN =
 const FACET_DISCOVERY_PROMPT_PATTERN =
   /\b(?:what|which|show|list|find)\b.*\b(tags?|genres?|categories)\b.*\b(?:exist|for|in)\b/i;
 const ENTITY_OVERVIEW_PROMPT_PATTERN =
-  /\b(?:tell me about|what can you tell me about|give me an overview of|overview of)\b/i;
+  /\b(?:tell me about|what can you tell me about|what do you know about|give me an overview of|overview of)\b/i;
 const COMPANY_COUNT_PROMPT_PATTERN =
   /\bhow many\s+(?:games|titles)\s+has\s+(.+?)\s+(?:published|developed)\b/i;
 const COMPANY_PORTFOLIO_METRIC_PROMPT_PATTERN =
@@ -400,7 +404,9 @@ interface ProspectRankingResponse {
 }
 
 interface DiscoverMomentumResponse {
+  broadeningApplied?: boolean;
   filtersApplied?: string[];
+  idealItems?: number;
   items?: Array<{
     appid: number;
     ccuGrowth30dPercent?: number | null;
@@ -431,8 +437,17 @@ interface DiscoverMomentumResponse {
     velocity7d?: number | null;
     velocityAcceleration?: number | null;
   }>;
+  minimumItems?: number;
+  provenance?: {
+    capturedAt?: string;
+    source?: 'supabase-postgres' | 'tiger';
+    tables?: string[];
+  } | null;
+  provenanceSource?: 'supabase-postgres' | 'tiger' | null;
   rankingDefinition?: string;
   rankingLabel?: string;
+  resultCount?: number;
+  shortfallReason?: string | null;
   sortBy?:
     | 'ccu_peak'
     | 'momentum_score'
@@ -732,6 +747,10 @@ interface CatalogShadowBuildResult {
 }
 
 interface MomentumBuildResult {
+  explicitReviewTrendFloors?: {
+    minCcu: boolean;
+    minReviews: boolean;
+  } | null;
   momentumPromptFamily?: MomentumPromptFamily | null;
   reason?: string;
   request: DiscoverMomentumShadowRequest | null;
@@ -1358,14 +1377,14 @@ function buildTigerPrimaryNoResultText(params: {
 
     if (relationKind === 'dlc') {
       return firstReason?.includes('backfilled')
-        ? 'I could not verify the DLC link table for this title in Tiger yet, so there is no structured DLC set I can trust from the current data slice.'
-        : `I could not find any DLC rows in the current Tiger snapshot${scopeSuffix}.`;
+        ? 'I could not verify the DLC link table for this title yet, so there is no structured DLC set I can trust from the current data slice.'
+        : `I could not find any DLC rows in the current structured snapshot${scopeSuffix}.`;
     }
 
     if (relationKind === 'franchise_games') {
       return firstReason?.includes('backfilled')
-        ? 'I could not verify exact franchise links for this title in Tiger yet, so there is no exact same-series set I can trust from the current data slice.'
-        : `I could not find any same-franchise matches in the current Tiger snapshot${scopeSuffix}.`;
+        ? 'I could not verify exact franchise links for this title yet, so there is no exact same-series set I can trust from the current data slice.'
+        : `I could not find any same-franchise matches in the current structured snapshot${scopeSuffix}.`;
     }
   }
 
@@ -1386,11 +1405,11 @@ function buildTigerPrimaryNoResultText(params: {
 
     return scope.length > 0
       ? `I could not find any rows that met the current ranking thresholds for ${joinTigerHumanList(scope)}.`
-      : 'I could not find any rows that produced a stable ranking for this request in the current Tiger snapshot.';
+      : 'I could not find any rows that produced a stable ranking for this request in the current structured snapshot.';
   }
 
   if (params.matchedIntent === 'momentum_discovery') {
-    return 'I could not find enough qualifying titles to produce a stable momentum screen for this exact scope in the current Tiger snapshot.';
+    return 'I could not find enough qualifying titles to produce a stable momentum screen for this exact scope in the current structured snapshot.';
   }
 
   if (params.matchedIntent === 'semantic_search') {
@@ -2025,7 +2044,7 @@ function extractEntityOverviewQuery(prompt: string): string | null {
   }
 
   const overviewMatch =
-    prompt.match(/(?:tell me about|what can you tell me about|give me an overview of|overview of)\s+(.+?)(?:[?!.]|$)/i)
+    prompt.match(/(?:tell me about|what can you tell me about|what do you know about|give me an overview of|overview of)\s+(.+?)(?:[?!.]|$)/i)
     ?? prompt.match(/(?:what is|who is)\s+(.+?)(?:[?!.]|$)/i);
   const overviewQuery = normalizeEntityQuery(overviewMatch?.[1] ?? null);
   if (overviewQuery) {
@@ -2155,6 +2174,10 @@ function shouldUseLatestNewsMode(prompt: string, entityQuery: string | null): bo
     return false;
   }
 
+  if (inferNewsTopicQuery(prompt)) {
+    return false;
+  }
+
   if (/\b(?:latest|newest|most recent)\b/i.test(prompt)) {
     return true;
   }
@@ -2173,7 +2196,7 @@ function resolveDocumentSearchWindowDays(prompt: string, entityQuery: string | n
     entityQuery
     && (
       shouldUseLatestNewsMode(prompt, entityQuery)
-      || /\brecent\b/i.test(prompt) && /\b(?:announcements?|news|updates?)\b/i.test(prompt)
+      || /\brecent\b/i.test(prompt) && NEWS_PROMPT_PATTERN.test(prompt)
     )
   ) {
     return 90;
@@ -2735,12 +2758,22 @@ function extractMomentumTags(prompt: string): string[] | undefined {
   return matches.length > 0 ? Array.from(new Set(matches)) : undefined;
 }
 
-const BROAD_REVIEW_TREND_MIN_CCU = 100;
-const BROAD_REVIEW_TREND_MIN_REVIEWS = 10_000;
-const BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED = 25;
-const NARROW_REVIEW_TREND_MIN_REVIEWS = 1_000;
-const NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED = 5;
+const DISCOVERY_MINIMUM_ITEMS = 5;
+const DISCOVERY_IDEAL_ITEMS = 10;
+const MARKET_LEADING_REVIEW_TREND_MIN_CCU = 100;
+const MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS = 10_000;
+const MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS_ADDED = 25;
+const BALANCED_REVIEW_TREND_MIN_REVIEWS = 1_000;
+const BALANCED_REVIEW_TREND_MIN_REVIEWS_ADDED = 5;
+const RELAXED_REVIEW_TREND_MIN_REVIEWS = 250;
+const RELAXED_REVIEW_TREND_MIN_REVIEWS_ADDED_7D = 2;
+const RELAXED_REVIEW_TREND_MIN_REVIEWS_ADDED_30D = 3;
 const REVIEW_SENTIMENT_THRESHOLD = 3;
+
+interface MomentumDiscoveryResultPolicy {
+  idealItems: number;
+  minimumItems: number;
+}
 
 function isReviewSentimentPromptFamily(
   promptFamily: MomentumPromptFamily | null | undefined
@@ -2762,9 +2795,14 @@ function isReviewTrendPromptFamily(
 ): promptFamily is
   | 'review_activity_down'
   | 'review_activity_up'
+  | 'review_momentum'
   | 'review_sentiment_down'
   | 'review_sentiment_up' {
-  return isReviewSentimentPromptFamily(promptFamily) || isReviewActivityPromptFamily(promptFamily);
+  return (
+    isReviewSentimentPromptFamily(promptFamily)
+    || isReviewActivityPromptFamily(promptFamily)
+    || promptFamily === 'review_momentum'
+  );
 }
 
 function clearReviewTrendSpecificFilters(
@@ -2782,6 +2820,106 @@ function getReviewTrendReviewAddedField(
   return request.timeframe === '30d' || request.sortBy === 'reviews_added_30d'
     ? 'minReviewsAdded30d'
     : 'minReviewsAdded7d';
+}
+
+function getRelaxedReviewTrendReviewAddedFloor(
+  request: DiscoverMomentumShadowRequest
+): number {
+  return getReviewTrendReviewAddedField(request) === 'minReviewsAdded30d'
+    ? RELAXED_REVIEW_TREND_MIN_REVIEWS_ADDED_30D
+    : RELAXED_REVIEW_TREND_MIN_REVIEWS_ADDED_7D;
+}
+
+function getMomentumDiscoveryResultPolicy(
+  request: DiscoverMomentumShadowRequest
+): MomentumDiscoveryResultPolicy | null {
+  const requestedLimit = Number.isInteger(request.limit) && (request.limit ?? 0) > 0
+    ? (request.limit as number)
+    : DISCOVERY_IDEAL_ITEMS;
+
+  if (requestedLimit < DISCOVERY_MINIMUM_ITEMS) {
+    return null;
+  }
+
+  if (Array.isArray(request.appids) && request.appids.length > 0) {
+    return null;
+  }
+
+  return {
+    idealItems: Math.min(requestedLimit, DISCOVERY_IDEAL_ITEMS),
+    minimumItems: Math.min(DISCOVERY_MINIMUM_ITEMS, requestedLimit),
+  };
+}
+
+function describeMomentumDiscoveryScreen(
+  promptFamily: MomentumPromptFamily | null | undefined
+): string {
+  if (isReviewSentimentPromptFamily(promptFamily)) {
+    return 'review-sentiment screen';
+  }
+
+  if (isReviewActivityPromptFamily(promptFamily) || promptFamily === 'review_momentum') {
+    return 'review-activity screen';
+  }
+
+  if (promptFamily === 'current_players') {
+    return 'current-player screen';
+  }
+
+  return 'momentum screen';
+}
+
+function buildMomentumDiscoveryShortfallReason(params: {
+  broadeningApplied: boolean;
+  policy: MomentumDiscoveryResultPolicy | null;
+  promptFamily: MomentumPromptFamily | null;
+  request: DiscoverMomentumShadowRequest;
+  resultCount: number;
+}): string | null {
+  if (
+    params.policy == null
+    || params.resultCount <= 0
+    || params.resultCount >= params.policy.minimumItems
+  ) {
+    return null;
+  }
+
+  const countLabel = `${params.resultCount} ${params.resultCount === 1 ? 'title' : 'titles'}`;
+  const screenLabel = describeMomentumDiscoveryScreen(params.promptFamily);
+  const timeframeLabel = params.request.timeframe === '30d'
+    ? '30-day'
+    : params.request.timeframe === 'current'
+      ? 'current'
+      : '7-day';
+  const broadenedPrefix = params.broadeningApplied
+    ? 'even after relaxing the default popularity floor, '
+    : '';
+  const historyNote = isReviewTrendPromptFamily(params.promptFamily)
+    ? ' The current window or recent history coverage is still too thin to fill the usual list.'
+    : '';
+
+  return `Only ${countLabel} qualified ${broadenedPrefix}for this ${timeframeLabel} ${screenLabel}, so I could not fill ${params.policy.minimumItems} spots.${historyNote}`;
+}
+
+function decorateMomentumDiscoveryResponse(params: {
+  broadeningApplied: boolean;
+  policy: MomentumDiscoveryResultPolicy | null;
+  response: DiscoverMomentumResponse;
+  shortfallReason?: string | null;
+}): DiscoverMomentumResponse {
+  const resultCount = params.response.items?.length ?? 0;
+
+  return {
+    ...params.response,
+    ...(params.broadeningApplied ? { broadeningApplied: true } : {}),
+    ...(params.policy ? {
+      idealItems: params.policy.idealItems,
+      minimumItems: params.policy.minimumItems,
+    } : {}),
+    provenanceSource: params.response.provenance?.source ?? null,
+    resultCount,
+    ...(params.shortfallReason ? { shortfallReason: params.shortfallReason } : {}),
+  };
 }
 
 function inferReviewTrendPromptFamily(prompt: string): Exclude<
@@ -2918,47 +3056,33 @@ function applyReviewTrendPopularityDefaults(
   const filters: NonNullable<DiscoverMomentumShadowRequest['filters']> = {
     ...(request.filters ?? {}),
   };
-  const narrowed = hasMomentumNarrowingScope(request);
   const explicitMinReviews = extractMomentumMinReviews(prompt);
   const explicitMinCcu = extractMomentumMinCcu(prompt);
   const reviewAddedField = getReviewTrendReviewAddedField(request);
   const staleReviewAddedField =
     reviewAddedField === 'minReviewsAdded30d' ? 'minReviewsAdded7d' : 'minReviewsAdded30d';
-  const broadReviewFloor = BROAD_REVIEW_TREND_MIN_REVIEWS;
-  const narrowReviewFloor = NARROW_REVIEW_TREND_MIN_REVIEWS;
-  const broadReviewAddedFloor = BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED;
-  const narrowReviewAddedFloor = NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED;
 
   if (explicitMinReviews == null) {
-    if (narrowed) {
-      if (typeof filters.minReviews !== 'number' || filters.minReviews === broadReviewFloor) {
-        filters.minReviews = narrowReviewFloor;
-      } else {
-        filters.minReviews = Math.max(filters.minReviews, narrowReviewFloor);
-      }
-    } else {
-      filters.minReviews = Math.max(filters.minReviews ?? 0, broadReviewFloor);
-    }
+    filters.minReviews =
+      typeof filters.minReviews !== 'number' || filters.minReviews === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS
+        ? BALANCED_REVIEW_TREND_MIN_REVIEWS
+        : Math.max(filters.minReviews, BALANCED_REVIEW_TREND_MIN_REVIEWS);
   }
 
   if (explicitMinCcu == null) {
-    if (narrowed) {
-      if (filters.minCcu === BROAD_REVIEW_TREND_MIN_CCU) {
-        delete filters.minCcu;
-      }
-    } else {
-      filters.minCcu = Math.max(filters.minCcu ?? 0, BROAD_REVIEW_TREND_MIN_CCU);
+    if (filters.minCcu === MARKET_LEADING_REVIEW_TREND_MIN_CCU) {
+      delete filters.minCcu;
     }
   }
 
   delete filters[staleReviewAddedField];
 
   const currentReviewAddedFloor = filters[reviewAddedField];
-  const nextReviewAddedFloor = narrowed ? narrowReviewAddedFloor : broadReviewAddedFloor;
   const normalizedReviewAddedFloor =
-    typeof currentReviewAddedFloor !== 'number' || currentReviewAddedFloor === broadReviewAddedFloor
-      ? nextReviewAddedFloor
-      : Math.max(currentReviewAddedFloor, nextReviewAddedFloor);
+    typeof currentReviewAddedFloor !== 'number'
+      || currentReviewAddedFloor === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS_ADDED
+      ? BALANCED_REVIEW_TREND_MIN_REVIEWS_ADDED
+      : Math.max(currentReviewAddedFloor, BALANCED_REVIEW_TREND_MIN_REVIEWS_ADDED);
 
   filters[reviewAddedField] = normalizedReviewAddedFloor;
 
@@ -3016,58 +3140,53 @@ function applyMomentumActivityFloorDefaults(
   return request;
 }
 
-function shouldRetrySparseWeeklyReviewSentimentRequest(params: {
-  promptFamily: MomentumPromptFamily | null;
-  request: DiscoverMomentumShadowRequest;
-}): boolean {
-  if (!isReviewSentimentPromptFamily(params.promptFamily) || params.request.timeframe !== '7d') {
-    return false;
-  }
-
-  if (hasMomentumNarrowingScope(params.request)) {
-    return false;
-  }
-
-  const filters = params.request.filters ?? null;
-  return filters?.minReviews === BROAD_REVIEW_TREND_MIN_REVIEWS
-    && filters.minCcu === BROAD_REVIEW_TREND_MIN_CCU
-    && filters.minReviewsAdded7d === BROAD_REVIEW_TREND_MIN_REVIEWS_ADDED;
-}
-
-function buildRelaxedSparseWeeklyReviewSentimentRequest(
-  request: DiscoverMomentumShadowRequest
-): DiscoverMomentumShadowRequest {
-  const relaxedFilters: NonNullable<DiscoverMomentumShadowRequest['filters']> = {
-    ...(request.filters ?? {}),
-    minReviews: NARROW_REVIEW_TREND_MIN_REVIEWS,
-    minReviewsAdded7d: NARROW_REVIEW_TREND_MIN_REVIEWS_ADDED,
-  };
-
-  delete relaxedFilters.minCcu;
-  delete relaxedFilters.minReviewsAdded30d;
-
-  return {
-    ...request,
-    filters: relaxedFilters,
-  };
-}
-
 function shouldRetrySparseMomentumRequest(params: {
+  explicitReviewTrendFloors?: MomentumBuildResult['explicitReviewTrendFloors'];
+  policy: MomentumDiscoveryResultPolicy | null;
   promptFamily: MomentumPromptFamily | null;
   request: DiscoverMomentumShadowRequest;
+  resultCount: number;
+  sufficientToAnswer: boolean;
 }): boolean {
   if (params.request.timeframe === 'current') {
     return false;
   }
 
-  if (
-    isReviewTrendPromptFamily(params.promptFamily)
-    && hasMomentumNarrowingScope(params.request)
-  ) {
-    return true;
+  const needsMoreItems = params.policy != null
+    ? params.resultCount < params.policy.minimumItems
+    : !params.sufficientToAnswer;
+
+  if (!needsMoreItems) {
+    return false;
   }
 
-  return Array.isArray(params.request.appids)
+  if (isReviewTrendPromptFamily(params.promptFamily)) {
+    const filters = params.request.filters ?? null;
+    const reviewAddedField = getReviewTrendReviewAddedField(params.request);
+    const currentReviewAddedFloor = filters?.[reviewAddedField];
+    const explicitFloors = params.explicitReviewTrendFloors ?? null;
+
+    return (
+      (!explicitFloors?.minReviews
+        && (
+          typeof filters?.minReviews !== 'number'
+          || filters.minReviews === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS
+          || filters.minReviews === BALANCED_REVIEW_TREND_MIN_REVIEWS
+        ))
+      || (
+        typeof currentReviewAddedFloor !== 'number'
+        || currentReviewAddedFloor === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS_ADDED
+        || currentReviewAddedFloor === BALANCED_REVIEW_TREND_MIN_REVIEWS_ADDED
+      )
+      || (
+        !explicitFloors?.minCcu
+        && filters?.minCcu === MARKET_LEADING_REVIEW_TREND_MIN_CCU
+      )
+    );
+  }
+
+  return !params.sufficientToAnswer
+    && Array.isArray(params.request.appids)
     && params.request.appids.length > 0
     && (
       params.promptFamily === 'accelerating'
@@ -3077,6 +3196,7 @@ function shouldRetrySparseMomentumRequest(params: {
 }
 
 function buildRelaxedSparseMomentumRequest(params: {
+  explicitReviewTrendFloors?: MomentumBuildResult['explicitReviewTrendFloors'];
   promptFamily: MomentumPromptFamily | null;
   request: DiscoverMomentumShadowRequest;
 }): DiscoverMomentumShadowRequest {
@@ -3089,23 +3209,35 @@ function buildRelaxedSparseMomentumRequest(params: {
   };
 
   if (isReviewTrendPromptFamily(params.promptFamily)) {
-    filters.minReviews = typeof filters.minReviews === 'number'
-      ? Math.min(filters.minReviews, 250)
-      : 250;
+    const explicitFloors = params.explicitReviewTrendFloors ?? null;
+    const reviewAddedField = getReviewTrendReviewAddedField(nextRequest);
+    const relaxedReviewAddedFloor = getRelaxedReviewTrendReviewAddedFloor(nextRequest);
+    const currentReviewAddedFloor = filters[reviewAddedField];
 
-    if (nextRequest.timeframe === '30d') {
-      filters.minReviewsAdded30d = typeof filters.minReviewsAdded30d === 'number'
-        ? Math.min(filters.minReviewsAdded30d, 3)
-        : 3;
-      delete filters.minReviewsAdded7d;
-    } else {
-      filters.minReviewsAdded7d = typeof filters.minReviewsAdded7d === 'number'
-        ? Math.min(filters.minReviewsAdded7d, 2)
-        : 2;
-      delete filters.minReviewsAdded30d;
+    if (
+      !explicitFloors?.minReviews
+      && (
+        typeof filters.minReviews !== 'number'
+        || filters.minReviews === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS
+        || filters.minReviews === BALANCED_REVIEW_TREND_MIN_REVIEWS
+      )
+    ) {
+      filters.minReviews = RELAXED_REVIEW_TREND_MIN_REVIEWS;
     }
 
-    delete filters.minCcu;
+    if (
+      typeof currentReviewAddedFloor !== 'number'
+      || currentReviewAddedFloor === MARKET_LEADING_REVIEW_TREND_MIN_REVIEWS_ADDED
+      || currentReviewAddedFloor === BALANCED_REVIEW_TREND_MIN_REVIEWS_ADDED
+    ) {
+      filters[reviewAddedField] = relaxedReviewAddedFloor;
+    }
+
+    delete filters[reviewAddedField === 'minReviewsAdded30d' ? 'minReviewsAdded7d' : 'minReviewsAdded30d'];
+
+    if (!explicitFloors?.minCcu && filters.minCcu === MARKET_LEADING_REVIEW_TREND_MIN_CCU) {
+      delete filters.minCcu;
+    }
   } else if (Array.isArray(nextRequest.appids) && nextRequest.appids.length > 0) {
     nextRequest.sortBy = nextRequest.timeframe === '30d' ? 'reviews_added_30d' : 'reviews_added_7d';
     nextRequest.sortDirection = 'desc';
@@ -3264,6 +3396,10 @@ function buildMomentumPrimaryRequest(prompt: string): MomentumBuildResult {
   };
 
   return {
+    explicitReviewTrendFloors: {
+      minCcu: minCcu != null,
+      minReviews: minReviews != null,
+    },
     momentumPromptFamily: promptFamily,
     request: applyMomentumActivityFloorDefaults(
       applyReviewTrendPopularityDefaults(prompt, request, promptFamily),
@@ -7040,10 +7176,15 @@ async function runSimilarityMomentumComposition(params: {
     (momentumResponse.data?.sufficientToAnswer ?? false) && momentumResultCount > 0
   );
   if (!momentumSufficient && shouldRetrySparseMomentumRequest({
+    explicitReviewTrendFloors: null,
+    policy: null,
     promptFamily: momentumPromptFamily,
     request: momentumRequest,
+    resultCount: momentumResultCount,
+    sufficientToAnswer: momentumSufficient,
   })) {
     const relaxedRequest = buildRelaxedSparseMomentumRequest({
+      explicitReviewTrendFloors: null,
       promptFamily: momentumPromptFamily,
       request: momentumRequest,
     });
@@ -7185,8 +7326,12 @@ async function runMomentumPrimary(params: {
     });
   }
 
-  const built = params.requestOverride
-    ? { momentumPromptFamily: null, request: params.requestOverride }
+  const built: MomentumBuildResult = params.requestOverride
+    ? {
+        explicitReviewTrendFloors: null,
+        momentumPromptFamily: null,
+        request: params.requestOverride,
+      }
     : buildMomentumPrimaryRequest(params.prompt);
   if (!built.request) {
     return {
@@ -7230,89 +7375,18 @@ async function runMomentumPrimary(params: {
 
   const resultCount = response.data?.items?.length ?? 0;
   const sufficientToAnswer = Boolean((response.data?.sufficientToAnswer ?? false) && resultCount > 0);
-  const retrySparseWeeklyReviewSentiment = !sufficientToAnswer
-    && shouldRetrySparseWeeklyReviewSentimentRequest({
-      promptFamily: momentumPromptFamily,
-      request: built.request,
-    });
+  const policy = getMomentumDiscoveryResultPolicy(built.request);
 
-  if (retrySparseWeeklyReviewSentiment) {
-    const relaxedRequest = buildRelaxedSparseWeeklyReviewSentimentRequest(built.request);
-    const retryStartedAt = performance.now();
-    const retryResponse = await postToQueryApi<DiscoverMomentumResponse>(
-      '/v1/contracts/discover-momentum',
-      relaxedRequest,
-      { timeoutMs: readPrimaryTimeoutMs() }
-    );
-    const retryTimingMs = Math.round(performance.now() - retryStartedAt);
-
-    if (!retryResponse.ok) {
-      return {
-        attempts: [
-          {
-            contractName: 'discoverMomentum',
-            httpStatus: response.httpStatus,
-            reason: 'The broad weekly review-sentiment screen was too sparse, so the system retried with the market-leader floor relaxed.',
-            resultCount,
-            status: 'skipped',
-            sufficientToAnswer,
-            timingMs,
-          },
-          {
-            contractName: 'discoverMomentum',
-            errorCode: retryResponse.errorCode,
-            httpStatus: retryResponse.httpStatus,
-            reason: retryResponse.reason,
-            status: 'error',
-            timingMs: retryTimingMs,
-          },
-        ],
-        momentumPromptFamily,
-        request: relaxedRequest,
-        response: null,
-      };
-    }
-
-    const retryResultCount = retryResponse.data?.items?.length ?? 0;
-    const retrySufficientToAnswer = Boolean(
-      (retryResponse.data?.sufficientToAnswer ?? false) && retryResultCount > 0
-    );
-
-    return {
-      attempts: [
-        {
-          contractName: 'discoverMomentum',
-          httpStatus: response.httpStatus,
-          reason: 'The broad weekly review-sentiment screen was too sparse, so the system retried with the market-leader floor relaxed.',
-          resultCount,
-          status: 'skipped',
-          sufficientToAnswer,
-          timingMs,
-        },
-        {
-          contractName: 'discoverMomentum',
-          httpStatus: retryResponse.httpStatus,
-          reason: retrySufficientToAnswer
-            ? undefined
-            : 'No qualifying titles met the weekly review-sentiment screen even after relaxing the popularity floor.',
-          resultCount: retryResultCount,
-          status: retrySufficientToAnswer ? 'success' : 'skipped',
-          sufficientToAnswer: retrySufficientToAnswer,
-          timingMs: retryTimingMs,
-        },
-      ],
-      momentumPromptFamily,
-      request: relaxedRequest,
-      response: retrySufficientToAnswer ? (retryResponse.data ?? null) : null,
-      scopeAdjustedForSparseResults: retrySufficientToAnswer,
-    };
-  }
-
-  if (!sufficientToAnswer && shouldRetrySparseMomentumRequest({
+  if (shouldRetrySparseMomentumRequest({
+    explicitReviewTrendFloors: built.explicitReviewTrendFloors ?? null,
+    policy,
     promptFamily: momentumPromptFamily,
     request: built.request,
+    resultCount,
+    sufficientToAnswer,
   })) {
     const relaxedRequest = buildRelaxedSparseMomentumRequest({
+      explicitReviewTrendFloors: built.explicitReviewTrendFloors ?? null,
       promptFamily: momentumPromptFamily,
       request: built.request,
     });
@@ -7325,12 +7399,16 @@ async function runMomentumPrimary(params: {
     const retryTimingMs = Math.round(performance.now() - retryStartedAt);
 
     if (!retryResponse.ok) {
+      const retryReason = policy != null && resultCount > 0 && resultCount < policy.minimumItems
+        ? `Only ${resultCount} ${resultCount === 1 ? 'title' : 'titles'} qualified on the first pass, below the ${policy.minimumItems}-result minimum, so the system retried with a relaxed popularity floor.`
+        : 'The first momentum screen was too sparse, so the system retried with a relaxed momentum view.';
+
       return {
         attempts: [
           {
             contractName: 'discoverMomentum',
             httpStatus: response.httpStatus,
-            reason: 'The first momentum screen was too sparse, so the system retried with a relaxed momentum view.',
+            reason: retryReason,
             resultCount,
             status: 'skipped',
             sufficientToAnswer,
@@ -7355,13 +7433,26 @@ async function runMomentumPrimary(params: {
     const retrySufficientToAnswer = Boolean(
       (retryResponse.data?.sufficientToAnswer ?? false) && retryResultCount > 0
     );
+    const retryPolicy = getMomentumDiscoveryResultPolicy(relaxedRequest);
+    const retryShortfallReason = retrySufficientToAnswer
+      ? buildMomentumDiscoveryShortfallReason({
+          broadeningApplied: true,
+          policy: retryPolicy,
+          promptFamily: momentumPromptFamily,
+          request: relaxedRequest,
+          resultCount: retryResultCount,
+        })
+      : null;
+    const retryReason = policy != null && resultCount > 0 && resultCount < policy.minimumItems
+      ? `Only ${resultCount} ${resultCount === 1 ? 'title' : 'titles'} qualified on the first pass, below the ${policy.minimumItems}-result minimum, so the system retried with a relaxed popularity floor.`
+      : 'The first momentum screen was too sparse, so the system retried with a relaxed momentum view.';
 
     return {
       attempts: [
         {
           contractName: 'discoverMomentum',
           httpStatus: response.httpStatus,
-          reason: 'The first momentum screen was too sparse, so the system retried with a relaxed momentum view.',
+          reason: retryReason,
           resultCount,
           status: 'skipped',
           sufficientToAnswer,
@@ -7371,8 +7462,8 @@ async function runMomentumPrimary(params: {
           contractName: 'discoverMomentum',
           httpStatus: retryResponse.httpStatus,
           reason: retrySufficientToAnswer
-            ? undefined
-            : 'No qualifying titles met the relaxed momentum screen either.',
+            ? (retryShortfallReason ?? undefined)
+            : 'The relaxed momentum screen still did not return a stable result set.',
           resultCount: retryResultCount,
           status: retrySufficientToAnswer ? 'success' : 'skipped',
           sufficientToAnswer: retrySufficientToAnswer,
@@ -7381,17 +7472,35 @@ async function runMomentumPrimary(params: {
       ],
       momentumPromptFamily,
       request: relaxedRequest,
-      response: retrySufficientToAnswer ? (retryResponse.data ?? null) : null,
+      response:
+        retrySufficientToAnswer && retryResponse.data
+          ? decorateMomentumDiscoveryResponse({
+              broadeningApplied: true,
+              policy: retryPolicy,
+              response: retryResponse.data,
+              shortfallReason: retryShortfallReason,
+            })
+          : null,
       scopeAdjustedForSparseResults: retrySufficientToAnswer,
     };
   }
+
+  const shortfallReason = sufficientToAnswer
+    ? buildMomentumDiscoveryShortfallReason({
+        broadeningApplied: false,
+        policy,
+        promptFamily: momentumPromptFamily,
+        request: built.request,
+        resultCount,
+      })
+    : null;
 
   return {
     attempts: [{
       contractName: 'discoverMomentum',
       httpStatus: response.httpStatus,
       reason: sufficientToAnswer
-        ? undefined
+        ? (shortfallReason ?? undefined)
         : 'The system did not return a stable momentum set for this prompt.',
       resultCount,
       status: sufficientToAnswer ? 'success' : 'skipped',
@@ -7400,7 +7509,15 @@ async function runMomentumPrimary(params: {
     }],
     momentumPromptFamily,
     request: built.request,
-    response: sufficientToAnswer ? (response.data ?? null) : null,
+    response:
+      sufficientToAnswer && response.data
+        ? decorateMomentumDiscoveryResponse({
+            broadeningApplied: false,
+            policy,
+            response: response.data,
+            shortfallReason,
+          })
+        : null,
   };
 }
 
@@ -7751,6 +7868,10 @@ function buildSparseSearchDocumentsFallbackRequest(params: {
   startTime: string;
 } | null {
   if (!params.entityQuery) {
+    return null;
+  }
+
+  if (params.request.mode !== 'latest_item') {
     return null;
   }
 
@@ -8776,10 +8897,24 @@ function resolvePrimaryFollowUpContext(params: {
   return null;
 }
 
+function getPrimaryInterpretationEntityHint(
+  interpretation: TigerPromptInterpretation | null | undefined
+): TigerPromptEntityHint | null {
+  if (!interpretation) {
+    return null;
+  }
+
+  return interpretation.entities.find((entity) => entity.role === 'primary')
+    ?? interpretation.entities.find((entity) => entity.role === 'reference')
+    ?? interpretation.entities[0]
+    ?? null;
+}
+
 export async function runTigerPrimaryEvaluation(params: {
   isEvalRequest: boolean;
-    prompt: string;
-    sessionContext: SessionChatContext | null;
+  interpretation?: TigerPromptInterpretation | null;
+  prompt: string;
+  sessionContext: SessionChatContext | null;
   userId: string | null;
 }): Promise<TigerPrimaryEvaluationResult> {
   const mode = readPrimaryMode();
@@ -8805,8 +8940,19 @@ export async function runTigerPrimaryEvaluation(params: {
     prompt: params.prompt,
     sessionContext: params.sessionContext,
   });
+  const interpretationEntity = getPrimaryInterpretationEntityHint(params.interpretation);
+  const interpretationIntent =
+    params.interpretation?.intent && isTigerPrimaryRenderableIntent(params.interpretation.intent)
+      ? params.interpretation.intent
+      : null;
+  const interpretedIntent =
+    params.interpretation?.confidence === 'low'
+      ? null
+      : interpretationIntent;
   const priorSelectionState = params.sessionContext?.selectionState ?? null;
   const matchedIntent = followUpContext?.matchedIntent
+    ?? interpretedIntent
+    ?? interpretationIntent
     ?? inferPrimaryMatchedIntent(params.prompt)
     ?? (inferCompareFollowUpIntent(params.prompt, params.sessionContext) ? 'entity_compare' : null);
   if (!matchedIntent) {
@@ -8823,6 +8969,42 @@ export async function runTigerPrimaryEvaluation(params: {
       },
       renderedText: null,
       sessionState: null,
+    };
+  }
+
+  if (
+    !followUpContext &&
+    params.interpretation?.intent === matchedIntent &&
+    params.interpretation.confidence === 'low' &&
+    params.interpretation.clarificationQuestion
+  ) {
+    const answerBrief = buildTigerClarificationBrief({
+      clarificationText: params.interpretation.clarificationQuestion,
+      intent: matchedIntent,
+      selectionState: null,
+    });
+
+    return {
+      answerBrief,
+      contractResult: null,
+      followUpSuggestions: answerBrief.followUpSuggestions,
+      info: {
+        attempts: [],
+        cohort,
+        enabled: true,
+        matchedIntent,
+        mode,
+        renderMode: 'deterministic',
+        route: 'primary_success',
+      },
+      renderedText: renderTigerAnswerBrief(answerBrief),
+      sessionState: {
+        lastAnswer: buildTigerSelectionLastAnswer({
+          family: matchedIntent,
+          clarificationNeeded: true,
+        }),
+        selectionState: null,
+      },
     };
   }
 
@@ -8866,6 +9048,7 @@ export async function runTigerPrimaryEvaluation(params: {
       );
   const entityQuery =
     followUpContext?.entityQuery
+    ?? interpretationEntity?.query
     ?? extractGameNameFromSessionContext(params.sessionContext)
     ?? extractEntityQueryFromPrompt(params.prompt);
 
@@ -8887,7 +9070,7 @@ export async function runTigerPrimaryEvaluation(params: {
         })
       : matchedIntent === 'entity_overview'
       ? await runEntityOverviewPrimary({
-          explicitKindHint: followUpContext?.explicitKindHint ?? null,
+          explicitKindHint: followUpContext?.explicitKindHint ?? interpretationEntity?.kindHint ?? null,
           prompt: params.prompt,
           queryOverride: followUpContext?.entityQuery ?? null,
           selectionState: activeSelectionState,

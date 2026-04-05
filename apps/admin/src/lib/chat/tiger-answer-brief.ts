@@ -20,6 +20,9 @@ export interface TigerAnswerBrief {
   followUpSuggestions: QuerySuggestion[];
   intent: TigerAnswerIntent;
   keyFacts: string[];
+  narrationConfidence?: 'high' | 'medium';
+  narrationFacts?: string[];
+  provenanceSummary?: string | null;
   selectionNote?: string | null;
 }
 
@@ -137,6 +140,28 @@ function joinHumanList(values: string[]): string {
   }
 
   return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
+function dedupeFactLines(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+
+    const key = normalizeForLooseMatch(normalized);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
 }
 
 function humanizeMetric(metric: string | null | undefined): string {
@@ -1167,11 +1192,33 @@ function getEstablishedTitlesNote(response: unknown): string | null {
     : null;
 }
 
-function getSparseReviewSentimentBroadeningNote(
-  scopeAdjustedForSparseResults: boolean | undefined
-): string | null {
-  return scopeAdjustedForSparseResults
-    ? 'I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.'
+function getMomentumBroadeningNote(params: {
+  response: unknown;
+  scopeAdjustedForSparseResults: boolean | undefined;
+}): string | null {
+  const broadened =
+    (isRecord(params.response) && params.response.broadeningApplied === true)
+    || params.scopeAdjustedForSparseResults === true;
+
+  if (
+    !broadened
+    || (
+      isRecord(params.response)
+      && typeof params.response.shortfallReason === 'string'
+      && params.response.shortfallReason.trim().length > 0
+    )
+  ) {
+    return null;
+  }
+
+  return 'I widened the default popularity floor to fill out this list.';
+}
+
+function getMomentumShortfallNote(response: unknown): string | null {
+  return isRecord(response)
+    && typeof response.shortfallReason === 'string'
+    && response.shortfallReason.trim().length > 0
+    ? response.shortfallReason.trim()
     : null;
 }
 
@@ -1316,7 +1363,11 @@ function buildDirectAnswer(params: {
     const appliedScope = formatMomentumAppliedScope(response);
     const scopeSuffix = appliedScope ? ` within the ${appliedScope} set` : '';
     const establishedTitlesNote = getEstablishedTitlesNote(response);
-    const sparseBroadeningNote = getSparseReviewSentimentBroadeningNote(params.scopeAdjustedForSparseResults);
+    const broadeningNote = getMomentumBroadeningNote({
+      response,
+      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
+    });
+    const shortfallNote = getMomentumShortfallNote(response);
     const supportReasons =
       firstItem && Array.isArray(firstItem.supportReasons)
         ? firstItem.supportReasons.map((value) => String(value)).filter(Boolean)
@@ -1324,7 +1375,8 @@ function buildDirectAnswer(params: {
     const ccuPeak = firstItem ? getNumber(firstItem.ccuPeak) : null;
     const referenceSuffix = referenceName ? ` among games similar to ${referenceName}` : '';
     const establishedSuffix = establishedTitlesNote ? ` ${establishedTitlesNote}` : '';
-    const sparseBroadeningSuffix = sparseBroadeningNote ? ` ${sparseBroadeningNote}` : '';
+    const broadeningSuffix = broadeningNote ? ` ${broadeningNote}` : '';
+    const shortfallSuffix = shortfallNote ? ` ${shortfallNote}` : '';
 
     if (firstName) {
       if (briefMode === 'current_players') {
@@ -1332,11 +1384,11 @@ function buildDirectAnswer(params: {
       }
 
       if (briefMode === 'review_sentiment') {
-        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${referenceSuffix}${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${sparseBroadeningSuffix}`;
+        return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${referenceSuffix}${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'sentiment delta'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${broadeningSuffix}${shortfallSuffix}`;
       }
 
       if (briefMode === 'review_activity') {
-        return `From ${windowLabel}, ${firstName} ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity screen'}${referenceSuffix}${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} by ${rankingLabel?.toLowerCase() ?? 'recent reviews added'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}`;
+        return `From ${windowLabel}, ${firstName} ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity screen'}${referenceSuffix}${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} by ${rankingLabel?.toLowerCase() ?? 'recent reviews added'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}${establishedSuffix}${broadeningSuffix}${shortfallSuffix}`;
       }
 
       return `From ${windowLabel}, ${firstName} leads this ${timeframeLabel?.toLowerCase() ?? 'recent'} momentum set${referenceSuffix}${scopeSuffix} by ${rankingLabel?.toLowerCase() ?? 'momentum'}.${supportReasons[0] ? ` ${supportReasons[0]}` : ''}`;
@@ -1347,11 +1399,11 @@ function buildDirectAnswer(params: {
     }
 
     if (briefMode === 'review_sentiment') {
-      return `Here is the current review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}${sparseBroadeningSuffix}`;
+      return `Here is the current review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}${broadeningSuffix}${shortfallSuffix}`;
     }
 
     if (briefMode === 'review_activity') {
-      return `Here is the current review-activity screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}`;
+      return `Here is the current review-activity screen${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).${establishedSuffix}${broadeningSuffix}${shortfallSuffix}`;
     }
 
     return `Here is the current momentum set${scopeSuffix} for ${timeframeLabel?.toLowerCase() ?? 'this window'} (${windowLabel}).`;
@@ -1569,7 +1621,11 @@ function buildKeyFacts(params: {
     const windowLabel = getMomentumWindowLabel(response);
     const appliedScope = formatMomentumAppliedScope(response);
     const establishedTitlesNote = getEstablishedTitlesNote(response);
-    const sparseBroadeningNote = getSparseReviewSentimentBroadeningNote(params.scopeAdjustedForSparseResults);
+    const broadeningNote = getMomentumBroadeningNote({
+      response,
+      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
+    });
+    const shortfallNote = getMomentumShortfallNote(response);
     if (referenceName) {
       facts.push(`Similarity reference: ${referenceName}.`);
     }
@@ -1579,8 +1635,11 @@ function buildKeyFacts(params: {
     if (establishedTitlesNote) {
       facts.push(establishedTitlesNote);
     }
-    if (sparseBroadeningNote) {
-      facts.push(sparseBroadeningNote);
+    if (broadeningNote) {
+      facts.push(broadeningNote);
+    }
+    if (shortfallNote) {
+      facts.push(shortfallNote);
     }
     for (const item of getItemsFromResponse(response).slice(0, 3)) {
       const name = getString(item.name) ?? getString(item.displayName);
@@ -1748,6 +1807,9 @@ export function buildTigerClarificationBrief(params: {
       followUpSuggestions: [],
       intent,
       keyFacts: [],
+      narrationConfidence: 'medium',
+      narrationFacts: [],
+      provenanceSummary: null,
       selectionNote: null,
     };
   }
@@ -1775,6 +1837,9 @@ export function buildTigerClarificationBrief(params: {
       followUpSuggestions: buildClarificationSuggestions(selectionState),
       intent,
       keyFacts: labels,
+      narrationConfidence: 'medium',
+      narrationFacts: labels,
+      provenanceSummary: null,
       selectionNote: null,
     };
   }
@@ -1805,6 +1870,9 @@ export function buildTigerClarificationBrief(params: {
     followUpSuggestions: buildClarificationSuggestions(selectionState),
     intent,
     keyFacts: slotPrompts,
+    narrationConfidence: 'medium',
+    narrationFacts: slotPrompts,
+    provenanceSummary: null,
     selectionNote: null,
   };
 }
@@ -1832,27 +1900,38 @@ export function buildTigerSuccessBrief(params: {
     ? `${params.fallbackMarkdown}\n\n${selectionNote}`
     : params.fallbackMarkdown;
   const hasStructuredEvidence = hasMarkdownTable(fallbackMarkdown) || hasMarkdownTable(evidenceMarkdown);
+  const directAnswer = buildDirectAnswer({
+    intent: params.intent,
+    momentumPromptFamily: params.momentumPromptFamily ?? null,
+    response: params.response,
+    scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
+  });
+  const keyFacts = buildKeyFacts({
+    intent: params.intent,
+    momentumPromptFamily: params.momentumPromptFamily ?? null,
+    response: params.response,
+    scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
+  });
+  const narrationFacts = dedupeFactLines([
+    directAnswer,
+    ...keyFacts,
+    selectionNote ?? '',
+  ]);
 
   return {
     answerKind: 'success',
-    // Table-backed answers should stay deterministic so the prose cannot drift from the rows.
-    allowNarration: params.allowNarration ?? !hasStructuredEvidence,
-    directAnswer: buildDirectAnswer({
-      intent: params.intent,
-      momentumPromptFamily: params.momentumPromptFamily ?? null,
-      response: params.response,
-      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
-    }),
+    // Structured evidence remains deterministic below the summary, but a short grounded
+    // narration is allowed when the brief contains enough explicit facts to anchor it.
+    allowNarration: params.allowNarration ?? narrationFacts.length > 0,
+    directAnswer,
     evidenceMarkdown,
     fallbackMarkdown,
     followUpSuggestions,
     intent: params.intent,
-    keyFacts: buildKeyFacts({
-      intent: params.intent,
-      momentumPromptFamily: params.momentumPromptFamily ?? null,
-      response: params.response,
-      scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
-    }),
+    keyFacts,
+    narrationConfidence: hasStructuredEvidence ? 'high' : 'medium',
+    narrationFacts,
+    provenanceSummary: hasStructuredEvidence ? 'Structured evidence is attached below the summary.' : null,
     selectionNote,
   };
 }

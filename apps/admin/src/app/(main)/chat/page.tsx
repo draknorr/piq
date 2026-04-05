@@ -13,10 +13,11 @@ export default async function ChatPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const { q: initialQuery } = await searchParams;
+  const promptSeed = crypto.randomUUID();
 
   return (
     <div className="h-full flex flex-col">
-      <ChatContainer initialQuery={initialQuery} />
+      <ChatContainer initialQuery={initialQuery} promptSeed={promptSeed} />
     </div>
   );
 }

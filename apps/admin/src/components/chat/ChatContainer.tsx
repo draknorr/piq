@@ -3,19 +3,29 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
-import { MessageSquare, StopCircle } from 'lucide-react';
-import { getExamplePrompts } from '@/lib/example-prompts';
+import { StopCircle } from 'lucide-react';
+import {
+  getChatLandingPromptGroups,
+  type ChatLandingPromptGroup,
+} from '@/lib/example-prompts';
 import { useChatStream } from '@/hooks/useChatStream';
 import { generatePostResponseSuggestions } from '@/lib/chat/suggestion-generator';
 import type { QuerySuggestion } from '@/lib/chat/query-templates';
 
 interface ChatContainerProps {
   initialQuery?: string;
+  promptSeed?: string;
 }
 
-export function ChatContainer({ initialQuery }: ChatContainerProps) {
+export function ChatContainer({
+  initialQuery,
+  promptSeed = 'chat',
+}: ChatContainerProps) {
   const [error, setError] = useState<string | null>(null);
-  const suggestions = useMemo(() => getExamplePrompts('chat', 4), []);
+  const landingPromptGroups = useMemo(
+    () => getChatLandingPromptGroups(promptSeed, 4),
+    [promptSeed]
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const hasSubmittedInitialQuery = useRef(false);
@@ -78,6 +88,7 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
     setError(null);
     sendMessage(content);
   }, [sendMessage]);
+  const showLandingState = messages.length === 0 && !isStreaming && !initialQuery;
 
   // Find the last assistant message to determine if it's streaming
   const lastMessage = messages[messages.length - 1];
@@ -121,29 +132,13 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
       <div
         ref={messagesContainerRef}
         data-testid="chat-messages"
-        className="flex-1 overflow-y-auto p-4 space-y-4"
+        className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6"
       >
-        {messages.length === 0 && !isStreaming && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="chat-accent-soft mb-4 flex h-16 w-16 items-center justify-center rounded-full">
-              <MessageSquare className="chat-accent-icon h-8 w-8" />
-            </div>
-            <h3 className="text-subheading text-text-primary mb-2">Ask about Steam data</h3>
-            <p className="text-body-sm text-text-secondary max-w-md mb-6">
-              Ask questions in plain English and I&apos;ll query the database for you.
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-              {suggestions.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  onClick={() => handleSend(suggestion)}
-                  className="px-3 py-1.5 text-body-sm text-text-secondary bg-surface-elevated hover:bg-surface-overlay border border-border-subtle hover:border-border-muted rounded-full transition-colors"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          </div>
+        {showLandingState && (
+          <ChatLandingState
+            promptGroups={landingPromptGroups}
+            onPromptSelect={handleSend}
+          />
         )}
 
         {messages.map((message, idx) => {
@@ -197,4 +192,76 @@ export function ChatContainer({ initialQuery }: ChatContainerProps) {
       </div>
     </div>
   );
+}
+
+interface ChatLandingStateProps {
+  promptGroups: ChatLandingPromptGroup[];
+  onPromptSelect: (query: string) => void;
+}
+
+function ChatLandingState({
+  promptGroups,
+  onPromptSelect,
+}: ChatLandingStateProps) {
+  return (
+    <div className="flex min-h-full items-end">
+      <section className="mx-auto w-full max-w-5xl pb-4 pt-8 sm:pt-12">
+        <div className="rounded-[28px] border border-border-subtle bg-surface-raised px-5 py-6 shadow-sm sm:px-7 sm:py-7">
+          <div className="mb-6 max-w-2xl border-b border-border-subtle pb-4 sm:mb-7 sm:pb-5">
+            <h2 className="text-[clamp(1.625rem,2vw,2.1rem)] font-semibold tracking-tight text-text-primary">
+              Start with a question
+            </h2>
+            <p className="mt-2 text-body text-text-secondary">
+              Ask about games, publishers, market momentum, or recent Steam changes in plain English.
+            </p>
+            <p className="mt-3 max-w-xl text-body-sm leading-6 text-text-muted">
+              Note: The platform is currently in active development and will change rapidly.
+            </p>
+          </div>
+
+          <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
+            {promptGroups.map((group) => (
+              <div key={group.id} className="space-y-2.5">
+                <h3 className="text-caption font-semibold uppercase tracking-[0.18em] text-text-muted">
+                  {group.title}
+                </h3>
+                <div className="space-y-1">
+                  {group.prompts.map((prompt, index) => (
+                    <button
+                      key={prompt.id}
+                      onClick={() => onPromptSelect(prompt.query)}
+                      className={[
+                        'group w-full items-start gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors duration-150',
+                        'hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2',
+                        'focus-visible:ring-accent-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-raised',
+                        getPromptVisibilityClasses(index),
+                      ].join(' ')}
+                    >
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full chat-accent-dot opacity-60 transition-opacity duration-150 group-hover:opacity-100" />
+                      <span className="text-body-sm leading-6 text-text-secondary transition-colors duration-150 group-hover:text-text-primary">
+                        {prompt.query}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function getPromptVisibilityClasses(index: number): string {
+  switch (index) {
+    case 0:
+      return 'flex';
+    case 1:
+      return 'hidden sm:flex';
+    case 2:
+      return 'hidden lg:flex';
+    default:
+      return 'hidden xl:flex';
+  }
 }

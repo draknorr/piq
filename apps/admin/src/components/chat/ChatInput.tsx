@@ -338,7 +338,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
           aria-haspopup={INPUT_AUTOCOMPLETE_ENABLED ? 'listbox' : undefined}
           aria-autocomplete={INPUT_AUTOCOMPLETE_ENABLED ? 'list' : undefined}
           className={`
-            w-full min-h-[40px] max-h-[200px] py-2.5 px-4 rounded-lg resize-none
+            block w-full min-h-[40px] max-h-[200px] overflow-x-hidden overflow-y-auto scrollbar-none py-2.5 px-4 rounded-lg resize-none
             bg-surface-elevated border border-border-muted
             text-body text-text-primary placeholder:text-text-muted
             transition-colors duration-150

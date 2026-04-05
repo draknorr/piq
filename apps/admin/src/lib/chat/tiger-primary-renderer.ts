@@ -256,8 +256,12 @@ interface TigerPrimaryDiscoverMomentumItem {
 }
 
 interface TigerPrimaryDiscoverMomentumResponse {
+  broadeningApplied?: boolean;
   filtersApplied: string[];
+  idealItems?: number;
   items: TigerPrimaryDiscoverMomentumItem[];
+  minimumItems?: number;
+  provenanceSource?: 'supabase-postgres' | 'tiger' | null;
   rankingDefinition: string;
   rankingLabel: string;
   reference?: {
@@ -265,6 +269,8 @@ interface TigerPrimaryDiscoverMomentumResponse {
     name?: string;
     type?: string;
   } | null;
+  resultCount?: number;
+  shortfallReason?: string | null;
   sortBy?:
     | 'ccu_peak'
     | 'momentum_score'
@@ -581,13 +587,30 @@ function formatDateOffsetDays(days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function sanitizeMarkdownTableCell(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function escapeMarkdownLinkLabel(value: string): string {
+  return sanitizeMarkdownTableCell(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+}
+
 function formatGameLink(name: string, appid: number | null | undefined): string {
-  return typeof appid === 'number' ? `[${name}](game:${appid})` : name;
+  const label = escapeMarkdownLinkLabel(name);
+  return typeof appid === 'number' ? `[${label}](game:${appid})` : label;
 }
 
 function formatTitleLink(title: string | null | undefined, url: string): string {
-  const label = title?.trim() || 'Untitled';
-  return `[${label}](${url})`;
+  const label = escapeMarkdownLinkLabel(title?.trim() || 'Untitled');
+  const safeUrl = sanitizeMarkdownTableCell(url);
+  return safeUrl ? `[${label}](<${safeUrl}>)` : label;
 }
 
 function formatUnknownValue(value: unknown): string {
@@ -611,9 +634,9 @@ function humanizeChangeType(changeType: string): string {
 }
 
 function buildMarkdownTable(columns: string[], rows: string[][]): string {
-  const header = `| ${columns.join(' | ')} |`;
+  const header = `| ${columns.map((column) => sanitizeMarkdownTableCell(column)).join(' | ')} |`;
   const divider = `| ${columns.map(() => '---').join(' | ')} |`;
-  const body = rows.map((row) => `| ${row.join(' | ')} |`);
+  const body = rows.map((row) => `| ${row.map((cell) => sanitizeMarkdownTableCell(cell)).join(' | ')} |`);
   return [header, divider, ...body].join('\n');
 }
 
@@ -1254,6 +1277,28 @@ function hasEstablishedTitlesFloor(response: TigerPrimaryDiscoverMomentumRespons
     );
 }
 
+function getMomentumBroadeningNote(params: {
+  response: TigerPrimaryDiscoverMomentumResponse;
+  scopeAdjustedForSparseResults?: boolean;
+}): string | null {
+  const broadened =
+    params.response.broadeningApplied === true || params.scopeAdjustedForSparseResults === true;
+
+  if (!broadened || params.response.shortfallReason) {
+    return null;
+  }
+
+  return 'I widened the default popularity floor to fill out this list.';
+}
+
+function getMomentumShortfallNote(
+  response: TigerPrimaryDiscoverMomentumResponse
+): string | null {
+  return typeof response.shortfallReason === 'string' && response.shortfallReason.trim().length > 0
+    ? response.shortfallReason.trim()
+    : null;
+}
+
 function buildMomentumWindowLabel(response: TigerPrimaryDiscoverMomentumResponse): string {
   const end = new Date();
   const endLabel = formatIsoDate(end);
@@ -1360,25 +1405,30 @@ function renderMomentumDiscovery(params: {
     hasEstablishedTitlesFloor(response) && (tableMode === 'review_activity' || tableMode === 'review_sentiment')
       ? 'I screened for established titles so this stays focused on broadly played games rather than low-volume noise.'
       : null;
-  const sparseBroadeningNote = params.scopeAdjustedForSparseResults
-    ? 'I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.'
-    : null;
+  const broadeningNote = getMomentumBroadeningNote({
+    response,
+    scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
+  });
+  const shortfallNote = getMomentumShortfallNote(response);
+  const establishedTitlesSuffix = establishedTitlesNote ? ` ${establishedTitlesNote}` : '';
+  const broadeningSuffix = broadeningNote ? ` ${broadeningNote}` : '';
+  const shortfallSuffix = shortfallNote ? ` ${shortfallNote}` : '';
   const itemsForSignalCheck = response.items as Array<Record<string, unknown>>;
   const hasPeakCcuSignal = hasPositiveMetric(itemsForSignalCheck, 'ccuPeak');
   const intro = leader
     ? response.timeframe === 'current'
       ? `As of **${windowLabel}**, **${leader.name}** has the highest **${response.rankingLabel}** in this snapshot${similarityScope}${scopeSuffix}.${leaderReason ? ` ${leaderReason}` : ''}`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
+        ? `From **${windowLabel}**, **${leader.name}** leads this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesSuffix}${broadeningSuffix}${shortfallSuffix}`
         : tableMode === 'review_activity'
-          ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          ? `From **${windowLabel}**, **${leader.name}** ${activityDown ? 'shows the sharpest slowdown in incoming review pace' : 'leads this review-activity set'}${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}${establishedTitlesSuffix}${broadeningSuffix}${shortfallSuffix}`
           : `From **${windowLabel}**, **${leader.name}** leads this set${similarityScope}${scopeSuffix} by **${response.rankingLabel}** for **${response.timeframeLabel}**.${leaderReason ? ` ${leaderReason}` : ''}`
     : response.timeframe === 'current'
       ? `As of **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${similarityScope}${scopeSuffix}.`
       : tableMode === 'review_sentiment'
-        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}${sparseBroadeningNote ? ` ${sparseBroadeningNote}` : ''}`
+        ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review sentiment ${sentimentDown ? 'decline' : 'improvement'} screen${similarityScope}${scopeSuffix}.${establishedTitlesSuffix}${broadeningSuffix}${shortfallSuffix}`
         : tableMode === 'review_activity'
-          ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${similarityScope}${scopeSuffix}.${establishedTitlesNote ? ` ${establishedTitlesNote}` : ''}`
+          ? `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}** for this review-activity screen${similarityScope}${scopeSuffix}.${establishedTitlesSuffix}${broadeningSuffix}${shortfallSuffix}`
           : `From **${windowLabel}**, here are the leading games by **${response.rankingLabel}**${similarityScope}${scopeSuffix} for **${response.timeframeLabel}**.`;
   const reviewDeltaColumn = response.timeframe === '30d' ? 'Reviews Added (30d)' : 'Reviews Added (7d)';
   const rows = response.items.slice(0, 10).map((item) => {

@@ -161,7 +161,7 @@ test('buildTigerSuccessBrief keeps review-sentiment framing after reranking with
   assert.ok(brief.keyFacts.some((fact) => /Sentiment delta -4.2 pts/i.test(fact)));
 });
 
-test('buildTigerSuccessBrief handles numeric-string review percentages and weekly sparse-result broadening notes', () => {
+test('buildTigerSuccessBrief handles numeric-string review percentages and broadening notes', () => {
   const brief = buildTigerSuccessBrief({
     fallbackMarkdown: [
       'From **2026-03-29** to **2026-04-04**, **Example Game** leads this review sentiment decline screen by **Total Reviews** for **Last 7 days**. I broadened this from market-leading titles to established mid-tier games because the broad weekly screen was too sparse.',
@@ -204,9 +204,58 @@ test('buildTigerSuccessBrief handles numeric-string review percentages and weekl
     selectionState: null,
   });
 
-  assert.match(brief.directAnswer, /broad weekly screen was too sparse/i);
+  assert.match(brief.directAnswer, /widened the default popularity floor to fill out this list/i);
   assert.ok(brief.keyFacts.some((fact) => /74\.4% review percentage/i.test(fact)));
-  assert.ok(brief.keyFacts.some((fact) => /market-leading titles to established mid-tier games/i.test(fact)));
+  assert.ok(brief.keyFacts.some((fact) => /widened the default popularity floor/i.test(fact)));
+});
+
+test('buildTigerSuccessBrief includes review-discovery shortfall explanations when the broadened list is still short', () => {
+  const brief = buildTigerSuccessBrief({
+    fallbackMarkdown: [
+      'From **2026-03-29** to **2026-04-04**, **Assassin’s Creed IV Black Flag** leads this review-activity screen by **Reviews Added (7d)** for **Last 7 days**. Only 3 titles qualified even after relaxing the default popularity floor for this 7-day review-activity screen, so I could not fill 5 spots. The current window or recent history coverage is still too thin to fill the usual list.',
+      '',
+      '| Game | Reviews Added (7d) | Review % | Total Reviews | Peak CCU | Platforms |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| Assassin’s Creed IV Black Flag | 25 | 88.4% | 76,582 | 923 | windows |',
+    ].join('\n'),
+    intent: 'momentum_discovery',
+    momentumPromptFamily: 'review_activity_up',
+    response: {
+      broadeningApplied: true,
+      filtersApplied: [
+        'sort_by: reviews_added_7d',
+        'timeframe: 7d',
+        'min_reviews: 250',
+        'min_reviews_added_7d: 2',
+      ],
+      items: [
+        {
+          ccuPeak: 923,
+          name: 'Assassin’s Creed IV Black Flag',
+          reviewPercentage: 88.4,
+          reviewsAdded7d: 25,
+          supportLevel: 'high',
+          supportReasons: ['25 reviews added over 7d.'],
+          totalReviews: 76582,
+          trendDirection: 'up',
+        },
+      ],
+      rankingLabel: 'Reviews Added (7d)',
+      resultCount: 3,
+      shortfallReason:
+        'Only 3 titles qualified even after relaxing the default popularity floor for this 7-day review-activity screen, so I could not fill 5 spots. The current window or recent history coverage is still too thin to fill the usual list.',
+      sortBy: 'reviews_added_7d',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: 'review_momentum',
+    },
+    scopeAdjustedForSparseResults: true,
+    selectionState: null,
+  });
+
+  assert.match(brief.directAnswer, /Only 3 titles qualified even after relaxing the default popularity floor/i);
+  assert.ok(brief.keyFacts.some((fact) => /Only 3 titles qualified/i.test(fact)));
 });
 
 test('buildTigerSuccessBrief grounds metric-history summaries with exact dates', () => {

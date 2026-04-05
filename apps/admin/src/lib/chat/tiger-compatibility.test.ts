@@ -778,6 +778,268 @@ test('Tiger primary routes developer-diary news prompts through Tiger search-doc
   assert.match(result.renderedText ?? '', /developer diary/i);
 });
 
+test('Tiger primary keeps entity-scoped developer-diary prompts filtered to the named game', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let searchDocumentsCalls = 0;
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(body.query, 'hades ii');
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Hades II',
+            entityKind: 'game',
+            entityUid: 'game:steam:1145350',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '1145350',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/search-documents');
+    searchDocumentsCalls += 1;
+    assert.equal(searchDocumentsCalls, 1);
+    assert.deepEqual(body.entityUids, ['game:steam:1145350']);
+    assert.equal(body.mode, 'topic_search');
+    assert.equal(body.query, 'developer diary');
+
+    return jsonResponse({
+      entity: {
+        displayName: 'Hades II',
+        entityKind: 'game',
+        entityUid: 'game:steam:1145350',
+        platform: 'steam',
+        platformEntityId: '1145350',
+      },
+      interpretedFilters: {
+        endTime: '2026-04-04T00:00:00.000Z',
+        entityUids: ['game:steam:1145350'],
+        feedScopes: [],
+        mode: 'topic_search',
+        query: 'developer diary',
+        startTime: '2026-01-04T00:00:00.000Z',
+      },
+      items: [
+        {
+          appName: 'Hades II',
+          appid: 1145350,
+          feedLabel: 'Steam News',
+          feedScope: 'community_announcements',
+          publishedAt: '2026-03-30T12:00:00.000Z',
+          sortTime: '2026-03-30T12:00:00.000Z',
+          title: 'Developer Diary #7',
+          url: 'https://store.steampowered.com/news/app/1145350/view/1',
+        },
+      ],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'any recent developer diaries for hades ii?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'news_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /Hades II/);
+  assert.match(result.renderedText ?? '', /Developer Diary #7/);
+});
+
+test('Tiger primary does not broaden entity-scoped topic news searches to unrelated games when the result set is sparse', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let searchDocumentsCalls = 0;
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(body.query, 'hades ii');
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Hades II',
+            entityKind: 'game',
+            entityUid: 'game:steam:1145350',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '1145350',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/search-documents');
+    searchDocumentsCalls += 1;
+    assert.equal(searchDocumentsCalls, 1);
+    assert.deepEqual(body.entityUids, ['game:steam:1145350']);
+    assert.equal(body.mode, 'topic_search');
+    assert.equal(body.query, 'developer diary');
+
+    return jsonResponse({
+      entity: {
+        displayName: 'Hades II',
+        entityKind: 'game',
+        entityUid: 'game:steam:1145350',
+        platform: 'steam',
+        platformEntityId: '1145350',
+      },
+      interpretedFilters: {
+        endTime: '2026-04-04T00:00:00.000Z',
+        entityUids: ['game:steam:1145350'],
+        feedScopes: [],
+        mode: 'topic_search',
+        query: 'developer diary',
+        startTime: '2026-01-04T00:00:00.000Z',
+      },
+      items: [],
+      sufficientToAnswer: false,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'any recent developer diaries for hades ii?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(searchDocumentsCalls, 1);
+  assert.equal(result.info.matchedIntent, 'news_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /could not find relevant recent documents/i);
+});
+
+test('Tiger primary returns clarification from a low-confidence interpreted intent before guessing', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedFetch(t, async () => {
+    throw new Error('Tiger primary should not call query-api for clarification-only interpretations');
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    interpretation: {
+      clarificationQuestion: 'Which game or company do you want to focus on?',
+      confidence: 'low',
+      continuationAction: 'none',
+      contractCandidates: ['resolveEntities', 'getEntityOverview'],
+      entities: [],
+      intent: 'entity_overview',
+    },
+    isEvalRequest: true,
+    prompt: 'tell me more',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_overview');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /Which game or company do you want to focus on\?/);
+});
+
+test('Tiger primary routes "what do you know about" prompts into entity-overview handling', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.query, 'Hades II');
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Hades II',
+            entityKind: 'game',
+            entityUid: 'game:steam:1145350',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '1145350',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-entity-overview');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityKind: 'game',
+      gamesLimit: 0,
+      gamesSortBy: 'release_date',
+      platformEntityId: '1145350',
+    });
+
+    return jsonResponse({
+      entity: {
+        details: {
+          developers: ['Supergiant Games'],
+          discountPercent: 0,
+          isFree: false,
+          isReleased: true,
+          platforms: ['windows', 'macos'],
+          priceCents: 2999,
+          publishers: ['Supergiant Games'],
+          releaseDate: '2025-09-25',
+          releaseState: 'released',
+          releaseYear: 2025,
+        },
+        displayName: 'Hades II',
+        entityKind: 'game',
+        metrics: {
+          ccuPeak: 6736,
+          gameCount: null,
+          ownersMidpoint: 3500000,
+          reviewScore: 90,
+          totalReviews: 115774,
+        },
+      },
+      games: [],
+      sufficientToAnswer: true,
+      viewMode: 'single_game',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'what do you know about hades ii',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_overview');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts[0]?.contractName, 'resolveEntities');
+  assert.doesNotMatch(result.renderedText ?? '', /I couldn't route that prompt cleanly/i);
+  assert.match(result.renderedText ?? '', /Hades II|likely matches/i);
+});
+
 test('Tiger primary routes overview prompts through get-entity-overview', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
@@ -1417,7 +1679,8 @@ test('Tiger primary keeps better-review similarity prompts on Tiger semanticSear
   assert.equal(result.info.matchedIntent, 'semantic_search');
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'semanticSearch');
-  assert.equal(result.answerBrief?.allowNarration, false);
+  assert.equal(result.answerBrief?.allowNarration, true);
+  assert.equal(result.answerBrief?.narrationConfidence, 'high');
   assert.match(result.renderedText ?? '', /Hollow Knight/);
   assert.match(result.renderedText ?? '', /Close alternatives/);
   assert.match(result.renderedText ?? '', /Dead Cells/);
@@ -1904,6 +2167,66 @@ test('Tiger primary routes review-momentum filters through discoverMomentum', as
           totalReviews: 48000,
           trendDirection: 'up',
         },
+        {
+          appid: 440,
+          ccuPeak: 8300,
+          isFree: false,
+          matchedSteamDeck: 'verified',
+          momentumScore: 72,
+          name: 'Deck Momentum 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 79,
+          reviewsAdded7d: 420,
+          supportLevel: 'medium',
+          supportReasons: ['Recent review activity remains elevated.'],
+          totalReviews: 21000,
+          trendDirection: 'up',
+        },
+        {
+          appid: 620,
+          ccuPeak: 6400,
+          isFree: false,
+          matchedSteamDeck: 'verified',
+          momentumScore: 69,
+          name: 'Deck Momentum 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 81,
+          reviewsAdded7d: 310,
+          supportLevel: 'medium',
+          supportReasons: ['Recent review activity remains above the trailing baseline.'],
+          totalReviews: 18400,
+          trendDirection: 'up',
+        },
+        {
+          appid: 730,
+          ccuPeak: 5100,
+          isFree: true,
+          matchedSteamDeck: 'verified',
+          momentumScore: 66,
+          name: 'Deck Momentum 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 78,
+          reviewsAdded7d: 240,
+          supportLevel: 'medium',
+          supportReasons: ['Review volume is still moving higher this week.'],
+          totalReviews: 14200,
+          trendDirection: 'up',
+        },
+        {
+          appid: 570,
+          ccuPeak: 4700,
+          isFree: true,
+          matchedSteamDeck: 'verified',
+          momentumScore: 62,
+          name: 'Deck Momentum 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 77,
+          reviewsAdded7d: 180,
+          supportLevel: 'medium',
+          supportReasons: ['Review pickup remains solid on the current window.'],
+          totalReviews: 12300,
+          trendDirection: 'up',
+        },
       ],
       rankingDefinition: 'Review momentum highlights titles adding reviews quickly over the selected window.',
       rankingLabel: 'Reviews Added (7d)',
@@ -1922,7 +2245,6 @@ test('Tiger primary routes review-momentum filters through discoverMomentum', as
 
   assert.equal(result.info.matchedIntent, 'momentum_discovery');
   assert.equal(result.info.route, 'primary_success');
-  assert.match(result.renderedText ?? '', /ELDEN RING NIGHTREIGN/);
 });
 
 test('Tiger primary routes worsening-review prompts through sentiment discovery defaults', async (t) => {
@@ -1935,9 +2257,8 @@ test('Tiger primary routes worsening-review prompts through sentiment discovery 
     assert.deepEqual(JSON.parse(String(init.body)), {
       filters: {
         maxSentimentDelta: -3,
-        minCcu: 100,
-        minReviews: 10000,
-        minReviewsAdded30d: 25,
+        minReviews: 1000,
+        minReviewsAdded30d: 5,
       },
       limit: 10,
       sortBy: 'sentiment_delta',
@@ -1950,9 +2271,8 @@ test('Tiger primary routes worsening-review prompts through sentiment discovery 
       filtersApplied: [
         'sort_by: sentiment_delta',
         'timeframe: 30d',
-        'min_reviews: 10000',
-        'min_ccu: 100',
-        'min_reviews_added_30d: 25',
+        'min_reviews: 1000',
+        'min_reviews_added_30d: 5',
         'max_sentiment_delta: -3',
       ],
       items: [
@@ -1971,6 +2291,70 @@ test('Tiger primary routes worsening-review prompts through sentiment discovery 
           totalReviews: 18000,
           trendDirection: 'down',
           velocityAcceleration: -28,
+        },
+        {
+          appid: 2668511,
+          ccuPeak: 3600,
+          entityUid: 'game:steam:2668511',
+          isFree: false,
+          name: 'Example Game 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 72,
+          reviewsAdded30d: 640,
+          sentimentDelta: -3.8,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 3.8 points.'],
+          totalReviews: 16500,
+          trendDirection: 'down',
+          velocityAcceleration: -21,
+        },
+        {
+          appid: 2668512,
+          ccuPeak: 2900,
+          entityUid: 'game:steam:2668512',
+          isFree: false,
+          name: 'Example Game 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 71,
+          reviewsAdded30d: 510,
+          sentimentDelta: -3.6,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.6 points.'],
+          totalReviews: 14100,
+          trendDirection: 'down',
+          velocityAcceleration: -18,
+        },
+        {
+          appid: 2668513,
+          ccuPeak: 2400,
+          entityUid: 'game:steam:2668513',
+          isFree: false,
+          name: 'Example Game 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 70,
+          reviewsAdded30d: 460,
+          sentimentDelta: -3.3,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.3 points.'],
+          totalReviews: 12800,
+          trendDirection: 'down',
+          velocityAcceleration: -15,
+        },
+        {
+          appid: 2668514,
+          ccuPeak: 2100,
+          entityUid: 'game:steam:2668514',
+          isFree: false,
+          name: 'Example Game 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 69,
+          reviewsAdded30d: 410,
+          sentimentDelta: -3.1,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.1 points.'],
+          totalReviews: 11800,
+          trendDirection: 'down',
+          velocityAcceleration: -12,
         },
       ],
       rankingDefinition: 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.',
@@ -2044,6 +2428,66 @@ test('Tiger primary relaxes broad review-sentiment defaults when the user narrow
           trendDirection: 'down',
           velocityAcceleration: -28,
         },
+        {
+          appid: 2668511,
+          ccuPeak: 3100,
+          isFree: false,
+          name: 'Example Indie 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 73,
+          reviewsAdded30d: 98,
+          sentimentDelta: -3.9,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 3.9 points.'],
+          totalReviews: 3900,
+          trendDirection: 'down',
+          velocityAcceleration: -22,
+        },
+        {
+          appid: 2668512,
+          ccuPeak: 2600,
+          isFree: false,
+          name: 'Example Indie 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 72,
+          reviewsAdded30d: 84,
+          sentimentDelta: -3.7,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.7 points.'],
+          totalReviews: 3600,
+          trendDirection: 'down',
+          velocityAcceleration: -19,
+        },
+        {
+          appid: 2668513,
+          ccuPeak: 2300,
+          isFree: false,
+          name: 'Example Indie 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 71,
+          reviewsAdded30d: 76,
+          sentimentDelta: -3.5,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.5 points.'],
+          totalReviews: 3300,
+          trendDirection: 'down',
+          velocityAcceleration: -17,
+        },
+        {
+          appid: 2668514,
+          ccuPeak: 2100,
+          isFree: false,
+          name: 'Example Indie 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 70,
+          reviewsAdded30d: 69,
+          sentimentDelta: -3.2,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.2 points.'],
+          totalReviews: 3050,
+          trendDirection: 'down',
+          velocityAcceleration: -14,
+        },
       ],
       rankingDefinition: 'Sentiment delta measures the change in positive-review rate versus the trailing 30-day baseline.',
       rankingLabel: 'Sentiment Delta',
@@ -2077,9 +2521,8 @@ test('Tiger primary routes review-activity prompts through review-momentum seman
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       filters: {
-        minCcu: 100,
-        minReviews: 10000,
-        minReviewsAdded7d: 25,
+        minReviews: 1000,
+        minReviewsAdded7d: 5,
       },
       limit: 10,
       sortBy: 'reviews_added_7d',
@@ -2093,9 +2536,8 @@ test('Tiger primary routes review-activity prompts through review-momentum seman
         'sort_by: reviews_added_7d',
         'timeframe: 7d',
         'trend_type: review_momentum',
-        'min_reviews: 10000',
-        'min_ccu: 100',
-        'min_reviews_added_7d: 25',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
       ],
       items: [
         {
@@ -2109,6 +2551,58 @@ test('Tiger primary routes review-activity prompts through review-momentum seman
           supportLevel: 'high',
           supportReasons: ['Review momentum is running well above the trailing baseline.'],
           totalReviews: 48000,
+          trendDirection: 'up',
+        },
+        {
+          appid: 440,
+          ccuPeak: 8200,
+          isFree: false,
+          name: 'Momentum Game 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 78,
+          reviewsAdded7d: 950,
+          supportLevel: 'high',
+          supportReasons: ['Review momentum is running ahead of the trailing baseline.'],
+          totalReviews: 15000,
+          trendDirection: 'up',
+        },
+        {
+          appid: 620,
+          ccuPeak: 6400,
+          isFree: false,
+          name: 'Momentum Game 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 84,
+          reviewsAdded7d: 720,
+          supportLevel: 'medium',
+          supportReasons: ['Review activity remains elevated this week.'],
+          totalReviews: 9400,
+          trendDirection: 'up',
+        },
+        {
+          appid: 730,
+          ccuPeak: 5100,
+          isFree: true,
+          name: 'Momentum Game 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 80,
+          reviewsAdded7d: 540,
+          supportLevel: 'medium',
+          supportReasons: ['Review activity remains elevated versus the trailing baseline.'],
+          totalReviews: 12400,
+          trendDirection: 'up',
+        },
+        {
+          appid: 570,
+          ccuPeak: 4700,
+          isFree: true,
+          name: 'Momentum Game 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 79,
+          reviewsAdded7d: 410,
+          supportLevel: 'medium',
+          supportReasons: ['Recent review volume remains above the recent baseline.'],
+          totalReviews: 11300,
           trendDirection: 'up',
         },
       ],
@@ -2132,6 +2626,167 @@ test('Tiger primary routes review-activity prompts through review-momentum seman
 
   assert.equal(result.info.matchedIntent, 'momentum_discovery');
   assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_activity_up');
+});
+
+test('Tiger primary broadens low-count review-activity discovery and explains the shortfall', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  let callCount = 0;
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/discover-momentum');
+    assert.ok(init?.body);
+
+    callCount += 1;
+    if (callCount === 1) {
+      assert.deepEqual(JSON.parse(String(init.body)), {
+        filters: {
+          minReviews: 1000,
+          minReviewsAdded7d: 5,
+        },
+        limit: 10,
+        sortBy: 'reviews_added_7d',
+        sortDirection: 'desc',
+        timeframe: '7d',
+        trendType: 'review_momentum',
+      });
+
+      return jsonResponse({
+        filtersApplied: [
+          'sort_by: reviews_added_7d',
+          'timeframe: 7d',
+          'trend_type: review_momentum',
+          'min_reviews: 1000',
+          'min_reviews_added_7d: 5',
+        ],
+        items: [
+          {
+            appid: 1245620,
+            ccuPeak: 923,
+            entityUid: 'game:steam:1245620',
+            isFree: false,
+            name: 'Assassin’s Creed IV Black Flag',
+            platformSupport: ['windows'],
+            reviewPercentage: 88.4,
+            reviewsAdded7d: 25,
+            supportLevel: 'high',
+            supportReasons: ['25 reviews added over 7d.'],
+            totalReviews: 76582,
+            trendDirection: 'up',
+          },
+        ],
+        rankingDefinition: 'Reviews added (7d) counts net new reviews in the last 7 days.',
+        rankingLabel: 'Reviews Added (7d)',
+        sortBy: 'reviews_added_7d',
+        sortDirection: 'desc',
+        sufficientToAnswer: true,
+        timeframe: '7d',
+        timeframeLabel: 'Last 7 days',
+        trendType: 'review_momentum',
+      });
+    }
+
+    assert.equal(callCount, 2);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      filters: {
+        minReviews: 250,
+        minReviewsAdded7d: 2,
+      },
+      limit: 10,
+      sortBy: 'reviews_added_7d',
+      sortDirection: 'desc',
+      timeframe: '7d',
+      trendType: 'review_momentum',
+    });
+
+    return jsonResponse({
+      filtersApplied: [
+        'sort_by: reviews_added_7d',
+        'timeframe: 7d',
+        'trend_type: review_momentum',
+        'min_reviews: 250',
+        'min_reviews_added_7d: 2',
+      ],
+      items: [
+        {
+          appid: 1245620,
+          ccuPeak: 923,
+          entityUid: 'game:steam:1245620',
+          isFree: false,
+          name: 'Assassin’s Creed IV Black Flag',
+          platformSupport: ['windows'],
+          reviewPercentage: 88.4,
+          reviewsAdded7d: 25,
+          supportLevel: 'high',
+          supportReasons: ['25 reviews added over 7d.'],
+          totalReviews: 76582,
+          trendDirection: 'up',
+        },
+        {
+          appid: 777777,
+          ccuPeak: 612,
+          entityUid: 'game:steam:777777',
+          isFree: false,
+          name: 'Momentum Game 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 84.1,
+          reviewsAdded7d: 11,
+          supportLevel: 'medium',
+          supportReasons: ['11 reviews added over 7d.'],
+          totalReviews: 9420,
+          trendDirection: 'up',
+        },
+        {
+          appid: 888888,
+          ccuPeak: 481,
+          entityUid: 'game:steam:888888',
+          isFree: false,
+          name: 'Momentum Game 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 81.2,
+          reviewsAdded7d: 7,
+          supportLevel: 'medium',
+          supportReasons: ['7 reviews added over 7d.'],
+          totalReviews: 5120,
+          trendDirection: 'up',
+        },
+      ],
+      rankingDefinition: 'Reviews added (7d) counts net new reviews in the last 7 days.',
+      rankingLabel: 'Reviews Added (7d)',
+      sortBy: 'reviews_added_7d',
+      sortDirection: 'desc',
+      sufficientToAnswer: true,
+      timeframe: '7d',
+      timeframeLabel: 'Last 7 days',
+      trendType: 'review_momentum',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What games are trending up in reviews right now?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(result.info.matchedIntent, 'momentum_discovery');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts[0]?.status, 'skipped');
+  assert.equal(result.info.attempts[1]?.status, 'success');
+  assert.match(result.renderedText ?? '', /Only 3 titles qualified even after relaxing the default popularity floor/i);
+  assert.deepEqual(result.sessionState?.requestState?.canonicalArgs, {
+    filters: {
+      minReviews: 250,
+      minReviewsAdded7d: 2,
+    },
+    limit: 10,
+    sortBy: 'reviews_added_7d',
+    sortDirection: 'desc',
+    timeframe: '7d',
+    trendType: 'review_momentum',
+  });
   assert.equal(result.sessionState?.requestState?.momentumPromptFamily, 'review_activity_up');
 });
 
@@ -4242,6 +4897,66 @@ test('Tiger primary preserves review-sentiment semantics when narrowing follow-u
           trendDirection: 'down',
           velocityAcceleration: -28,
         },
+        {
+          appid: 2668511,
+          ccuPeak: 3100,
+          isFree: false,
+          name: 'Example Indie 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 73,
+          reviewsAdded30d: 98,
+          sentimentDelta: -3.9,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 3.9 points.'],
+          totalReviews: 3900,
+          trendDirection: 'down',
+          velocityAcceleration: -22,
+        },
+        {
+          appid: 2668512,
+          ccuPeak: 2600,
+          isFree: false,
+          name: 'Example Indie 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 72,
+          reviewsAdded30d: 84,
+          sentimentDelta: -3.7,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.7 points.'],
+          totalReviews: 3600,
+          trendDirection: 'down',
+          velocityAcceleration: -19,
+        },
+        {
+          appid: 2668513,
+          ccuPeak: 2300,
+          isFree: false,
+          name: 'Example Indie 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 71,
+          reviewsAdded30d: 76,
+          sentimentDelta: -3.5,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.5 points.'],
+          totalReviews: 3300,
+          trendDirection: 'down',
+          velocityAcceleration: -17,
+        },
+        {
+          appid: 2668514,
+          ccuPeak: 2100,
+          isFree: false,
+          name: 'Example Indie 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 70,
+          reviewsAdded30d: 69,
+          sentimentDelta: -3.2,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.2 points.'],
+          totalReviews: 3050,
+          trendDirection: 'down',
+          velocityAcceleration: -14,
+        },
       ],
       rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
       rankingLabel: 'Total Reviews',
@@ -4319,9 +5034,8 @@ test('Tiger primary moves review-sentiment activity floors to the requested week
     assert.deepEqual(JSON.parse(String(init.body)), {
       filters: {
         maxSentimentDelta: -3,
-        minCcu: 100,
-        minReviews: 10000,
-        minReviewsAdded7d: 25,
+        minReviews: 1000,
+        minReviewsAdded7d: 5,
       },
       limit: 10,
       sortBy: 'total_reviews',
@@ -4334,9 +5048,8 @@ test('Tiger primary moves review-sentiment activity floors to the requested week
       filtersApplied: [
         'sort_by: total_reviews',
         'timeframe: 7d',
-        'min_reviews: 10000',
-        'min_ccu: 100',
-        'min_reviews_added_7d: 25',
+        'min_reviews: 1000',
+        'min_reviews_added_7d: 5',
         'max_sentiment_delta: -3',
       ],
       items: [
@@ -4355,6 +5068,70 @@ test('Tiger primary moves review-sentiment activity floors to the requested week
           totalReviews: 18000,
           trendDirection: 'down',
           velocityAcceleration: -28,
+        },
+        {
+          appid: 2668511,
+          ccuPeak: 3600,
+          entityUid: 'game:steam:2668511',
+          isFree: false,
+          name: 'Example Game 2',
+          platformSupport: ['windows'],
+          reviewPercentage: 72,
+          reviewsAdded7d: 180,
+          sentimentDelta: -3.8,
+          supportLevel: 'high',
+          supportReasons: ['Sentiment fell by 3.8 points.'],
+          totalReviews: 16500,
+          trendDirection: 'down',
+          velocityAcceleration: -21,
+        },
+        {
+          appid: 2668512,
+          ccuPeak: 2900,
+          entityUid: 'game:steam:2668512',
+          isFree: false,
+          name: 'Example Game 3',
+          platformSupport: ['windows'],
+          reviewPercentage: 71,
+          reviewsAdded7d: 140,
+          sentimentDelta: -3.6,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.6 points.'],
+          totalReviews: 14100,
+          trendDirection: 'down',
+          velocityAcceleration: -18,
+        },
+        {
+          appid: 2668513,
+          ccuPeak: 2400,
+          entityUid: 'game:steam:2668513',
+          isFree: false,
+          name: 'Example Game 4',
+          platformSupport: ['windows'],
+          reviewPercentage: 70,
+          reviewsAdded7d: 118,
+          sentimentDelta: -3.3,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.3 points.'],
+          totalReviews: 12800,
+          trendDirection: 'down',
+          velocityAcceleration: -15,
+        },
+        {
+          appid: 2668514,
+          ccuPeak: 2100,
+          entityUid: 'game:steam:2668514',
+          isFree: false,
+          name: 'Example Game 5',
+          platformSupport: ['windows'],
+          reviewPercentage: 69,
+          reviewsAdded7d: 101,
+          sentimentDelta: -3.1,
+          supportLevel: 'medium',
+          supportReasons: ['Sentiment fell by 3.1 points.'],
+          totalReviews: 11800,
+          trendDirection: 'down',
+          velocityAcceleration: -12,
         },
       ],
       rankingDefinition: 'Total reviews ranks titles by lifetime Steam review volume.',
@@ -4424,7 +5201,7 @@ test('Tiger primary moves review-sentiment activity floors to the requested week
   assert.equal(result.sessionState?.requestState?.timeframe, '7d');
 });
 
-test('Tiger primary retries sparse weekly review-sentiment pivots with the relaxed established-title floor', async (t) => {
+test('Tiger primary retries sparse weekly review-sentiment pivots and explains remaining shortfall', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
 
@@ -4438,9 +5215,8 @@ test('Tiger primary retries sparse weekly review-sentiment pivots with the relax
       assert.deepEqual(JSON.parse(String(init.body)), {
         filters: {
           maxSentimentDelta: -3,
-          minCcu: 100,
-          minReviews: 10000,
-          minReviewsAdded7d: 25,
+          minReviews: 1000,
+          minReviewsAdded7d: 5,
         },
         limit: 10,
         sortBy: 'total_reviews',
@@ -4453,9 +5229,8 @@ test('Tiger primary retries sparse weekly review-sentiment pivots with the relax
         filtersApplied: [
           'sort_by: total_reviews',
           'timeframe: 7d',
-          'min_reviews: 10000',
-          'min_ccu: 100',
-          'min_reviews_added_7d: 25',
+          'min_reviews: 1000',
+          'min_reviews_added_7d: 5',
           'max_sentiment_delta: -3',
         ],
         items: [],
@@ -4474,8 +5249,8 @@ test('Tiger primary retries sparse weekly review-sentiment pivots with the relax
     assert.deepEqual(JSON.parse(String(init.body)), {
       filters: {
         maxSentimentDelta: -3,
-        minReviews: 1000,
-        minReviewsAdded7d: 5,
+        minReviews: 250,
+        minReviewsAdded7d: 2,
       },
       limit: 10,
       sortBy: 'total_reviews',
@@ -4488,8 +5263,8 @@ test('Tiger primary retries sparse weekly review-sentiment pivots with the relax
       filtersApplied: [
         'sort_by: total_reviews',
         'timeframe: 7d',
-        'min_reviews: 1000',
-        'min_reviews_added_7d: 5',
+        'min_reviews: 250',
+        'min_reviews_added_7d: 2',
         'max_sentiment_delta: -3',
       ],
       items: [
@@ -4572,15 +5347,15 @@ test('Tiger primary retries sparse weekly review-sentiment pivots with the relax
   assert.equal(callCount, 2);
   assert.equal(result.info.matchedIntent, 'momentum_discovery');
   assert.equal(result.info.route, 'primary_success');
-  assert.match(result.renderedText ?? '', /broad weekly screen was too sparse/i);
+  assert.match(result.renderedText ?? '', /Only 1 title qualified even after relaxing the default popularity floor/i);
   assert.match(result.renderedText ?? '', /74\.4%/);
   assert.equal(result.info.attempts[0]?.status, 'skipped');
   assert.equal(result.info.attempts[1]?.status, 'success');
   assert.deepEqual(result.sessionState?.requestState?.canonicalArgs, {
     filters: {
       maxSentimentDelta: -3,
-      minReviews: 1000,
-      minReviewsAdded7d: 5,
+      minReviews: 250,
+      minReviewsAdded7d: 2,
     },
     limit: 10,
     sortBy: 'total_reviews',
@@ -4607,9 +5382,8 @@ test('Tiger primary reports review-trend-aware weekly no-results after the relax
         filtersApplied: [
           'sort_by: total_reviews',
           'timeframe: 7d',
-          'min_reviews: 10000',
-          'min_ccu: 100',
-          'min_reviews_added_7d: 25',
+          'min_reviews: 1000',
+          'min_reviews_added_7d: 5',
           'max_sentiment_delta: -3',
         ],
         items: [],
@@ -4628,8 +5402,8 @@ test('Tiger primary reports review-trend-aware weekly no-results after the relax
       filtersApplied: [
         'sort_by: total_reviews',
         'timeframe: 7d',
-        'min_reviews: 1000',
-        'min_reviews_added_7d: 5',
+        'min_reviews: 250',
+        'min_reviews_added_7d: 2',
         'max_sentiment_delta: -3',
       ],
       items: [],
@@ -4690,7 +5464,7 @@ test('Tiger primary reports review-trend-aware weekly no-results after the relax
   assert.equal(result.info.matchedIntent, 'momentum_discovery');
   assert.equal(result.info.route, 'primary_success');
   assert.match(result.renderedText ?? '', /stable momentum screen/i);
-  assert.match(result.info.attempts[1]?.reason ?? '', /weekly review-sentiment screen/i);
+  assert.match(result.info.attempts[1]?.reason ?? '', /stable result set/i);
 });
 
 test('Tiger primary can drill from ranked results into change lookups for the top item', async (t) => {
