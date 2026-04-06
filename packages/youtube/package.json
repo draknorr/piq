@@ -1,0 +1,39 @@
+{
+  "name": "@publisheriq/youtube",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src/",
+    "seed-routing": "tsx src/scripts/seed-routing.ts",
+    "bootstrap-backfill": "tsx src/scripts/bootstrap-backfill.ts",
+    "sync-discovery": "tsx src/scripts/sync-discovery.ts",
+    "sync-refresh": "tsx src/scripts/sync-refresh.ts",
+    "rollup-daily": "tsx src/scripts/rollup-daily.ts",
+    "mirror-preview": "tsx src/scripts/mirror-preview.ts",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@publisheriq/shared": "workspace:*",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.15.6",
+    "eslint": "^9.39.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

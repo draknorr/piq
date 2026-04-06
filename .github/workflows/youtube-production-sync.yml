@@ -1,0 +1,68 @@
+name: YouTube Production Sync
+
+on:
+  schedule:
+    - cron: '15 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      bootstrap_lookback_days:
+        description: 'Lookback window for historical bootstrap and replay'
+        required: false
+        default: '30'
+      discovery_limit:
+        description: 'Maximum number of games to process for discovery'
+        required: false
+        default: '25'
+      refresh_limit:
+        description: 'Maximum number of matched videos to refresh'
+        required: false
+        default: '500'
+
+concurrency:
+  group: youtube-production-sync
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+  YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+  YOUTUBE_WRITE_TARGET: production
+  YOUTUBE_BOOTSTRAP_LOOKBACK_DAYS: ${{ github.event.inputs.bootstrap_lookback_days || '30' }}
+  YOUTUBE_DISCOVERY_LIMIT: ${{ github.event.inputs.discovery_limit || '25' }}
+  YOUTUBE_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '500' }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared, data-plane, and YouTube packages
+        run: |
+          pnpm --filter @publisheriq/shared build
+          pnpm --filter @publisheriq/data-plane build
+          pnpm --filter @publisheriq/youtube build
+
+      - name: Seed YouTube routing from Steam cohort
+        run: pnpm youtube:seed-routing
+
+      - name: Run YouTube discovery sync
+        run: pnpm youtube:sync-discovery
+
+      - name: Run YouTube metric refresh
+        run: pnpm youtube:sync-refresh
+
+      - name: Rebuild YouTube daily rollups
+        run: pnpm youtube:rollup-daily

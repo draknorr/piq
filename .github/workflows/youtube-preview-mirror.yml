@@ -1,0 +1,46 @@
+name: YouTube Preview Mirror
+
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap_lookback_days:
+        description: 'Historical window to mirror from production Tiger'
+        required: false
+        default: '30'
+
+concurrency:
+  group: youtube-preview-mirror
+  cancel-in-progress: false
+
+env:
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PREVIEW_URL }}
+  DATA_PLANE_SOURCE_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+  YOUTUBE_WRITE_TARGET: preview
+  YOUTUBE_BOOTSTRAP_LOOKBACK_DAYS: ${{ github.event.inputs.bootstrap_lookback_days || '30' }}
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared, data-plane, and YouTube packages
+        run: |
+          pnpm --filter @publisheriq/shared build
+          pnpm --filter @publisheriq/data-plane build
+          pnpm --filter @publisheriq/youtube build
+
+      - name: Mirror YouTube data into preview Tiger
+        run: pnpm youtube:mirror-preview

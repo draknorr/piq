@@ -1,0 +1,66 @@
+name: YouTube Production Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap_lookback_days:
+        description: 'Historical window to backfill before steady-state sync starts'
+        required: false
+        default: '30'
+      discovery_limit:
+        description: 'Maximum number of games to process during bootstrap'
+        required: false
+        default: '100'
+      refresh_limit:
+        description: 'Maximum number of matched videos to refresh during bootstrap'
+        required: false
+        default: '1000'
+
+concurrency:
+  group: youtube-production-bootstrap
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+  YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+  YOUTUBE_WRITE_TARGET: production
+  YOUTUBE_BOOTSTRAP_LOOKBACK_DAYS: ${{ github.event.inputs.bootstrap_lookback_days || '30' }}
+  YOUTUBE_DISCOVERY_LIMIT: ${{ github.event.inputs.discovery_limit || '100' }}
+  YOUTUBE_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '1000' }}
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared, data-plane, and YouTube packages
+        run: |
+          pnpm --filter @publisheriq/shared build
+          pnpm --filter @publisheriq/data-plane build
+          pnpm --filter @publisheriq/youtube build
+
+      - name: Seed YouTube routing from Steam cohort
+        run: pnpm youtube:seed-routing
+
+      - name: Run YouTube bootstrap backfill
+        run: pnpm youtube:bootstrap-backfill
+
+      - name: Refresh bootstrap-era YouTube metrics
+        run: pnpm youtube:sync-refresh
+
+      - name: Rebuild YouTube daily rollups
+        run: pnpm youtube:rollup-daily
