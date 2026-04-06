@@ -78,6 +78,10 @@ Or if using OpenAI:
 |----------|-------|-------------|
 | `NEXT_PUBLIC_CHAT_TIGER_DEBUG` | `true` | Preview / Development only |
 
+For a split preview/production Tiger rollout, do not reuse the same query-api
+base URL and bearer token across environments. Use the dedicated Railway/Tiger
+pairing described in [Tiger Chat Production](./tiger-chat-production.md).
+
 ### 4. Deploy
 
 Click **Deploy** and wait for the build to complete.
@@ -127,6 +131,11 @@ Preview deployments use the same environment variables by default. For different
 
 1. Create variables with **Preview** environment only
 2. Use a separate Supabase project for staging
+3. Point `QUERY_API_BASE_URL` and `QUERY_API_BEARER_TOKEN` at the preview Railway service, not production
+
+If `QUERY_API_BASE_URL` is not set in a deployed Vercel preview or production
+environment, the admin app now treats that as a configuration error instead of
+silently falling back to `127.0.0.1`.
 
 ## Troubleshooting
 
@@ -178,5 +187,6 @@ Enable Vercel Analytics for:
 ## Related Documentation
 
 - [Environment Setup](../setup.md) - All environment variables
+- [Tiger Chat Production](./tiger-chat-production.md) - Preview/prod Tiger + Railway rollout
 - [Supabase Deployment](supabase.md) - Database setup
 - [GitHub Actions](github-actions.md) - Sync job configuration

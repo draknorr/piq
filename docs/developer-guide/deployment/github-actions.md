@@ -20,6 +20,8 @@ Go to **Settings > Secrets and variables > Actions > New repository secret**:
 | `SUPABASE_SERVICE_KEY` | `eyJ...` |
 | `STEAM_API_KEY` | Your Steam API key |
 | `DATABASE_URL` | PostgreSQL connection string (for refresh-views, v2.1) |
+| `TIGER_PRODUCTION_URL` | Production Tiger / Timescale connection string |
+| `TIGER_PREVIEW_URL` | Preview Tiger / Timescale connection string |
 
 ### 2. Enable Actions
 
@@ -52,6 +54,8 @@ All times are UTC:
 | CCU Cleanup | `ccu-cleanup.yml` | Sun 03:00 | Aggregate + cleanup snapshots (v2.2) |
 | Cleanup Reservations | `cleanup-reservations.yml` | :00 hourly | Stale credit reservation cleanup |
 | Cleanup Chat Logs | `cleanup-chat-logs.yml` | 03:00 daily | 7-day log retention |
+| Tiger Production Sync | `tiger-production-sync.yml` | 07:45 daily | Refresh production Tiger chat-serving data |
+| Tiger Preview Sync | `tiger-preview-sync.yml` | Manual | Refresh preview Tiger chat-serving data |
 | CI | `ci.yml` | On push/PR | Type checking |
 
 ## Workflow Structure
@@ -103,6 +107,19 @@ jobs:
 ## Manual Triggers
 
 All workflows support manual triggering with optional inputs.
+
+Tiger-specific workflows:
+
+- `tiger-production-sync.yml`
+  - also runs on a daily schedule
+  - refreshes `legacy`, the trailing `metrics.daily_metrics` window, and the
+    events/news reconcile surfaces for the production Tiger target
+- `tiger-preview-sync.yml`
+  - manual only
+  - runs the same sync path against the preview Tiger target
+
+Both workflows upload the generated Tiger manifest directory as a workflow
+artifact so you can inspect parity output after each run.
 
 ### From GitHub UI
 

@@ -1,6 +1,6 @@
 import 'server-only';
 
-const DEFAULT_QUERY_API_BASE_URL = 'http://127.0.0.1:4318';
+import { resolveQueryApiBaseUrl } from '@/lib/query-api-config';
 
 export interface QueryApiCallResult<T> {
   data?: T;
@@ -19,7 +19,16 @@ export async function postToQueryApi<T>(
   body: unknown,
   options?: { timeoutMs?: number }
 ): Promise<QueryApiCallResult<T>> {
-  const baseUrl = process.env.QUERY_API_BASE_URL?.trim() || DEFAULT_QUERY_API_BASE_URL;
+  const { baseUrl, reason } = resolveQueryApiBaseUrl();
+  if (!baseUrl) {
+    return {
+      errorCode: 'QUERY_API_BASE_URL_MISSING',
+      httpStatus: null,
+      ok: false,
+      reason,
+    };
+  }
+
   const headers: HeadersInit = {
     'content-type': 'application/json',
   };

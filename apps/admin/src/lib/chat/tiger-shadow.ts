@@ -14,6 +14,7 @@ import type {
 } from '@/lib/chat/chat-context-types';
 import { COMMON_TAGS, type QuerySuggestion } from '@/lib/chat/query-templates';
 import { buildChatEntityUid } from '@/lib/chat/entity-uid';
+import { resolveQueryApiBaseUrl } from '@/lib/query-api-config';
 import type {
   TigerPromptEntityHint,
   TigerPromptInterpretation,
@@ -37,7 +38,6 @@ import type {
   TigerShadowMode,
 } from './tiger-shadow-types';
 
-const DEFAULT_QUERY_API_BASE_URL = 'http://127.0.0.1:4318';
 const DEFAULT_PRIMARY_TIMEOUT_MS = 8000;
 const DEFAULT_SHADOW_TIMEOUT_MS = 8000;
 const NEWS_TOOL_NAMES = new Set([
@@ -5383,7 +5383,16 @@ async function postToQueryApi<T>(
   body: unknown,
   options?: { timeoutMs?: number }
 ): Promise<QueryApiResponse<T>> {
-  const baseUrl = process.env.QUERY_API_BASE_URL?.trim() || DEFAULT_QUERY_API_BASE_URL;
+  const { baseUrl, reason } = resolveQueryApiBaseUrl();
+  if (!baseUrl) {
+    return {
+      errorCode: 'QUERY_API_BASE_URL_MISSING',
+      httpStatus: null,
+      ok: false,
+      reason,
+    };
+  }
+
   const timeoutMs = options?.timeoutMs ?? readShadowTimeoutMs();
   const headers: HeadersInit = {
     'content-type': 'application/json',

@@ -95,6 +95,7 @@ Highlights:
 ### Deployment
 
 - **[Vercel](developer-guide/deployment/vercel.md)** - Dashboard deployment
+- **[Tiger Chat](developer-guide/deployment/tiger-chat-production.md)** - Tiger/query-api production rollout
 - **[Fly.io](developer-guide/deployment/fly-io.md)** - Cube.js deployment
 - **[Railway](developer-guide/deployment/railway.md)** - PICS service deployment
 - **[Supabase](developer-guide/deployment/supabase.md)** - Database setup

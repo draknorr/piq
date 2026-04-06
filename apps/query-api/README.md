@@ -98,6 +98,28 @@ Then point the Vercel preview at Railway with:
 - `CHAT_TIGER_SHADOW_MODE=off`
 - `NEXT_PUBLIC_CHAT_TIGER_DEBUG=true`
 
+## Railway Production Deployment
+
+For production, keep a separate Railway service and a separate Tiger target.
+
+Recommended production env:
+
+- `TIGER_PRIMARY_URL`
+- `QUERY_API_BEARER_TOKEN`
+- `DATA_PLANE_STATEMENT_TIMEOUT_MS=10000`
+- `DATA_PLANE_MAX_POOL_SIZE=5`
+- `QUERY_API_HOST=0.0.0.0`
+
+Then point Vercel production at that service with:
+
+- `QUERY_API_BASE_URL=<production railway https url>`
+- `QUERY_API_BEARER_TOKEN=<same production bearer token>`
+- `CHAT_TIGER_PRIMARY_MODE=all`
+- `CHAT_TIGER_SHADOW_MODE=off`
+- `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
+
+Do not share preview and production bearer tokens or Tiger connection strings.
+
 ## Container Build
 
 Build from the repo root so workspace packages are available:
