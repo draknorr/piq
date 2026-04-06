@@ -85,11 +85,17 @@ These contracts are what `/chat`, similarity routes, momentum screens, and recen
 For Railway:
 
 - build from `apps/query-api/Dockerfile`
+- use the repo-root `/railway.toml` only for `query-api`
 - set `QUERY_API_HOST=0.0.0.0`
 - set `QUERY_API_BEARER_TOKEN`
 - set `TIGER_PRIMARY_URL`
 - set `DATA_PLANE_STATEMENT_TIMEOUT_MS=10000`
 - set `DATA_PLANE_MAX_POOL_SIZE=5`
+
+Do not reuse the repo-root Railway config for background workers. The
+`change-intel-*` services should point at `/packages/ingestion/railway.json`
+and continue running `pnpm --filter @publisheriq/ingestion change-intel-worker`
+without an HTTP healthcheck.
 
 ## Local Development
 

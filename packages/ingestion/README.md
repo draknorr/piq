@@ -68,6 +68,19 @@ TigerData refresh and parity workflows are not run from this package, but they a
 
 The ingestion workers continue to own the live source side of the pipeline. TigerData owns the query-serving slice.
 
+## Railway Worker Deployment
+
+The production `change-intel-*` Railway services should use the dedicated worker
+config at `/packages/ingestion/railway.json`.
+
+- Keep the Railway service root directory at `/` so the worker build can see the
+  workspace packages it imports from.
+- Keep the start command as `pnpm --filter @publisheriq/ingestion change-intel-worker`.
+- Do not attach the repo-root `/railway.toml` to these services. That file is
+  reserved for `query-api`.
+- Do not add an HTTP healthcheck to these workers. They are background queue
+  processors, not web services.
+
 ### Important Environment Variables
 
 ```bash
@@ -110,6 +123,9 @@ pnpm --filter @publisheriq/ingestion build
 pnpm --filter @publisheriq/ingestion check-types
 pnpm --filter @publisheriq/ingestion lint
 pnpm --filter @publisheriq/ingestion test:change-intel
+
+# transitive build smoke used by the Railway worker config
+pnpm --filter @publisheriq/ingestion... build
 ```
 
 ## Related Documentation

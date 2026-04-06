@@ -1,3 +1,6 @@
+# Query API only.
+# Do not attach this file to the change-intel worker services.
+# Worker services must use /packages/ingestion/railway.json instead.
 [build]
 builder = "dockerfile"
 dockerfilePath = "apps/query-api/Dockerfile"

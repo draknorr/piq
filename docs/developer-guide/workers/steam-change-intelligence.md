@@ -36,6 +36,43 @@ Steam change intelligence is split across three runtimes:
 
 When stale claims are requeued, the completion path records the `stale_claim_requeued` reason so abandoned rows do not stay stranded.
 
+## Railway Service Layout
+
+Run the queue drainer as three Railway background services:
+
+- `change-intel-news` with `QUEUE_SOURCES=news`
+- `change-intel-storefront` with `QUEUE_SOURCES=storefront,projection_refresh`
+- `change-intel-hero` with `QUEUE_SOURCES=hero_asset`
+
+All three services should point at `/packages/ingestion/railway.json`.
+
+Important deployment rules:
+
+- Keep each service root directory at `/`. The worker build needs access to the
+  shared workspace packages imported by `@publisheriq/ingestion`.
+- Keep the start command as `pnpm --filter @publisheriq/ingestion change-intel-worker`.
+- Do not reuse the repo-root `/railway.toml`. That config is reserved for the
+  Railway `query-api` service and wires up `apps/query-api/Dockerfile` plus
+  `/healthz`.
+- Do not configure an HTTP healthcheck for these worker services. The worker has
+  no HTTP listener; health is process-based and log-based.
+- Preserve existing per-service variables, replica counts, and regions when
+  switching the config file.
+
+Recommended rollout order:
+
+1. `change-intel-hero`
+2. `change-intel-news`
+3. `change-intel-storefront`
+
+Rollback guidance:
+
+- Before changing a service, capture its current Railway settings and latest
+  deployment ID.
+- If a service fails after switching to `/packages/ingestion/railway.json`,
+  restore the previous explicit Railpack worker settings for that service,
+  verify it returns to `SUCCESS`, and stop before touching the next service.
+
 ## Storage Guardrails
 
 - Bucket: `steam-hero-assets`
