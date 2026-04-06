@@ -1,11 +1,17 @@
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
+import gevent
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+fake_client_module = ModuleType("src.steam.client")
+fake_client_module.PICSSteamClient = object
+sys.modules.setdefault("src.steam.client", fake_client_module)
+
+from src.steam import pics as pics_module
 from src.steam.pics import PICSFetcher
 
 
@@ -18,6 +24,8 @@ class FakeSteamApiClient:
         self.calls += 1
         if self.responses:
             response = self.responses.pop(0)
+            if callable(response):
+                response = response()
             if isinstance(response, BaseException):
                 raise response
             return response
@@ -103,3 +111,39 @@ def test_get_changes_since_raises_when_reconnect_cannot_recover():
 
     with pytest.raises(RuntimeError, match="Failed to get PICS changes: Failed to reconnect to Steam"):
         fetcher.get_changes_since(500)
+
+
+def test_get_changes_since_retries_after_timeout_response(monkeypatch):
+    client = FakeClient(
+        connected=True,
+        responses=[None, build_response(700, [11, 22])],
+    )
+    fetcher = PICSFetcher(client, timeout=1, max_retries=2)
+    monkeypatch.setattr(pics_module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    result = fetcher.get_changes_since(650)
+
+    assert result is not None
+    assert result.change_number == 700
+    assert result.app_changes == [11, 22]
+    assert client.client.calls == 2
+
+
+def test_get_changes_since_retries_after_hanging_poll_timeout(monkeypatch):
+    def slow_success():
+        gevent.sleep(0.05)
+        return build_response(901, [99])
+
+    client = FakeClient(
+        connected=True,
+        responses=[slow_success, build_response(902, [42])],
+    )
+    fetcher = PICSFetcher(client, timeout=1, change_poll_timeout=0.01, max_retries=2)
+    monkeypatch.setattr(pics_module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    result = fetcher.get_changes_since(800)
+
+    assert result is not None
+    assert result.change_number == 902
+    assert result.app_changes == [42]
+    assert client.client.calls == 2

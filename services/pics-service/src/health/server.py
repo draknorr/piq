@@ -15,16 +15,26 @@ class HealthHandler(BaseHTTPRequestHandler):
     """HTTP request handler for health checks."""
 
     # Class-level status storage
-    _status: Dict[str, Any] = {"status": "starting"}
+    _status: Dict[str, Any] = {"status": "starting", "health_state": "starting"}
 
     def do_GET(self):
         """Handle GET requests."""
         if self.path == "/" or self.path == "/health":
-            self._send_response(200, "OK")
+            code, message = self.get_health_response()
+            self._send_response(code, message)
         elif self.path == "/status":
             self._send_json_response(200, self._status)
         else:
             self._send_response(404, "Not Found")
+
+    @classmethod
+    def get_health_response(cls) -> tuple[int, str]:
+        """Map worker status to an HTTP health response."""
+        if cls._status.get("status") == "error" or cls._status.get("health_state") == "unhealthy":
+            return 503, "UNHEALTHY"
+        if cls._status.get("health_state") == "starting":
+            return 200, "STARTING"
+        return 200, "OK"
 
     def _send_response(self, code: int, message: str):
         """Send a simple text response."""
@@ -65,7 +75,7 @@ class HealthServer:
         self._thread.start()
 
         logger.info(f"Health server listening on port {self._port}")
-        HealthHandler._status["status"] = "running"
+        HealthHandler._status.update({"status": "running", "health_state": "starting"})
 
     def stop(self):
         """Stop the health check server."""

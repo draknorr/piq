@@ -94,6 +94,13 @@ def main():
             sys.exit(1)
 
     except Exception as e:
+        health_server.update_status(
+            {
+                "status": "error",
+                "health_state": "unhealthy",
+                "error": str(e),
+            }
+        )
         logger.exception(f"Fatal error: {e}")
         sys.exit(1)
 

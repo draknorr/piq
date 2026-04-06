@@ -86,6 +86,8 @@ MODE=change_monitor python -m src.main
 - `GET /health`
 - `GET /status`
 
+`/health` stays `200` while the worker is starting or transiently degraded, and returns `503` when the worker marks itself unhealthy after repeated change-poll failures or a fatal process error.
+
 ## Tests
 
 ```bash

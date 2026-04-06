@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional
 
+import gevent
+
 from .client import PICSSteamClient
 
 logger = logging.getLogger(__name__)
@@ -36,12 +38,14 @@ class PICSFetcher:
         request_delay: float = None,
         timeout: int = None,
         max_retries: int = None,
+        change_poll_timeout: float | None = None,
     ):
         self._client = client
         self.batch_size = batch_size or self.BATCH_SIZE
         self.request_delay = request_delay or self.REQUEST_DELAY
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
+        self.change_poll_timeout = change_poll_timeout or self.timeout
 
     def _ensure_connection(self, wait_timeout: float = AUTO_RECONNECT_WAIT_TIMEOUT) -> None:
         """Recover a disconnected Steam client before issuing a request."""
@@ -162,14 +166,20 @@ class PICSFetcher:
         for attempt in range(self.max_retries):
             try:
                 self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
-                response = self._client.client.get_changes_since(
-                    change_number,
-                    app_changes=True,
-                    package_changes=False,  # We only care about apps
+                timeout_error = TimeoutError(
+                    f"PICS change poll timed out after {self.change_poll_timeout}s"
                 )
+                with gevent.Timeout(self.change_poll_timeout, timeout_error):
+                    response = self._client.client.get_changes_since(
+                        change_number,
+                        app_changes=True,
+                        package_changes=False,  # We only care about apps
+                    )
 
                 if response is None:
-                    return None
+                    raise TimeoutError(
+                        "PICS change poll returned no response before the client timeout"
+                    )
 
                 return PICSChange(
                     change_number=response.current_change_number,

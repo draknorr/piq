@@ -24,6 +24,8 @@ class ChangeMonitorWorker:
     Designed to run continuously on Railway.
     """
 
+    MAX_CONSECUTIVE_POLL_FAILURES = 3
+
     def __init__(self, health_server: Optional[HealthServer] = None):
         self._steam = PICSSteamClient()
         self._fetcher: Optional[PICSFetcher] = None
@@ -64,64 +66,72 @@ class ChangeMonitorWorker:
         # Get last known change number
         last_change = self._db.get_last_change_number()
         logger.info(f"Starting from change number {last_change}")
+        self._update_health_status(last_change)
 
-        # Main loop
-        while self._running:
-            try:
-                # Check for new changes
-                changes = self._fetcher.get_changes_since(last_change)
-                self._consecutive_poll_failures = 0
-                self._last_poll_error = None
-                self._last_successful_change_poll_at = datetime.utcnow().isoformat()
+        try:
+            # Main loop
+            while self._running:
+                try:
+                    # Check for new changes
+                    changes = self._fetcher.get_changes_since(last_change)
+                    self._consecutive_poll_failures = 0
+                    self._last_poll_error = None
+                    self._last_successful_change_poll_at = datetime.utcnow().isoformat()
 
-                if changes and changes.change_number > last_change:
-                    # Queue changed apps
-                    new_apps = [
-                        appid
-                        for appid in changes.app_changes
-                        if appid not in self._processing_set
-                    ]
+                    if changes and changes.change_number > last_change:
+                        # Queue changed apps
+                        new_apps = [
+                            appid
+                            for appid in changes.app_changes
+                            if appid not in self._processing_set
+                        ]
 
-                    for appid in new_apps:
-                        if len(self._change_queue) < settings.max_queue_size:
-                            self._change_queue.append(appid)
+                        for appid in new_apps:
+                            if len(self._change_queue) < settings.max_queue_size:
+                                self._change_queue.append(appid)
 
-                    logger.info(
-                        f"Change {changes.change_number}: "
-                        f"{len(changes.app_changes)} apps changed, "
-                        f"{len(new_apps)} queued (queue size: {len(self._change_queue)})"
+                        logger.info(
+                            f"Change {changes.change_number}: "
+                            f"{len(changes.app_changes)} apps changed, "
+                            f"{len(new_apps)} queued (queue size: {len(self._change_queue)})"
+                        )
+
+                        last_change = changes.change_number
+                        self._db.set_last_change_number(last_change)
+
+                    # Process queued apps
+                    self._process_queue(last_change)
+
+                    # Update health status
+                    self._update_health_status(last_change)
+
+                    # Wait before next poll
+                    time.sleep(settings.poll_interval)
+
+                except Exception as e:
+                    self._consecutive_poll_failures += 1
+                    self._last_poll_error = str(e)
+                    backoff_seconds = min(
+                        max(settings.poll_interval, 10) * (2 ** min(self._consecutive_poll_failures - 1, 4)),
+                        300,
+                    )
+                    logger.error(
+                        "Error in change monitor loop (failure #%s, backing off %ss): %s",
+                        self._consecutive_poll_failures,
+                        backoff_seconds,
+                        e,
                     )
 
-                    last_change = changes.change_number
-                    self._db.set_last_change_number(last_change)
+                    if self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                        self._update_health_status(last_change, forced_state="unhealthy")
+                        raise RuntimeError(
+                            "Exceeded consecutive change poll failures; exiting for restart"
+                        ) from e
 
-                # Process queued apps
-                self._process_queue(last_change)
-
-                # Update health status
-                self._update_health_status(last_change)
-
-                # Wait before next poll
-                time.sleep(settings.poll_interval)
-
-            except Exception as e:
-                self._consecutive_poll_failures += 1
-                self._last_poll_error = str(e)
-                backoff_seconds = min(
-                    max(settings.poll_interval, 10) * (2 ** min(self._consecutive_poll_failures - 1, 4)),
-                    300,
-                )
-                logger.error(
-                    "Error in change monitor loop (failure #%s, backing off %ss): %s",
-                    self._consecutive_poll_failures,
-                    backoff_seconds,
-                    e,
-                )
-                self._update_health_status(last_change)
-                time.sleep(backoff_seconds)
-
-        # Cleanup
-        self._steam.disconnect()
+                    self._update_health_status(last_change)
+                    time.sleep(backoff_seconds)
+        finally:
+            self._steam.disconnect()
 
     def _process_queue(self, trigger_cursor: Optional[int] = None):
         """Process a batch of queued apps."""
@@ -176,13 +186,13 @@ class ChangeMonitorWorker:
         logger.info("Stopping change monitor")
         self._running = False
 
-    def _update_health_status(self, last_change: int):
+    def _update_health_status(self, last_change: int, forced_state: Optional[str] = None):
         """Publish worker health and Steam reconnect state."""
         if not self._health:
             return
 
-        health_state = "ok"
-        if self._consecutive_poll_failures > 0 or not self._steam.is_connected:
+        health_state = forced_state or "ok"
+        if forced_state is None and (self._consecutive_poll_failures > 0 or not self._steam.is_connected):
             health_state = "degraded"
 
         self._health.update_status(
