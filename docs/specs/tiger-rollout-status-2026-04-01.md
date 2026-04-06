@@ -3,6 +3,8 @@
 Date: 2026-04-01
 Branch: `timescale-tiger-refactor`
 
+> Historical note: this is a rollout snapshot from the Tiger cutover period. It is useful for tracing the milestone sequence, but it is not the current operating guide. For current guidance, use the living Tiger/query-api and deployment docs.
+
 ## Overall Status
 
 Tiger is no longer just a prototype. The new Tiger-backed data plane, `query-api`, and chat routing are real and working.

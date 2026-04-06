@@ -1,47 +1,71 @@
 # System Architecture Overview
 
-PublisherIQ is a Steam analytics platform built around three product surfaces:
+PublisherIQ is a Steam analytics platform with three main product surfaces:
 
-- analytics pages for games and companies
+- analytics pages for games, companies, and insights
 - a Change Feed for recent storefront, media, PICS, and news activity
-- an AI chat interface over curated warehouse data and change-intelligence projections
+- an AI chat interface over curated catalog, momentum, semantic, and change-intelligence contracts
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 6, 2026
 
 ## High-Level Stack
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
+| Layer | Technology | Current Role |
+|-------|------------|--------------|
 | Frontend | Next.js 15 + React 19 | Signed-in dashboard and public entry surfaces |
-| Database | Supabase Postgres | Warehouse tables, queues, auth, RPCs, and cached admin stats |
-| Semantic Layer | Cube.js | Chat analytics, screeners, and structured discovery |
-| Tiger Query API | `apps/query-api` + `packages/data-plane` | Tiger-backed chat contracts, semantic retrieval, and continuation |
-| TS Workers | `@publisheriq/ingestion` | Scheduled syncs, queue workers, and change-intel maintenance |
-| Python Service | `services/pics-service` | PICS ingestion plus history capture and first-pass bootstrap |
+| Write / Control Plane | Supabase Postgres | warehouse tables, queues, auth, RPCs, admin stats, product-page reads |
+| Semantic Layer | Cube.js | legacy and compatibility analytics reads that still have not moved to Tiger-backed contracts |
+| Contract Read Plane | `apps/query-api` + `packages/data-plane` | TigerData-backed typed contracts for chat, semantic retrieval, momentum, change search, news search, and continuation |
+| TS Workers | `@publisheriq/ingestion` | scheduled syncs, queue workers, change-intel maintenance |
+| Python Service | `services/pics-service` | PICS ingestion, latest-state enrichment, and PICS history capture |
 
-## Main Product Routes
+## Current Serving Model
 
-| Route | Role |
-|------|------|
-| `/dashboard` | Signed-in home |
-| `/chat` | AI query interface |
-| `/insights` | Curated analytics and personalization |
-| `/changes` | Unified Change Feed and Steam news exploration |
-| `/apps` | Games analytics |
-| `/companies` | Unified publishers/developers browse |
-| `/admin` | Admin system status |
-| `/updates` | In-app patch notes |
+PublisherIQ currently runs as a **split data plane**, not a single-database application:
 
-## Runtime Layout
+- **Supabase** is still the authoritative write target for source ingestion, auth, operational state, product RPCs, and most page reads.
+- **TigerData (Timescale)** is the read-optimized target for contract-backed chat and search/discovery paths, served only through `query-api`.
+- **Cube.js** still exists for compatibility and legacy analytics reads while those prompt families and page-level data flows continue to be migrated.
+
+The important boundary is:
+
+- Vercel should call `query-api`
+- `query-api` should call TigerData
+- Vercel should not connect directly to TigerData
+
+## Current Load Sharing
+
+| Surface | Primary Read Path | Primary Store | Notes |
+|--------|-------------------|---------------|-------|
+| `/chat` supported contract families | `/api/chat/stream` -> `query-api` | TigerData | canonical path for entity resolution, catalog search, momentum, semantic, news/change analysis, user context, and continuation |
+| Chat auth, credits, logging | admin app + Supabase | Supabase | sessions, rate limiting, reservations, logs, and final billing remain on Supabase |
+| `/apps` | Supabase RPCs/views | Supabase | page-serving path remains Supabase-first today |
+| `/companies` | Supabase RPCs/views | Supabase | page-serving path remains Supabase-first today |
+| `/insights` | Supabase + Cube compatibility reads | Supabase | not yet re-homed to TigerData |
+| `/changes` | Supabase RPCs and projections | Supabase | change-feed page still reads Supabase projections and read surfaces |
+| `/admin` | Supabase RPCs and tables | Supabase | admin stats, queue state, and logs remain on Supabase |
+| Legacy analytics in chat | Cube.js compatibility path | Supabase | shrinking compatibility layer, still present for some non-contract prompt patterns |
+
+## Runtime Topology
 
 ```text
 Steam APIs / Steam News / SteamSpy / PICS
         ↓
 TypeScript workers + PICS service
         ↓
-Supabase (tables, queues, projections, RPCs, auth)
+Supabase
+  - source ingestion landing
+  - warehouse tables
+  - queues and operational state
+  - auth, credits, and chat logs
+  - page-facing RPCs and projections
         ↓
-Cube.js + Tiger query-api
+Tiger refresh / bootstrap / reconcile workflows
+        ↓
+TigerData + query-api
+  - typed contract-serving read plane
+  - semantic retrieval and continuation
+  - momentum, entity, change, and news contracts
         ↓
 Next.js dashboard
 ```
@@ -57,46 +81,43 @@ The dashboard in `apps/admin` owns:
 - admin pages for users, waitlist, usage, and system health
 - internal APIs for chat, alerts, pins, and Change Feed
 
-### Ingestion Workers
+### Supabase Write / Control Plane
 
-`packages/ingestion` owns scheduled warehouse updates and long-running queue workers:
+Supabase currently stores:
 
-- catalog and metadata sync (`applist-sync`, `storefront-sync`, `steamspy-sync`)
-- reviews, histogram, CCU, and derived metrics
-- `app-change-hints` to seed change-intel capture work
-- `change-intel-worker` to drain `storefront`, `news`, `projection_refresh`, and `hero_asset` work
+- warehouse tables and materialized views
+- `sync_status`, queue state, and worker control data
+- auth/session state, user profiles, credits, pins, and alerts
+- change-intel projections and `/changes` read surfaces
+- cached admin stats and chat logs
 
-### PICS Service
+### TigerData Contract Read Plane
 
-`services/pics-service` owns:
+TigerData currently serves the contract-backed chat/search runtime through `apps/query-api` and `packages/data-plane`.
 
-- direct PICS polling
-- bulk backfill and the bounded `first_pass` bootstrap mode
-- normalized PICS snapshot history
-- PICS diff event generation
-- latest-state app and relationship upserts
+Live contract families include:
 
-### Database and Read Surfaces
+- entity resolution and overview
+- related entities / DLC / franchise context
+- broad catalog discovery
+- momentum and breakout discovery
+- cross-game change discovery and pattern discovery
+- ranking and comparison
+- metric history
+- change explanation
+- news/document search
+- semantic search
+- user context
+- continuation
 
-Supabase stores:
+### Cube.js Compatibility Layer
 
-- the warehouse tables and derived views
-- auth/session state
-- capture queue state and coalesced work-state rows
-- change-intel projections and change-feed read surfaces
-- cached admin stats for catalog control and CCU quality
+Cube remains in the stack for:
 
-Cube.js and the Tiger query-api support the AI chat and search/discovery surfaces.
+- older analytics prompt families still routed through compatibility logic
+- page-level or legacy analytics surfaces that have not yet moved to a typed Tiger-backed contract
 
-## Auth Model
-
-PublisherIQ uses an OTP-first auth flow:
-
-- protected routes redirect to `/login?next=...`
-- `/login` verifies an 8-digit code
-- the browser waits for an authoritative authenticated user before redirecting
-- `/auth/callback` and `/auth/confirm` remain as compatibility handlers
-- redirect origins are normalized through `NEXT_PUBLIC_SITE_URL`
+Cube should be treated as a compatibility dependency, not the long-term contract boundary for chat.
 
 ## Change-Intelligence Flow
 
@@ -107,27 +128,27 @@ The current change-intelligence system has four cooperating layers:
 3. `app_capture_work_state` coalesces repeated dirty signals so the worker maintains one live task per app/source.
 4. `pics-service` captures normalized PICS history and diff events inline before latest-state writes, while `first_pass` can bootstrap prioritized catalog gaps.
 
-The `/changes` page reads from SQL functions and internal APIs on top of those stored events and projections.
+The `/changes` page still reads Supabase SQL functions and internal APIs on top of those stored events and projections. The contract-backed chat path reads the TigerData change/news slice instead.
 
-## Monorepo Structure
+## Source-of-Truth Rules
 
-```text
-publisheriq/
-├── apps/admin/
-├── apps/query-api/
-├── packages/data-plane/
-├── packages/database/
-├── packages/ingestion/
-├── packages/shared/
-├── packages/cube/
-├── services/pics-service/
-├── supabase/migrations/
-└── docs/
-```
+- **Storefront** is authoritative for parsed `release_date`, pricing, and `is_free`.
+- **PICS** is enrichment and fallback for tags, genres, categories, Deck, release state, relationships, and historical PICS change capture.
+- **Supabase** is the current write authority for operational data and most page-serving data.
+- **TigerData** is the current contract-serving read plane, not the write authority.
+- **Cube** is a compatibility analytics layer over Supabase-backed data, not the primary chat contract system.
+
+## Current Operational Reality
+
+- preview and production each need their own `query-api` service and TigerData target
+- deployed Vercel environments must set `QUERY_API_BASE_URL`; there is no silent localhost fallback
+- local admin development can still default to `http://127.0.0.1:4318`
+- TigerData slices are kept current through explicit bootstrap/backfill/reconcile/validate flows and scheduled Tiger refresh workflows
 
 ## Related Documentation
 
+- [TigerData Operating Model](./tigerdata-operating-model.md)
+- [Database Schema](./database-schema.md)
 - [Sync Pipeline](./sync-pipeline.md)
-- [Data Sources](./data-sources.md)
 - [Chat Data System](./chat-data-system.md)
-- [Change Feed Feature](../features/change-feed.md)
+- [Data Sources](./data-sources.md)

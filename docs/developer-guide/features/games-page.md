@@ -10,6 +10,8 @@ This document describes the technical architecture of the Games page in Publishe
 
 The Games page (`/apps`) is a powerful game discovery and analytics dashboard. It follows the architectural patterns established by the Companies page (v2.5) with game-specific features and novel computed insight metrics.
 
+This page is still Supabase/RPC-backed today. It uses materialized views and stored functions for its main reads, while Tiger/query-api serves the chat contract layer rather than this page directly.
+
 **Key Capabilities:**
 - Browse games, DLC, and demos with type toggle
 - 12 preset views for common discovery patterns

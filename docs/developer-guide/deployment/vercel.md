@@ -78,8 +78,8 @@ Or if using OpenAI:
 |----------|-------|-------------|
 | `NEXT_PUBLIC_CHAT_TIGER_DEBUG` | `true` | Preview / Development only |
 
-For a split preview/production Tiger rollout, do not reuse the same query-api
-base URL and bearer token across environments. Use the dedicated Railway/Tiger
+For a split preview/production TigerData rollout, do not reuse the same query-api
+base URL and bearer token across environments. Use the dedicated Railway/TigerData
 pairing described in [Tiger Chat Production](./tiger-chat-production.md).
 
 ### 4. Deploy

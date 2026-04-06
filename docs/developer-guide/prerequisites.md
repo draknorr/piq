@@ -27,7 +27,7 @@ corepack prepare pnpm@latest --activate
 
 ### 1. Supabase Account
 
-Supabase provides the PostgreSQL database for all data storage.
+Supabase is the write/control plane for the live product database and admin surfaces.
 
 1. Create account at [supabase.com](https://supabase.com)
 2. Create a new project
@@ -63,12 +63,13 @@ Required for the current semantic retrieval pipeline:
 2. Generate an API key
 3. Used for text-embedding-3-small model (1536 dimensions)
 
-### 5. Tiger / Timescale (for Query API Data Plane)
+### 5. TigerData / Timescale (for Query API Data Plane)
 
-Tiger backs the current query-api contracts used by `/chat` and `/api/similarity`:
-1. Create or access a Tiger / Timescale service
-2. Get the Postgres connection string for `TIGER_PRIMARY_URL`
-3. Allow your local/dev runtime or deployed `query-api` to connect
+TigerData backs the current query-api contracts used by `/chat` and the Tiger-backed discovery/change paths:
+
+1. Create or access a TigerData / Timescale service.
+2. Get the Postgres connection string for `TIGER_PRIMARY_URL`.
+3. Allow your local/dev runtime or deployed `query-api` to connect.
 
 ### 6. Cube.js Cloud or Fly.io (for Analytics)
 

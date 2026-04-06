@@ -2,6 +2,8 @@
 
 Date: March 31, 2026
 
+> Historical note: this was the shadow-routing milestone before `searchDocuments` became ready and before Tiger-backed primary chat coverage expanded. Keep it as a milestone record, not as the current runtime description.
+
 This note records the first Tiger-backed `/chat` shadow milestone after the
 events/news reconciliation tooling landed.
 

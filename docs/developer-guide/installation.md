@@ -20,6 +20,7 @@ pnpm install
 
 This installs dependencies for:
 - `apps/admin` - Next.js dashboard
+- `packages/data-plane` - TigerData contracts, bootstrap, and backfills
 - `packages/database` - Supabase client
 - `packages/ingestion` - Data workers
 - `packages/shared` - Shared utilities
@@ -51,7 +52,7 @@ See [Environment Setup](setup.md) for detailed configuration.
 
 ### Apply Migrations
 
-The database schema is defined in Supabase migrations. Apply them via the Supabase dashboard:
+The live product database is defined in Supabase migrations. Apply them via the Supabase dashboard:
 
 1. Go to your Supabase project
 2. Navigate to **SQL Editor**
@@ -67,7 +68,7 @@ supabase/migrations/
 
 ### Verify Schema
 
-After applying migrations, verify the tables exist:
+After applying migrations, verify the Supabase-side tables exist:
 - `apps`
 - `publishers`
 - `developers`
@@ -102,6 +103,7 @@ publisheriq/
 ├── apps/
 │   └── admin/              # Next.js dashboard
 ├── packages/
+│   ├── data-plane/         # TigerData contracts, bootstrap, backfills
 │   ├── database/           # Supabase client + types
 │   ├── ingestion/          # API clients and workers
 │   └── shared/             # Logger, errors, constants

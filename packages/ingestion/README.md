@@ -2,7 +2,7 @@
 
 TypeScript workers and API clients for Steam ingestion, sync scheduling, and change intelligence.
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 2026
 
 ## Overview
 
@@ -11,8 +11,9 @@ This package provides:
 - Steam, SteamSpy, reviews, storefront, CCU, and embedding clients
 - scheduled sync workers for metadata and metrics
 - the change-intelligence queue worker, hint seeding worker, and news hot-refresh paths
-- repair / backfill scripts for review truth, CCU quality, and change-intel projections
+- repair and backfill scripts for review truth, CCU quality, and change-intel projections
 - rate limiting, retry, and change-intel support utilities
+- source-side preparation for TigerData refresh flows via the `@publisheriq/data-plane` package
 
 ## Core Commands
 
@@ -56,6 +57,16 @@ The change-intelligence runtime is split across two TypeScript workers plus the 
 - Canonical diffing normalizes JSON payloads before comparing them, which reduces false positives caused by key ordering.
 - Storefront remains authoritative for parsed `release_date` and `is_free`; PICS is enrichment/fallback data.
 - Recent news search projections and latest projections keep chat/news queries fast without depending on the legacy projection path.
+
+## TigerData Refresh Workflows
+
+TigerData refresh and parity workflows are not run from this package, but they are part of the same overall data pipeline:
+
+- bootstrap SQL lives in `packages/data-plane/sql/tiger-bootstrap/`
+- backfill and reconcile scripts live in `packages/data-plane/src/scripts/`
+- scheduled Tiger syncs are triggered from GitHub Actions using the same package-level contract assumptions
+
+The ingestion workers continue to own the live source side of the pipeline. TigerData owns the query-serving slice.
 
 ### Important Environment Variables
 

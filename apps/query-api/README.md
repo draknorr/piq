@@ -1,12 +1,34 @@
 # Query API
 
-This service is the first step of the Tiger migration runtime split.
+`apps/query-api` is the HTTP contract boundary between the admin app and the TigerData-backed data plane.
 
 ## Purpose
 
-- Keep Vercel away from direct database connections
-- Expose typed contracts that future `/chat` can use without forcing structured user input
-- Bridge current live Postgres data into the new data-plane abstraction before Tiger is provisioned
+- Keep Vercel away from direct TigerData connections.
+- Expose typed query contracts instead of raw SQL or prompt-shaped analytics.
+- Serve the chat and search contracts that are now owned by the TigerData data plane.
+
+## Contract Surface
+
+Current ready contracts:
+
+- `resolveEntities`
+- `getEntityOverview`
+- `getRelatedEntities`
+- `searchCatalog`
+- `discoverMomentum`
+- `searchChangeActivity`
+- `discoverChangePatterns`
+- `rankEntities`
+- `compareEntities`
+- `traceMetricHistory`
+- `explainChanges`
+- `searchDocuments`
+- `semanticSearch`
+- `getUserContext`
+- `continueResultSet`
+
+These contracts are what `/chat`, similarity routes, momentum screens, and recent-news/change-intel paths should use. The service is no longer a placeholder for future Tiger work.
 
 ## Endpoints
 
@@ -14,22 +36,27 @@ This service is the first step of the Tiger migration runtime split.
 - `GET /readyz`
 - `GET /v1/contracts`
 - `POST /v1/contracts/resolve-entities`
+- `POST /v1/contracts/get-entity-overview`
+- `POST /v1/contracts/get-related-entities`
 - `POST /v1/contracts/search-catalog`
+- `POST /v1/contracts/discover-momentum`
+- `POST /v1/contracts/search-change-activity`
+- `POST /v1/contracts/discover-change-patterns`
 - `POST /v1/contracts/rank-entities`
 - `POST /v1/contracts/compare-entities`
 - `POST /v1/contracts/trace-metric-history`
 - `POST /v1/contracts/explain-changes`
 - `POST /v1/contracts/search-documents`
 - `POST /v1/contracts/semantic-search`
+- `POST /v1/contracts/get-user-context`
 - `POST /v1/contracts/continue-result-set`
 
-`search-documents` is now promoted to `ready` once the Tiger events/news
-validate gate is green. It remains metadata-first and is intended for
-news/topic lookups plus Tiger shadow chat coverage.
+## Runtime Model
 
-`semantic-search` is now served by the Tiger data plane itself. Admin chat and
-similarity routes should proxy here instead of executing direct semantic
-lookups inside the Next.js app.
+- `TIGER_PRIMARY_URL` is the primary connection string and should point at TigerData / Timescale.
+- `DATA_PLANE_SOURCE_URL` is for live-source baseline/backfill workflows.
+- `DATABASE_URL` is the Supabase fallback for local or source-side access.
+- `query-api` loads from Tiger first, then source/baseline URLs only when the script explicitly intends to read the source database.
 
 ## Environment
 
@@ -42,83 +69,33 @@ lookups inside the Next.js app.
 - `QUERY_API_PORT`
 - `QUERY_API_BEARER_TOKEN`
 
-`TIGER_PRIMARY_URL` is preferred. Until Tiger exists, the service falls back to `DATA_PLANE_SOURCE_URL` or `DATABASE_URL`.
+## Health And Readiness
 
-## Staging / Canary Runtime Notes
+- `GET /healthz` verifies the server is alive.
+- `GET /readyz` verifies the data plane can reach the configured primary source and serve contracts.
+- `GET /v1/contracts` returns the contract registry and source metadata.
 
-For the first Tiger-primary rollout:
+## Deployment Notes
 
-- deploy `query-api` behind a stable HTTPS endpoint in the same region as Tiger
-- keep `QUERY_API_BEARER_TOKEN` server-side only
-- point the admin app at the deployed endpoint with `QUERY_API_BASE_URL`
-- use chat rollout envs in the admin app:
-  - `CHAT_TIGER_PRIMARY_MODE=canary`
-  - `CHAT_TIGER_SHADOW_MODE=canary`
-  - `CHAT_TIGER_CANARY_USER_IDS=<comma-separated user ids>`
+- Deploy preview and production `query-api` services separately.
+- Keep preview and production TigerData connection strings separate.
+- Keep `QUERY_API_BEARER_TOKEN` server-side only.
+- Vercel preview and production must set `QUERY_API_BASE_URL`; localhost fallback is only for local development.
 
-The chat runtime currently promotes only these prompt families to Tiger-owned visible answers:
+For Railway:
 
-- catalog search
-- entity compare
-- entity ranking
-- metric history
-- momentum discovery
-- semantic search
+- build from `apps/query-api/Dockerfile`
+- set `QUERY_API_HOST=0.0.0.0`
+- set `QUERY_API_BEARER_TOKEN`
+- set `TIGER_PRIMARY_URL`
+- set `DATA_PLANE_STATEMENT_TIMEOUT_MS=10000`
+- set `DATA_PLANE_MAX_POOL_SIZE=5`
 
-News and change-intel can stay shadow-only while the live ingesting docs/events slice continues to drift.
+## Local Development
 
-## Railway Preview Deployment
-
-For branch-preview testing, deploy `query-api` to Railway from the repo root.
-This repo now includes [`railway.toml`](../../railway.toml) pointing at
-[`apps/query-api/Dockerfile`](./Dockerfile).
-
-Recommended Railway env:
-
-- `TIGER_PRIMARY_URL`
-- `QUERY_API_BEARER_TOKEN`
-- `DATA_PLANE_STATEMENT_TIMEOUT_MS=10000`
-- `DATA_PLANE_MAX_POOL_SIZE=5`
-- `QUERY_API_HOST=0.0.0.0`
-
-`query-api` now falls back to Railway's injected `PORT` if `QUERY_API_PORT` is
-not set explicitly.
-
-After deploy, verify:
-
-- `GET /healthz`
-- `GET /readyz`
-- `GET /v1/contracts`
-
-Then point the Vercel preview at Railway with:
-
-- `QUERY_API_BASE_URL=<railway https url>`
-- `QUERY_API_BEARER_TOKEN=<same bearer token>`
-- `CHAT_TIGER_PRIMARY_MODE=all`
-- `CHAT_TIGER_SHADOW_MODE=off`
-- `NEXT_PUBLIC_CHAT_TIGER_DEBUG=true`
-
-## Railway Production Deployment
-
-For production, keep a separate Railway service and a separate Tiger target.
-
-Recommended production env:
-
-- `TIGER_PRIMARY_URL`
-- `QUERY_API_BEARER_TOKEN`
-- `DATA_PLANE_STATEMENT_TIMEOUT_MS=10000`
-- `DATA_PLANE_MAX_POOL_SIZE=5`
-- `QUERY_API_HOST=0.0.0.0`
-
-Then point Vercel production at that service with:
-
-- `QUERY_API_BASE_URL=<production railway https url>`
-- `QUERY_API_BEARER_TOKEN=<same production bearer token>`
-- `CHAT_TIGER_PRIMARY_MODE=all`
-- `CHAT_TIGER_SHADOW_MODE=off`
-- `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
-
-Do not share preview and production bearer tokens or Tiger connection strings.
+- Local admin chat can point at `http://127.0.0.1:4318`.
+- If `QUERY_API_BASE_URL` is unset outside Vercel preview/production, the app falls back to localhost.
+- Use the local `query-api` process to exercise the same contract boundary the deployed app uses.
 
 ## Container Build
 

@@ -11,6 +11,8 @@ Steam Activity is a signed-in dashboard surface that lets users inspect:
 - related announcements, news digests, and topic search results
 - capture health and projection freshness status
 
+The page itself remains Supabase-backed. Chat uses some of the same underlying projections through the system contract service, but the page route does not go through query-api.
+
 ## Main Route
 
 - page route: `apps/admin/src/app/(main)/changes/page.tsx`
@@ -53,7 +55,7 @@ It is responsible for:
 - falling back to legacy burst/news surfaces if the unified RPC is unavailable
 - caching default activity responses for a short TTL
 - pulling recent-news digests and topic-search rows from the lean news projection
-- topic search is exposed through the server access layer and chat tools rather than a dedicated public route
+- exposing topic search through the server access layer and chat tools rather than a dedicated public route
 
 ## Internal APIs
 

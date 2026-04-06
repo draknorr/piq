@@ -2,11 +2,82 @@
 
 > This document is optimized for LLM text-to-SQL generation. Use exact column names, types, and SQL patterns shown below.
 
-**Database**: PostgreSQL (Supabase)
+**Databases**: Supabase Postgres + TigerData (Timescale)
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 6, 2026
 
-**Semantic Layer**: Cube.js provides type-safe queries over these tables. See [Chat Data System](chat-data-system.md) for Cube schema documentation.
+**Semantic Layer**: Cube.js still provides compatibility analytics queries over Supabase-backed models. TigerData now serves the contract-backed chat/query plane through `apps/query-api`.
+
+---
+
+## Current Database Topology
+
+PublisherIQ now operates with two database roles:
+
+| Plane | System | Current Role |
+|------|--------|--------------|
+| Write / control plane | Supabase Postgres | source ingestion, queues, auth, operational state, product RPCs, page reads |
+| Contract read plane | TigerData (Timescale) | contract-backed chat/search/discovery reads served through `query-api` |
+
+This is not a full migration off Supabase. Supabase remains the write authority today.
+
+## TigerData Schema Overview
+
+TigerData does not mirror the entire Supabase schema. It currently holds the slices needed for contract-backed reads.
+
+### Main TigerData schema groups
+
+| Schema | Purpose |
+|--------|---------|
+| `core` | entity identity and overview relations |
+| `metrics` | time-series history such as `metrics.daily_metrics` |
+| `events` | change-event history |
+| `docs` | news items and search projections |
+| `ops` | operational metadata used by the data plane |
+| `chat` | chat-oriented helper relations |
+| `legacy` | compatibility landing zone for slices still shaped like legacy warehouse reads |
+
+### Contract-serving relation families
+
+TigerData-backed contracts currently depend on relations in these categories:
+
+- apps and latest metrics
+- publishers, developers, and entity-link context
+- daily metric history
+- news and document search projections
+- change events and change-pattern slices
+- user pins, alerts, and alert settings for `getUserContext`
+
+For the exact live contract list and ownership, see:
+
+- [TigerData Operating Model](./tigerdata-operating-model.md)
+- [Chat Data System](./chat-data-system.md)
+- [Query API README](../../../apps/query-api/README.md)
+
+## How To Read This Document
+
+The remainder of this document focuses on the Supabase schema detail, because:
+
+- Supabase is still the write authority
+- Supabase still serves most product-page reads
+- generated database types in `@publisheriq/database` come from the Supabase schema
+
+TigerData schema detail currently lives primarily in:
+
+- `packages/data-plane/sql/tiger-bootstrap/`
+- `packages/data-plane/src/contract-registry.ts`
+- `docs/developer-guide/architecture/tigerdata-operating-model.md`
+
+## Current Serving Split
+
+| Surface | Primary Read Store |
+|--------|--------------------|
+| `/apps` | Supabase |
+| `/companies` | Supabase |
+| `/changes` | Supabase |
+| `/admin` | Supabase |
+| contract-backed chat/search/discovery | TigerData |
+| Cube compatibility analytics | Supabase-backed Cube models |
 
 ---
 

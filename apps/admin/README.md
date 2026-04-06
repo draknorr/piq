@@ -11,6 +11,7 @@ The dashboard provides:
 - Insights and personalization surfaces
 - admin system-status pages, catalog control, and CCU quality
 - OTP-first authentication and invite/waitlist flows
+- TigerData-backed chat, similarity, momentum, and change-intel contract routing through `apps/query-api`
 
 ## Development
 
@@ -33,7 +34,7 @@ pnpm test:e2e:headed
 The Playwright smoke suite targets `/chat` on the local admin dev server and mocks
 `/api/chat/stream`, `/api/search`, and `/api/autocomplete/tags` so it stays deterministic.
 
-For the main full prompt-quality pass against the local Tigerdata-backed stack, run:
+For the main full prompt-quality pass against the local TigerData-backed stack, run:
 
 ```bash
 pnpm chat-evals:full-blended-endpoint
@@ -43,9 +44,12 @@ That endpoint runner hits the same `/api/chat/stream` route the UI uses, normali
 assistant output into visible-like text for scoring, and writes ranked artifacts under
 `/tmp/publisheriq-chat-evals/`. It expects your local admin server and local `query-api`
 to already be running unless you pass `--origin` to another reachable target. The same
-run now also writes tool/backend audit artifacts such as `prompt-tool-traces.json`,
+run also writes tool/backend audit artifacts such as `prompt-tool-traces.json`,
 `tool-usage-summary.json`, `backend-usage-summary.json`, and `migration-matrix.md` so you
 can see which prompts still depend on legacy Supabase or Cube answer-path reads.
+
+Local chat routing relies on `QUERY_API_BASE_URL` and `QUERY_API_BEARER_TOKEN`. In deployed
+Vercel preview/production, `QUERY_API_BASE_URL` must be set explicitly.
 
 For a smaller UI-level smoke pass through the real `/chat` page, run:
 

@@ -4,7 +4,9 @@ This document describes the internal endpoints used by the PublisherIQ dashboard
 
 ## Authentication
 
-Most endpoints require an authenticated Supabase session cookie.
+Most dashboard endpoints require an authenticated Supabase session cookie.
+
+The chat runtime also uses an internal bearer-authenticated hop to the query-api for Tiger-backed contracts.
 
 Typical unauthenticated response:
 
@@ -19,11 +21,17 @@ Typical unauthenticated response:
 
 ### `POST /api/chat`
 
-JSON response endpoint for chat callers that do not need SSE streaming.
+JSON response endpoint for callers that do not need SSE streaming.
 
 ### `POST /api/chat/stream`
 
 Streaming chat endpoint using Server-Sent Events.
+
+The route can combine:
+
+- Tiger-backed query-api contracts for supported prompts
+- legacy compatibility paths for unsupported prompts
+- session carry-forward data for follow-up turns
 
 The stream returns:
 
@@ -33,11 +41,22 @@ The stream returns:
 - `message_end`
 - `error`
 
-`message_end` includes timing data and may include debug, quality, session context, usage, and credits charged.
+`message_end` includes timing data and may include:
+
+- `debug`
+- `quality`
+- `sessionContext`
+- `executionTrace`
+- `followUpSuggestions`
+- `renderData`
+- `tigerPrimary`
+- `tigerShadow`
+- `usage`
+- `creditsCharged`
 
 ### `POST /api/chat/eval`
 
-Internal evaluation endpoint used by the chat smoke and eval tooling.
+Internal evaluation endpoint used by chat smoke tests and eval tooling.
 
 ## Change Feed
 
@@ -127,7 +146,7 @@ Remove a pin.
 
 Check whether a specific entity is pinned.
 
-### `GET` / `PUT /api/pins/[id]/alert-settings`
+### `GET` / `PUT` `/api/pins/[id]/alert-settings`
 
 Read or update per-pin alert settings.
 
@@ -149,7 +168,7 @@ Mark an alert as read.
 
 Delete an alert.
 
-### `GET` / `PUT /api/alerts/preferences`
+### `GET` / `PUT` `/api/alerts/preferences`
 
 Read or update global alert preferences.
 
@@ -167,6 +186,7 @@ Server-side callback router that validates origin handling and forwards callback
 
 - Change Feed endpoints return `503` when the required SQL read surfaces are not available yet.
 - The unified activity list uses server-side cursor pagination when the new read surface is available and a legacy fallback when it is not.
+- Chat endpoints should be debugged from the query details panel and execution trace when a Tiger-backed contract is involved.
 - Protected-route UX redirects through `/login?next=...`; APIs return JSON errors instead of redirects.
 
 ## Related Documentation

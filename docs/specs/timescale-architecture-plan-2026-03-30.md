@@ -3,6 +3,8 @@
 Date: March 30, 2026  
 Audience: Founder/operator, future implementers, and anyone executing the Timescale-first rebuild for PublisherIQ
 
+> Historical note: this memo captures the original Timescale-first rebuild decision. The live operating model has since moved into a Tiger/query-api cutover state, so treat this document as architecture history and decision context rather than current implementation guidance.
+
 This memo turns the Timescale decision into a concrete architecture and migration plan. It is intentionally more detailed than the comparison docs and budget memos.
 
 It is based on:

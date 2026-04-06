@@ -13,10 +13,10 @@ The logs are visible to admins only.
 The dashboard shows the last 7 days of chat queries, including:
 
 - query text
-- tools used
+- routed capabilities and tool families
 - performance timing
 - iteration counts
-- phase-1 chat family
+- route-level answer family
 - quality flags
 - guardrail trace summaries
 - compact session carry-forward summaries
@@ -57,11 +57,11 @@ If a query is slow, check for:
 
 | Pattern | Meaning |
 |---------|---------|
-| `lookup_publishers` → `query_analytics` | Specific publisher question |
-| `lookup_games` → `get_game_change_timeline` | One-title change timeline |
-| `get_recent_news_detail` | Latest news item for one title |
-| `get_recent_news_digest` | Bounded recent-news summary |
-| `search_recent_news_topics` | Cross-game topic search in stored news text |
+| `lookup` or `resolve` followed by a system contract | Specific title or entity question |
+| `search` or `screen` routed through the system contract | Catalog discovery or trend screen |
+| `recent news` or `change` routed through the system contract | News, activity, or before/after analysis |
+
+The logs also record the Tiger routing summary for turns that used the query-api path.
 
 ## Retention
 

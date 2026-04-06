@@ -42,7 +42,7 @@ The stream emits JSON events in `data: {...}\n\n` format:
 | `text_delta` | Incremental text chunk from the model |
 | `tool_start` | Tool call initiated |
 | `tool_result` | Tool execution completed |
-| `message_end` | Response complete with timing, debug, and turn summary data |
+| `message_end` | Response complete with timing, debug, execution, and turn summary data |
 | `error` | Error occurred |
 
 ---
@@ -103,6 +103,11 @@ interface MessageEndEvent {
   };
   quality?: ChatTurnQualityInfo;
   sessionContext?: SessionChatContext | null;
+  executionTrace?: ChatExecutionTraceEntry[];
+  followUpSuggestions?: QuerySuggestion[];
+  renderData?: ChatRenderData;
+  tigerPrimary?: TigerPrimaryInfo;
+  tigerShadow?: TigerShadowInfo;
   usage?: {
     inputTokens: number;
     outputTokens: number;
@@ -116,6 +121,9 @@ What those fields mean:
 - `debug` is the stream-level performance summary.
 - `quality` carries the turn-level guardrail and contract summary.
 - `sessionContext` is the compact carry-forward state for the next browser turn.
+- `executionTrace` records backend usage, data sources, and migration disposition for the turn.
+- `followUpSuggestions` contains generated next-step prompts when available.
+- `tigerPrimary` and `tigerShadow` summarize Tiger routing decisions when the turn used the system contracts.
 - `usage` and `creditsCharged` are returned when token accounting is available.
 
 ---
@@ -132,7 +140,7 @@ The streaming API uses a maximum of 5 tool iterations:
 
 If the limit is reached without a final response, the route emits a fallback message explaining that the request should be rephrased or narrowed.
 
-When phase-1 quality capture is enabled, the same completion event also includes the session context that should be sent back on the next turn.
+When quality capture is enabled, the same completion event also includes the session context that should be sent back on the next turn.
 
 ---
 

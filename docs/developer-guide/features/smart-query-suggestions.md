@@ -6,12 +6,12 @@
 
 ## Overview
 
-Two complementary features for helping users write better queries in the chat interface:
+Two complementary features help users write better queries in the chat interface:
 
 1. **Type-Ahead Autocomplete** - Suggestions appear as you type
-2. **Post-Response Suggestions** - Follow-up queries appear after assistant responds
+2. **Post-Response Suggestions** - Follow-up queries appear after the assistant responds
 
-Both are pattern-based (no LLM calls) for speed and zero marginal cost.
+Both are pattern-based, with no LLM calls, so they stay fast and low-cost.
 
 ---
 
@@ -67,11 +67,11 @@ User types "roguel..."
 
 ### Data Flow
 
-1. On chat page mount → `useAutocompleteData` checks localStorage
-2. If cache expired → Fetches `/api/autocomplete/tags` → Caches in localStorage
-3. User types → Instant filtering of templates + cached tags
-4. After 150ms pause → Debounced fetch to `/api/search` for entities
-5. Results combined and displayed in dropdown
+1. On chat page mount, `useAutocompleteData` checks localStorage
+2. If cache expired, it fetches `/api/autocomplete/tags` and caches the result
+3. User types, and the UI filters templates plus cached tag data immediately
+4. After 150ms pause, the app performs a debounced fetch to `/api/search`
+5. Results are combined and displayed in the dropdown
 
 ---
 
@@ -92,11 +92,11 @@ Assistant response completes
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Generate suggestions by tool type                      │
-│  - find_similar → "Hidden gems like X", "Steam Deck..." │
-│  - search_games → "Trending X", "X on Steam Deck"       │
-│  - discover_trending → "What's breaking out?"           │
-│  - lookup_games → "Games similar to X"                  │
+│  Generate suggestions by capability                     │
+│  - similarity search → "Hidden gems like X"             │
+│  - games search → "Trending X", "X on Steam Deck"      │
+│  - trend discovery → "What's breaking out?"             │
+│  - title lookup → "Games similar to X"                  │
 └─────────────────────────────────────────────────────────┘
          │
          ▼
@@ -115,16 +115,16 @@ Assistant response completes
 | `components/chat/ChatMessage.tsx` | Integrates chips into message |
 | `components/chat/ChatContainer.tsx` | Generates suggestions, handles clicks |
 
-### Suggestion Patterns by Tool
+### Suggestion Patterns by Capability
 
-| Tool | Suggestions Generated |
-|------|----------------------|
-| `find_similar` | "Hidden gems like X", "Steam Deck games like X" |
-| `search_games` | "Trending X games", "X on Steam Deck" |
-| `search_by_concept` | "Add Steam Deck filter", "Find hidden gems" |
-| `discover_trending` | "What's breaking out?", "Tell me about X" |
-| `lookup_games` | "Games similar to X", "More by developer" |
-| `lookup_publishers` | "X's best rated games" |
+| Capability | Suggestions Generated |
+|-----------|----------------------|
+| Similarity search | "Hidden gems like X", "Steam Deck games like X" |
+| Games search | "Trending X games", "X on Steam Deck" |
+| Concept search | "Add Steam Deck filter", "Find hidden gems" |
+| Trend discovery | "What's breaking out?", "Tell me about X" |
+| Title lookup | "Games similar to X", "More by developer" |
+| Publisher lookup | "X's best rated games" |
 
 ---
 
@@ -144,15 +144,15 @@ Assistant response completes
 1. Run `pnpm --filter @publisheriq/admin dev`
 2. Navigate to `/chat`
 3. Test autocomplete:
-   - Focus input (empty) → See example prompts
-   - Type "roguel" → See template suggestions
-   - Type game name → See game-based suggestions
-   - Use arrow keys, enter, tab, escape
+   - Focus input (empty) and verify example prompts
+   - Type "roguel" and verify template suggestions
+   - Type a game name and verify game-based suggestions
+   - Use arrow keys, enter, tab, and escape
 4. Test post-response suggestions:
    - Ask "Show me roguelike games"
    - Wait for response
-   - See suggestion chips below response
-   - Click a chip → Auto-submits
+   - Verify suggestion chips below the response
+   - Click a chip to auto-submit
 
 ---
 

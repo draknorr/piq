@@ -21,10 +21,11 @@ Start with:
 Start with:
 - [Developer Setup](./developer-guide/setup.md)
 - [System Overview](./developer-guide/architecture/overview.md)
-- [Steam Change Intelligence](./developer-guide/workers/steam-change-intelligence.md)
+- [TigerData Operating Model](./developer-guide/architecture/tigerdata-operating-model.md)
+- [Query API README](../apps/query-api/README.md)
 
 ## Quick Links
 
-- [Latest Release Notes](./releases/v2.10-chat-news-ops-refresh.md)
+- [Latest Release Notes](./releases/v2.11-chat-contract-cutover.md)
 - [API Overview](./api/overview.md)
 - [Reference Docs](./reference/)

@@ -6,36 +6,32 @@ This guide explains how chat billing works in PublisherIQ.
 
 Credits are consumed only when you use the AI chat. The final charge depends on:
 
-- which chat tools ran
+- which chat capabilities ran
 - how many model tokens were used
 - the per-message minimum charge
 
 Admins can add or remove credits from `/admin/users`.
 
-## Current Tool Costs
+## Current Capability Costs
 
-These are the current per-tool charges in the chat runtime:
+These are the current per-capability charges in the chat runtime:
 
-| Tool | Credits |
-|------|---------|
-| `lookup_publishers` | 4 |
-| `lookup_developers` | 4 |
-| `lookup_games` | 4 |
-| `lookup_tags` | 4 |
-| `query_analytics` | 8 |
-| `query_change_activity` | 8 |
-| `get_change_activity_detail` | 8 |
-| `get_recent_news_detail` | 8 |
-| `get_recent_news_digest` | 8 |
-| `search_recent_news_topics` | 10 |
-| `search_games` | 8 |
-| `get_game_change_timeline` | 10 |
-| `compare_change_before_after` | 12 |
-| `search_by_concept` | 12 |
-| `find_similar` | 12 |
-| `discover_trending` | 12 |
-| `screen_games` | 12 |
-| `find_change_patterns` | 14 |
+| Capability | Credits |
+|------------|---------|
+| Title or entity lookup | 4 |
+| Structured analytics | 8 |
+| Change activity summary | 8 |
+| Change detail | 8 |
+| Recent news detail | 8 |
+| Recent news digest | 8 |
+| Recent news topic search | 10 |
+| Games search and discovery | 8 |
+| Game timeline | 10 |
+| Before/after comparison | 12 |
+| Concept search | 12 |
+| Similarity search | 12 |
+| Trend discovery | 12 |
+| Change-pattern discovery | 14 |
 
 ## Token Costs
 
@@ -65,7 +61,7 @@ If the request fails after reservation, the reservation is refunded.
 ## Final Cost Formula
 
 ```
-total = tool credits + token credits
+total = capability credits + token credits
 final charge = max(total, 4)
 ```
 

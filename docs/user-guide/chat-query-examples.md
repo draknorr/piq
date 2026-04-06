@@ -2,12 +2,12 @@
 
 Curated examples for the PublisherIQ chat interface.
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 6, 2026
 
 > Related docs:
 > - [Chat Interface Guide](./chat-interface.md)
 > - [Streaming API](../api/streaming-api.md)
-> - [Chat Data System](../developer-guide/architecture/chat-data-system.md)
+> - [Change Feed Guide](./change-feed.md)
 
 ---
 
@@ -15,17 +15,17 @@ Curated examples for the PublisherIQ chat interface.
 
 | Want to... | Use this kind of query |
 |------------|------------------------|
-| Look up one game | `lookup_games` first, then ask about that title |
-| Compare similar games | `find_similar` |
-| Find something by tags or concepts | `search_games` or `search_by_concept` |
-| Find trending games | `discover_trending` or `screen_games` |
-| Ask what changed on one title | `get_game_change_timeline` |
-| Inspect the latest Steam news item | `get_recent_news_detail` |
-| Summarize recent news for one or more titles | `get_recent_news_digest` |
-| Search recent news by topic | `search_recent_news_topics` |
-| Drill into one change card | `get_change_activity_detail` |
-| Compare before and after | `compare_change_before_after` |
-| Find marketing / launch patterns | `find_change_patterns` |
+| Look up one game | Start with a title lookup, then ask about that title |
+| Compare similar games | Ask for similar games |
+| Find something by tags or concepts | Ask for a tag or concept search |
+| Find trending games | Ask for a momentum screen or trending screen |
+| Ask what changed on one title | Ask for a game timeline |
+| Inspect the latest Steam news item | Ask for the latest news item |
+| Summarize recent news for one or more titles | Ask for a news digest |
+| Search recent news by topic | Ask for topic search |
+| Drill into one change card | Ask for change detail |
+| Compare before and after | Ask for before/after comparison |
+| Find marketing / launch patterns | Ask for change-pattern analysis |
 
 ---
 

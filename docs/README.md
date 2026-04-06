@@ -1,8 +1,19 @@
 # PublisherIQ Documentation
 
-PublisherIQ documentation is organized by audience and kept aligned with the current product and runtime behavior.
+PublisherIQ documentation is organized by audience and aligned with the current runtime behavior.
 
 **New here?** Start with [START-HERE.md](START-HERE.md).
+
+## Current-State Anchors
+
+These docs describe the live April 2026 operating model and should be treated as canonical:
+
+- **[System Overview](developer-guide/architecture/overview.md)** - high-level architecture and load sharing
+- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current Supabase/TigerData/Cube split and operational flow
+- **[Query API README](../apps/query-api/README.md)** - live contract service, environments, and contract ownership
+- **[Tiger Chat Production](developer-guide/deployment/tiger-chat-production.md)** - preview/production deployment and refresh topology
+
+Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are no longer the primary source of truth.
 
 ---
 
@@ -21,13 +32,12 @@ PublisherIQ documentation is organized by audience and kept aligned with the cur
 
 ## Latest Release
 
-**[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** (March 30, 2026)
+**[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** (April 6, 2026)
 
 Highlights:
-- Recent Steam news tools now cover latest-item detail, bounded digests, and topic search over stored news text
-- Admin operations now surface catalog control, CCU quality, and richer chat-log quality metadata
-- PICS first-pass sync, app-capture work state, and news-search projections keep the current runtime easier to operate
-- Change-intelligence and chat guardrails now align around recent-news routing and carry-forward session context
+- contract-backed chat/search families now reflect the current Tiger/query-api cutover state
+- documentation now describes the live split between Supabase writes, TigerData contract reads, and Cube compatibility reads
+- deployment, setup, eval, and sync docs now align around the current preview/production operating model
 
 ---
 
@@ -42,7 +52,7 @@ Highlights:
 - **[Companies Page](user-guide/companies-page.md)** - Unified publishers and developers
 - **[Chat Interface](user-guide/chat-interface.md)** - Natural language queries
 - **[Chat Query Examples](user-guide/chat-query-examples.md)** - Example prompts
-- **[Search & Discovery](user-guide/search-discovery.md)** - Concept search and similarity
+- **[Search & Discovery](user-guide/search-discovery.md)** - Discovery styles and current chat capabilities
 - **[Personalization](user-guide/personalization.md)** - Pins, alerts, and My Dashboard
 - **[Account](user-guide/account.md)** - Sign-in, profile, and credits
 - **[Credit System](user-guide/credit-system.md)** - How credits work
@@ -54,8 +64,8 @@ Highlights:
 
 - **[Overview](admin-guide/overview.md)** - Admin quick start
 - **[Dashboard](admin-guide/dashboard.md)** - System health, queue status, and operational views
-- **[Chat Logs](admin-guide/chat-logs.md)** - Query debugging
-- **[Troubleshooting](admin-guide/troubleshooting.md)** - Common issues and auth/runtime fixes
+- **[Chat Logs](admin-guide/chat-logs.md)** - Query debugging, traces, and contract summaries
+- **[Troubleshooting](admin-guide/troubleshooting.md)** - Common auth, runtime, query-api, and deployment fixes
 
 ---
 
@@ -70,9 +80,10 @@ Highlights:
 ### Architecture
 
 - **[System Overview](developer-guide/architecture/overview.md)** - High-level system design
-- **[Database Schema](developer-guide/architecture/database-schema.md)** - Tables, views, enums, and RPCs
-- **[Sync Pipeline](developer-guide/architecture/sync-pipeline.md)** - Worker and runtime data flow
-- **[Chat Data System](developer-guide/architecture/chat-data-system.md)** - LLM and Cube.js internals
+- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current live data-plane split
+- **[Database Schema](developer-guide/architecture/database-schema.md)** - Supabase schema plus TigerData schema slices
+- **[Sync Pipeline](developer-guide/architecture/sync-pipeline.md)** - Worker and data-plane refresh flow
+- **[Chat Data System](developer-guide/architecture/chat-data-system.md)** - current chat and contract runtime
 - **[Design System](developer-guide/architecture/design-system.md)** - UI tokens and patterns
 - **[Data Sources](developer-guide/architecture/data-sources.md)** - External and internal acquisition sources
 
@@ -95,11 +106,11 @@ Highlights:
 ### Deployment
 
 - **[Vercel](developer-guide/deployment/vercel.md)** - Dashboard deployment
-- **[Tiger Chat](developer-guide/deployment/tiger-chat-production.md)** - Tiger/query-api production rollout
+- **[Tiger Chat](developer-guide/deployment/tiger-chat-production.md)** - Tiger/query-api preview and production rollout
 - **[Fly.io](developer-guide/deployment/fly-io.md)** - Cube.js deployment
-- **[Railway](developer-guide/deployment/railway.md)** - PICS service deployment
-- **[Supabase](developer-guide/deployment/supabase.md)** - Database setup
-- **[GitHub Actions](developer-guide/deployment/github-actions.md)** - Scheduled syncs
+- **[Railway](developer-guide/deployment/railway.md)** - PICS service and query-api deployment notes
+- **[Supabase](developer-guide/deployment/supabase.md)** - Supabase write/control-plane setup
+- **[GitHub Actions](developer-guide/deployment/github-actions.md)** - Scheduled syncs and Tiger refresh workflows
 
 ---
 
@@ -115,18 +126,18 @@ Highlights:
 
 ## Reference
 
-- **[New Metrics](reference/new-metrics.md)** - Estimated played hours and derived metrics
 - **[PICS Data Fields](reference/pics-data-fields.md)** - PICS field reference and authority rules
 - **[SQL Examples](reference/sql-examples.md)** - Query patterns
 - **[Data Gaps Analysis](reference/data-gaps-analysis.md)** - Coverage analysis
 - **[Data Sources Comprehensive](reference/data-sources-comprehensive.md)** - Broader source inventory
 - **[Steam Game Change Intelligence Research](reference/steam-game-change-intelligence-research.md)** - Research and roadmap context
-- **[Steam User Data Access And Scraping Research](reference/steam-user-data-access-and-scraping-research.md)** - Owner-only access, public scraping surfaces, and profiling limits
+- **[Tiger Target Baselines](reference/tiger-target-baseline/)** - captured TigerData baseline and parity artifacts
 
 ---
 
 ## Previous Releases
 
+- **[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** - recent-news and ops baseline before the broader contract cutover doc refresh
 - **[v2.9 - Change Feed, Auth Hardening, and Change Intelligence](releases/v2.9-change-feed-auth-intelligence.md)** - Change Feed, auth, and change-intel baseline
 - **[v2.8 - Security Fixes](releases/v2.8-security-fixes.md)** - OTP auth and security hardening baseline
 - **[v2.7 - Command Palette](releases/v2.7-design-command-palette.md)** - Filter syntax and command palette

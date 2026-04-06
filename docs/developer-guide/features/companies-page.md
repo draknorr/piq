@@ -10,6 +10,8 @@ This document describes the technical architecture of the unified Companies page
 
 The Companies page (`/companies`) is a unified analytics dashboard for browsing publishers and developers. It replaces the separate `/publishers` and `/developers` index pages with a single, feature-rich interface.
 
+This page is still Supabase/RPC-backed today. The main reads come from stored functions and materialized views; Tiger/query-api does not serve this surface directly.
+
 **Key Capabilities:**
 - View publishers, developers, or both together
 - 9 filter categories with 25+ parameters

@@ -1,6 +1,6 @@
 # Tiger Chat Production Deployment
 
-This guide covers the production rollout for Tiger-backed chat while the rest of
+This guide covers the production rollout for the Tiger/query-api contract runtime while the rest of
 the site continues to run on the current Supabase and Cube paths.
 
 Target topology:
@@ -8,11 +8,11 @@ Target topology:
 - Vercel Preview -> Railway Preview `query-api` -> Tiger Preview database
 - Vercel Production -> Railway Production `query-api` -> Tiger Production database
 - Supabase remains the write authority
-- Tiger powers `/chat` only
+- TigerData powers the contract-serving query plane used by `/chat`, similarity, momentum, and change-intel routes
 
 ## 1. Provision The Tiger Databases
 
-Create two Tiger / Timescale services:
+Create two TigerData / Timescale services:
 
 - preview / staging
 - production
@@ -158,7 +158,6 @@ Chat prompts:
 
 Expected outcome:
 
-- source trail shows Tiger-backed contracts rather than legacy tools like
-  `screen_games`
+- source trail shows Tiger-backed contracts rather than legacy catalog-screen helpers
 - Preview and Production each call their own Railway service
 - production chat works without legacy fallback

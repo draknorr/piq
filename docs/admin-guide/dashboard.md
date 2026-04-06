@@ -4,8 +4,6 @@ This guide explains how to use the PublisherIQ admin dashboard to monitor system
 
 > Access requires an authenticated admin user.
 
----
-
 ## Overview
 
 The `/admin` dashboard currently focuses on:
@@ -17,7 +15,7 @@ The `/admin` dashboard currently focuses on:
 - queue health and recent jobs
 - chat logs
 
----
+The dashboard itself still reads from Supabase RPCs, materialized views, and control tables. TigerData/query-api owns the contract-serving chat paths, not the admin dashboard read model.
 
 ## Status Bar
 
@@ -31,8 +29,6 @@ The top status bar shows six summary metrics:
 | `Overdue` | Apps past their sync schedule |
 | `Errors` | Apps with consecutive sync failures |
 | `PICS` | Latest Steam change number processed |
-
----
 
 ## Data Completion
 
@@ -48,8 +44,6 @@ This section shows sync completion for the current catalog by source:
 
 The dashboard uses the current catalog denominator rather than raw historical row counts.
 
----
-
 ## Catalog Control
 
 This section exposes the live catalog control plane:
@@ -62,8 +56,6 @@ This section exposes the live catalog control plane:
 | `Stale Applist Jobs` | Running applist jobs older than the expected threshold |
 
 It also shows the latest successful applist start and completion timestamps.
-
----
 
 ## CCU Quality
 
@@ -84,8 +76,6 @@ This section summarizes current-catalog CCU confidence and provenance:
 | `Legacy Unknown` | Latest non-null CCU row has no provenance |
 
 The cached stats include an `updated_at` timestamp and may fall back to approximate data if the live aggregation is unavailable.
-
----
 
 ## Sync Queue
 
@@ -108,8 +98,6 @@ The priority distribution groups apps into:
 | `Low` | 25-49 | 48 hours |
 | `Minimal` | <25 | 7 days |
 
----
-
 ## PICS Service
 
 This section shows the latest PICS change number and whether the data source is approximate or live.
@@ -118,8 +106,6 @@ Operational note:
 
 - PICS history capture writes normalized snapshots and diff events before latest-state upserts
 - a temporary history cooldown does not mean latest-state PICS sync has stopped
-
----
 
 ## Sync Errors
 
@@ -132,8 +118,6 @@ Each row shows:
 - last failing source
 - last error message
 - last error timestamp
-
----
 
 ## Recent Jobs
 
@@ -150,13 +134,9 @@ Key fields:
 - start and completion timestamps
 - GitHub Actions run ID
 
----
-
 ## Chat Logs
 
 This section surfaces recent chat queries for debugging. See the dedicated [Chat Logs guide](./chat-logs.md) for the field breakdown.
-
----
 
 ## User Management
 
@@ -169,8 +149,6 @@ The `/admin/users` page lets you:
 
 Credit adjustments require a reason and support positive or negative changes.
 
----
-
 ## Waitlist Management
 
 The `/admin/waitlist` page lets you:
@@ -179,8 +157,6 @@ The `/admin/waitlist` page lets you:
 - resend invites for approved users
 - filter by pending, approved, and rejected states
 - filter approved entries that still need an invite
-
----
 
 ## Usage Analytics
 

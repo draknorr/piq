@@ -1,6 +1,6 @@
 # CLAUDE.md - PublisherIQ
 
-> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + Tiger query-api. Last updated: April 3, 2026.
+> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData-backed query-api. Last updated: April 6, 2026.
 
 ## When Uncertain, Ask
 
@@ -74,6 +74,25 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 - Referencing `LatestMetrics.js` as a separate file (it's defined inside `DailyMetrics.js`)
 - Running `trends-calculate` or `priority-calculate` (correct: `calculate-trends`, `update-priorities`)
 - Creating tests (no test framework configured; use `pnpm build` + `pnpm check-types`)
+
+---
+
+## Current Data-Plane Split
+
+Do not describe PublisherIQ as a single Postgres app anymore.
+
+- **Supabase** is still the write authority and control plane.
+- **TigerData / Timescale** is the contract-serving read plane behind `apps/query-api`.
+- **Cube.js** remains for compatibility and legacy analytics reads that have not yet moved to typed Tiger-backed contracts.
+
+Current high-level ownership:
+
+| Surface | Primary Read Path |
+|---------|-------------------|
+| `/chat` supported contract families | `apps/query-api` -> TigerData |
+| auth, credits, chat logs | Supabase |
+| `/apps`, `/companies`, `/changes`, `/admin` | Supabase RPCs/tables/views |
+| legacy analytics compatibility | Cube.js over Supabase |
 
 ---
 
@@ -154,8 +173,8 @@ For full schema details (tables, views, enums, RPC functions, column schemas), s
 | Query API | Railway |
 | PICS Service | Railway |
 | Cube.js | Fly.io |
-| Database | Supabase |
-| Tiger Data Plane | Tiger / Timescale |
+| Supabase Write / Control Plane | Supabase |
+| Tiger Contract Read Plane | Tiger / Timescale |
 
 Environment variables: see `.env.example` files in `apps/admin/`, `packages/cube/`, `services/pics-service/`, and root `.env`.
 

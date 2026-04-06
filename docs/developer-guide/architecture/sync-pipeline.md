@@ -1,19 +1,30 @@
 # Sync Pipeline
 
-This document describes how PublisherIQ moves data from external sources into the warehouse and then into product-facing surfaces.
+This document describes how PublisherIQ moves data from external sources into Supabase and then into TigerData-backed contract reads.
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 6, 2026
 
 ## Pipeline Summary
 
-PublisherIQ has two ingestion families:
+PublisherIQ currently has two data-plane layers:
 
-- **scheduled warehouse syncs** for catalog, metrics, reviews, CCU, and embeddings
-- **change-intelligence runtimes** for recent storefront, media, news, projection, and PICS changes
+- **Supabase write/control plane** for ingestion, latest-state storage, queues, projections, auth, and page-facing RPCs
+- **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, and change/news contracts
+
+That means the pipeline is now:
+
+```text
+source APIs
+  -> workers / PICS service
+  -> Supabase
+  -> Tiger bootstrap/backfill/refresh workflows
+  -> query-api
+  -> contract-backed reads
+```
 
 ## Scheduled Warehouse Syncs
 
-The TypeScript workers in `packages/ingestion` handle the regular warehouse pipeline:
+The TypeScript workers in `packages/ingestion` handle the regular Supabase warehouse pipeline:
 
 | Command | Purpose |
 |---------|---------|
@@ -27,13 +38,15 @@ The TypeScript workers in `packages/ingestion` handle the regular warehouse pipe
 | `calculate-velocity` | Review velocity tiers |
 | `interpolate-reviews` | Fill review gaps |
 | `ccu-sync` / `ccu-tiered-sync` / `ccu-daily-sync` | Exact CCU collection |
-| `embedding-sync` | Tiger semantic retrieval embeddings |
+| `embedding-sync` | Embedding generation for the Tiger-backed retrieval pipeline |
 | `refresh-views` | Materialized view refreshes |
 | `change-intel-backfill-projection` | Seed projection refresh jobs for change-intel backfills |
 
-## Change-Intelligence Pipeline
+These workers write to Supabase. They do not write directly to TigerData in the normal application runtime.
 
-Change intelligence runs across three components.
+## Change-Intelligence Runtime
+
+Change intelligence still runs primarily on Supabase-backed storage and projections.
 
 ### 1. Hint Seeding
 
@@ -48,11 +61,38 @@ Change intelligence runs across three components.
 - `projection_refresh`
 - `hero_asset`
 
-It captures data, writes snapshots and versions, refreshes the change/news projections, and emits `app_change_events`.
+It captures data, writes snapshots and versions, refreshes change/news projections, and emits `app_change_events`.
 
 ### 3. PICS-Side History
 
 `services/pics-service` runs in `bulk_sync`, `first_pass`, or `change_monitor` mode. `first_pass` pulls prioritized unsynced apps before the usual latest-state upserts, while the change monitor writes normalized PICS snapshots and PICS diff events inline.
+
+## TigerData Bootstrap and Refresh Flow
+
+TigerData is populated from Supabase rather than from the raw source APIs directly.
+
+### Bootstrap phases
+
+Bootstrap SQL in `packages/data-plane/sql/tiger-bootstrap/` creates the target schemas and core contract-serving slices.
+
+### Backfill flow
+
+The ordered backfill flow is:
+
+1. legacy compatibility slice
+2. daily metrics slice
+3. events/news slice
+4. reconcile
+5. validate
+
+### Ongoing refresh
+
+GitHub Actions now includes Tiger refresh workflows:
+
+- production Tiger sync
+- preview Tiger sync
+
+Those workflows refresh selected slices from Supabase into the TigerData targets and upload manifest artifacts for parity review.
 
 ## Operational Characteristics
 
@@ -63,27 +103,21 @@ It captures data, writes snapshots and versions, refreshes the change/news proje
 - PICS history capture retries transient/schema-cache failures
 - repeated PICS history failures trigger a short cooldown for historical writes while latest-state upserts continue
 
-## Change Feed Read Path
+## Serving Split After Sync
 
-The `/changes` page is backed by SQL read surfaces and internal APIs:
+After data lands:
 
-- `get_change_feed_bursts`
-- `get_change_feed_burst_detail`
-- `get_change_feed_news`
-- `get_change_feed_activity`
-- `/api/change-feed/activity/[activityId]`
-- `/api/change-feed/status`
-
-These provide grouped activity rows, news rows, detail drill-down, and capture health status.
-
-Shared chat surfaces such as `get_chat_recent_news` and `search_recent_news_topics` use the same underlying projections, but they are not the primary `/changes` page contract.
+- `/apps`, `/companies`, `/changes`, `/admin`, and most operational reads still use Supabase RPCs/views/tables
+- `query-api` contracts read TigerData for chat/search/discovery families that have already moved
+- Cube reads Supabase-backed analytical models for compatibility and page-level paths not yet cut over
 
 ## Authority Rules
 
 - Storefront is authoritative for parsed `release_date` and `is_free`
 - PICS is enrichment/fallback data
-- when Storefront release text is not parseable, raw text is preserved instead of forcing invalid typed dates
 - projection refresh is a derived read surface only and never the source of truth for Storefront values
+- Supabase remains the current write authority
+- TigerData is a contract-serving read target, not the write authority
 
 ## Useful Runtime Knobs
 
@@ -113,9 +147,11 @@ SYNC_COLLECTION=all
 - `pnpm --filter @publisheriq/ingestion check-types`
 - `pnpm --filter @publisheriq/ingestion test:change-intel`
 - `cd services/pics-service && pytest`
+- Tiger refresh and parity checks from `packages/data-plane` / GitHub Actions artifacts
 
 ## Related Documentation
 
+- [TigerData Operating Model](./tigerdata-operating-model.md)
 - [Running Workers](../workers/running-workers.md)
 - [Steam Change Intelligence](../workers/steam-change-intelligence.md)
 - [Data Sources](./data-sources.md)

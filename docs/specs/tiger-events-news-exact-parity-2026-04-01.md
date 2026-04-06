@@ -2,6 +2,8 @@
 
 Date: April 1, 2026
 
+> Historical note: this document records the parity gate that promoted `searchDocuments` into the ready Tiger contract set. Keep it as a milestone record, not as the source of truth for the current runtime.
+
 This note records the first exact-parity green run for the Tiger docs/event
 slice after the sync-hardening and chat-shadow phases.
 

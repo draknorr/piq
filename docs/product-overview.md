@@ -2,7 +2,7 @@
 
 > **Steam Data Analytics Platform with AI Chat Interface**
 
-PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from seven sources into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, and a Tiger-backed query-api, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, and market trends.
+PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, and PICS into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, and a TigerData-backed query-api, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, and market trends.
 
 ---
 
@@ -46,14 +46,24 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 - **Deep Discovery**: 12 preset views, 40+ filter parameters, and 6 computed insight metrics for finding hidden gems, tracking trends, and comparing games
 - **Personalized Monitoring**: Pin games and companies, receive alerts on CCU spikes, trend reversals, review surges, and more
 
+### Current Serving Model
+
+PublisherIQ now runs with a split serving model:
+
+- **Supabase** remains the write authority and control plane for ingestion, queues, auth, operational state, and the current page-serving RPCs
+- **TigerData (Timescale)** powers the contract-serving read plane through `query-api`
+- **Cube.js** remains in the stack for compatibility and legacy analytics reads that have not yet moved onto typed Tiger-backed contracts
+
+This means the system should be understood as a multi-plane runtime, not a single-database application.
+
 ### Technology Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 15, React 19, TailwindCSS |
-| Database | Supabase (PostgreSQL) with materialized views and RPC read surfaces |
-| Semantic Layer | Cube.js (27 cubes across 9 model files) |
-| Tiger Query API | Tiger-backed contracts for chat, semantic retrieval, and continuation |
+| Write / Control Plane | Supabase (PostgreSQL) with materialized views and RPC read surfaces |
+| Semantic Layer | Cube.js (27 cubes across 9 model files, now primarily compatibility-focused) |
+| Contract Read Plane | TigerData-backed `query-api` contracts for chat, semantic retrieval, momentum, change/news, user context, and continuation |
 | Semantic Retrieval | Tiger-backed retrieval tables with OpenAI embeddings |
 | LLM | GPT-4o-mini (default), streaming via SSE |
 | Ingestion | TypeScript workers, repair scripts, and change-intel runtime |
@@ -394,22 +404,24 @@ The AI chat interface (`/chat`) enables natural language querying of all platfor
 
 #### Architecture
 
-1. **Natural Language Understanding**: User query interpreted by LLM
-2. **Tool Selection**: LLM selects appropriate data tools (up to 5 iterations)
-3. **Query Execution**: The app routes requests into Tiger query contracts, Cube.js, and curated SQL read surfaces
+1. **Natural Language Understanding**: User query interpreted by the LLM
+2. **Contract Routing**: The runtime resolves the request into typed query contracts and only falls back to compatibility paths when needed
+3. **Query Execution**: The app routes requests into Tiger-backed contracts, Supabase-backed read surfaces, and limited compatibility analytics paths
 4. **Entity Linking**: Results enriched with clickable links to game/company pages
 5. **Streaming Response**: Results streamed via Server-Sent Events (SSE)
 
-#### 18 LLM Tools
+#### Current Contract Families
 
-The chat runtime now exposes 18 tools across analytics, similarity search, discovery, and change intelligence.
+The chat runtime is now contract-first. The live serving surface centers on these typed query contracts:
 
-| Tool family | Tools |
-|-------------|-------|
-| Analytics and discovery | `query_analytics`, `find_similar`, `search_games`, `lookup_tags`, `lookup_publishers`, `lookup_developers`, `search_by_concept`, `discover_trending`, `screen_games`, `lookup_games` |
-| Change intelligence | `query_change_activity`, `get_game_change_timeline`, `get_recent_news_digest`, `get_recent_news_detail`, `search_recent_news_topics`, `get_change_activity_detail`, `compare_change_before_after`, `find_change_patterns` |
+| Contract family | Current contracts |
+|-----------------|------------------|
+| Entity resolution and context | `resolveEntities`, `getEntityOverview`, `getRelatedEntities`, `getUserContext` |
+| Catalog search and ranking | `searchCatalog`, `rankEntities`, `compareEntities`, `discoverMomentum` |
+| History, change, and news | `traceMetricHistory`, `searchChangeActivity`, `explainChanges`, `discoverChangePatterns`, `searchDocuments` |
+| Semantic retrieval and continuation | `semanticSearch`, `continueResultSet` |
 
-`query_analytics` currently spans the Cube.js models used by the dashboard, including Discovery, GameCatalog, DlcRelations, PublisherMetrics, DeveloperMetrics, DailyMetrics, LatestMetrics, and the monthly metrics cubes.
+The older tool-era naming still exists in some compatibility traces and historical documents, but the current system should be understood in terms of contracts and capability families rather than individual ad hoc tool labels.
 
 #### Query Capabilities
 
@@ -432,11 +444,11 @@ The chat supports a wide range of queries across categories:
 #### Query Details Panel
 
 Every chat response includes an expandable details panel showing:
-- Tool calls made (name, parameters, duration)
-- Cube.js queries generated
-- LLM reasoning steps
-- Raw result data
-- Session carry-forward context and guardrail/quality metadata when phase-1 chat quality is enabled
+- Contract calls and routing decisions (name, parameters, duration)
+- Execution traces and backend source summaries
+- LLM iteration details
+- Structured result data
+- Session carry-forward context and guardrail/quality metadata
 
 #### Streaming Protocol
 
@@ -494,12 +506,24 @@ Pin any game, publisher, or developer from its detail page to track it on your p
 
 The credit system manages AI chat usage with transparent cost tracking.
 
-#### Tool Costs
+#### Capability Costs
 
-| Tool | Credits per Call |
-|------|-----------------|
-| `search_games`, `lookup_tags`, `lookup_publishers`, `lookup_developers`, `lookup_games` | 4 |
-| `query_analytics`, `find_similar`, `search_by_concept`, `discover_trending` | 8 |
+| Capability | Credits |
+|------------|---------|
+| Title or entity lookup | 4 |
+| Structured analytics | 8 |
+| Change activity summary | 8 |
+| Change detail | 8 |
+| Recent news detail | 8 |
+| Recent news digest | 8 |
+| Recent news topic search | 10 |
+| Games search and discovery | 8 |
+| Game timeline | 10 |
+| Before/after comparison | 12 |
+| Concept search | 12 |
+| Similarity search | 12 |
+| Trend discovery | 12 |
+| Change-pattern discovery | 14 |
 
 #### Token Costs
 
@@ -842,13 +866,13 @@ Games are classified by review activity:
 - **Stability threshold**: 2% change required to register a trend direction change
 - **Velocity trend**: Accelerating (7d > 30d x 1.2), Decelerating (7d < 30d x 0.8), Stable (otherwise)
 
-#### Trend Discovery (Chat)
+#### Momentum Discovery (Chat)
 
-The `discover_trending` tool supports four discovery modes:
-- **review_momentum**: Highest review activity (most reviews/day)
-- **accelerating**: Games where review rate is increasing
-- **breaking_out**: Hidden gems gaining attention (accelerating + 100-10K reviews)
-- **declining**: Games losing momentum
+The current momentum discovery contract supports four main discovery modes:
+- **Highest review activity**: titles with the most active review momentum
+- **Accelerating**: games where recent review rate is improving
+- **Breaking out**: hidden gems gaining attention without already being mainstream
+- **Declining**: games losing momentum relative to their prior window
 
 ### 4.5 Estimated Weekly Played Hours
 
@@ -874,19 +898,19 @@ Data Sources                Ingestion Layer         Data Layer              Pres
 Steam App List API    ──┐
 Steam Storefront API  ──┤                         ┌──────────────┐
 Steam Reviews API     ──┼── TypeScript Workers ──▶│  Supabase    │──┐
-Steam Histogram API   ──┤   (15+ scheduled jobs)  │  PostgreSQL  │  │     ┌─────────────┐
+Steam Histogram API   ──┤   + PICS Service        │  PostgreSQL  │  │     ┌─────────────┐
 Steam CCU API         ──┘                         └──────────────┘  ├────▶│  Next.js 15  │
                                                         │           │     │  Dashboard   │
 SteamSpy API          ──── TypeScript Workers ────────────┘           │     └─────────────┘
                                                                     │
 PICS Service (Python) ──── SteamKit2 ─────────────────────────────────┘
                                                   ┌──────────────┐
-                                                  │  Cube.js     │──── Semantic Layer
-                                                  │  27 cubes    │     (analytics queries)
+                                                  │  Cube.js     │──── Compatibility analytics
+                                                  │  27 cubes    │     (legacy / page reads)
                                                   └──────────────┘
-                                                  ┌──────────────┐
-Query API             ──────────────────────────▶│  Tiger Data  │──── Contract-backed retrieval
-                                                  │  + vectors    │     (similarity, concept, chat)
+Supabase refresh / bootstrap / reconcile flows ─▶┌──────────────┐
+Query API             ──────────────────────────▶│ TigerData    │──── Contract-backed reads
+                                                  │ + query-api  │     (chat, discovery, change/news)
                                                   └──────────────┘
 ```
 
@@ -897,9 +921,9 @@ Query API             ───────────────────�
 | Frontend Framework | Next.js 15 | App Router with React Server Components |
 | UI Framework | React 19 | Component rendering |
 | Styling | TailwindCSS | Utility-first CSS |
-| Database | Supabase (PostgreSQL) | Primary data store with RLS |
-| Semantic Layer | Cube.js | Analytics query abstraction (27 cubes) |
-| Query API | Railway-hosted `query-api` | Tiger-backed chat contracts and semantic retrieval |
+| Write / Control Plane | Supabase (PostgreSQL) | primary write target, auth, queues, projections, and page reads |
+| Semantic Layer | Cube.js | analytics compatibility layer over Supabase-backed models |
+| Query API | Railway-hosted `query-api` | TigerData-backed typed contracts and continuation |
 | Embeddings | OpenAI text-embedding-3-small | Stored in Tiger-backed retrieval tables |
 | LLM | GPT-4o-mini (default) | Chat query understanding |
 | PICS Service | Python + SteamKit2 | Steam product info cache |
@@ -908,6 +932,13 @@ Query API             ───────────────────�
 | Type Generation | Supabase CLI | Database-to-TypeScript types |
 
 ### 5.3 Database
+
+PublisherIQ now uses two database roles:
+
+- **Supabase** for writes, operational state, auth, product RPCs, and current page-serving data
+- **TigerData** for selected contract-serving read slices
+
+The scale table below still reflects the main Supabase warehouse footprint because Supabase remains the write/control plane.
 
 #### Scale
 
@@ -1000,8 +1031,8 @@ Semantic similarity and concept search now flow through the Tiger query-api rath
 | Dashboard | Vercel | Next.js frontend + API routes |
 | PICS Service | Railway | Python microservice for Steam product data |
 | Cube.js | Fly.io | Semantic analytics layer |
-| Database | Supabase | PostgreSQL with RLS + Auth |
-| Query API + Tiger | Railway + Tiger | Chat contracts and semantic retrieval |
+| Supabase | Supabase | write/control plane, auth, queues, and page-serving RPCs |
+| Query API + TigerData | Railway + Tiger | contract-serving read plane for chat and discovery |
 | CI/CD | GitHub Actions | 15+ scheduled workflows |
 
 ---
@@ -1195,16 +1226,17 @@ Key UI components:
 | Version | Date | Key Additions |
 |---------|------|---------------|
 | **v2.0** | Jan 6, 2026 | Complete UI redesign, new design system, admin dashboard with collapsible sections, 66% query reduction |
-| **v2.1** | Jan 8, 2026 | Velocity-based review sync scheduling, user authentication (magic link), credit system, waitlist, `lookup_games` tool, ReviewVelocity + ReviewDeltas cubes |
+| **v2.1** | Jan 8, 2026 | Velocity-based review sync scheduling, user authentication (magic link), credit system, waitlist, game lookup in chat, ReviewVelocity + ReviewDeltas cubes |
 | **v2.2** | Jan 9, 2026 | Tiered CCU tracking (3-tier system with hourly/2-hourly/daily), Insights dashboard with sparklines, exact CCU from Steam API (replacing SteamSpy estimates), CCU rotation tracking, skip tracking, SteamSpy supplementary fetch, 3x reviews throughput |
 | **v2.3** | Jan 11, 2026 | 10x embedding sync throughput (24h to 15-30 min), async Qdrant writes, OpenAI retry logic, selective sync by collection |
-| **v2.4** | Jan 12, 2026 | Personalized dashboard (pin system), 8 alert types with hourly detection, alert preferences with sensitivity tuning, per-pin overrides, `search_by_concept` + `discover_trending` tools, enhanced embeddings with momentum data, 90% Qdrant storage reduction |
+| **v2.4** | Jan 12, 2026 | Personalized dashboard (pin system), 8 alert types with hourly detection, alert preferences with sensitivity tuning, per-pin overrides, concept search and trend discovery in chat, enhanced embeddings with momentum data, 90% Qdrant storage reduction |
 | **v2.5** | Jan 15, 2026 | Companies page (unified publishers/developers), 25+ filter parameters, 17 columns, comparison mode, export, saved views, computed ratios, two-path query optimization |
 | **v2.6** | Jan 16, 2026 | Games page rebuild, 12 presets, 12 quick filters, 33 columns, 6 computed insight metrics (Momentum, Sentiment Delta, Active Player %, Review Rate, Value Score, vs Publisher Avg), 40+ filter parameters, 7 new materialized views |
 | **v2.7** | Jan 25, 2026 | Command palette (Cmd+K) with filter syntax, active filter bar with color-coded chips, warm stone color palette, DM Sans + JetBrains Mono typography |
 | **v2.8** | Jan 31, 2026 | 14 security vulnerabilities patched, OTP authentication (8-digit codes), token refresh loop fix, apps/companies page sparkline and timeout fixes, standardized Supabase client patterns |
 | **v2.9** | Mar 15, 2026 | New Change Feed at `/changes`, OTP/session hardening, origin validation, Change Feed SQL read surfaces, stale-claim recovery, improved change-intel and PICS history capture |
 | **v2.10** | Mar 30, 2026 | Recent news detail/digest/topic search in chat, catalog control and CCU quality in admin, first-pass PICS sync, chat quality/session logging, and news search projection refresh |
+| **v2.11** | Apr 6, 2026 | Chat contract cutover, TigerData-backed query-api operating model, continuation/context contracts, docs/news parity, and preview/production Tiger refresh automation |
 
 ### Feature Matrix
 
@@ -1226,6 +1258,8 @@ Key UI components:
 | Change-Intelligence Runtime | v2.9 | Active |
 | Recent News Chat Tools | v2.10 | Active |
 | Catalog Control & CCU Quality | v2.10 | Active |
+| Chat Contract Cutover | v2.11 | Active |
+| TigerData Query Operating Model | v2.11 | Active |
 | Command Palette | v2.7 | Active |
 | Filter Syntax | v2.7 | Active |
 | Design System (Warm Stone) | v2.7 | Active |

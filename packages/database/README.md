@@ -5,10 +5,10 @@ Supabase client factories, ingestion helpers, and TypeScript types for Publisher
 ## Overview
 
 This package provides:
-- Pre-configured Supabase clients
-- Ingestion helper functions used by workers and repair scripts
-- Auto-generated TypeScript types from database schema
-- Type-safe database operations
+- pre-configured Supabase clients
+- ingestion helper functions used by workers and repair scripts
+- auto-generated TypeScript types from the Supabase schema
+- type-safe Supabase database operations
 
 ## Installation
 
@@ -26,7 +26,7 @@ This is a workspace package, included automatically:
 
 ### Server-Side (Service Role)
 
-Use `createServiceClient()` for server-side operations with full database access:
+Use `createServiceClient()` for server-side operations with full Supabase access:
 
 ```typescript
 import { createServiceClient } from '@publisheriq/database';
@@ -97,6 +97,8 @@ Required for clients to function:
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...  # For service client
 ```
+
+This package does not connect to TigerData directly. TigerData access lives in `@publisheriq/data-plane` and `apps/query-api`.
 
 ## Scripts
 

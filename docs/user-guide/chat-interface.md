@@ -2,12 +2,11 @@
 
 PublisherIQ chat is a natural-language interface for querying Steam data, similarity search, and Steam change intelligence.
 
-**Last Updated:** March 30, 2026
+**Last Updated:** April 6, 2026
 
 > Related docs:
 > - [Chat Query Examples](./chat-query-examples.md)
 > - [Streaming API](../api/streaming-api.md)
-> - [Chat Data System](../developer-guide/architecture/chat-data-system.md)
 > - [Change Feed Guide](./change-feed.md)
 
 ## Getting Started
@@ -17,24 +16,26 @@ PublisherIQ chat is a natural-language interface for querying Steam data, simila
 3. Press Enter
 4. Review the answer, the linked entities, and the query details panel
 
-## What Chat Uses
+## What Chat Can Do
 
-The chat route can call these tool families:
+The chat route supports these capability families:
 
-- Structured analytics: `query_analytics`
-- Similarity and discovery: `find_similar`, `search_by_concept`, `search_games`, `lookup_tags`, `lookup_publishers`, `lookup_developers`, `lookup_games`, `discover_trending`, `screen_games`
-- Change intelligence: `query_change_activity`, `get_game_change_timeline`, `get_recent_news_detail`, `get_recent_news_digest`, `search_recent_news_topics`, `get_change_activity_detail`, `compare_change_before_after`, `find_change_patterns`
+- Structured analytics for ranked lists, counts, and comparisons
+- Similarity and discovery for "games like X" and concept-based search
+- Trend and screening for momentum, velocity, and market screens
+- Change intelligence for store-page, announcement, and before/after analysis
+- Recent news search for the latest stored Steam news and topic lookups
+- Follow-up continuation so "show me more" and "same but..." stay on the same result set
 
 Use these rules as a shortcut:
 
-- Use `lookup_games` first when a specific title might be ambiguous or misspelled.
-- Use `get_game_change_timeline` for one game’s recent Storefront, PICS, media, and news history.
-- Use `get_recent_news_detail` when the user wants the newest Steam news item specifically.
-- Use `get_recent_news_digest` for a bounded recent-news summary across one title or a small set of titles.
-- Use `search_recent_news_topics` for cross-game topic searches like developer diaries, roadmaps, demos, playtests, or patch notes.
-- Use `find_change_patterns` for marketing push, relaunch, update tease, under-marketed, signable, rescue, sustained-response, or weak-response prompts.
-- Use `screen_games` for strict games-page style screening with ranking metrics.
-- Use `discover_trending` for momentum-focused questions like accelerating or breaking-out games.
+- Resolve a specific title first when the name may be ambiguous or misspelled.
+- Use a game timeline for one title’s recent storefront, media, and news history.
+- Ask for the latest news item when you want the newest stored post only.
+- Ask for a digest when you want a bounded summary across one or a few titles.
+- Use topic search when you care about content across many games rather than one named title.
+- Use a market screen when you want a strict ranked list with explicit filters and sorting.
+- Use momentum discovery when you want accelerating, breakout, or declining titles.
 
 ## What You Can Ask
 
@@ -95,4 +96,3 @@ The session context carries the current resolved entities, active constraints, c
 - [Change Feed Guide](./change-feed.md)
 - [Account Guide](./account.md)
 - [Streaming API](../api/streaming-api.md)
-- [Chat Data System](../developer-guide/architecture/chat-data-system.md)

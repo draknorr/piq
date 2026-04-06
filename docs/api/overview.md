@@ -4,11 +4,11 @@ This section covers the product-facing internal APIs and the external data sourc
 
 ## Internal APIs
 
-| API | Purpose | Guide |
-|-----|---------|-------|
-| Chat JSON and streaming | AI responses, tool calls, and follow-up context | [Streaming API](./streaming-api.md) |
-| Dashboard internals | Pins, alerts, auth validation, and app data | [Internal API](./internal-api.md) |
-| Change Feed internals | Activity, detail, news, and status surfaces | [Internal API](./internal-api.md) |
+| API | Purpose | Primary Backend |
+|-----|---------|-----------------|
+| Chat JSON and streaming | AI responses, contract execution, follow-up context, and turn metadata | Query API + Tiger-backed contracts |
+| Dashboard internals | Pins, alerts, auth validation, and user state | Supabase session + tables/RPCs |
+| Change Feed internals | Activity, detail, news, and status surfaces | Supabase RPCs and read surfaces |
 
 ## External Source APIs
 
@@ -19,7 +19,7 @@ This section covers the product-facing internal APIs and the external data sourc
 
 ## Auth Model
 
-Internal APIs are generally protected by the signed-in Supabase session cookie.
+Most internal APIs use the signed-in Supabase session cookie. Chat streaming also relies on an internal bearer-authenticated query-api hop for Tiger-backed contracts.
 
 Common failure response:
 
@@ -29,6 +29,12 @@ Common failure response:
   "message": "Authentication required"
 }
 ```
+
+## Routing Split
+
+- `/api/chat/*` is the system contract boundary for chat and related query workflows.
+- `/api/change-feed/*` is Supabase-backed and serves the `/changes` experience.
+- `/api/pins/*`, `/api/alerts/*`, and admin data routes remain Supabase-backed.
 
 ## Related Documentation
 

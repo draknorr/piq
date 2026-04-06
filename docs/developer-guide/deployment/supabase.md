@@ -1,6 +1,6 @@
 # Supabase Setup
 
-This guide covers setting up the Supabase database for PublisherIQ.
+This guide covers setting up the Supabase side of PublisherIQ.
 
 ## Prerequisites
 
@@ -116,6 +116,17 @@ supabase/migrations/
 | `app_steam_deck` | Steam Deck compatibility |
 
 See [Database Schema](../architecture/database-schema.md) for full details.
+
+## Scope
+
+Supabase remains responsible for:
+
+- write authority for the live product database
+- auth and session state
+- operational/control-plane tables
+- page and admin reads that still execute directly against Supabase RPCs and materialized views
+
+TigerData owns the contract-serving query plane documented in [Tiger Chat Production](./tiger-chat-production.md) and [Query API](../../../apps/query-api/README.md).
 
 ## RPC Functions
 

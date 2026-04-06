@@ -4,14 +4,14 @@ This guide explains the main search and discovery styles available through Publi
 
 ## Main Approaches
 
-| Approach | Best For | Typical Tooling |
-|----------|----------|-----------------|
-| Structured analytics | Ranked lists, metrics, comparisons | `query_analytics` |
-| Strict screening | Games-page style ranked discovery | `screen_games` |
-| Trend discovery | Momentum and velocity questions | `discover_trending` |
-| Concept search | Natural-language game ideas | `search_by_concept` |
-| Similarity search | "Games like X" | `find_similar` |
-| Change and news search | Recent Steam activity, announcements, before/after diffs | change-intel and recent-news tools |
+| Approach | Best For | Typical Experience |
+|----------|----------|--------------------|
+| Structured analytics | Ranked lists, metrics, comparisons | Ask for a ranked answer with explicit filters |
+| Strict screening | Games-page style ranked discovery | Ask for a market screen with sorting and filters |
+| Trend discovery | Momentum and velocity questions | Ask what is accelerating, breaking out, or declining |
+| Concept search | Natural-language game ideas | Describe the kind of game you want in plain English |
+| Similarity search | "Games like X" | Ask for close matches to a title or company |
+| Change and news search | Recent Steam activity, announcements, before/after diffs | Ask what changed, what was announced, or what the latest news says |
 
 ## Concept Search
 
@@ -99,7 +99,7 @@ The current chat can also search recent Steam activity and Steam news:
 
 > "Show me announcement-heavy games with weak downstream response"
 
-These prompts use the newer change-intelligence and recent-news tools rather than the older discovery-only paths.
+These prompts use the change-intelligence and recent-news capabilities rather than the older discovery-only paths.
 
 ## Tips
 

@@ -1,6 +1,6 @@
 # Deploying PICS Service to Railway
 
-This guide covers deploying the Python PICS service to Railway for real-time Steam data monitoring.
+This guide covers deploying the Python PICS service to Railway for real-time Steam data monitoring. It is separate from the TigerData/query-api data plane and does not deploy the admin dashboard or chat services.
 
 ## Prerequisites
 

@@ -1,6 +1,6 @@
 # Environment Setup
 
-PublisherIQ uses environment variables to configure database connections, API keys, and service settings. This guide covers all variables across the project.
+PublisherIQ uses environment variables to configure database connections, API keys, and service settings. This guide covers the current Supabase + TigerData split.
 
 ## Quick Setup
 
@@ -66,18 +66,20 @@ ANTHROPIC_API_KEY=sk-ant-...
 | `CUBE_API_URL` | Yes | Cube.js API endpoint (e.g., `https://your-app.fly.dev/cubejs-api/v1`) |
 | `CUBE_API_SECRET` | Yes | Secret for JWT token signing |
 
-### Tiger Query API / Tiger Data Plane
+### Tiger Query API / TigerData Data Plane
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `QUERY_API_BASE_URL` | Yes for admin chat | Base URL for the Tiger query-api |
+| `QUERY_API_BASE_URL` | Yes for deployed admin chat | Base URL for the Tiger query-api |
 | `QUERY_API_BEARER_TOKEN` | Yes for protected query-api routes | Shared bearer token between admin and query-api |
-| `TIGER_PRIMARY_URL` | Yes for query-api | Tiger / Timescale Postgres connection string |
+| `TIGER_PRIMARY_URL` | Yes for query-api | TigerData / Timescale Postgres connection string |
 
 **Notes:**
-- `/chat` and `/api/similarity` now use the Tiger query-api for semantic retrieval and contract execution.
+- `/chat` and the Tiger-backed discovery routes use the Tiger query-api for contract execution.
 - `QUERY_API_BASE_URL` / `QUERY_API_BEARER_TOKEN` belong in `apps/admin/.env.local`.
 - `TIGER_PRIMARY_URL` belongs in the query-api / data-plane runtime environment.
+- `DATA_PLANE_SOURCE_URL` is reserved for source-side baseline/backfill reads.
+- `DATABASE_URL` is the Supabase source fallback used by worker and repair scripts.
 
 ### Authentication (v2.1+)
 
@@ -240,8 +242,10 @@ OPENAI_API_KEY=sk-...
 CUBE_API_URL=https://publisheriq-cube.fly.dev/cubejs-api/v1
 CUBE_API_SECRET=your-cube-api-secret
 
-# Tiger query-api / Tiger data plane
+# Tiger query-api / TigerData data plane
 TIGER_PRIMARY_URL=postgres://tsdbadmin:password@host:5432/tsdb?sslmode=require
+DATA_PLANE_SOURCE_URL=postgres://postgres:password@live-source-host:5432/postgres
+DATABASE_URL=postgres://postgres:password@supabase-host:5432/postgres
 QUERY_API_BEARER_TOKEN=your-query-api-bearer-token
 ```
 

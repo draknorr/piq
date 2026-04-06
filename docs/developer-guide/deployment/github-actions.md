@@ -20,8 +20,8 @@ Go to **Settings > Secrets and variables > Actions > New repository secret**:
 | `SUPABASE_SERVICE_KEY` | `eyJ...` |
 | `STEAM_API_KEY` | Your Steam API key |
 | `DATABASE_URL` | PostgreSQL connection string (for refresh-views, v2.1) |
-| `TIGER_PRODUCTION_URL` | Production Tiger / Timescale connection string |
-| `TIGER_PREVIEW_URL` | Preview Tiger / Timescale connection string |
+| `TIGER_PRODUCTION_URL` | Production TigerData / Timescale connection string |
+| `TIGER_PREVIEW_URL` | Preview TigerData / Timescale connection string |
 
 ### 2. Enable Actions
 
@@ -113,10 +113,10 @@ Tiger-specific workflows:
 - `tiger-production-sync.yml`
   - also runs on a daily schedule
   - refreshes `legacy`, the trailing `metrics.daily_metrics` window, and the
-    events/news reconcile surfaces for the production Tiger target
+    events/news reconcile surfaces for the production TigerData target
 - `tiger-preview-sync.yml`
   - manual only
-  - runs the same sync path against the preview Tiger target
+  - runs the same sync path against the preview TigerData target
 
 Both workflows upload the generated Tiger manifest directory as a workflow
 artifact so you can inspect parity output after each run.
