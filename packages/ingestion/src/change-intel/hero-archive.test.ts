@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { TypedSupabaseClient } from '@publisheriq/database';
 import {
   extractHeroAssets,
   HeroAssetArchiver,
@@ -144,7 +145,7 @@ function createSupabaseMock(options: {
         };
       },
     },
-  } as any;
+  } as unknown as TypedSupabaseClient;
 
   return {
     client,
@@ -152,6 +153,20 @@ function createSupabaseMock(options: {
     updatedRows,
     uploadAttempts,
   };
+}
+
+async function withSilencedConsole<T>(fn: () => Promise<T>): Promise<T> {
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+
+  try {
+    return await fn();
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
 }
 
 test('extractHeroAssets returns populated hero asset descriptors only', () => {
@@ -269,7 +284,7 @@ test('archiveLatestAssetsForApp retries transient storage upload failures before
     });
 
     const archiver = new HeroAssetArchiver(supabase.client);
-    await archiver.archiveLatestAssetsForApp(20);
+    await withSilencedConsole(() => archiver.archiveLatestAssetsForApp(20));
 
     assert.equal(supabase.uploadAttempts.get('header'), 3);
     assert.equal(supabase.insertedRows.length, 1);
@@ -307,9 +322,11 @@ test('archiveLatestAssetsForApp continues other assets before surfacing retryabl
     });
 
     const archiver = new HeroAssetArchiver(supabase.client);
-    await assert.rejects(
-      () => archiver.archiveLatestAssetsForApp(30),
-      /Failed to archive hero assets for app 30: header: Unexpected token/
+    await withSilencedConsole(() =>
+      assert.rejects(
+        () => archiver.archiveLatestAssetsForApp(30),
+        /Failed to archive hero assets for app 30: header: Unexpected token/
+      )
     );
 
     assert.equal(supabase.uploadAttempts.get('header'), 3);

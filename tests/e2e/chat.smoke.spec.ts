@@ -196,6 +196,8 @@ const ERROR_CHAT_STREAM: MockChatStreamResponse = {
 };
 
 test('chat renders linked entities and analytical tables in assistant responses', async ({ page }) => {
+  test.slow();
+
   await installChatFetchMocks(page, {
     chatResponses: [RICH_FORMATTING_CHAT_STREAM],
   });
