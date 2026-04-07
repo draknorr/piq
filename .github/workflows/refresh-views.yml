@@ -1,10 +1,12 @@
 name: Refresh Materialized Views
 
 on:
-  schedule:
-    # Run at 5:00 AM UTC daily for the heavy dependency chain.
-    - cron: '0 5 * * *'
   workflow_dispatch:
+  # Re-enable the daily schedule after the
+  # 20260407075000_optimize_latest_daily_metrics_refresh migration is applied
+  # and latest_daily_metrics refresh timing is verified in production.
+  # schedule:
+  #   - cron: '0 5 * * *'
 
 concurrency:
   group: refresh-materialized-views
