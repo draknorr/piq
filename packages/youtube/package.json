@@ -22,7 +22,7 @@
     "sync-refresh": "tsx src/scripts/sync-refresh.ts",
     "rollup-daily": "tsx src/scripts/rollup-daily.ts",
     "mirror-preview": "tsx src/scripts/mirror-preview.ts",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@publisheriq/shared": "workspace:*",
