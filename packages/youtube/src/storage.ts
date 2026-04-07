@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 
 const log = logger.child({ package: 'youtube-storage' });
+const YOUTUBE_QUOTA_TIME_ZONE = 'America/Los_Angeles';
 
 type Queryable = Pool | PoolClient;
 
@@ -95,7 +96,8 @@ export async function fetchTodayQuotaUsage(pool: Pool): Promise<number> {
     `
       SELECT COALESCE(sum(quota_units), 0)::bigint AS used_units
       FROM ops.youtube_search_runs
-      WHERE requested_at >= date_trunc('day', now())
+      WHERE (requested_at AT TIME ZONE '${YOUTUBE_QUOTA_TIME_ZONE}')::date
+          = (now() AT TIME ZONE '${YOUTUBE_QUOTA_TIME_ZONE}')::date
         AND status = 'succeeded'
     `
   );
