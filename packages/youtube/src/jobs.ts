@@ -291,7 +291,6 @@ export async function runDiscoverySync(config: YoutubeCollectorConfig): Promise<
   const targetPool = createTargetPool(config);
   try {
     const rows = await fetchRoutingRows(targetPool, config.maxSearchCallsPerRun);
-    await closePools([targetPool]);
     await runDiscoveryForRoutingRows(config, {
       rows,
       lookbackDays: config.bootstrapLookbackDays,
@@ -315,7 +314,6 @@ export async function runBootstrapBackfill(config: YoutubeCollectorConfig): Prom
       `
     );
     const rows = await fetchRoutingRows(targetPool, config.maxSearchCallsPerRun);
-    await closePools([targetPool]);
     await runDiscoveryForRoutingRows(config, {
       rows,
       lookbackDays: config.bootstrapLookbackDays,
