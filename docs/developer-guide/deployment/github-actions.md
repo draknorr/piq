@@ -115,10 +115,12 @@ Tiger-specific workflows:
 
 - `tiger-production-sync.yml`
   - also runs on a daily schedule
+  - assumes the Tiger target is already bootstrapped before the refresh job starts
   - refreshes `legacy`, the trailing `metrics.daily_metrics` window, and the
     events/news reconcile surfaces for the production TigerData target
 - `tiger-preview-sync.yml`
   - manual only
+  - assumes the preview Tiger target is already bootstrapped
   - runs the same sync path against the preview TigerData target
 
 Both workflows upload the generated Tiger manifest directory as a workflow

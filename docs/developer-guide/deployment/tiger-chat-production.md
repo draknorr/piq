@@ -39,6 +39,10 @@ Then seed core identity:
 Use `pnpm tiger:target-baseline` before and after the bootstrap window so you
 have a recorded snapshot of the target service.
 
+Scheduled Tiger syncs do not apply bootstrap SQL for you. The GitHub Actions
+jobs assume this full bootstrap set is already present on the Tiger target
+before `pnpm tiger:backfill-legacy` runs.
+
 ## 3. Load Production Tiger From Live Source
 
 Set:
@@ -124,6 +128,8 @@ Required repository secrets:
 Production sync:
 
 - runs daily
+- assumes the Tiger target already has the full bootstrap set above
+- does not apply migrations or bootstrap SQL itself
 - refreshes the legacy compatibility slice
 - replays the trailing metrics window into `metrics.daily_metrics`
 - reconciles and validates the events/news slice

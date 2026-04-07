@@ -3,4 +3,5 @@ export * from './contract-registry.js';
 export * from './contracts.js';
 export * from './errors.js';
 export * from './identity.js';
+export * from './legacy-relation-manifest.js';
 export * from './service.js';

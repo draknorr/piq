@@ -1,8 +1,14 @@
+import { pathToFileURL } from 'node:url';
 import { Pool, type QueryResultRow } from 'pg';
 
 import { logger } from '@publisheriq/shared';
 
 import { loadSourceBaselineConfig, loadTigerConfig } from '../config.js';
+import {
+  LEGACY_BACKFILL_CRITICAL_RELATIONS,
+  LEGACY_BACKFILL_RELATIONS_BY_NAME,
+  type LegacyBackfillRelationName,
+} from '../legacy-relation-manifest.js';
 
 interface TablePlan<Row extends QueryResultRow> {
   batchSize: number;
@@ -34,10 +40,8 @@ function parseSelectedTables(envValue: string | undefined): Set<string> | null {
   );
 }
 
-const CRITICAL_COMPATIBILITY_TABLES = ['apps', 'app_dlc', 'latest_daily_metrics', 'app_steam_deck'] as const;
-
-const TABLE_PLANS: Array<{
-  name: string;
+export const LEGACY_BACKFILL_TABLE_PLANS: Array<{
+  name: LegacyBackfillRelationName;
   plan: TablePlan<QueryResultRow>;
 }> = [
   {
@@ -531,9 +535,41 @@ function buildInsertSql(plan: TablePlan<QueryResultRow>, rowCount: number): stri
   `;
 }
 
-function assertCriticalTablePlansExist(selectedPlans: Array<{ name: string }>): void {
+function assertBackfillPlansMatchManifest(): void {
+  const planNames = new Set(LEGACY_BACKFILL_TABLE_PLANS.map(({ name }) => name));
+  const manifestNames = new Set(LEGACY_BACKFILL_RELATIONS_BY_NAME.keys());
+  const missingPlans = [...manifestNames].filter((name) => !planNames.has(name));
+  const unexpectedPlans = [...planNames].filter((name) => !manifestNames.has(name));
+  const mismatches = LEGACY_BACKFILL_TABLE_PLANS.flatMap(({ name, plan }) => {
+    const manifestEntry = LEGACY_BACKFILL_RELATIONS_BY_NAME.get(name);
+
+    if (!manifestEntry || manifestEntry.targetRelation === plan.targetRelation) {
+      return [];
+    }
+
+    return [`${name} (${plan.targetRelation} != ${manifestEntry.targetRelation})`];
+  });
+
+  if (missingPlans.length === 0 && unexpectedPlans.length === 0 && mismatches.length === 0) {
+    return;
+  }
+
+  const problems = [
+    missingPlans.length > 0 ? `missing plans: ${missingPlans.join(', ')}` : null,
+    unexpectedPlans.length > 0 ? `unexpected plans: ${unexpectedPlans.join(', ')}` : null,
+    mismatches.length > 0 ? `target mismatches: ${mismatches.join(', ')}` : null,
+  ].filter((value): value is string => value !== null);
+
+  throw new Error(`Legacy compatibility backfill manifest mismatch: ${problems.join(' | ')}`);
+}
+
+function assertCriticalTablePlansExist(
+  selectedPlans: Array<{ name: LegacyBackfillRelationName }>
+): void {
   const selectedNames = new Set(selectedPlans.map(({ name }) => name));
-  const missingTables = CRITICAL_COMPATIBILITY_TABLES.filter((tableName) => !selectedNames.has(tableName));
+  const missingTables = LEGACY_BACKFILL_CRITICAL_RELATIONS.filter(
+    (tableName) => !selectedNames.has(tableName)
+  );
 
   if (missingTables.length > 0) {
     throw new Error(
@@ -549,7 +585,57 @@ async function fetchCount(pool: Pool, relation: string): Promise<number> {
   return Number(result.rows[0]?.row_count ?? 0);
 }
 
-async function backfillTable(poolSource: Pool, poolTiger: Pool, name: string, plan: TablePlan<QueryResultRow>): Promise<Summary> {
+async function fetchMissingRelations(pool: Pool, relationNames: readonly string[]): Promise<string[]> {
+  if (relationNames.length === 0) {
+    return [];
+  }
+
+  const result = await pool.query<{ relation_name: string }>(
+    `
+      SELECT relation_name
+      FROM unnest($1::text[]) AS expected(relation_name)
+      WHERE to_regclass(relation_name) IS NULL
+      ORDER BY relation_name
+    `,
+    [relationNames]
+  );
+
+  return result.rows.map((row) => row.relation_name);
+}
+
+async function assertTigerTargetRelationsExist(
+  poolTiger: Pool,
+  selectedPlans: Array<{
+    name: LegacyBackfillRelationName;
+    plan: TablePlan<QueryResultRow>;
+  }>
+): Promise<void> {
+  const missingRelations = await fetchMissingRelations(
+    poolTiger,
+    selectedPlans.map(({ plan }) => plan.targetRelation)
+  );
+
+  if (missingRelations.length > 0) {
+    const message = selectedPlans
+      .filter(({ plan }) => missingRelations.includes(plan.targetRelation))
+      .map(({ name, plan }) => {
+        const manifestEntry = LEGACY_BACKFILL_RELATIONS_BY_NAME.get(name);
+        const bootstrapSqlFile = manifestEntry?.bootstrapSqlFile ?? '<unknown bootstrap SQL>';
+        return `${plan.targetRelation} (bootstrap: ${bootstrapSqlFile})`;
+      });
+
+    throw new Error(
+      `Tiger target is missing required legacy relations before backfill. No rows were written.\n- ${message.join('\n- ')}`
+    );
+  }
+}
+
+async function backfillTable(
+  poolSource: Pool,
+  poolTiger: Pool,
+  name: LegacyBackfillRelationName,
+  plan: TablePlan<QueryResultRow>
+): Promise<Summary> {
   const sourceCount = await fetchCount(poolSource, plan.sourceRelation);
   let offset = 0;
   let writtenRows = 0;
@@ -597,7 +683,7 @@ async function backfillTable(poolSource: Pool, poolTiger: Pool, name: string, pl
   };
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const sourceConfig = loadSourceBaselineConfig();
   const tigerConfig = loadTigerConfig();
   const selectedTables = parseSelectedTables(process.env.LEGACY_BACKFILL_TABLES);
@@ -615,13 +701,15 @@ async function main(): Promise<void> {
   });
 
   try {
+    assertBackfillPlansMatchManifest();
+
     const summaries: Summary[] = [];
     const selectedPlans = selectedTables
-      ? TABLE_PLANS.filter(({ name }) => selectedTables.has(name))
-      : TABLE_PLANS;
+      ? LEGACY_BACKFILL_TABLE_PLANS.filter(({ name }) => selectedTables.has(name))
+      : LEGACY_BACKFILL_TABLE_PLANS;
 
     if (selectedTables && selectedPlans.length !== selectedTables.size) {
-      const knownTables = new Set(TABLE_PLANS.map(({ name }) => name));
+      const knownTables = new Set<string>(LEGACY_BACKFILL_RELATIONS_BY_NAME.keys());
       const unknownTables = [...selectedTables].filter((name) => !knownTables.has(name));
       throw new Error(
         `Unknown LEGACY_BACKFILL_TABLES values: ${unknownTables.join(', ')}`
@@ -631,6 +719,8 @@ async function main(): Promise<void> {
     if (!selectedTables) {
       assertCriticalTablePlansExist(selectedPlans);
     }
+
+    await assertTigerTargetRelationsExist(tigerPool, selectedPlans);
 
     logger.info('Starting legacy compatibility backfill', {
       selectedTables: selectedPlans.map(({ name }) => name),
@@ -647,7 +737,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  logger.error('Failed to backfill legacy compatibility tables', { error });
-  process.exitCode = 1;
-});
+const isDirectExecution =
+  typeof process.argv[1] === 'string' &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    logger.error('Failed to backfill legacy compatibility tables', { error });
+    process.exitCode = 1;
+  });
+}
