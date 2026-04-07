@@ -39,18 +39,18 @@ Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BAS
 
 ## Current Load-Sharing Matrix
 
-| Area | Write Authority | Primary Read Path | Primary Store | Notes |
-|------|-----------------|-------------------|---------------|-------|
-| Auth and sessions | Supabase | admin app | Supabase | OTP-first auth, callbacks, waitlist, roles |
-| Credits and chat logging | Supabase | admin app | Supabase | reservations, finalized charges, chat logs |
-| `/apps` | Supabase | Supabase RPCs/views | Supabase | current page-serving path |
-| `/companies` | Supabase | Supabase RPCs/views | Supabase | current page-serving path |
-| `/insights` | Supabase | Supabase and Cube | Supabase | not yet re-homed to TigerData |
-| `/changes` | Supabase | Supabase RPCs/projections | Supabase | page stays on Supabase change surfaces |
-| `/admin` | Supabase | Supabase RPCs/tables | Supabase | queue, catalog, CCU, usage, logs |
-| Chat contract reads | Supabase source materialized into TigerData | `query-api` contracts | TigerData | canonical path for supported families |
-| Legacy chat analytics | Supabase | Cube compatibility or legacy reads | Supabase | shrinking fallback layer |
-| Semantic retrieval | Supabase data embedded then loaded into TigerData | `query-api` -> `semanticSearch` | TigerData | no longer separate vector DB in the canonical path |
+| Area                     | Write Authority                                   | Primary Read Path                  | Primary Store | Notes                                              |
+| ------------------------ | ------------------------------------------------- | ---------------------------------- | ------------- | -------------------------------------------------- |
+| Auth and sessions        | Supabase                                          | admin app                          | Supabase      | OTP-first auth, callbacks, waitlist, roles         |
+| Credits and chat logging | Supabase                                          | admin app                          | Supabase      | reservations, finalized charges, chat logs         |
+| `/apps`                  | Supabase                                          | Supabase RPCs/views                | Supabase      | current page-serving path                          |
+| `/companies`             | Supabase                                          | Supabase RPCs/views                | Supabase      | current page-serving path                          |
+| `/insights`              | Supabase                                          | Supabase and Cube                  | Supabase      | not yet re-homed to TigerData                      |
+| `/changes`               | Supabase                                          | Supabase RPCs/projections          | Supabase      | page stays on Supabase change surfaces             |
+| `/admin`                 | Supabase                                          | Supabase RPCs/tables               | Supabase      | queue, catalog, CCU, usage, logs                   |
+| Chat contract reads      | Supabase source materialized into TigerData       | `query-api` contracts              | TigerData     | canonical path for supported families              |
+| Legacy chat analytics    | Supabase                                          | Cube compatibility or legacy reads | Supabase      | shrinking fallback layer                           |
+| Semantic retrieval       | Supabase data embedded then loaded into TigerData | `query-api` -> `semanticSearch`    | TigerData     | no longer separate vector DB in the canonical path |
 
 ## What Lives In TigerData Today
 
@@ -58,15 +58,15 @@ TigerData is not a generic mirror of the full Supabase database. It contains the
 
 ### Primary TigerData schema groups
 
-| Schema | Purpose |
-|--------|---------|
-| `core` | entities and identity-backed cross-entity read models |
-| `metrics` | time-series history, especially `metrics.daily_metrics` |
-| `events` | app change event history |
-| `docs` | news items and search projections |
-| `ops` | operational metadata needed by data-plane flows |
-| `chat` | contract-serving or chat-oriented helper relations |
-| `legacy` | compatibility landing zone for slices still shaped like the old warehouse |
+| Schema    | Purpose                                                                   |
+| --------- | ------------------------------------------------------------------------- |
+| `core`    | entities and identity-backed cross-entity read models                     |
+| `metrics` | time-series history, especially `metrics.daily_metrics`                   |
+| `events`  | app change event history                                                  |
+| `docs`    | news items and search projections                                         |
+| `ops`     | operational metadata needed by data-plane flows                           |
+| `chat`    | contract-serving or chat-oriented helper relations                        |
+| `legacy`  | compatibility landing zone for slices still shaped like the old warehouse |
 
 ### Contract-serving relation categories
 
@@ -155,6 +155,12 @@ Important parity expectations:
 - `docs.steam_news_search_projection` matches the source
 - duplicate event IDs remain zero
 - orphaned or projection-missing news rows remain zero
+
+The scheduled production and preview sync workflows use `recent_window`
+projection repair by default so daily runs only chase the trailing projection
+window. Exact historical projection repair remains available, but only when an
+operator explicitly selects `projection_repair_scope=exact_parity` for a manual
+run.
 
 The exact-parity milestone note remains historical documentation, but the current operational expectation is that these validations continue to gate trust in the Tiger-backed document and change contracts.
 

@@ -2,21 +2,25 @@ name: Tiger Production Sync
 
 on:
   schedule:
-    - cron: '45 7 * * *'
+    - cron: "45 7 * * *"
   workflow_dispatch:
     inputs:
       metrics_lookback_days:
-        description: 'How many trailing UTC days to replay into metrics.daily_metrics'
+        description: "How many trailing UTC days to replay into metrics.daily_metrics"
         required: false
-        default: '7'
+        default: "7"
       projection_day_lookback:
-        description: 'How many trailing UTC days of projection churn to replay during events/news reconcile'
+        description: "How many trailing UTC days of projection churn to replay during events/news reconcile"
         required: false
-        default: '7'
+        default: "7"
+      projection_repair_scope:
+        description: "Projection repair scope for events/news reconcile (recent_window or exact_parity)"
+        required: false
+        default: "recent_window"
       legacy_tables:
-        description: 'Optional comma-separated LEGACY_BACKFILL_TABLES override'
+        description: "Optional comma-separated LEGACY_BACKFILL_TABLES override"
         required: false
-        default: ''
+        default: ""
 
 concurrency:
   group: tiger-production-sync
@@ -25,9 +29,10 @@ concurrency:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
-  DATA_PLANE_STATEMENT_TIMEOUT_MS: '15000'
+  DATA_PLANE_STATEMENT_TIMEOUT_MS: "15000"
   METRICS_LOOKBACK_DAYS: ${{ github.event.inputs.metrics_lookback_days || '7' }}
   PROJECTION_DAY_LOOKBACK: ${{ github.event.inputs.projection_day_lookback || '7' }}
+  PROJECTION_REPAIR_SCOPE: ${{ github.event.inputs.projection_repair_scope || 'recent_window' }}
   LEGACY_BACKFILL_TABLES: ${{ github.event.inputs.legacy_tables || '' }}
 
 jobs:
@@ -42,8 +47,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -68,20 +73,24 @@ jobs:
       - name: Reconcile Tiger events and news
         run: pnpm tiger:reconcile-events-news
         env:
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: '3'
+          DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-production-events-reconcile-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: '7'
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
 
       - name: Validate Tiger events and news parity
         run: pnpm tiger:reconcile-events-news
         env:
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: '3'
+          DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-production-events-validate-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: validate
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: '7'
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
 
       - name: Upload Tiger production sync manifests
         if: always()

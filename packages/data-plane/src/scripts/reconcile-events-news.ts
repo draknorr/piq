@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url';
+
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
 
 import { logger } from '@publisheriq/shared';
@@ -29,8 +31,23 @@ const DEFAULT_EVENT_DAY_LOOKBACK = 3;
 const DEFAULT_PROJECTION_DAY_LOOKBACK = 7;
 const EVENTS_NEWS_RECONCILE_LOCK_KEY = 20260331;
 const PROJECTION_STAGE_RELATION = 'docs.steam_news_search_projection_reconcile_stage';
+const PROJECTION_TARGET_RELATION = 'docs.steam_news_search_projection';
+const PROJECTION_TARGET_COLUMNS = [
+  'gid',
+  'appid',
+  'published_at',
+  'first_seen_at',
+  'sort_time',
+  'feed_scope',
+  'title',
+  'search_document',
+] as const;
+const PROJECTION_MUTABLE_COLUMNS = PROJECTION_TARGET_COLUMNS.filter(
+  (columnName) => columnName !== 'gid'
+);
 
 type SyncMode = 'reconcile' | 'validate';
+export type ProjectionRepairScope = 'recent_window' | 'exact_parity';
 
 interface SteamNewsItemRow extends QueryResultRow {
   appid: number;
@@ -74,10 +91,15 @@ interface AppChangeEventRow extends QueryResultRow {
   trigger_cursor: string | null;
 }
 
-interface PartitionMismatch {
+export interface PartitionMismatch {
   partitionKey: string;
   sourceCount: number;
   tigerCount: number;
+}
+
+export interface ProjectionReplayMonth {
+  partitionKey: string;
+  reason: string;
 }
 
 interface PartitionActionSummary {
@@ -126,11 +148,17 @@ interface EventsNewsSyncManifest {
     eventDayLookback: number;
     newsDayLookback: number;
     projectionDayLookback: number;
+    projectionRepairScope: ProjectionRepairScope;
     selectedTables: EventsNewsTableName[];
   };
   success: boolean;
   tableSummaries: Array<TableSyncSummary | ProjectionSyncSummary>;
-  validations: SyncValidations;
+  validations: SyncValidations | null;
+  error?: {
+    failingTable: EventsNewsTableName | null;
+    message: string;
+    name: string;
+  };
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
@@ -160,6 +188,22 @@ function readSyncMode(value: string | undefined): SyncMode {
   }
 
   throw new Error(`Unsupported EVENTS_NEWS_SYNC_MODE value: ${value}`);
+}
+
+export function parseProjectionRepairScope(
+  value: string | undefined
+): ProjectionRepairScope {
+  if (!value?.trim()) {
+    return 'exact_parity';
+  }
+
+  if (value === 'recent_window' || value === 'exact_parity') {
+    return value;
+  }
+
+  throw new Error(
+    `Unsupported EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE value: ${value}`
+  );
 }
 
 function comparePartitionCounts(
@@ -301,24 +345,37 @@ function buildRecentReplayDays(
     .map(([partitionKey, reason]) => ({ partitionKey, reason }));
 }
 
-function buildHistoricalReplayDays(
-  lookbackDays: number,
-  mismatches: PartitionMismatch[],
-  now: Date = new Date()
-): Array<{ partitionKey: string; reason: string }> {
-  const recentKeys = new Set(listRecentUtcDayKeys(lookbackDays, now));
-  return mismatches
-    .filter((mismatch) => !recentKeys.has(mismatch.partitionKey))
-    .map((mismatch) => ({
-      partitionKey: mismatch.partitionKey,
-      reason: 'mismatched_historical_day',
-    }));
+function monthKeyFromDayKey(dayKey: string): string {
+  return `${dayKey.slice(0, 7)}-01`;
 }
 
-function buildProjectionReplayMonths(
+function orderProjectionReplayMonths(
+  selected: Map<string, string>,
+  previousMonth: string,
+  currentMonth: string
+): ProjectionReplayMonth[] {
+  const ordered = [...selected.entries()].sort(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey)
+  );
+  const older = ordered.filter(
+    ([partitionKey]) =>
+      partitionKey !== previousMonth && partitionKey !== currentMonth
+  );
+  const recent = ordered.filter(
+    ([partitionKey]) =>
+      partitionKey === previousMonth || partitionKey === currentMonth
+  );
+
+  return [...older, ...recent].map(([partitionKey, reason]) => ({
+    partitionKey,
+    reason,
+  }));
+}
+
+function buildExactParityProjectionReplayMonths(
   mismatches: PartitionMismatch[],
   now: Date = new Date()
-): Array<{ partitionKey: string; reason: string }> {
+): ProjectionReplayMonth[] {
   const currentMonth = currentUtcMonthKey(now);
   const previousMonth = shiftUtcMonth(currentMonth, -1);
   const selected = new Map<string, string>();
@@ -330,13 +387,82 @@ function buildProjectionReplayMonths(
   selected.set(previousMonth, selected.get(previousMonth) ?? 'previous_month');
   selected.set(currentMonth, selected.get(currentMonth) ?? 'current_month');
 
-  const ordered = [...selected.entries()].sort(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey)
-  );
-  const older = ordered.filter(([partitionKey]) => partitionKey !== previousMonth && partitionKey !== currentMonth);
-  const recent = ordered.filter(([partitionKey]) => partitionKey === previousMonth || partitionKey === currentMonth);
+  return orderProjectionReplayMonths(selected, previousMonth, currentMonth);
+}
 
-  return [...older, ...recent].map(([partitionKey, reason]) => ({ partitionKey, reason }));
+function buildRecentWindowProjectionReplayMonths(
+  recentDayMismatches: PartitionMismatch[],
+  now: Date = new Date()
+): ProjectionReplayMonth[] {
+  const currentMonth = currentUtcMonthKey(now);
+  const previousMonth = shiftUtcMonth(currentMonth, -1);
+  const selected = new Map<string, string>();
+
+  selected.set(previousMonth, 'previous_month');
+  selected.set(currentMonth, 'current_month');
+
+  for (const mismatch of recentDayMismatches) {
+    const monthKey = monthKeyFromDayKey(mismatch.partitionKey);
+    selected.set(
+      monthKey,
+      selected.get(monthKey) ?? 'mismatched_recent_window_day'
+    );
+  }
+
+  return orderProjectionReplayMonths(selected, previousMonth, currentMonth);
+}
+
+export function buildProjectionReplayMonths(
+  monthMismatches: PartitionMismatch[],
+  recentDayMismatches: PartitionMismatch[],
+  scope: ProjectionRepairScope,
+  now: Date = new Date()
+): ProjectionReplayMonth[] {
+  return scope === 'recent_window'
+    ? buildRecentWindowProjectionReplayMonths(recentDayMismatches, now)
+    : buildExactParityProjectionReplayMonths(monthMismatches, now);
+}
+
+export function buildProjectionUpsertSql(
+  targetRelation: string,
+  stageRelation: string,
+  targetColumns: readonly string[] = PROJECTION_TARGET_COLUMNS
+): string {
+  const updateSql = PROJECTION_MUTABLE_COLUMNS.map(
+    (columnName) => `${columnName} = EXCLUDED.${columnName}`
+  ).join(',\n        ');
+  const changedSql = PROJECTION_MUTABLE_COLUMNS.map(
+    (columnName) =>
+      `${targetRelation}.${columnName} IS DISTINCT FROM EXCLUDED.${columnName}`
+  ).join('\n          OR ');
+
+  return `
+      INSERT INTO ${targetRelation}
+      (${targetColumns.join(', ')})
+      SELECT ${targetColumns.join(', ')}
+      FROM ${stageRelation}
+      ON CONFLICT (gid)
+      DO UPDATE SET
+        ${updateSql}
+      WHERE ${changedSql}
+    `;
+}
+
+function serializeError(error: unknown): {
+  message: string;
+  name: string;
+} {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name || 'Error',
+    };
+  }
+
+  return {
+    message: typeof error === 'string' ? error : JSON.stringify(error),
+    name: 'Error',
+  };
 }
 
 async function acquireReconcileLock(pool: Pool): Promise<void> {
@@ -637,16 +763,7 @@ async function reconcileProjectionMonth(
   tigerCountBefore: number,
   reason: string
 ): Promise<PartitionActionSummary> {
-  const targetColumns = [
-    'gid',
-    'appid',
-    'published_at',
-    'first_seen_at',
-    'sort_time',
-    'feed_scope',
-    'title',
-    'search_document',
-  ];
+  const targetColumns = [...PROJECTION_TARGET_COLUMNS];
   let cursorSortTime: string | null = null;
   let cursorGid: string | null = null;
   let writtenRows = 0;
@@ -732,7 +849,7 @@ async function reconcileProjectionMonth(
 
   const deleteResult = await tigerPool.query(
     `
-      DELETE FROM docs.steam_news_search_projection target
+      DELETE FROM ${PROJECTION_TARGET_RELATION} target
       WHERE target.sort_time >= $1::date
         AND target.sort_time < $2::date
         AND NOT EXISTS (
@@ -745,21 +862,11 @@ async function reconcileProjectionMonth(
   );
 
   const upsertResult = await tigerPool.query(
-    `
-      INSERT INTO docs.steam_news_search_projection
-      (${targetColumns.join(', ')})
-      SELECT ${targetColumns.join(', ')}
-      FROM ${PROJECTION_STAGE_RELATION}
-      ON CONFLICT (gid)
-      DO UPDATE SET
-        appid = EXCLUDED.appid,
-        published_at = EXCLUDED.published_at,
-        first_seen_at = EXCLUDED.first_seen_at,
-        sort_time = EXCLUDED.sort_time,
-        feed_scope = EXCLUDED.feed_scope,
-        title = EXCLUDED.title,
-        search_document = EXCLUDED.search_document
-    `
+    buildProjectionUpsertSql(
+      PROJECTION_TARGET_RELATION,
+      PROJECTION_STAGE_RELATION,
+      targetColumns
+    )
   );
 
   return {
@@ -952,6 +1059,9 @@ async function main(): Promise<void> {
   const sourceConfig = loadSourceBaselineConfig();
   const tigerConfig = loadTigerConfig();
   const mode = readSyncMode(process.env.EVENTS_NEWS_SYNC_MODE);
+  const projectionRepairScope = parseProjectionRepairScope(
+    process.env.EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE
+  );
   const selectedTables = parseSelectedEventsNewsTables(
     process.env.EVENTS_NEWS_SYNC_TABLES
   );
@@ -1004,6 +1114,9 @@ async function main(): Promise<void> {
     process.env.EVENTS_NEWS_SYNC_MANIFEST_LABEL,
     `events-news-sync-${mode}`
   );
+  const tableSummaries: Array<TableSyncSummary | ProjectionSyncSummary> = [];
+  let currentTable: EventsNewsTableName | null = null;
+  let validations: SyncValidations | null = null;
 
   let lockAcquired = false;
   let projectionStagePrepared = false;
@@ -1016,6 +1129,7 @@ async function main(): Promise<void> {
       eventDayLookback,
       newsDayLookback,
       projectionDayLookback,
+      projectionRepairScope,
     });
 
     if (mode === 'reconcile') {
@@ -1023,9 +1137,8 @@ async function main(): Promise<void> {
       lockAcquired = true;
     }
 
-    const tableSummaries: Array<TableSyncSummary | ProjectionSyncSummary> = [];
-
     if (activeTables.includes('steam_news_items')) {
+      currentTable = 'steam_news_items';
       logger.info('Reconciling Tiger table', { mode, tableName: 'steam_news_items' });
       const recentDayKeys = listRecentUtcDayKeys(newsDayLookback);
       const recentDayKeySet = new Set(recentDayKeys);
@@ -1155,9 +1268,11 @@ async function main(): Promise<void> {
         historicalDayMismatches: summary.historicalDayMismatchesAfter.length,
         actions: summary.actions.length,
       });
+      currentTable = null;
     }
 
     if (activeTables.includes('app_change_events')) {
+      currentTable = 'app_change_events';
       logger.info('Reconciling Tiger table', { mode, tableName: 'app_change_events' });
       const recentDayKeys = listRecentUtcDayKeys(eventDayLookback);
       const recentDayKeySet = new Set(recentDayKeys);
@@ -1297,14 +1412,17 @@ async function main(): Promise<void> {
         historicalDayMismatches: summary.historicalDayMismatchesAfter.length,
         actions: summary.actions.length,
       });
+      currentTable = null;
     }
 
     if (activeTables.includes('steam_news_search_projection') && mode === 'reconcile') {
+      currentTable = 'steam_news_search_projection';
       await prepareProjectionStageTable(tigerPool);
       projectionStagePrepared = true;
     }
 
     if (activeTables.includes('steam_news_search_projection')) {
+      currentTable = 'steam_news_search_projection';
       logger.info('Reconciling Tiger table', { mode, tableName: 'steam_news_search_projection' });
       const recentDayKeys = listRecentUtcDayKeys(projectionDayLookback);
       const sourceMonthCountsBefore = await fetchMonthCountMap(
@@ -1333,13 +1451,22 @@ async function main(): Promise<void> {
         sourceMonthCountsBefore,
         tigerMonthCountsBefore
       );
+      const dayMismatchesBefore = comparePartitionCounts(
+        sourceDayCountsBefore,
+        tigerDayCountsBefore
+      );
       const actions: PartitionActionSummary[] = [];
 
       if (mode === 'reconcile') {
-        const firstPassMonths = buildProjectionReplayMonths(monthMismatchesBefore);
+        const firstPassMonths = buildProjectionReplayMonths(
+          monthMismatchesBefore,
+          dayMismatchesBefore,
+          projectionRepairScope
+        );
         logger.info('Replaying Tiger projection months', {
           pass: 1,
           replayCount: firstPassMonths.length,
+          scope: projectionRepairScope,
         });
         for (const { partitionKey, reason } of firstPassMonths) {
           actions.push(
@@ -1361,7 +1488,11 @@ async function main(): Promise<void> {
           actions
         );
         if (!postFirstPassSummary.passed) {
-          const secondPassMonths = buildProjectionReplayMonths(postFirstPassSummary.monthMismatchesAfter);
+          const secondPassMonths = buildProjectionReplayMonths(
+            postFirstPassSummary.monthMismatchesAfter,
+            postFirstPassSummary.dayMismatchesAfter,
+            projectionRepairScope
+          );
           const sourceMonthCountsForSecondPass = await fetchMonthCountMap(
             sourcePool,
             'public.steam_news_search_projection',
@@ -1375,6 +1506,7 @@ async function main(): Promise<void> {
           logger.info('Replaying Tiger projection months', {
             pass: 2,
             replayCount: secondPassMonths.length,
+            scope: projectionRepairScope,
           });
           for (const { partitionKey, reason } of secondPassMonths) {
             actions.push(
@@ -1397,10 +1529,7 @@ async function main(): Promise<void> {
         projectionDayLookback,
         actions
       );
-      summary.dayMismatchesBefore = comparePartitionCounts(
-        sourceDayCountsBefore,
-        tigerDayCountsBefore
-      );
+      summary.dayMismatchesBefore = dayMismatchesBefore;
       summary.monthMismatchesBefore = monthMismatchesBefore;
       tableSummaries.push(summary);
       logger.info('Completed Tiger table sync', {
@@ -1411,9 +1540,11 @@ async function main(): Promise<void> {
         monthMismatches: summary.monthMismatchesAfter.length,
         actions: summary.actions.length,
       });
+      currentTable = null;
     }
 
-    const validations = await fetchValidationCounts(tigerPool);
+    currentTable = null;
+    validations = await fetchValidationCounts(tigerPool);
     const success =
       tableSummaries.every((summary) => summary.passed) &&
       validations.duplicateEventIds === 0 &&
@@ -1428,6 +1559,7 @@ async function main(): Promise<void> {
           eventDayLookback,
           newsDayLookback,
           projectionDayLookback,
+          projectionRepairScope,
           selectedTables: activeTables,
         },
         success,
@@ -1448,6 +1580,50 @@ async function main(): Promise<void> {
     if (!success) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    if (validations === null) {
+      try {
+        validations = await fetchValidationCounts(tigerPool);
+      } catch {
+        validations = null;
+      }
+    }
+
+    try {
+      const manifestPath = writeEventsNewsManifest(
+        {
+          capturedAt: new Date().toISOString(),
+          mode,
+          settings: {
+            eventDayLookback,
+            newsDayLookback,
+            projectionDayLookback,
+            projectionRepairScope,
+            selectedTables: activeTables,
+          },
+          success: false,
+          tableSummaries,
+          validations,
+          error: {
+            ...serializeError(error),
+            failingTable: currentTable,
+          },
+        } satisfies EventsNewsSyncManifest,
+        manifestLabel,
+        'events-news-sync-manifest.json'
+      );
+
+      logger.error('Wrote failure manifest for Tiger events/news sync', {
+        currentTable,
+        manifestPath,
+      });
+    } catch (manifestError) {
+      logger.error('Failed to write Tiger events/news failure manifest', {
+        error: manifestError,
+      });
+    }
+
+    throw error;
   } finally {
     try {
       if (projectionStagePrepared) {
@@ -1463,11 +1639,17 @@ async function main(): Promise<void> {
   }
 }
 
-main()
-  .then(() => {
-    process.exit(process.exitCode ?? 0);
-  })
-  .catch((error) => {
-    logger.error('Failed to reconcile Tiger events/news tables', { error });
-    process.exit(1);
-  });
+const isDirectExecution =
+  typeof process.argv[1] === 'string' &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  main()
+    .then(() => {
+      process.exit(process.exitCode ?? 0);
+    })
+    .catch((error) => {
+      logger.error('Failed to reconcile Tiger events/news tables', { error });
+      process.exit(1);
+    });
+}

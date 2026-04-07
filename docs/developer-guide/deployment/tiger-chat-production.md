@@ -133,12 +133,18 @@ Production sync:
 - refreshes the legacy compatibility slice
 - replays the trailing metrics window into `metrics.daily_metrics`
 - reconciles and validates the events/news slice
+- uses `recent_window` projection repair by default so daily runs only replay
+  trailing projection churn
+- supports manual `projection_repair_scope=exact_parity` when a historical
+  projection repair is explicitly required
 - uploads manifest artifacts for each run
 
 Preview sync:
 
 - manual only
 - uses the same sync path against the preview Tiger database
+- supports the same `projection_repair_scope` input for manual exact-parity
+  projection repair
 
 ## 7. Smoke Test Before Go-Live
 
