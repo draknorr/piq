@@ -8,6 +8,8 @@ Use these after:
 2. running `pnpm --filter @publisheriq/youtube verify-preview-mirror`
 3. confirming `CHAT_TIGER_YOUTUBE_ENABLED=true` in preview and `false` in production
 
+The local verifier accepts `TIGER_PREVIEW_URL` and `TIGER_PRODUCTION_URL` from `.env.tiger.local`, so it can run without extra env exports.
+
 These prompts are intentionally limited to the v1 surface that is now implemented behind the server-side flag.
 
 ## Core Success Cases
