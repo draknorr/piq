@@ -876,6 +876,13 @@ interface TigerPrimaryEvaluationResult {
     request: Record<string, unknown>;
     response: unknown;
   } | null;
+  debugContext?: {
+    matchedIntent?: TigerPrimaryMatchedIntent | null;
+    queryApiBaseUrl?: string | null;
+    resolvedQueryApiBaseUrl?: string | null;
+    youtubeEntityQuery?: string | null;
+    youtubeSelectionQuery?: string | null;
+  } | null;
   followUpSuggestions?: QuerySuggestion[] | null;
   info: TigerPrimaryInfo;
   renderedText: string | null;
@@ -901,6 +908,12 @@ interface CompareRequestBuildResult {
 interface YoutubeGameCoveragePrimaryOutcome {
   attempts: TigerShadowAttempt[];
   clarificationText?: string | null;
+  debugContext?: {
+    queryApiBaseUrl?: string | null;
+    resolvedQueryApiBaseUrl?: string | null;
+    youtubeEntityQuery?: string | null;
+    youtubeSelectionQuery?: string | null;
+  } | null;
   followUpSuggestions?: QuerySuggestion[] | null;
   renderedText: string | null;
   request: GetYoutubeGameCoverageRequest | null;
@@ -9336,6 +9349,12 @@ async function runYoutubeGameCoveragePrimary(params: {
   selectionState?: SessionChatSelectionState | null;
 }): Promise<YoutubeGameCoveragePrimaryOutcome> {
   const entityQuery = extractYoutubeEntityQuery(params.prompt);
+  const debugContext = {
+    queryApiBaseUrl: process.env.QUERY_API_BASE_URL?.trim() ?? null,
+    resolvedQueryApiBaseUrl: resolveQueryApiBaseUrl().baseUrl,
+    youtubeEntityQuery: entityQuery,
+    youtubeSelectionQuery: params.selectionState?.slots[0]?.query ?? null,
+  };
   const view = inferYoutubeCoverageView(params.prompt);
   const { attempt: resolveAttempt, entity, entityUid, selectionState } = await resolveGameEntityAttempt({
     family: 'youtube_game_activity',
@@ -9354,6 +9373,7 @@ async function runYoutubeGameCoveragePrimary(params: {
     return {
       attempts,
       clarificationText: selectionState ? renderSelectionClarification(selectionState) : null,
+      debugContext,
       renderedText: null,
       request: null,
       response: null,
@@ -9390,6 +9410,7 @@ async function runYoutubeGameCoveragePrimary(params: {
     const renderedText = `I could not load the YouTube coverage view for ${entity.displayName} right now.${response.reason ? ` ${response.reason}` : ''}`.trim();
     return {
       attempts,
+      debugContext,
       followUpSuggestions: buildYoutubeFollowUpSuggestions({
         entityName: entity.displayName,
         view,
@@ -9416,6 +9437,7 @@ async function runYoutubeGameCoveragePrimary(params: {
 
   return {
     attempts,
+    debugContext,
     followUpSuggestions: buildYoutubeFollowUpSuggestions({
       entityName: entity.displayName,
       view,
@@ -9736,6 +9758,13 @@ export async function runTigerPrimaryEvaluation(params: {
       return {
         answerBrief,
         contractResult: null,
+        debugContext:
+          'debugContext' in outcome
+            ? {
+                matchedIntent,
+                ...(outcome.debugContext ?? {}),
+              }
+            : null,
         followUpSuggestions: answerBrief.followUpSuggestions,
         info: {
           attempts: outcome.attempts,
@@ -9773,6 +9802,10 @@ export async function runTigerPrimaryEvaluation(params: {
         return {
           answerBrief,
           contractResult: null,
+          debugContext: {
+            matchedIntent,
+            ...youtubeOutcome.debugContext,
+          },
           followUpSuggestions: youtubeOutcome.followUpSuggestions ?? answerBrief.followUpSuggestions,
           info: {
             attempts: youtubeOutcome.attempts,
@@ -9796,6 +9829,10 @@ export async function runTigerPrimaryEvaluation(params: {
 
       return {
         contractResult: null,
+        debugContext: {
+          matchedIntent,
+          ...youtubeOutcome.debugContext,
+        },
         info: {
           attempts: youtubeOutcome.attempts,
           cohort,

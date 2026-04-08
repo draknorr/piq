@@ -1592,6 +1592,9 @@ export async function handleChatStreamRequest(
           sessionContext,
           userId,
         });
+        if (tigerPrimaryEvaluation.debugContext) {
+          debugStats.tigerPrimaryDebug = tigerPrimaryEvaluation.debugContext;
+        }
         const tigerPrimaryInfo = tigerPrimaryEvaluation.info;
         totalToolsMs += sumTigerAttemptTimingMs(tigerPrimaryInfo.attempts);
         tigerPrimaryResult = tigerPrimaryInfo;

@@ -45,6 +45,13 @@ export interface StreamDebugInfo {
   totalChars: number;          // Total characters streamed
   toolCallCount: number;       // Number of tool calls made
   lastIterationHadText: boolean; // Whether the final iteration produced text
+  tigerPrimaryDebug?: {
+    matchedIntent?: string | null;
+    queryApiBaseUrl?: string | null;
+    resolvedQueryApiBaseUrl?: string | null;
+    youtubeEntityQuery?: string | null;
+    youtubeSelectionQuery?: string | null;
+  } | null;
 }
 
 export interface MessageEndEvent extends BaseStreamEvent {
