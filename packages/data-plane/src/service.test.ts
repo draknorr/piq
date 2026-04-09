@@ -17,6 +17,8 @@ function createEntityRow(params: {
   display_name: string;
   entity_id: number;
   match_quality: 'exact' | 'prefix' | 'substring' | 'fuzzy';
+  match_rank?: number | null;
+  matched_name?: string;
   owners_midpoint: number | null;
   review_score: number | null;
   total_reviews: number | null;
@@ -29,6 +31,8 @@ function createEntityRow(params: {
     entity_id: params.entity_id,
     game_count: params.game_count ?? null,
     match_quality: params.match_quality,
+    match_rank: params.match_rank ?? null,
+    matched_name: params.matched_name ?? params.display_name,
     owners_midpoint: params.owners_midpoint,
     release_year: params.release_year ?? null,
     review_score: params.review_score,
@@ -1323,6 +1327,10 @@ test('resolveEntities prefers lexical exact hits and deduplicates duplicate enti
   const receivedCalls: string[] = [];
 
   (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async () => {
+    receivedCalls.push('queryCanonicalEntities');
+    return [];
+  };
   (service as any).queryGames = async () => {
     receivedCalls.push('queryGames');
     return [
@@ -1371,13 +1379,115 @@ test('resolveEntities prefers lexical exact hits and deduplicates duplicate enti
     query: 'assetto corsa',
   });
 
-  assert.deepEqual(receivedCalls, ['queryGames', 'queryGamesLexical']);
+  assert.deepEqual(receivedCalls, ['queryCanonicalEntities', 'queryGames', 'queryGamesLexical']);
   assert.equal(result.entities.length, 2);
   assert.equal(result.entities[0]?.displayName, 'Assetto Corsa');
   assert.equal(result.entities[0]?.matchQuality, 'exact');
   assert.equal(result.entities[0]?.confidence, 0.99);
   assert.equal(result.entities[1]?.displayName, 'RaceRoom Racing Experience');
   assert.equal(result.ambiguity.requiresClarification, false);
+});
+
+test('resolveEntities prefers canonical alias matches before fuzzy legacy rows and preserves game clarification', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async () => [
+    createEntityRow({
+      ccu_peak: 112000,
+      display_name: 'Counter-Strike 2',
+      entity_id: 730,
+      match_quality: 'exact',
+      match_rank: 1,
+      matched_name: 'Counter Strike 2',
+      owners_midpoint: 25000000,
+      release_year: 2023,
+      review_score: 88,
+      total_reviews: 2200000,
+    }),
+    createEntityRow({
+      ccu_peak: 1200,
+      display_name: 'Counter-Strike Nexon',
+      entity_id: 273110,
+      match_quality: 'fuzzy',
+      match_rank: 5,
+      matched_name: 'Counter-Strike Nexon',
+      owners_midpoint: 250000,
+      release_year: 2014,
+      review_score: 65,
+      total_reviews: 15000,
+    }),
+  ];
+  (service as any).queryGames = async () => [
+    createEntityRow({
+      ccu_peak: 98000,
+      display_name: 'Counter-Strike: Global Offensive',
+      entity_id: 740,
+      match_quality: 'fuzzy',
+      owners_midpoint: 40000000,
+      release_year: 2012,
+      review_score: 86,
+      total_reviews: 9000000,
+    }),
+  ];
+  (service as any).queryGamesLexical = async () => [];
+  (service as any).queryCompanies = async () => [];
+  (service as any).queryCompaniesLexical = async () => [];
+
+  const result = await service.resolveEntities({
+    entityKinds: ['game'],
+    query: 'counter strike 2',
+  });
+
+  assert.equal(result.entities[0]?.displayName, 'Counter-Strike 2');
+  assert.equal(result.entities[0]?.matchedName, 'Counter Strike 2');
+  assert.equal(result.entities[0]?.matchQuality, 'exact');
+  assert.ok(result.entities[0]?.confidence && result.entities[0].confidence > 0.99);
+  assert.equal(result.ambiguity.requiresClarification, false);
+});
+
+test('resolveEntities keeps clarification for ambiguous fuzzy-only game lookups', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async () => [
+    createEntityRow({
+      ccu_peak: 1200,
+      display_name: 'Mysterious Game',
+      entity_id: 9001,
+      match_quality: 'fuzzy',
+      match_rank: 5,
+      matched_name: 'Mysterious Game',
+      owners_midpoint: 100000,
+      release_year: 2024,
+      review_score: 60,
+      total_reviews: 800,
+    }),
+    createEntityRow({
+      ccu_peak: 1100,
+      display_name: 'Mystery Game 2',
+      entity_id: 9002,
+      match_quality: 'fuzzy',
+      match_rank: 5,
+      matched_name: 'Mystery Game 2',
+      owners_midpoint: 90000,
+      release_year: 2023,
+      review_score: 58,
+      total_reviews: 700,
+    }),
+  ];
+  (service as any).queryGames = async () => [];
+  (service as any).queryGamesLexical = async () => [];
+  (service as any).queryCompanies = async () => [];
+  (service as any).queryCompaniesLexical = async () => [];
+
+  const result = await service.resolveEntities({
+    entityKinds: ['game'],
+    query: 'mystery',
+  });
+
+  assert.equal(result.ambiguity.requiresClarification, true);
+  assert.match(result.ambiguity.message ?? '', /could not confidently resolve/i);
 });
 
 test('searchChangeActivity annotates strong commercial bursts with relevance evidence', async () => {
@@ -1739,6 +1849,65 @@ test('getEntityOverview returns company metrics and related games', async () => 
   assert.equal(result.entity.metrics.gameCount, 7);
   assert.equal(result.games.length, 1);
   assert.equal(result.games[0]?.name, 'ELDEN RING');
+});
+
+test('getEntityOverview prefers entityUid when a canonical binding is provided', async () => {
+  const service = createService();
+  let resolvedEntityUid: string | null = null;
+  let queriedEntityId: number | null = null;
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).resolveCoreEntity = async (entityUid: string) => {
+    resolvedEntityUid = entityUid;
+    return {
+      canonical_name: 'Counter-Strike 2',
+      entity_kind: 'game',
+      entity_uid: entityUid,
+      platform: 'steam',
+      platform_entity_id: '730',
+    };
+  };
+  (service as any).queryGameOverview = async (entityId: number) => {
+    queriedEntityId = entityId;
+    return {
+      app_type: 'game',
+      appid: 730,
+      ccu_peak: 1810000,
+      developer_ids: [],
+      developers: ['Valve'],
+      discount_percent: null,
+      display_name: 'Counter-Strike 2',
+      entity_id: 730,
+      game_count: null,
+      is_free: true,
+      is_released: true,
+      owners_midpoint: 45000000,
+      parent_appid: null,
+      platforms: 'windows',
+      price_cents: 0,
+      publisher_ids: [],
+      publishers: ['Valve'],
+      release_date: '2023-09-27',
+      release_state: 'released',
+      release_year: 2023,
+      review_score: 87,
+      total_reviews: 9000000,
+    };
+  };
+
+  const result = await service.getEntityOverview({
+    entityKind: 'publisher',
+    entityUid: '11111111-1111-4111-8111-111111111111',
+    gamesLimit: 5,
+    gamesSortBy: 'reviews',
+    platformEntityId: '9999',
+  });
+
+  assert.equal(resolvedEntityUid, '11111111-1111-4111-8111-111111111111');
+  assert.equal(queriedEntityId, 730);
+  assert.equal(result.entity.entityKind, 'game');
+  assert.equal(result.entity.platformEntityId, '730');
+  assert.equal(result.entity.entityUid, '11111111-1111-4111-8111-111111111111');
 });
 
 test('explainChanges before_after mode includes the selected moment and comparison windows', async () => {

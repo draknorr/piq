@@ -991,6 +991,7 @@ test('Tiger primary routes "what do you know about" prompts into entity-overview
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       entityKind: 'game',
+      entityUid: 'game:steam:1145350',
       gamesLimit: 0,
       gamesSortBy: 'release_date',
       platformEntityId: '1145350',
@@ -1066,6 +1067,7 @@ test('Tiger primary routes overview prompts through get-entity-overview', async 
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       entityKind: 'game',
+      entityUid: 'game:steam:1145350',
       gamesLimit: 0,
       gamesSortBy: 'release_date',
       platformEntityId: '1145350',
@@ -1222,6 +1224,7 @@ test('Tiger primary routes company portfolio metric prompts through get-entity-o
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       entityKind: 'developer',
+      entityUid: 'developer:publisheriq:3005',
       gamesLimit: 5,
       gamesSortBy: 'release_date',
       platformEntityId: '3005',
@@ -1381,6 +1384,7 @@ test('Tiger primary auto-selects the dominant company candidate when resolver am
     assert.equal(url.pathname, '/v1/contracts/get-entity-overview');
     assert.deepEqual(body, {
       entityKind: 'developer',
+      entityUid: 'developer:publisheriq:3005',
       gamesLimit: 5,
       gamesSortBy: 'release_date',
       platformEntityId: '3005',
@@ -4015,6 +4019,7 @@ test('Tiger primary lets users switch to the publisher alternative after an auto
     assert.ok(init?.body);
     assert.deepEqual(JSON.parse(String(init.body)), {
       entityKind: 'publisher',
+      entityUid: 'publisher:publisheriq:3005',
       gamesLimit: 5,
       gamesSortBy: 'release_date',
       platformEntityId: '3005',

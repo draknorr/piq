@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import type { Message, ChatToolCall, ChatTiming } from '@/lib/llm/types';
+import type { Message, ChatSelectedEntity, ChatToolCall, ChatTiming } from '@/lib/llm/types';
 import type { SessionChatContext } from '@/lib/chat/chat-context-types';
 import type { QuerySuggestion } from '@/lib/chat/query-templates';
 import type { StreamEvent, StreamDebugInfo } from '@/lib/llm/streaming-types';
@@ -39,7 +39,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionContextRef = useRef<SessionChatContext | null>(null);
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (
+    content: string,
+    requestOptions?: {
+      selectedEntities?: ChatSelectedEntity[];
+    }
+  ) => {
     if (!content.trim() || isStreaming) return;
 
     // Add user message
@@ -78,6 +83,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         body: JSON.stringify({
           messages: apiMessages,
           sessionContext: sessionContextRef.current,
+          selectedEntities: requestOptions?.selectedEntities,
         }),
         signal: abortControllerRef.current.signal,
       });

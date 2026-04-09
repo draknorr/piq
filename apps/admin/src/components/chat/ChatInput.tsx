@@ -2,25 +2,38 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
 import { Button } from '@/components/ui/Button';
-import { Send } from 'lucide-react';
+import { Send, X } from 'lucide-react';
 import { AutocompleteDropdown, type AutocompleteSuggestion } from './AutocompleteDropdown';
+import { SuggestionChips } from './SuggestionChips';
 import { useAutocompleteData, filterAutocompleteItems } from '@/hooks/useAutocompleteData';
-import {
-  matchTemplates,
-  generateGameSuggestions,
-} from '@/lib/chat/query-templates';
+import { matchTemplates } from '@/lib/chat/query-templates';
 import { getExamplePrompts } from '@/lib/example-prompts';
-import type { SearchResponse } from '@/components/search/types';
+import {
+  buildEntityAutocompleteSuggestions,
+  buildEntityQuickPrompts,
+  buildSelectedEntityBinding,
+  extractEntitySearchQuery,
+  isSelectedEntityPrompt,
+  replaceEntitySearchQuery,
+  type ChatEntityBinding,
+  type ChatEntityPickerResponse,
+} from '@/lib/chat/chat-entity-picker';
+import type { ChatSelectedEntity } from '@/lib/llm/types';
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (
+    message: string,
+    requestOptions?: {
+      selectedEntities?: ChatSelectedEntity[];
+    }
+  ) => void;
   disabled?: boolean;
 }
 
 // Debounce delay for API search
 const SEARCH_DEBOUNCE_MS = 150;
 const MIN_SEARCH_LENGTH = 2;
-const INPUT_AUTOCOMPLETE_ENABLED = false;
+const INPUT_AUTOCOMPLETE_ENABLED = true;
 
 export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [input, setInput] = useState('');
@@ -28,6 +41,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [entityResults, setEntityResults] = useState<AutocompleteSuggestion[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [selectedEntity, setSelectedEntity] = useState<ChatEntityBinding | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -51,7 +65,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
   // Generate instant suggestions (no API call)
   const instantSuggestions = useMemo((): AutocompleteSuggestion[] => {
-    if (!INPUT_AUTOCOMPLETE_ENABLED) {
+    if (!INPUT_AUTOCOMPLETE_ENABLED || selectedEntity) {
       return [];
     }
 
@@ -59,7 +73,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
     // Empty input - show example prompts
     if (!trimmedInput) {
-      return examplePrompts.map(prompt => ({
+      return examplePrompts.map((prompt) => ({
         label: prompt,
         query: prompt,
         category: 'example' as const,
@@ -81,7 +95,6 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     const allTagItems = [...tags, ...genres];
     const tagMatches = filterAutocompleteItems(allTagItems, trimmedInput, 3);
     for (const tag of tagMatches) {
-      // Generate template-based suggestions for matching tags
       suggestions.push({
         label: `${tag} games`,
         query: `${tag} games`,
@@ -90,114 +103,123 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     }
 
     return suggestions;
-  }, [input, tags, genres, examplePrompts]);
+  }, [input, tags, genres, examplePrompts, selectedEntity]);
 
-  // Combine instant + entity results
+  // Combine entity results + instant suggestions, preferring direct entity matches
   const allSuggestions = useMemo((): AutocompleteSuggestion[] => {
-    // Dedupe by query
     const seen = new Set<string>();
     const combined: AutocompleteSuggestion[] = [];
 
-    for (const s of [...instantSuggestions, ...entityResults]) {
-      const key = s.query.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        combined.push(s);
+    for (const suggestion of [...entityResults, ...instantSuggestions]) {
+      const key = suggestion.query.toLowerCase();
+      if (seen.has(key)) {
+        continue;
       }
+
+      seen.add(key);
+      combined.push(suggestion);
     }
 
     return combined.slice(0, 8);
-  }, [instantSuggestions, entityResults]);
+  }, [entityResults, instantSuggestions]);
+
+  const clearSelectedEntity = useCallback(
+    (restoreSourceQuery = false) => {
+      if (restoreSourceQuery && selectedEntity?.sourceQuery) {
+        setInput(selectedEntity.sourceQuery);
+      }
+      setSelectedEntity(null);
+    },
+    [selectedEntity]
+  );
 
   // Debounced entity search
-  const searchEntities = useCallback(async (query: string) => {
-    if (!INPUT_AUTOCOMPLETE_ENABLED) {
-      setEntityResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    // Cancel previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-
-    if (query.length < MIN_SEARCH_LENGTH) {
-      setEntityResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    setIsSearching(true);
-
-    searchTimeoutRef.current = setTimeout(async () => {
-      try {
-        abortControllerRef.current = new AbortController();
-
-        const response = await fetch('/api/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, limit: 5 }),
-          signal: abortControllerRef.current.signal,
-        });
-
-        if (!response.ok) {
-          setEntityResults([]);
-          setIsSearching(false);
-          return;
-        }
-
-        const data = (await response.json()) as SearchResponse;
-        const results: AutocompleteSuggestion[] = [];
-
-        // Add game results
-        if (data.results.games?.length) {
-          for (const game of data.results.games.slice(0, 3)) {
-            // Generate game-based suggestions
-            const gameSuggestions = generateGameSuggestions(game.name, 2);
-            results.push(...gameSuggestions);
-          }
-        }
-
-        // Add publisher results
-        if (data.results.publishers?.length) {
-          for (const pub of data.results.publishers.slice(0, 2)) {
-            results.push({
-              label: `All games by ${pub.name}`,
-              query: `all games by ${pub.name}`,
-              category: 'publisher' as const,
-            });
-          }
-        }
-
-        // Add developer results
-        if (data.results.developers?.length) {
-          for (const dev of data.results.developers.slice(0, 2)) {
-            results.push({
-              label: `Games by ${dev.name}`,
-              query: `games by ${dev.name}`,
-              category: 'developer' as const,
-            });
-          }
-        }
-
-        setEntityResults(results);
+  const searchEntities = useCallback(
+    async (query: string) => {
+      if (!INPUT_AUTOCOMPLETE_ENABLED) {
+        setEntityResults([]);
         setIsSearching(false);
-      } catch (error) {
-        if (error instanceof Error && error.name !== 'AbortError') {
-          setEntityResults([]);
-          setIsSearching(false);
-        }
+        return;
       }
-    }, SEARCH_DEBOUNCE_MS);
-  }, []);
+
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+
+      if (query.length < MIN_SEARCH_LENGTH) {
+        setEntityResults([]);
+        setIsSearching(false);
+        return;
+      }
+
+      const searchQuery = extractEntitySearchQuery(query);
+      if (searchQuery.length < MIN_SEARCH_LENGTH) {
+        setEntityResults([]);
+        setIsSearching(false);
+        return;
+      }
+
+      if (selectedEntity && isSelectedEntityPrompt(selectedEntity, query)) {
+        setEntityResults([]);
+        setIsSearching(false);
+        return;
+      }
+
+      setIsSearching(true);
+
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          abortControllerRef.current = new AbortController();
+
+          const response = await fetch('/api/chat/entities', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: searchQuery,
+              includeMetrics: true,
+              limit: 8,
+            }),
+            signal: abortControllerRef.current.signal,
+          });
+
+          if (!response.ok) {
+            setEntityResults([]);
+            setIsSearching(false);
+            return;
+          }
+
+          const data = (await response.json()) as ChatEntityPickerResponse;
+          const entities = Array.isArray(data.results?.entities) ? data.results.entities : [];
+
+          setEntityResults(buildEntityAutocompleteSuggestions(entities, searchQuery));
+          setIsSearching(false);
+        } catch (error) {
+          if (error instanceof Error && error.name !== 'AbortError') {
+            setEntityResults([]);
+            setIsSearching(false);
+          }
+        }
+      }, SEARCH_DEBOUNCE_MS);
+    },
+    [selectedEntity]
+  );
 
   // Trigger entity search on input change
   useEffect(() => {
-    searchEntities(input.trim());
+    const trimmedInput = input.trim();
+    void searchEntities(trimmedInput);
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [input, searchEntities]);
 
   // Reset selected index when suggestions change
@@ -207,42 +229,74 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
   const handleSubmit = useCallback(() => {
     if (input.trim() && !disabled) {
-      onSend(input);
+      onSend(input.trim(), {
+        selectedEntities: selectedEntity ? [selectedEntity.entity] : undefined,
+      });
       setInput('');
       setIsDropdownOpen(false);
       setEntityResults([]);
+      setSelectedEntity(null);
     }
-  }, [input, disabled, onSend]);
+  }, [input, disabled, onSend, selectedEntity]);
 
-  const handleSelectSuggestion = useCallback((suggestion: AutocompleteSuggestion) => {
-    if (disabled) {
-      return;
-    }
+  const handleSelectSuggestion = useCallback(
+    (suggestion: AutocompleteSuggestion) => {
+      if (disabled) {
+        return;
+      }
 
-    onSend(suggestion.query);
-    setInput('');
-    setIsDropdownOpen(false);
-    setEntityResults([]);
-  }, [disabled, onSend]);
+      if (suggestion.entity) {
+        const binding = buildSelectedEntityBinding(suggestion.entity, input);
+        const searchQuery = extractEntitySearchQuery(input);
+        setSelectedEntity(binding);
+        setInput(replaceEntitySearchQuery(input, searchQuery, suggestion.entity.displayName));
+        setIsDropdownOpen(false);
+        setEntityResults([]);
+        setSelectedIndex(0);
+        return;
+      }
+
+      onSend(suggestion.query);
+      setInput('');
+      setIsDropdownOpen(false);
+      setEntityResults([]);
+      setSelectedEntity(null);
+    },
+    [disabled, input, onSend]
+  );
+
+  const handleQuickPromptSelect = useCallback(
+    (query: string) => {
+      if (disabled) {
+        return;
+      }
+
+      onSend(query, {
+        selectedEntities: selectedEntity ? [selectedEntity.entity] : undefined,
+      });
+      setInput('');
+      setIsDropdownOpen(false);
+      setEntityResults([]);
+      setSelectedEntity(null);
+    },
+    [disabled, onSend, selectedEntity]
+  );
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (disabled && e.key === 'Enter' && !e.shiftKey) {
       return;
     }
 
-    // Handle dropdown navigation
     if (isDropdownOpen && allSuggestions.length > 0) {
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
-          setSelectedIndex(prev =>
-            prev < allSuggestions.length - 1 ? prev + 1 : 0
-          );
+          setSelectedIndex((prev) => (prev < allSuggestions.length - 1 ? prev + 1 : 0));
           return;
 
         case 'ArrowUp':
           e.preventDefault();
-          setSelectedIndex(prev =>
+          setSelectedIndex((prev) =>
             prev > 0 ? prev - 1 : allSuggestions.length - 1
           );
           return;
@@ -272,7 +326,6 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
       }
     }
 
-    // Default Enter behavior (submit without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       if (disabled) {
         return;
@@ -283,21 +336,25 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   };
 
   const handleFocus = () => {
-    setIsDropdownOpen(false);
+    setIsDropdownOpen(true);
   };
 
   const handleBlur = (e: React.FocusEvent) => {
-    // Check if the new focus target is inside the dropdown
     if (dropdownRef.current?.contains(e.relatedTarget as Node)) {
       return;
     }
-    // Small delay to allow click events on dropdown items
+
     setTimeout(() => setIsDropdownOpen(false), 150);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-    setIsDropdownOpen(false);
+    const nextInput = e.target.value;
+    setInput(nextInput);
+    setIsDropdownOpen(true);
+
+    if (selectedEntity && !isSelectedEntityPrompt(selectedEntity, nextInput)) {
+      setSelectedEntity(null);
+    }
   };
 
   const trimmedInput = input.trim();
@@ -306,10 +363,17 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     isDropdownOpen &&
     (trimmedInput.length === 0 || trimmedInput.length >= MIN_SEARCH_LENGTH);
 
+  const selectedEntityPrompts = useMemo(() => {
+    if (!selectedEntity) {
+      return [];
+    }
+
+    return buildEntityQuickPrompts(selectedEntity.entity);
+  }, [selectedEntity]);
+
   return (
     <div className="flex gap-3 items-end">
       <div className="flex-1 relative">
-        {/* Autocomplete dropdown */}
         <AutocompleteDropdown
           ref={dropdownRef}
           suggestions={allSuggestions}
@@ -320,6 +384,33 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
           isLoading={isSearching || isLoadingTags}
           isVisible={isDropdownVisible}
         />
+
+        {selectedEntity && (
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1.5 text-body-sm text-text-primary">
+              <span className="font-medium">{selectedEntity.entity.displayName}</span>
+              <span className="text-caption uppercase tracking-[0.18em] text-text-muted">
+                {selectedEntity.entity.entityKind}
+              </span>
+              <button
+                type="button"
+                onClick={() => clearSelectedEntity(true)}
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary"
+                aria-label={`Clear selected entity ${selectedEntity.entity.displayName}`}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {selectedEntity && selectedEntityPrompts.length > 0 && (
+          <SuggestionChips
+            suggestions={selectedEntityPrompts}
+            onSuggestionClick={handleQuickPromptSelect}
+            label="Quick prompts"
+          />
+        )}
 
         <textarea
           ref={textareaRef}

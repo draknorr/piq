@@ -3,6 +3,19 @@ import type { SessionChatContext } from '@/lib/chat/chat-context-types';
 // Message types for LLM conversation
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+export interface ChatSelectedEntity {
+  displayName: string;
+  entityKind: 'game' | 'publisher' | 'developer';
+  entityUid: string;
+  matchQuality?: 'exact' | 'prefix' | 'substring' | 'fuzzy' | null;
+  platform: 'steam' | 'publisheriq';
+  platformEntityId: string;
+}
+
+export interface ChatEntityLookupResponse {
+  entities: ChatSelectedEntity[];
+}
+
 export interface Message {
   role: MessageRole;
   content: string;
@@ -134,6 +147,7 @@ export interface QueryResult extends ToolSufficiencyMetadata {
 export interface ChatRequest {
   messages: Message[];
   sessionContext?: SessionChatContext | null;
+  selectedEntities?: ChatSelectedEntity[];
 }
 
 export interface ChatToolCall {

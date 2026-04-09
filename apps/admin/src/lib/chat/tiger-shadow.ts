@@ -1573,6 +1573,10 @@ function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | 
     return 'metric_history';
   }
 
+  if (inferEntityOverviewIntent(prompt)) {
+    return 'entity_overview';
+  }
+
   if (inferMomentumIntent(prompt)) {
     return 'momentum_discovery';
   }
@@ -1587,10 +1591,6 @@ function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | 
 
   if (NEWS_PROMPT_PATTERN.test(prompt)) {
     return 'news_search';
-  }
-
-  if (inferEntityOverviewIntent(prompt)) {
-    return 'entity_overview';
   }
 
   if (inferRankingIntent(prompt)) {
@@ -1665,6 +1665,12 @@ function inferEntityOverviewIntent(prompt: string): boolean {
     return true;
   }
 
+  return COMPANY_COUNT_PROMPT_PATTERN.test(prompt)
+    || COMPANY_PORTFOLIO_METRIC_PROMPT_PATTERN.test(prompt)
+    || GAME_METRIC_OVERVIEW_PROMPT_PATTERN.test(prompt);
+}
+
+function isSingleEntityMetricOverviewPrompt(prompt: string): boolean {
   return COMPANY_COUNT_PROMPT_PATTERN.test(prompt)
     || COMPANY_PORTFOLIO_METRIC_PROMPT_PATTERN.test(prompt)
     || GAME_METRIC_OVERVIEW_PROMPT_PATTERN.test(prompt);
@@ -1885,6 +1891,10 @@ function inferRankingIntent(prompt: string): boolean {
 }
 
 function inferMomentumIntent(prompt: string): boolean {
+  if (isSingleEntityMetricOverviewPrompt(prompt)) {
+    return false;
+  }
+
   if (inferSimilarityMomentumIntent(prompt) || inferCompareTopMomentumIntent(prompt)) {
     return true;
   }
@@ -1931,6 +1941,48 @@ function inferMetricHistoryIntent(prompt: string): boolean {
   }
 
   return /\b(?:last \d+ days?|this week|this month|over time|history|recently)\b/i.test(prompt);
+}
+
+function inferSelectionBoundIntent(params: {
+  prompt: string;
+  selectionState: SessionChatSelectionState | null | undefined;
+}): TigerPrimaryMatchedIntent | null {
+  const selectedCandidate = pickSelectedCandidateFromSelectionState(params.selectionState);
+  if (!selectedCandidate) {
+    return null;
+  }
+
+  if (inferMetricHistoryIntent(params.prompt) && selectedCandidate.entityKind === 'game') {
+    return 'metric_history';
+  }
+
+  if (
+    selectionReferenceMatchesQuery(params.prompt, selectedCandidate.displayName)
+    || ENTITY_OVERVIEW_PROMPT_PATTERN.test(params.prompt)
+  ) {
+    return 'entity_overview';
+  }
+
+  if (
+    selectedCandidate.entityKind === 'game'
+    && /\b(?:ccu|concurrent players?|player count|players?\s+right\s+now|owners?|reviews?|review score|price|discount)\b/i.test(params.prompt)
+    && !/\b(?:games?|titles?)\b/i.test(params.prompt)
+    && !looksLikeGameRankingScreen(params.prompt)
+  ) {
+    return 'entity_overview';
+  }
+
+  if (
+    selectedCandidate.entityKind !== 'game'
+    && /\b(?:games?|titles?|published|developed|owners?|reviews?)\b/i.test(params.prompt)
+    && !inferMomentumIntent(params.prompt)
+    && !inferRankingIntent(params.prompt)
+    && !looksLikeCompanyRankingScreen(params.prompt)
+  ) {
+    return 'entity_overview';
+  }
+
+  return null;
 }
 
 function looksLikeRecentConceptRankingPrompt(prompt: string): boolean {
@@ -8204,6 +8256,7 @@ async function runEntityOverviewShadow(prompt: string): Promise<TigerShadowAttem
   const response = await postToQueryApi<GetEntityOverviewResponse>(
     '/v1/contracts/get-entity-overview',
     {
+      entityUid: entity.entityUid,
       entityKind: entity.entityKind,
       gamesLimit: entity.entityKind === 'game' ? 0 : 5,
       gamesSortBy: /\b(?:top|best)\b/i.test(prompt) ? 'reviews' : 'release_date',
@@ -8245,6 +8298,7 @@ async function runEntityOverviewPrimary(params: {
   attempts: TigerShadowAttempt[];
   clarificationText?: string | null;
   request: {
+    entityUid: string;
     entityKind: 'developer' | 'game' | 'publisher';
     gamesLimit: number;
     gamesSortBy: 'release_date' | 'reviews';
@@ -8287,6 +8341,7 @@ async function runEntityOverviewPrimary(params: {
   }
 
   const request = {
+    entityUid: entity.entityUid,
     entityKind: entity.entityKind as 'developer' | 'game' | 'publisher',
     gamesLimit: entity.entityKind === 'game' ? 0 : 5,
     gamesSortBy: /\b(?:top|best)\b/i.test(params.prompt) ? 'reviews' as const : 'release_date' as const,
@@ -8963,7 +9018,12 @@ export async function runTigerPrimaryEvaluation(params: {
       ? null
       : interpretationIntent;
   const priorSelectionState = params.sessionContext?.selectionState ?? null;
+  const selectionBoundIntent = inferSelectionBoundIntent({
+    prompt: params.prompt,
+    selectionState: priorSelectionState,
+  });
   const matchedIntent = followUpContext?.matchedIntent
+    ?? selectionBoundIntent
     ?? interpretedIntent
     ?? interpretationIntent
     ?? inferPrimaryMatchedIntent(params.prompt)
@@ -8987,6 +9047,7 @@ export async function runTigerPrimaryEvaluation(params: {
 
   if (
     !followUpContext &&
+    !selectionBoundIntent &&
     params.interpretation?.intent === matchedIntent &&
     params.interpretation.confidence === 'low' &&
     params.interpretation.clarificationQuestion
@@ -9052,12 +9113,16 @@ export async function runTigerPrimaryEvaluation(params: {
     };
   }
 
+  const reusableSelectionState = selectionBoundIntent && pickSelectedCandidateFromSelectionState(priorSelectionState)
+    ? priorSelectionState
+    : null;
   const activeSelectionState =
     followUpContext?.entityQuery
       ? (followUpContext.selectionState ?? null)
       : (
         followUpContext?.selectionState
         ?? (priorSelectionState?.family === matchedIntent ? priorSelectionState : null)
+        ?? reusableSelectionState
       );
   const entityQuery =
     followUpContext?.entityQuery

@@ -3,12 +3,9 @@
 import { forwardRef } from 'react';
 import { Search, Sparkles, Gamepad2 } from 'lucide-react';
 import { highlightMatch } from '@/lib/chat/query-templates';
+import type { ChatEntitySuggestion } from '@/lib/chat/chat-entity-picker';
 
-export interface AutocompleteSuggestion {
-  label: string;
-  query: string;
-  category: 'template' | 'tag' | 'game' | 'publisher' | 'developer' | 'example';
-}
+export type AutocompleteSuggestion = ChatEntitySuggestion;
 
 interface AutocompleteDropdownProps {
   suggestions: AutocompleteSuggestion[];
@@ -81,10 +78,14 @@ export const AutocompleteDropdown = forwardRef<HTMLDivElement, AutocompleteDropd
                   role="option"
                   aria-selected={isSelected}
                 >
-                  <HighlightedText
-                    text={suggestion.label}
-                    highlight={inputValue}
-                  />
+                  <div className="flex flex-col items-start gap-0.5">
+                    <HighlightedText text={suggestion.label} highlight={inputValue} />
+                    {suggestion.description && (
+                      <span className="text-caption text-text-muted">
+                        {suggestion.description}
+                      </span>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -109,6 +110,8 @@ function CategoryIcon({ category }: { category: string }) {
 
 function getCategoryLabel(category: string): string {
   switch (category) {
+    case 'entity':
+      return 'Matched entities';
     case 'template':
       return 'Suggested queries';
     case 'example':
@@ -135,7 +138,7 @@ function groupSuggestions(suggestions: AutocompleteSuggestion[]): GroupedSuggest
   const groups: Map<string, AutocompleteSuggestion[]> = new Map();
 
   // Priority order for categories
-  const categoryOrder = ['example', 'template', 'tag', 'game', 'publisher', 'developer'];
+  const categoryOrder = ['entity', 'example', 'template', 'tag', 'game', 'publisher', 'developer'];
 
   for (const suggestion of suggestions) {
     const existing = groups.get(suggestion.category) || [];

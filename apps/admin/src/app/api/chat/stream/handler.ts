@@ -62,6 +62,7 @@ import { logChatQuery } from '@/lib/chat-query-logger';
 import type {
   ChatTurnQualityInfo,
   SessionChatContext,
+  SessionChatSelectionState,
   SessionMomentumPromptFamily,
   SessionChatRequestState,
   SessionChatResultSet,
@@ -123,7 +124,16 @@ import {
   DEFAULT_RESERVATION,
   getCreditBreakdown,
 } from '@/lib/credits';
-import type { Message, ChatRequest, Tool, QueryResult, SimilarityResult, ToolCall, ChatToolCall } from '@/lib/llm/types';
+import type {
+  Message,
+  ChatRequest,
+  ChatSelectedEntity,
+  Tool,
+  QueryResult,
+  SimilarityResult,
+  ToolCall,
+  ChatToolCall,
+} from '@/lib/llm/types';
 import type {
   StreamEvent,
   TextDeltaEvent,
@@ -421,6 +431,95 @@ function formatSSE(event: StreamEvent): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeSelectedEntities(value: unknown): ChatSelectedEntity[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const validKinds = new Set<ChatSelectedEntity['entityKind']>(['game', 'publisher', 'developer']);
+  const validPlatforms = new Set<ChatSelectedEntity['platform']>(['steam', 'publisheriq']);
+  const validMatchQualities = new Set<NonNullable<ChatSelectedEntity['matchQuality']>>([
+    'exact',
+    'prefix',
+    'substring',
+    'fuzzy',
+  ]);
+
+  const normalized: ChatSelectedEntity[] = [];
+
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const displayName = typeof item.displayName === 'string' ? item.displayName.trim() : '';
+    const entityKind = typeof item.entityKind === 'string' ? item.entityKind : '';
+    const entityUid = typeof item.entityUid === 'string' ? item.entityUid.trim() : '';
+    const platform = typeof item.platform === 'string' ? item.platform : '';
+    const platformEntityId =
+      typeof item.platformEntityId === 'string'
+        ? item.platformEntityId.trim()
+        : typeof item.platformEntityId === 'number'
+          ? String(item.platformEntityId)
+          : '';
+    const matchQuality =
+      typeof item.matchQuality === 'string' && validMatchQualities.has(item.matchQuality as NonNullable<ChatSelectedEntity['matchQuality']>)
+        ? item.matchQuality as NonNullable<ChatSelectedEntity['matchQuality']>
+        : null;
+
+    if (
+      !displayName
+      || !entityUid
+      || !platformEntityId
+      || !validKinds.has(entityKind as ChatSelectedEntity['entityKind'])
+      || !validPlatforms.has(platform as ChatSelectedEntity['platform'])
+    ) {
+      continue;
+    }
+
+    normalized.push({
+      displayName,
+      entityKind: entityKind as ChatSelectedEntity['entityKind'],
+      entityUid,
+      matchQuality,
+      platform: platform as ChatSelectedEntity['platform'],
+      platformEntityId,
+    });
+  }
+
+  return normalized.slice(0, 3);
+}
+
+function buildSelectedEntitySelectionState(
+  selectedEntities: ChatSelectedEntity[]
+): SessionChatSelectionState | null {
+  if (selectedEntities.length === 0) {
+    return null;
+  }
+
+  return {
+    family: 'request_binding',
+    slots: selectedEntities.map((entity, index) => ({
+      candidates: [{
+        displayName: entity.displayName,
+        entityKind: entity.entityKind,
+        entityUid: entity.entityUid,
+        matchQuality: entity.matchQuality ?? 'exact',
+        ordinal: index + 1,
+        platform: entity.platform,
+        platformEntityId: entity.platformEntityId,
+        score: 100,
+      }],
+      expectedEntityKind: entity.entityKind,
+      label: entity.displayName,
+      query: entity.displayName,
+      requiresClarification: false,
+      selectedEntityUid: entity.entityUid,
+      slotId: `bound-${index + 1}`,
+    })),
+  };
 }
 
 function stripDebugFields<T>(value: T): T {
@@ -1573,14 +1672,22 @@ export async function handleChatStreamRequest(
         const sessionContext = isRecord(body.sessionContext)
           ? (body.sessionContext as SessionChatContext)
           : null;
+        const selectedEntities = normalizeSelectedEntities(body.selectedEntities);
+        const requestSelectionState = buildSelectedEntitySelectionState(selectedEntities);
+        const requestSessionContext = requestSelectionState
+          ? applyTigerPrimarySessionState({
+              baseContext: sessionContext,
+              selectionState: requestSelectionState,
+            })
+          : sessionContext;
         const lastUserPrompt = body.messages.filter((message) => message.role === 'user').pop()?.content ?? '';
         lastUserMessageContent = lastUserPrompt || null;
-        updatedSessionContext = sessionContext;
+        updatedSessionContext = requestSessionContext;
         const tigerPromptInterpretation = lastUserPrompt
           ? await interpretTigerPrompt({
               deps,
               prompt: lastUserPrompt,
-              sessionContext,
+              sessionContext: requestSessionContext,
             })
           : { durationMs: 0, interpretation: null };
         totalLlmMs += tigerPromptInterpretation.durationMs;
@@ -1589,7 +1696,7 @@ export async function handleChatStreamRequest(
           interpretation: tigerPromptInterpretation.interpretation,
           isEvalRequest,
           prompt: lastUserPrompt,
-          sessionContext,
+          sessionContext: requestSessionContext,
           userId,
         });
         const tigerPrimaryInfo = tigerPrimaryEvaluation.info;
@@ -1660,7 +1767,7 @@ export async function handleChatStreamRequest(
 
             if (syntheticToolCall) {
               updatedSessionContext = buildSessionContextFromTurn({
-                previousContext: sessionContext,
+                previousContext: requestSessionContext,
                 executedToolCalls: [syntheticToolCall],
                 terminalContract: null,
               });
@@ -2598,7 +2705,7 @@ export async function handleChatStreamRequest(
         }
 
         updatedSessionContext = buildSessionContextFromTurn({
-          previousContext: sessionContext,
+          previousContext: requestSessionContext,
           executedToolCalls: allToolCalls,
           terminalContract: phase1Quality?.terminalContract ?? null,
         });

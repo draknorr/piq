@@ -42,9 +42,16 @@ function pushUniqueEntity(entities: SessionChatEntity[], candidate: SessionChatE
   if (
     entities.some(
       (entity) =>
-        entity.kind === candidate.kind &&
-        entity.id === candidate.id &&
-        entity.name.toLowerCase() === candidate.name.toLowerCase()
+        (
+          entity.entityUid
+          && candidate.entityUid
+          && entity.entityUid === candidate.entityUid
+        )
+        || (
+          entity.kind === candidate.kind
+          && entity.id === candidate.id
+          && entity.name.toLowerCase() === candidate.name.toLowerCase()
+        )
     )
   ) {
     return;
@@ -180,8 +187,17 @@ function extractEntityFromLookupResult(
 
   pushUniqueEntity(entities, {
     kind: entityType as SessionChatEntity['kind'],
+    entityUid:
+      entityId != null && (entityType === 'game' || entityType === 'publisher' || entityType === 'developer')
+        ? buildChatEntityUid({
+            entityKind: entityType,
+            platformEntityId: entityId,
+          })
+        : undefined,
     id: entityId,
     name: entityName,
+    platform: entityType === 'game' ? 'steam' : 'publisheriq',
+    platformEntityId: entityId != null ? String(entityId) : undefined,
     confidence: 'high',
     sourceTool: toolName,
   });
@@ -205,8 +221,11 @@ function extractEntityFromApp(
 
   pushUniqueEntity(entities, {
     kind: 'game',
+    entityUid: buildChatEntityUid({ entityKind: 'game', platformEntityId: appid }),
     id: appid,
     name,
+    platform: 'steam',
+    platformEntityId: String(appid),
     confidence: 'high',
     sourceTool: toolName,
   });
@@ -331,10 +350,15 @@ function extractEntitiesFromCandidateSet(candidateSet: SessionChatCandidateSet, 
   }
 
   candidateSet.names.slice(0, 5).forEach((name, index) => {
+    const entityUid = candidateSet.entityUids?.[index];
+    const platformEntityId = candidateSet.ids[index];
     pushUniqueEntity(entities, {
       kind: entityKind,
+      entityUid,
       name,
-      id: candidateSet.ids[index],
+      id: platformEntityId,
+      platform: entityKind === 'game' ? 'steam' : 'publisheriq',
+      platformEntityId: platformEntityId != null ? String(platformEntityId) : undefined,
       confidence: 'medium',
       sourceTool: candidateSet.sourceTool,
     });
@@ -357,8 +381,11 @@ function extractEntitiesFromSelectionState(
 
     pushUniqueEntity(entities, {
       kind: selected.entityKind,
+      entityUid: selected.entityUid,
       name: selected.displayName,
       id: selected.platformEntityId ?? selected.entityUid,
+      platform: selected.platform,
+      platformEntityId: selected.platformEntityId ?? undefined,
       confidence: slot.requiresClarification ? 'medium' : 'high',
       sourceTool: 'tigerPrimarySelection',
     });
@@ -513,9 +540,12 @@ export function summarizeSessionContextForLog(context: SessionChatContext | null
   return {
     version: context.version,
     entities: context.entities.slice(0, 8).map((entity) => ({
+      entityUid: entity.entityUid ?? null,
       kind: entity.kind,
       id: entity.id ?? null,
       name: entity.name,
+      platform: entity.platform ?? null,
+      platformEntityId: entity.platformEntityId ?? null,
     })),
     constraints: context.constraints.slice(0, 12).map((constraint) => ({
       key: constraint.key,

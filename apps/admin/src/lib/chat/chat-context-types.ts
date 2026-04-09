@@ -49,7 +49,10 @@ export type ChatQualityFlag =
 export interface SessionChatEntity {
   kind: ChatEntityKind;
   name: string;
+  entityUid?: string;
   id?: number | string;
+  platform?: string;
+  platformEntityId?: string;
   confidence?: 'high' | 'medium' | 'low';
   sourceTool: string;
 }

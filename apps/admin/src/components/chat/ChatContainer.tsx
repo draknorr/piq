@@ -11,6 +11,7 @@ import {
 import { useChatStream } from '@/hooks/useChatStream';
 import { generatePostResponseSuggestions } from '@/lib/chat/suggestion-generator';
 import type { QuerySuggestion } from '@/lib/chat/query-templates';
+import type { ChatSelectedEntity } from '@/lib/llm/types';
 
 interface ChatContainerProps {
   initialQuery?: string;
@@ -84,9 +85,14 @@ export function ChatContainer({
     }
   }, [initialQuery, isStreaming, sendMessage]);
 
-  const handleSend = useCallback((content: string) => {
+  const handleSend = useCallback((
+    content: string,
+    requestOptions?: {
+      selectedEntities?: ChatSelectedEntity[];
+    }
+  ) => {
     setError(null);
-    sendMessage(content);
+    sendMessage(content, requestOptions);
   }, [sendMessage]);
   const showLandingState = messages.length === 0 && !isStreaming && !initialQuery;
 
@@ -196,7 +202,12 @@ export function ChatContainer({
 
 interface ChatLandingStateProps {
   promptGroups: ChatLandingPromptGroup[];
-  onPromptSelect: (query: string) => void;
+  onPromptSelect: (
+    query: string,
+    requestOptions?: {
+      selectedEntities?: ChatSelectedEntity[];
+    }
+  ) => void;
 }
 
 function ChatLandingState({

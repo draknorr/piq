@@ -81,6 +81,8 @@ interface EntityRow extends QueryResultRow {
   entity_id: number;
   game_count?: number | null;
   match_quality?: MatchQuality | null;
+  match_rank?: number | null;
+  matched_name?: string | null;
   owners_midpoint: number | null;
   release_year?: number | null;
   review_score: number | null;
@@ -834,6 +836,16 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.core_entities',
       table: 'core_entities',
     },
+    core_entity_aliases: {
+      schema: 'public',
+      sql: 'public.core_entity_aliases',
+      table: 'core_entity_aliases',
+    },
+    core_entity_external_ids: {
+      schema: 'public',
+      sql: 'public.core_entity_external_ids',
+      table: 'core_entity_external_ids',
+    },
     docs_steam_news_items: {
       schema: 'public',
       sql: 'public.steam_news_items',
@@ -892,6 +904,16 @@ const RELATION_LOCATIONS: Record<
       schema: 'core',
       sql: 'core.entities',
       table: 'entities',
+    },
+    core_entity_aliases: {
+      schema: 'core',
+      sql: 'core.entity_aliases',
+      table: 'entity_aliases',
+    },
+    core_entity_external_ids: {
+      schema: 'core',
+      sql: 'core.entity_external_ids',
+      table: 'entity_external_ids',
     },
     docs_steam_news_items: {
       schema: 'docs',
@@ -1255,14 +1277,19 @@ function comparedMetricValue(metric: CompareMetric, item: ComparedEntity): numbe
 }
 
 function inferMatchQuality(candidate: string, query: string): MatchQuality {
-  const normalizedCandidate = candidate.trim().toLowerCase();
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedCandidate = normalizeSemanticTextToken(candidate);
+  const normalizedQuery = normalizeSemanticTextToken(query);
+  const compactCandidate = normalizedCandidate.replace(/\s+/g, '');
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
 
-  if (normalizedCandidate === normalizedQuery) {
+  if (normalizedCandidate === normalizedQuery || compactCandidate === compactQuery) {
     return 'exact';
   }
 
-  if (normalizedCandidate.startsWith(normalizedQuery)) {
+  if (
+    normalizedCandidate.startsWith(normalizedQuery) ||
+    compactCandidate.startsWith(compactQuery)
+  ) {
     return 'prefix';
   }
 
@@ -1275,7 +1302,26 @@ function normalizeMatchQuality(value: unknown): MatchQuality | null {
     : null;
 }
 
-function matchConfidence(matchQuality: MatchQuality): number {
+function matchConfidence(matchQuality: MatchQuality, matchRank?: number | null): number {
+  if (matchRank !== null && matchRank !== undefined) {
+    switch (matchRank) {
+      case 0:
+        return 0.995;
+      case 1:
+        return 0.993;
+      case 2:
+        return 0.989;
+      case 3:
+        return 0.92;
+      case 4:
+        return 0.82;
+      case 5:
+        return 0.72;
+      default:
+        break;
+    }
+  }
+
   switch (matchQuality) {
     case 'exact':
       return 0.99;
@@ -1541,37 +1587,84 @@ export class DataPlaneService {
     );
 
     const entities: ResolvedEntity[] = [];
+    const provenanceTables = new Set<string>();
+    const useCanonicalResolver = this.config.source === 'tiger';
 
     if (requestedKinds.has('game')) {
-      const gameRows = [
-        ...await this.queryGames(query, limit),
-        ...await this.queryGamesLexical(query, limit),
-      ];
-      entities.push(...gameRows.map((row) => this.mapResolvedEntity('game', 'steam', row, query, includeMetrics)));
+      const canonicalRows = useCanonicalResolver
+        ? await this.queryCanonicalEntities('game', query, limit)
+        : [];
+      const useLegacyFallback =
+        canonicalRows.length === 0 ||
+        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
+      const gameRows = useLegacyFallback
+        ? [
+            ...canonicalRows,
+            ...await this.queryGames(query, limit),
+            ...await this.queryGamesLexical(query, limit),
+          ]
+        : canonicalRows;
+      entities.push(
+        ...gameRows.map((row) => this.mapResolvedEntity('game', 'steam', row, query, includeMetrics))
+      );
+      if (useCanonicalResolver) {
+        provenanceTables.add(this.relation('core_entities').sql);
+        provenanceTables.add(this.relation('core_entity_aliases').sql);
+      }
+      provenanceTables.add(this.relation('apps').sql);
+      provenanceTables.add(this.relation('latest_daily_metrics').sql);
     }
 
     if (requestedKinds.has('publisher')) {
-      const publisherRows = [
-        ...await this.queryCompanies('publisher', query, limit),
-        ...await this.queryCompaniesLexical('publisher', query, limit),
-      ];
+      const canonicalRows = useCanonicalResolver
+        ? await this.queryCanonicalEntities('publisher', query, limit)
+        : [];
+      const useLegacyFallback =
+        canonicalRows.length === 0 ||
+        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
+      const publisherRows = useLegacyFallback
+        ? [
+            ...canonicalRows,
+            ...await this.queryCompanies('publisher', query, limit),
+            ...await this.queryCompaniesLexical('publisher', query, limit),
+          ]
+        : canonicalRows;
       entities.push(
         ...publisherRows.map((row) =>
           this.mapResolvedEntity('publisher', 'publisheriq', row, query, includeMetrics)
         )
       );
+      if (useCanonicalResolver) {
+        provenanceTables.add(this.relation('core_entities').sql);
+        provenanceTables.add(this.relation('core_entity_aliases').sql);
+      }
+      provenanceTables.add(this.relation('publishers').sql);
     }
 
     if (requestedKinds.has('developer')) {
-      const developerRows = [
-        ...await this.queryCompanies('developer', query, limit),
-        ...await this.queryCompaniesLexical('developer', query, limit),
-      ];
+      const canonicalRows = useCanonicalResolver
+        ? await this.queryCanonicalEntities('developer', query, limit)
+        : [];
+      const useLegacyFallback =
+        canonicalRows.length === 0 ||
+        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
+      const developerRows = useLegacyFallback
+        ? [
+            ...canonicalRows,
+            ...await this.queryCompanies('developer', query, limit),
+            ...await this.queryCompaniesLexical('developer', query, limit),
+          ]
+        : canonicalRows;
       entities.push(
         ...developerRows.map((row) =>
           this.mapResolvedEntity('developer', 'publisheriq', row, query, includeMetrics)
         )
       );
+      if (useCanonicalResolver) {
+        provenanceTables.add(this.relation('core_entities').sql);
+        provenanceTables.add(this.relation('core_entity_aliases').sql);
+      }
+      provenanceTables.add(this.relation('developers').sql);
     }
 
     const sortedEntities = [...entities
@@ -1616,15 +1709,20 @@ export class DataPlaneService {
               sortedEntities[0].confidence - sortedEntities[1].confidence < 0.08,
           };
 
+    if (
+      requestedKinds.size === 1 &&
+      requestedKinds.has('game') &&
+      sortedEntities[0]?.matchQuality === 'fuzzy'
+    ) {
+      ambiguity.message =
+        'I could not confidently resolve this game title. Please choose a more specific title.';
+      ambiguity.requiresClarification = true;
+    }
+
     return {
       ambiguity,
       entities: sortedEntities,
-      provenance: buildProvenance(this.config.source, [
-        this.relation('apps').sql,
-        this.relation('latest_daily_metrics').sql,
-        this.relation('publishers').sql,
-        this.relation('developers').sql,
-      ]),
+      provenance: buildProvenance(this.config.source, [...provenanceTables]),
     };
   }
 
@@ -1633,8 +1731,20 @@ export class DataPlaneService {
   ): Promise<GetEntityOverviewResponse> {
     await this.assertContractRuntime('getEntityOverview');
 
-    const entityKind = request.entityKind;
-    const platformEntityId = request.platformEntityId.trim();
+    let entityKind = request.entityKind;
+    let platformEntityId = request.platformEntityId.trim();
+    let entityUid = request.entityUid?.trim() ?? '';
+
+    if (entityUid) {
+      const resolvedEntity = await this.resolveCoreEntity(entityUid, {
+        invalidCode: 'INVALID_ENTITY_OVERVIEW_ENTITY_UID',
+        notFoundCode: 'ENTITY_OVERVIEW_NOT_FOUND',
+      });
+      entityKind = resolvedEntity.entity_kind;
+      platformEntityId = resolvedEntity.platform_entity_id;
+      entityUid = resolvedEntity.entity_uid;
+    }
+
     const entityId = Number(platformEntityId);
     if (!Number.isInteger(entityId) || entityId <= 0) {
       throw new PublisherIQError(
@@ -1694,7 +1804,7 @@ export class DataPlaneService {
         },
         displayName: overviewRow.display_name,
         entityKind,
-        entityUid: buildEntityUid(platform, entityKind, platformEntityId),
+        entityUid: entityUid || buildEntityUid(platform, entityKind, platformEntityId),
         metrics: {
           ccuPeak: overviewRow.ccu_peak,
           gameCount: entityKind === 'game' ? null : overviewRow.game_count,
@@ -6703,6 +6813,220 @@ export class DataPlaneService {
     return right.occurredAt.localeCompare(left.occurredAt) || left.name.localeCompare(right.name);
   }
 
+  private async queryCanonicalEntities(
+    kind: EntityKind,
+    query: string,
+    limit: number
+  ): Promise<EntityRow[]> {
+    const entitiesTable = this.relation('core_entities').sql;
+    const aliasesTable = this.relation('core_entity_aliases').sql;
+    const normalizedQuery = normalizeSemanticTextToken(query);
+    const compactQuery = normalizedQuery.replace(/\s+/g, '');
+    if (!normalizedQuery || !compactQuery) {
+      return [];
+    }
+
+    const rawQuery = query.trim().toLowerCase();
+    const rawPrefix = `${rawQuery}%`;
+    const rawSubstring = `%${rawQuery}%`;
+    const normalizedPrefix = `${normalizedQuery}%`;
+    const normalizedSubstring = `%${normalizedQuery}%`;
+    const fuzzyThreshold = kind === 'game' ? 0.45 : 0.4;
+
+    const gameJoinSql =
+      kind === 'game'
+        ? `
+          JOIN ${this.relation('apps').sql} a
+            ON a.appid = e.platform_entity_id::int
+           AND a.is_delisted = false
+           AND ${GAME_TYPE_PREDICATE[this.config.source]}
+          LEFT JOIN ${this.relation('latest_daily_metrics').sql} ldm
+            ON ldm.appid = a.appid
+        `
+        : '';
+
+    const companyJoinSql =
+      kind === 'game'
+        ? ''
+        : `
+          LEFT JOIN ${this.relation(kind === 'publisher' ? 'publishers' : 'developers').sql} company
+            ON company.id = e.platform_entity_id::int
+        `;
+
+    const gameMetricSelect =
+      kind === 'game'
+        ? `
+          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
+          ldm.ccu_peak,
+          ldm.owners_midpoint,
+          ${reviewPercentageSql('ldm')} AS review_score,
+          ldm.total_reviews,
+          NULL::int AS game_count
+        `
+        : `
+          NULL::int AS release_year,
+          NULL::double precision AS ccu_peak,
+          NULL::double precision AS owners_midpoint,
+          NULL::double precision AS review_score,
+          NULL::double precision AS total_reviews,
+          company.game_count
+        `;
+
+    const candidateRows = await runQuery<EntityRow>(
+      `
+        WITH query_terms AS (
+          SELECT
+            $1::text AS raw_query,
+            $2::text AS normalized_query,
+            $3::text AS compact_query,
+            $4::text AS raw_prefix,
+            $5::text AS raw_substring,
+            $6::text AS normalized_prefix,
+            $7::text AS normalized_substring,
+            $8::double precision AS fuzzy_threshold
+        ),
+        candidate_rows AS (
+          SELECT
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            CASE
+              WHEN lower(e.canonical_name) = q.raw_query THEN 'exact'
+              WHEN e.normalized_name = q.normalized_query THEN 'exact'
+              WHEN replace(e.normalized_name, ' ', '') = q.compact_query THEN 'exact'
+              WHEN lower(e.canonical_name) LIKE q.raw_prefix THEN 'prefix'
+              WHEN e.normalized_name LIKE q.normalized_prefix THEN 'prefix'
+              WHEN lower(e.canonical_name) LIKE q.raw_substring THEN 'substring'
+              WHEN e.normalized_name LIKE q.normalized_substring THEN 'substring'
+              ELSE 'fuzzy'
+            END AS match_quality,
+            CASE
+              WHEN lower(e.canonical_name) = q.raw_query THEN 0
+              WHEN e.normalized_name = q.normalized_query OR replace(e.normalized_name, ' ', '') = q.compact_query THEN 2
+              WHEN lower(e.canonical_name) LIKE q.raw_prefix OR e.normalized_name LIKE q.normalized_prefix THEN 3
+              WHEN lower(e.canonical_name) LIKE q.raw_substring OR e.normalized_name LIKE q.normalized_substring THEN 4
+              ELSE 5
+            END AS match_rank,
+            GREATEST(
+              COALESCE(similarity(lower(e.canonical_name), q.raw_query), 0),
+              COALESCE(similarity(replace(lower(e.canonical_name), ' ', ''), q.compact_query), 0)
+            ) AS similarity_score,
+            ${gameMetricSelect}
+          FROM ${entitiesTable} e
+          CROSS JOIN query_terms q
+          ${gameJoinSql}
+          ${companyJoinSql}
+          WHERE e.entity_kind = $9
+            AND e.platform = $10
+            AND (
+              lower(e.canonical_name) = q.raw_query
+              OR e.normalized_name = q.normalized_query
+              OR replace(e.normalized_name, ' ', '') = q.compact_query
+              OR lower(e.canonical_name) LIKE q.raw_prefix
+              OR e.normalized_name LIKE q.normalized_prefix
+              OR lower(e.canonical_name) LIKE q.raw_substring
+              OR e.normalized_name LIKE q.normalized_substring
+              OR GREATEST(
+                COALESCE(similarity(lower(e.canonical_name), q.raw_query), 0),
+                COALESCE(similarity(replace(lower(e.canonical_name), ' ', ''), q.compact_query), 0)
+              ) >= q.fuzzy_threshold
+            )
+
+          UNION ALL
+
+          SELECT
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            a.alias AS matched_name,
+            CASE
+              WHEN lower(a.alias) = q.raw_query THEN 'exact'
+              WHEN a.normalized_alias = q.normalized_query THEN 'exact'
+              WHEN replace(a.normalized_alias, ' ', '') = q.compact_query THEN 'exact'
+              WHEN lower(a.alias) LIKE q.raw_prefix THEN 'prefix'
+              WHEN a.normalized_alias LIKE q.normalized_prefix THEN 'prefix'
+              WHEN lower(a.alias) LIKE q.raw_substring THEN 'substring'
+              WHEN a.normalized_alias LIKE q.normalized_substring THEN 'substring'
+              ELSE 'fuzzy'
+            END AS match_quality,
+            CASE
+              WHEN lower(a.alias) = q.raw_query THEN 1
+              WHEN a.normalized_alias = q.normalized_query OR replace(a.normalized_alias, ' ', '') = q.compact_query THEN 2
+              WHEN lower(a.alias) LIKE q.raw_prefix OR a.normalized_alias LIKE q.normalized_prefix THEN 3
+              WHEN lower(a.alias) LIKE q.raw_substring OR a.normalized_alias LIKE q.normalized_substring THEN 4
+              ELSE 5
+            END AS match_rank,
+            GREATEST(
+              COALESCE(similarity(lower(a.alias), q.raw_query), 0),
+              COALESCE(similarity(replace(lower(a.alias), ' ', ''), q.compact_query), 0)
+            ) AS similarity_score,
+            ${gameMetricSelect}
+          FROM ${entitiesTable} e
+          JOIN ${aliasesTable} a ON a.entity_uid = e.entity_uid
+          CROSS JOIN query_terms q
+          ${gameJoinSql}
+          ${companyJoinSql}
+          WHERE e.entity_kind = $9
+            AND e.platform = $10
+            AND (
+              lower(a.alias) = q.raw_query
+              OR a.normalized_alias = q.normalized_query
+              OR replace(a.normalized_alias, ' ', '') = q.compact_query
+              OR lower(a.alias) LIKE q.raw_prefix
+              OR a.normalized_alias LIKE q.normalized_prefix
+              OR lower(a.alias) LIKE q.raw_substring
+              OR a.normalized_alias LIKE q.normalized_substring
+              OR GREATEST(
+                COALESCE(similarity(lower(a.alias), q.raw_query), 0),
+                COALESCE(similarity(replace(lower(a.alias), ' ', ''), q.compact_query), 0)
+              ) >= q.fuzzy_threshold
+            )
+        ),
+        ranked_rows AS (
+          SELECT
+            candidate_rows.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY entity_id
+              ORDER BY match_rank ASC, similarity_score DESC, COALESCE(total_reviews, 0) DESC, display_name ASC
+            ) AS row_rank
+          FROM candidate_rows
+        )
+        SELECT
+          ccu_peak,
+          display_name,
+          entity_id,
+          game_count,
+          match_quality,
+          match_rank,
+          matched_name,
+          owners_midpoint,
+          release_year,
+          review_score,
+          similarity_score,
+          total_reviews
+        FROM ranked_rows
+        WHERE row_rank = 1
+        ORDER BY match_rank ASC, similarity_score DESC, COALESCE(total_reviews, 0) DESC, display_name ASC
+        LIMIT $11
+      `,
+      [
+        query,
+        normalizedQuery,
+        compactQuery,
+        rawPrefix,
+        rawSubstring,
+        normalizedPrefix,
+        normalizedSubstring,
+        fuzzyThreshold,
+        kind,
+        kind === 'game' ? 'steam' : 'publisheriq',
+        limit,
+      ],
+      this.config
+    );
+
+    return candidateRows.rows;
+  }
+
   private async queryCompanies(
     kind: Extract<EntityKind, 'publisher' | 'developer'>,
     query: string,
@@ -10001,11 +10325,12 @@ export class DataPlaneService {
     query: string,
     includeMetrics: boolean
   ): ResolvedEntity {
+    const matchedName = row.matched_name?.trim() || row.display_name;
     const matchQuality =
-      normalizeMatchQuality(row.match_quality) ?? inferMatchQuality(row.display_name, query);
+      normalizeMatchQuality(row.match_quality) ?? inferMatchQuality(matchedName, query);
 
     return {
-      confidence: matchConfidence(matchQuality),
+      confidence: matchConfidence(matchQuality, row.match_rank ?? null),
       displayName: row.display_name,
       entityKind,
       entityUid: buildEntityUid(platform, entityKind, String(row.entity_id)),
@@ -10018,7 +10343,7 @@ export class DataPlaneService {
           }
         : undefined,
       matchQuality,
-      matchedName: row.display_name,
+      matchedName,
       platform,
       platformEntityId: String(row.entity_id),
       releaseYear: row.release_year ?? null,

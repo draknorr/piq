@@ -168,6 +168,8 @@ export type DataPlaneRelationKey =
   | 'apps'
   | 'ccu_snapshots'
   | 'developers'
+  | 'core_entity_aliases'
+  | 'core_entity_external_ids'
   | 'publishers'
   | 'app_dlc'
   | 'app_franchises'
@@ -341,6 +343,7 @@ export interface SearchCatalogResponse {
 }
 
 export interface GetEntityOverviewRequest {
+  entityUid?: string;
   entityKind: EntityKind;
   gamesLimit?: number;
   gamesSortBy?: 'release_date' | 'reviews';
