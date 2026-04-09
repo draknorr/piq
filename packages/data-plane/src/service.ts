@@ -42,6 +42,7 @@ import type {
   RelatedEntityKind,
   RelatedEntityResultItem,
   ResolveEntitiesResolutionMode,
+  ResolveEntitiesResolutionPreference,
   ResolveEntityMatchSource,
   ResolveEntityResolutionTier,
   ResolveEntitiesRequest,
@@ -640,6 +641,7 @@ const DEFAULT_DOCUMENT_LIMIT = 8;
 const DEFAULT_USER_ALERT_LIMIT = 10;
 const MAX_ENTITY_LIMIT = 15;
 const MAX_CHAT_STRICT_ENTITY_LIMIT = 50;
+const AUTOCOMPLETE_ENTITY_SCAN_BUFFER = 25;
 const MAX_CATALOG_LIMIT = 50;
 const MAX_ENTITY_GAMES_LIMIT = 25;
 const MAX_RELATED_LIMIT = 25;
@@ -1310,7 +1312,13 @@ function normalizeMatchQuality(value: unknown): MatchQuality | null {
 }
 
 function normalizeResolveEntitiesResolutionMode(value: unknown): ResolveEntitiesResolutionMode {
-  return value === 'chat_strict' ? 'chat_strict' : 'default';
+  return value === 'chat_strict' || value === 'autocomplete' ? value : 'default';
+}
+
+function normalizeResolveEntitiesResolutionPreference(
+  value: unknown
+): ResolveEntitiesResolutionPreference | null {
+  return value === 'game' || value === 'company' ? value : null;
 }
 
 function normalizeResolveEntityMatchSource(value: unknown): ResolveEntityMatchSource | null {
@@ -1445,6 +1453,100 @@ function compareResolvedEntitiesByResolutionPriority(left: ResolvedEntity, right
 
 function choosePreferredResolvedEntity(left: ResolvedEntity, right: ResolvedEntity): ResolvedEntity {
   return compareResolvedEntitiesByResolutionPriority(left, right) <= 0 ? left : right;
+}
+
+function compareResolvedEntitiesByDefaultMode(left: ResolvedEntity, right: ResolvedEntity): number {
+  if (right.confidence !== left.confidence) {
+    return right.confidence - left.confidence;
+  }
+
+  const rightReviews = right.latestMetrics?.totalReviews ?? 0;
+  const leftReviews = left.latestMetrics?.totalReviews ?? 0;
+  if (rightReviews !== leftReviews) {
+    return rightReviews - leftReviews;
+  }
+
+  return left.displayName.localeCompare(right.displayName);
+}
+
+function autocompleteMatchQualityRank(entity: ResolvedEntity): number {
+  switch (entity.matchQuality) {
+    case 'exact':
+      return 0;
+    case 'prefix':
+      return 1;
+    case 'substring':
+      return 2;
+    case 'fuzzy':
+    default:
+      return 3;
+  }
+}
+
+function autocompleteKindRank(
+  entity: ResolvedEntity,
+  preference: ResolveEntitiesResolutionPreference | null
+): number {
+  const preferredGame = preference !== 'company';
+  if (preferredGame) {
+    return entity.entityKind === 'game' ? 0 : 1;
+  }
+
+  return entity.entityKind === 'game' ? 1 : 0;
+}
+
+function compareResolvedEntitiesByAutocompletePriority(
+  left: ResolvedEntity,
+  right: ResolvedEntity,
+  preference: ResolveEntitiesResolutionPreference | null
+): number {
+  const kindDelta = autocompleteKindRank(left, preference) - autocompleteKindRank(right, preference);
+  if (kindDelta !== 0) {
+    return kindDelta;
+  }
+
+  const matchQualityDelta = autocompleteMatchQualityRank(left) - autocompleteMatchQualityRank(right);
+  if (matchQualityDelta !== 0) {
+    return matchQualityDelta;
+  }
+
+  if (left.entityKind === 'game' && right.entityKind === 'game') {
+    const rightReviews = right.latestMetrics?.totalReviews ?? 0;
+    const leftReviews = left.latestMetrics?.totalReviews ?? 0;
+    if (rightReviews !== leftReviews) {
+      return rightReviews - leftReviews;
+    }
+
+    const rightCcu = right.latestMetrics?.ccuPeak ?? 0;
+    const leftCcu = left.latestMetrics?.ccuPeak ?? 0;
+    if (rightCcu !== leftCcu) {
+      return rightCcu - leftCcu;
+    }
+
+    const rightOwners = right.latestMetrics?.ownersMidpoint ?? 0;
+    const leftOwners = left.latestMetrics?.ownersMidpoint ?? 0;
+    if (rightOwners !== leftOwners) {
+      return rightOwners - leftOwners;
+    }
+  } else if (left.entityKind !== 'game' && right.entityKind !== 'game') {
+    const rightGameCount = right.signals?.gameCount ?? 0;
+    const leftGameCount = left.signals?.gameCount ?? 0;
+    if (rightGameCount !== leftGameCount) {
+      return rightGameCount - leftGameCount;
+    }
+  }
+
+  const tierDelta = resolutionTierRank(inferResolutionTierFromResolvedEntity(left))
+    - resolutionTierRank(inferResolutionTierFromResolvedEntity(right));
+  if (tierDelta !== 0) {
+    return tierDelta;
+  }
+
+  if (right.confidence !== left.confidence) {
+    return right.confidence - left.confidence;
+  }
+
+  return left.displayName.localeCompare(right.displayName);
 }
 
 function buildDefaultResolveAmbiguity(entities: ResolvedEntity[]): ResolveEntitiesResponse['ambiguity'] {
@@ -1737,6 +1839,9 @@ export class DataPlaneService {
     await this.assertContractRuntime('resolveEntities');
     const query = request.query.trim();
     const resolutionMode = normalizeResolveEntitiesResolutionMode(request.resolutionMode);
+    const resolutionPreference = normalizeResolveEntitiesResolutionPreference(
+      request.resolutionPreference
+    );
 
     if (!query) {
       return {
@@ -1771,7 +1876,9 @@ export class DataPlaneService {
     const offset = continuation.offset;
     const scanLimit = strictSingleKindResolver
       ? Math.min(MAX_CHAT_STRICT_ENTITY_LIMIT, offset + limit + STRICT_ENTITY_SCAN_BUFFER)
-      : limit;
+      : resolutionMode === 'autocomplete'
+        ? Math.min(MAX_CHAT_STRICT_ENTITY_LIMIT, offset + limit + AUTOCOMPLETE_ENTITY_SCAN_BUFFER)
+        : limit;
     const includeMetrics = request.includeMetrics ?? true;
 
     const entities: ResolvedEntity[] = [];
@@ -1867,13 +1974,9 @@ export class DataPlaneService {
       .values()]
       .sort((left, right) => strictSingleKindResolver
         ? compareResolvedEntitiesByResolutionPriority(left, right)
-        : (
-          right.confidence !== left.confidence
-            ? right.confidence - left.confidence
-            : (right.latestMetrics?.totalReviews ?? 0) !== (left.latestMetrics?.totalReviews ?? 0)
-              ? (right.latestMetrics?.totalReviews ?? 0) - (left.latestMetrics?.totalReviews ?? 0)
-              : left.displayName.localeCompare(right.displayName)
-        ));
+        : resolutionMode === 'autocomplete'
+          ? compareResolvedEntitiesByAutocompletePriority(left, right, resolutionPreference)
+          : compareResolvedEntitiesByDefaultMode(left, right));
 
     const totalCandidates = sortedEntities.length;
     const pagedEntities = sortedEntities.slice(offset, offset + limit);
@@ -7281,7 +7384,7 @@ export class DataPlaneService {
           FROM ${entitiesTable} e
           CROSS JOIN query_terms q
           CROSS JOIN lexical_stats stats
-          WHERE stats.lexical_candidate_count < $15
+          WHERE stats.lexical_candidate_count = 0
             AND e.entity_kind = $13
             AND e.platform = $14
             AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
@@ -7337,7 +7440,7 @@ export class DataPlaneService {
           JOIN ${aliasesTable} entity_alias ON entity_alias.entity_uid = e.entity_uid
           CROSS JOIN query_terms q
           CROSS JOIN lexical_stats stats
-          WHERE stats.lexical_candidate_count < $15
+          WHERE stats.lexical_candidate_count = 0
             AND e.entity_kind = $13
             AND e.platform = $14
             AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL

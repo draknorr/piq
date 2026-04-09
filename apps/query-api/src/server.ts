@@ -126,6 +126,16 @@ async function executeWithSourceFallback<T>(params: {
   }
 }
 
+function isStatementTimeoutError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  return candidate.code === '57014'
+    || (typeof candidate.message === 'string' && /statement timeout/i.test(candidate.message));
+}
+
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
@@ -289,12 +299,27 @@ export function createQueryApiRequestHandler(params: {
 
       if (request.method === 'POST' && url.pathname === '/v1/contracts/resolve-entities') {
         const body = await readJsonBody<ResolveEntitiesRequest>(request);
-        const result = await executeWithSourceFallback({
-          action: 'resolveEntities',
-          fallbackOperation: sourceFallback ? () => sourceFallback.resolveEntities(body) : null,
-          primaryOperation: () => dataPlane.resolveEntities(body),
-        });
-        sendJson(response, 200, result);
+        const fallbackResolveEntitiesOperation = sourceFallback
+          ? () => sourceFallback.resolveEntities(body)
+          : null;
+        try {
+          const result = await executeWithSourceFallback({
+            action: 'resolveEntities',
+            fallbackOperation: fallbackResolveEntitiesOperation,
+            primaryOperation: () => dataPlane.resolveEntities(body),
+          });
+          sendJson(response, 200, result);
+        } catch (error) {
+          if (!fallbackResolveEntitiesOperation && isStatementTimeoutError(error)) {
+            sendJson(response, 504, {
+              code: 'QUERY_TIMEOUT',
+              error: 'Tiger primary resolveEntities timed out before source fallback was available.',
+            });
+            return;
+          }
+
+          throw error;
+        }
         return;
       }
 

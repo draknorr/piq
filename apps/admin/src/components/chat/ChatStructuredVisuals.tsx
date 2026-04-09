@@ -386,6 +386,7 @@ function ClarificationSlotVisual({
           includeMetrics: true,
           limit: 5,
           query: slot.query,
+          resolutionMode: 'chat_strict',
         }),
         headers: {
           'Content-Type': 'application/json',

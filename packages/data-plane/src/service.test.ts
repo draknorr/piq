@@ -1593,6 +1593,205 @@ test('resolveEntities chat_strict paginates ranked game candidates without reord
   assert.equal(secondPage.continuationToken, null);
 });
 
+test('resolveEntities autocomplete prefers games for generic overview-style lookups', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async (kind: string) => {
+    if (kind === 'game') {
+      return [
+        createEntityRow({
+          ccu_peak: 0,
+          display_name: 'Crimson Hotel',
+          entity_id: 1682280,
+          match_quality: 'prefix',
+          match_rank: 1,
+          match_source: 'canonical_name',
+          matched_name: 'Crimson Hotel',
+          owners_midpoint: 35000,
+          release_year: 2019,
+          resolution_tier: 'canonical_prefix',
+          review_score: 72,
+          total_reviews: 50,
+        }),
+        createEntityRow({
+          ccu_peak: 116701,
+          display_name: 'Crimson Desert',
+          entity_id: 3321460,
+          match_quality: 'prefix',
+          match_rank: 2,
+          match_source: 'alias',
+          matched_name: 'crimson desert',
+          owners_midpoint: 10000,
+          release_year: 2026,
+          resolution_tier: 'alias_prefix',
+          review_score: 83,
+          total_reviews: 116572,
+        }),
+      ];
+    }
+
+    if (kind === 'publisher') {
+      return [
+        createEntityRow({
+          ccu_peak: null,
+          display_name: 'Crimson',
+          entity_id: 200771,
+          game_count: 1,
+          match_quality: 'exact',
+          match_rank: 0,
+          match_source: 'canonical_name',
+          matched_name: 'Crimson',
+          owners_midpoint: null,
+          resolution_tier: 'canonical_exact',
+          review_score: null,
+          total_reviews: null,
+        }),
+      ];
+    }
+
+    if (kind === 'developer') {
+      return [
+        createEntityRow({
+          ccu_peak: null,
+          display_name: 'Crimson',
+          entity_id: 211121,
+          game_count: 2,
+          match_quality: 'exact',
+          match_rank: 0,
+          match_source: 'canonical_name',
+          matched_name: 'Crimson',
+          owners_midpoint: null,
+          resolution_tier: 'canonical_exact',
+          review_score: null,
+          total_reviews: null,
+        }),
+      ];
+    }
+
+    return [];
+  };
+  (service as any).queryGames = async () => [];
+  (service as any).queryGamesLexical = async () => [];
+  (service as any).queryCompanies = async () => [];
+  (service as any).queryCompaniesLexical = async () => [];
+
+  const result = await service.resolveEntities({
+    entityKinds: ['game', 'publisher', 'developer'],
+    query: 'crimson',
+    resolutionMode: 'autocomplete',
+    resolutionPreference: 'game',
+  });
+
+  assert.equal(result.entities[0]?.displayName, 'Crimson Desert');
+  assert.equal(result.entities[0]?.entityKind, 'game');
+});
+
+test('resolveEntities autocomplete scans beyond the requested page size before reranking', async () => {
+  const service = createService();
+  let requestedLimit: number | null = null;
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async (_kind: string, _query: string, limit: number) => {
+    requestedLimit = limit;
+    return [];
+  };
+  (service as any).queryGames = async () => [];
+  (service as any).queryGamesLexical = async () => [];
+  (service as any).queryCompanies = async () => [];
+  (service as any).queryCompaniesLexical = async () => [];
+
+  await service.resolveEntities({
+    entityKinds: ['game'],
+    limit: 5,
+    query: 'crimson',
+    resolutionMode: 'autocomplete',
+    resolutionPreference: 'game',
+  });
+
+  assert.equal(requestedLimit, 30);
+});
+
+test('resolveEntities autocomplete keeps companies first when company preference is explicit', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async (kind: string) => {
+    if (kind === 'game') {
+      return [
+        createEntityRow({
+          ccu_peak: 116701,
+          display_name: 'Crimson Desert',
+          entity_id: 3321460,
+          match_quality: 'prefix',
+          match_rank: 3,
+          match_source: 'alias',
+          matched_name: 'crimson desert',
+          owners_midpoint: 10000,
+          release_year: 2026,
+          resolution_tier: 'alias_prefix',
+          review_score: 83,
+          total_reviews: 116572,
+        }),
+      ];
+    }
+
+    if (kind === 'publisher') {
+      return [
+        createEntityRow({
+          ccu_peak: null,
+          display_name: 'Crimson',
+          entity_id: 200771,
+          game_count: 1,
+          match_quality: 'exact',
+          match_rank: 0,
+          match_source: 'canonical_name',
+          matched_name: 'Crimson',
+          owners_midpoint: null,
+          resolution_tier: 'canonical_exact',
+          review_score: null,
+          total_reviews: null,
+        }),
+      ];
+    }
+
+    if (kind === 'developer') {
+      return [
+        createEntityRow({
+          ccu_peak: null,
+          display_name: 'Crimson',
+          entity_id: 211121,
+          game_count: 2,
+          match_quality: 'exact',
+          match_rank: 0,
+          match_source: 'canonical_name',
+          matched_name: 'Crimson',
+          owners_midpoint: null,
+          resolution_tier: 'canonical_exact',
+          review_score: null,
+          total_reviews: null,
+        }),
+      ];
+    }
+
+    return [];
+  };
+  (service as any).queryGames = async () => [];
+  (service as any).queryGamesLexical = async () => [];
+  (service as any).queryCompanies = async () => [];
+  (service as any).queryCompaniesLexical = async () => [];
+
+  const result = await service.resolveEntities({
+    entityKinds: ['game', 'publisher', 'developer'],
+    query: 'crimson',
+    resolutionMode: 'autocomplete',
+    resolutionPreference: 'company',
+  });
+
+  assert.notEqual(result.entities[0]?.entityKind, 'game');
+  assert.equal(result.entities[0]?.displayName, 'Crimson');
+});
+
 test('resolveEntities keeps clarification for ambiguous fuzzy-only game lookups', async () => {
   const service = createService();
 

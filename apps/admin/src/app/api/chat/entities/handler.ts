@@ -7,6 +7,8 @@ import type {
   ChatEntityPickerRequest,
   ChatEntityPickerResponse,
   ChatEntityPickerResults,
+  ChatEntityResolutionMode,
+  ChatEntityResolutionPreference,
 } from '@/lib/chat/chat-entity-picker';
 
 const DEFAULT_ENTITY_KINDS: ChatEntityKind[] = [
@@ -61,6 +63,20 @@ function normalizeEntityKinds(entityKinds: unknown): ChatEntityKind[] {
   return normalized.length > 0 ? normalized : DEFAULT_ENTITY_KINDS;
 }
 
+function normalizeResolutionMode(value: unknown): ChatEntityResolutionMode | undefined {
+  return value === 'autocomplete' || value === 'chat_strict' || value === 'default'
+    ? value
+    : undefined;
+}
+
+function normalizeResolutionPreference(value: unknown): ChatEntityResolutionPreference | null | undefined {
+  if (value === 'game' || value === 'company') {
+    return value;
+  }
+
+  return value == null ? null : undefined;
+}
+
 export async function handleChatEntityRequest(
   request: NextRequest,
   deps: ChatEntityRouteDeps = defaultDeps
@@ -110,6 +126,8 @@ export async function handleChatEntityRequest(
     const continuationToken = typeof body?.continuationToken === 'string'
       ? body.continuationToken.trim() || null
       : null;
+    const resolutionMode = normalizeResolutionMode(body?.resolutionMode);
+    const resolutionPreference = normalizeResolutionPreference(body?.resolutionPreference);
 
     const result = await deps.postToQueryApi<ChatEntityPickerResults>(
       '/v1/contracts/resolve-entities',
@@ -119,6 +137,8 @@ export async function handleChatEntityRequest(
         includeMetrics,
         limit,
         query,
+        ...(resolutionMode ? { resolutionMode } : {}),
+        ...(resolutionPreference !== undefined ? { resolutionPreference } : {}),
       }
     );
 

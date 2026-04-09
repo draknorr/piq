@@ -2,7 +2,8 @@ export type EntityKind = 'game' | 'publisher' | 'developer';
 export type EntityPlatform = 'steam' | 'publisheriq';
 export type DataPlaneSource = 'supabase-postgres' | 'tiger';
 export type MatchQuality = 'exact' | 'prefix' | 'substring' | 'fuzzy';
-export type ResolveEntitiesResolutionMode = 'default' | 'chat_strict';
+export type ResolveEntitiesResolutionMode = 'default' | 'chat_strict' | 'autocomplete';
+export type ResolveEntitiesResolutionPreference = 'game' | 'company';
 export type ResolveEntityMatchSource =
   | 'platform_entity_id'
   | 'canonical_name'
@@ -227,6 +228,7 @@ export interface ResolveEntitiesRequest {
   limit?: number;
   query: string;
   resolutionMode?: ResolveEntitiesResolutionMode;
+  resolutionPreference?: ResolveEntitiesResolutionPreference | null;
 }
 
 export interface ResolvedEntity {

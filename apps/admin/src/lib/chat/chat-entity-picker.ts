@@ -7,6 +7,8 @@ import type {
 export type ChatEntityKind = 'game' | 'publisher' | 'developer';
 export type ChatEntityPlatform = 'steam' | 'publisheriq';
 export type ChatEntityMatchQuality = 'exact' | 'prefix' | 'substring' | 'fuzzy';
+export type ChatEntityResolutionMode = 'autocomplete' | 'default' | 'chat_strict';
+export type ChatEntityResolutionPreference = 'game' | 'company';
 
 export interface ChatEntityLatestMetrics {
   ccuPeak: number | null;
@@ -60,6 +62,8 @@ export interface ChatEntityPickerRequest {
   includeMetrics?: boolean;
   continuationToken?: string | null;
   limit?: number;
+  resolutionMode?: ChatEntityResolutionMode;
+  resolutionPreference?: ChatEntityResolutionPreference | null;
   query: string;
 }
 
@@ -98,6 +102,7 @@ const REVERSED_GAME_METRIC_ENTITY_SEARCH_PATTERN =
   /\bwhat\s+(?:the\s+)?(?:review score|price|discount|ccu|owners?|player count|total reviews?)\s+is\s+(.+?)(?:[?!.]|$)/i;
 const NON_ENTITY_GAME_METRIC_QUERY_PATTERN =
   /^(?:the\s+)?(?:highest|most|top|best|largest|biggest|trending|breaking out|hot right now|all games?|all titles?|games?|titles?)\b/i;
+const ACTIVE_MENTION_QUERY_PATTERN = /(^|[\s([{,.;:!?])@(.+)$/;
 
 const ENTITY_QUALITY_ORDER: Record<ChatEntityMatchQuality, number> = {
   exact: 0,
@@ -121,6 +126,7 @@ function normalizeEntityQuery(value: string | null | undefined): string {
 
   return value
     .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, '')
+    .replace(/^@+/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -200,6 +206,29 @@ export function extractEntitySearchQuery(input: string): string {
   return trimmedInput;
 }
 
+export function extractActiveMentionQuery(input: string): string {
+  const trimmedInput = input.trim();
+  if (!trimmedInput) {
+    return '';
+  }
+
+  const mentionMatch = trimmedInput.match(ACTIVE_MENTION_QUERY_PATTERN);
+  if (!mentionMatch?.[2]) {
+    return '';
+  }
+
+  return normalizeEntityQuery(mentionMatch[2]).replace(/[?!.:,;]+$/g, '').trim();
+}
+
+export function extractComposerEntityQuery(input: string): string {
+  const mentionQuery = extractActiveMentionQuery(input);
+  if (mentionQuery) {
+    return mentionQuery;
+  }
+
+  return normalizeEntityQuery(extractEntitySearchQuery(input)).replace(/^@+/, '').trim();
+}
+
 export function replaceEntitySearchQuery(
   input: string,
   searchQuery: string,
@@ -217,6 +246,52 @@ export function replaceEntitySearchQuery(
   }
 
   return trimmedInput.replace(pattern, displayName);
+}
+
+export function replaceComposerEntityQuery(
+  input: string,
+  searchQuery: string,
+  displayName: string
+): string {
+  const trimmedInput = input.trim();
+  if (!trimmedInput) {
+    return displayName;
+  }
+
+  const mentionMatch = trimmedInput.match(ACTIVE_MENTION_QUERY_PATTERN);
+  if (mentionMatch?.[2]) {
+    return trimmedInput.replace(ACTIVE_MENTION_QUERY_PATTERN, `$1${displayName}`);
+  }
+
+  return replaceEntitySearchQuery(trimmedInput, searchQuery, displayName);
+}
+
+export function inferComposerEntityResolutionPreference(
+  input: string,
+  query: string
+): ChatEntityResolutionPreference {
+  const normalizedInput = normalizeText(`${input} ${query}`);
+
+  if (
+    hasAnyKeyword(normalizedInput, [
+      'publisher',
+      'publishers',
+      'developer',
+      'developers',
+      'studio',
+      'studios',
+      'company',
+      'companies',
+      'how many games',
+      'published',
+      'developed',
+      'portfolio',
+    ])
+  ) {
+    return 'company';
+  }
+
+  return 'game';
 }
 
 export function buildEntitySelectionPrompt(

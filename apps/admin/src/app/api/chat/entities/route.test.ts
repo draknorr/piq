@@ -112,6 +112,8 @@ test('chat entity route proxies resolve-entities and trims the query', async () 
       limit: 3,
       includeMetrics: true,
       continuationToken: 'cursor-1',
+      resolutionMode: 'autocomplete',
+      resolutionPreference: 'game',
     }),
     deps
   );
@@ -126,6 +128,8 @@ test('chat entity route proxies resolve-entities and trims the query', async () 
         includeMetrics: true,
         limit: 3,
         query: 'Counter-Strike 2',
+        resolutionMode: 'autocomplete',
+        resolutionPreference: 'game',
       },
     },
   ]);

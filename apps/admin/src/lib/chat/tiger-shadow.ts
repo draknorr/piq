@@ -1402,10 +1402,16 @@ function buildTigerPrimaryNoResultText(params: {
   const request = isRecord(params.request) ? params.request : null;
   const isStructuredRuntimeFailure = firstReason != null
     && /internal server error|failed to fetch|fetch failed|network|timeout|timed out|connection|socket|econn|abort/i.test(firstReason);
+  const isStructuredTimeout = firstReason != null
+    && /query_timeout|statement timeout|timed out|timeout/i.test(firstReason);
 
   if (params.matchedIntent === 'entity_overview') {
+    if (isStructuredTimeout) {
+      return 'The structured entity resolver timed out before it could lock the right title. Try again in a moment or pick the title from the match list.';
+    }
+
     return isStructuredRuntimeFailure
-      ? 'I could not load a stable overview for that title from the current structured data right now. Try the exact name or ask again in a moment.'
+      ? 'I could not load structured matching for that title right now. Try again in a moment or pick the title from the match list.'
       : 'I could not resolve a single game, publisher, or developer for that request. Try the exact name.';
   }
 
@@ -5656,7 +5662,10 @@ async function resolveSelectionSlotAttempt(params: {
     includeMetrics: false,
     limit: params.strictResolver ? 25 : 6,
     query: params.query,
-    resolutionMode: params.strictResolver ? 'chat_strict' : 'default',
+    resolutionMode: params.strictResolver
+      ? 'chat_strict'
+      : (params.resolutionPreference ? 'autocomplete' : 'default'),
+    resolutionPreference: params.resolutionPreference ?? null,
   }, {
     timeoutMs: params.timeoutMs ?? readShadowTimeoutMs(),
   });
