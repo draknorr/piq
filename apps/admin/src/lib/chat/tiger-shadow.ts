@@ -5623,6 +5623,7 @@ function buildResolvedEntityByUidMap(entities: ResolvedCompareEntity[]): Map<str
 }
 
 async function resolveSelectionSlotAttempt(params: {
+  entityKinds?: SessionSelectionEntityKind[] | null;
   expectedEntityKind: SessionSelectionEntityKind | null;
   label: string;
   query: string | null;
@@ -5656,9 +5657,11 @@ async function resolveSelectionSlotAttempt(params: {
 
   const startedAt = performance.now();
   const response = await postToQueryApi<ResolveEntitiesResponse>('/v1/contracts/resolve-entities', {
-    entityKinds: params.expectedEntityKind
-      ? [params.expectedEntityKind]
-      : ['game', 'publisher', 'developer'],
+    entityKinds: params.entityKinds?.length
+      ? params.entityKinds
+      : params.expectedEntityKind
+        ? [params.expectedEntityKind]
+        : ['game', 'publisher', 'developer'],
     includeMetrics: false,
     limit: params.strictResolver ? 25 : 6,
     query: params.query,
@@ -5798,9 +5801,11 @@ function pickSelectedCandidateFromSelectionState(
 async function resolvePrimaryEntityAttempt(params: {
   expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
   family?: TigerPrimaryMatchedIntent;
+  preferredEntityKinds?: SessionSelectionEntityKind[] | null;
   query: string | null;
   resolutionPreference?: EntityResolutionPreference;
   selectionState?: SessionChatSelectionState | null;
+  strictResolver?: boolean;
 }): Promise<PrimaryEntityResolutionResult> {
   const selectedCandidate = pickSelectedCandidateFromSelectionState(params.selectionState);
   const selectedSlot = params.selectionState?.slots[0] ?? null;
@@ -5829,11 +5834,12 @@ async function resolvePrimaryEntityAttempt(params: {
 
   const timeoutMs = readPrimaryEntityResolutionTimeoutMs();
   const resolved = await resolveSelectionSlotAttempt({
+    entityKinds: params.preferredEntityKinds ?? null,
     expectedEntityKind: params.expectedEntityKind,
     label: params.query ?? 'entity',
     query: params.query,
     resolutionPreference: params.resolutionPreference ?? null,
-    strictResolver: params.expectedEntityKind != null,
+    strictResolver: params.strictResolver ?? params.expectedEntityKind != null,
     slotId: 'primary',
     timeoutMs,
   });
@@ -5867,6 +5873,53 @@ async function resolvePrimaryEntityAttempt(params: {
         })
       : null,
   };
+}
+
+async function resolveEntityOverviewPrimaryEntityAttempt(params: {
+  family?: TigerPrimaryMatchedIntent;
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  query: string | null;
+  resolutionPreference?: EntityResolutionPreference;
+  selectionState?: SessionChatSelectionState | null;
+}): Promise<PrimaryEntityResolutionResult> {
+  if (params.expectedEntityKind) {
+    return resolvePrimaryEntityAttempt({
+      ...params,
+      preferredEntityKinds: [params.expectedEntityKind],
+      strictResolver: true,
+    });
+  }
+
+  if (params.resolutionPreference === 'company') {
+    return resolvePrimaryEntityAttempt({
+      ...params,
+      preferredEntityKinds: ['publisher', 'developer'],
+      strictResolver: false,
+    });
+  }
+
+  const gameFirst = await resolvePrimaryEntityAttempt({
+    ...params,
+    expectedEntityKind: 'game',
+    preferredEntityKinds: ['game'],
+    resolutionPreference: 'game',
+    strictResolver: true,
+  });
+
+  if (
+    gameFirst.entity
+    || gameFirst.attempt.status !== 'success'
+    || (gameFirst.attempt.resultCount ?? 0) > 0
+  ) {
+    return gameFirst;
+  }
+
+  return resolvePrimaryEntityAttempt({
+    ...params,
+    preferredEntityKinds: ['publisher', 'developer'],
+    resolutionPreference: 'company',
+    strictResolver: false,
+  });
 }
 
 async function resolveGameEntityAttempt(params: {
@@ -8375,7 +8428,7 @@ async function runEntityOverviewShadow(prompt: string): Promise<TigerShadowAttem
   const query = extractEntityOverviewQuery(prompt);
   const expectedEntityKind = inferEntityOverviewKindHint(prompt);
   const resolutionPreference = inferEntityOverviewResolutionPreference(prompt, expectedEntityKind);
-  const { attempt: resolveAttempt, entity } = await resolvePrimaryEntityAttempt({
+  const { attempt: resolveAttempt, entity } = await resolveEntityOverviewPrimaryEntityAttempt({
     expectedEntityKind,
     query,
     resolutionPreference,
@@ -8455,7 +8508,7 @@ async function runEntityOverviewPrimary(params: {
     params.prompt,
     expectedEntityKind
   );
-  const { attempt: resolveAttempt, entity, selectionState } = await resolvePrimaryEntityAttempt({
+  const { attempt: resolveAttempt, entity, selectionState } = await resolveEntityOverviewPrimaryEntityAttempt({
     expectedEntityKind,
     family: 'entity_overview',
     query,

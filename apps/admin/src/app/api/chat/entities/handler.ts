@@ -10,6 +10,7 @@ import type {
   ChatEntityResolutionMode,
   ChatEntityResolutionPreference,
 } from '@/lib/chat/chat-entity-picker';
+import { inferAutocompleteEntityKinds } from '@/lib/chat/chat-entity-picker';
 
 const DEFAULT_ENTITY_KINDS: ChatEntityKind[] = [
   'game',
@@ -61,6 +62,12 @@ function normalizeEntityKinds(entityKinds: unknown): ChatEntityKind[] {
   );
 
   return normalized.length > 0 ? normalized : DEFAULT_ENTITY_KINDS;
+}
+
+function defaultAutocompleteEntityKinds(
+  resolutionPreference: ChatEntityResolutionPreference | null
+): ChatEntityKind[] {
+  return inferAutocompleteEntityKinds(resolutionPreference);
 }
 
 function normalizeResolutionMode(value: unknown): ChatEntityResolutionMode | undefined {
@@ -121,13 +128,22 @@ export async function handleChatEntityRequest(
     }
 
     const limit = typeof body?.limit === 'number' ? Math.max(1, Math.min(body.limit, 10)) : 5;
-    const entityKinds = normalizeEntityKinds(body?.entityKinds);
-    const includeMetrics = body?.includeMetrics ?? true;
     const continuationToken = typeof body?.continuationToken === 'string'
       ? body.continuationToken.trim() || null
       : null;
     const resolutionMode = normalizeResolutionMode(body?.resolutionMode);
     const resolutionPreference = normalizeResolutionPreference(body?.resolutionPreference);
+    const requestedEntityKinds = Array.isArray(body?.entityKinds)
+      ? normalizeEntityKinds(body?.entityKinds)
+      : null;
+    const entityKinds = resolutionMode === 'autocomplete'
+      ? (Array.isArray(body?.entityKinds) && body.entityKinds.length > 0
+          ? requestedEntityKinds ?? defaultAutocompleteEntityKinds(resolutionPreference ?? 'game')
+          : defaultAutocompleteEntityKinds(resolutionPreference ?? 'game'))
+      : requestedEntityKinds ?? normalizeEntityKinds(body?.entityKinds);
+    const includeMetrics = resolutionMode === 'autocomplete'
+      ? false
+      : body?.includeMetrics ?? true;
 
     const result = await deps.postToQueryApi<ChatEntityPickerResults>(
       '/v1/contracts/resolve-entities',

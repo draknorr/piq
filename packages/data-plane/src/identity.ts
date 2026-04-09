@@ -24,7 +24,7 @@ function bytesToUuid(bytes: Uint8Array): string {
 
 function uuidV5(namespace: string, value: string): string {
   const namespaceBytes = uuidToBytes(namespace);
-  const valueBytes = Buffer.from(value, 'utf8');
+  const valueBytes = new TextEncoder().encode(value);
   const hash = createHash('sha1')
     .update(namespaceBytes)
     .update(valueBytes)

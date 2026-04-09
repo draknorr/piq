@@ -96,6 +96,22 @@ interface EntityRow extends QueryResultRow {
   total_reviews: number | null;
 }
 
+interface CanonicalLookupTerms {
+  compactQuery: string;
+  compactPrefix: string;
+  compactSubstring: string;
+  looseQuery: string;
+  loosePrefix: string;
+  looseSubstring: string;
+  normalizedQuery: string;
+  rawQuery: string;
+}
+
+interface CanonicalEntityQueryOptions {
+  allowFuzzyFallback?: boolean;
+  lightweight?: boolean;
+}
+
 interface CatalogRow extends QueryResultRow {
   app_type: string | null;
   appid: number;
@@ -1528,6 +1544,12 @@ function compareResolvedEntitiesByAutocompletePriority(
     if (rightOwners !== leftOwners) {
       return rightOwners - leftOwners;
     }
+
+    const rightReleaseYear = right.releaseYear ?? 0;
+    const leftReleaseYear = left.releaseYear ?? 0;
+    if (rightReleaseYear !== leftReleaseYear) {
+      return rightReleaseYear - leftReleaseYear;
+    }
   } else if (left.entityKind !== 'game' && right.entityKind !== 'game') {
     const rightGameCount = right.signals?.gameCount ?? 0;
     const leftGameCount = left.signals?.gameCount ?? 0;
@@ -1621,6 +1643,28 @@ function normalizeLookupTextPreservingPunctuation(value: string): string {
 
 function normalizeSemanticTextToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function buildCanonicalLookupTerms(query: string): CanonicalLookupTerms | null {
+  const rawQuery = normalizeLookupTextPreservingPunctuation(query);
+  const normalizedQuery = normalizeLookupTextPreservingPunctuation(query);
+  const looseQuery = normalizeSemanticTextToken(query);
+  const compactQuery = looseQuery.replace(/\s+/g, '');
+
+  if (!rawQuery || !normalizedQuery || !looseQuery || !compactQuery) {
+    return null;
+  }
+
+  return {
+    compactQuery,
+    compactPrefix: `${compactQuery}%`,
+    compactSubstring: `%${compactQuery}%`,
+    looseQuery,
+    loosePrefix: `${looseQuery}%`,
+    looseSubstring: `%${looseQuery}%`,
+    normalizedQuery,
+    rawQuery,
+  };
 }
 
 function tokenizeSemanticTitle(value: string): string[] {
@@ -1880,86 +1924,78 @@ export class DataPlaneService {
         ? Math.min(MAX_CHAT_STRICT_ENTITY_LIMIT, offset + limit + AUTOCOMPLETE_ENTITY_SCAN_BUFFER)
         : limit;
     const includeMetrics = request.includeMetrics ?? true;
+    const includeMetricsForSorting = resolutionMode === 'autocomplete' ? true : includeMetrics;
+    const canonicalQueryOptions: CanonicalEntityQueryOptions = {
+      allowFuzzyFallback: resolutionMode !== 'autocomplete',
+      lightweight: resolutionMode === 'autocomplete',
+    };
 
     const entities: ResolvedEntity[] = [];
     const provenanceTables = new Set<string>();
     const useCanonicalResolver = this.config.source === 'tiger';
+    const requestedKindOrder = (['game', 'publisher', 'developer'] as const)
+      .filter((kind) => requestedKinds.has(kind));
+    const kindResults = await Promise.all(
+      requestedKindOrder.map(async (kind) => {
+        const canonicalRows = useCanonicalResolver
+          ? await this.queryCanonicalEntities(kind, query, scanLimit, canonicalQueryOptions)
+          : [];
+        const shouldUseLegacyFallback =
+          (!useCanonicalResolver || resolutionMode !== 'autocomplete')
+          && (
+            canonicalRows.length === 0
+            || canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy')
+          );
 
-    if (requestedKinds.has('game')) {
-      const canonicalRows = useCanonicalResolver
-        ? await this.queryCanonicalEntities('game', query, scanLimit)
-        : [];
-      const useLegacyFallback =
-        canonicalRows.length === 0 ||
-        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
-      const gameRows = useLegacyFallback
-        ? [
-            ...canonicalRows,
-            ...await this.queryGames(query, scanLimit),
-            ...await this.queryGamesLexical(query, scanLimit),
-          ]
-        : canonicalRows;
-      entities.push(
-        ...gameRows.map((row) => this.mapResolvedEntity('game', 'steam', row, query, includeMetrics))
-      );
-      if (useCanonicalResolver) {
-        provenanceTables.add(this.relation('core_entities').sql);
-        provenanceTables.add(this.relation('core_entity_aliases').sql);
-      }
-      provenanceTables.add(this.relation('apps').sql);
-      provenanceTables.add(this.relation('latest_daily_metrics').sql);
-    }
+        if (kind === 'game') {
+          const rows = shouldUseLegacyFallback
+            ? [
+                ...canonicalRows,
+                ...await this.queryGames(query, scanLimit),
+                ...await this.queryGamesLexical(query, scanLimit),
+              ]
+            : canonicalRows;
 
-    if (requestedKinds.has('publisher')) {
-      const canonicalRows = useCanonicalResolver
-        ? await this.queryCanonicalEntities('publisher', query, scanLimit)
-        : [];
-      const useLegacyFallback =
-        canonicalRows.length === 0 ||
-        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
-      const publisherRows = useLegacyFallback
-        ? [
-            ...canonicalRows,
-            ...await this.queryCompanies('publisher', query, scanLimit),
-            ...await this.queryCompaniesLexical('publisher', query, scanLimit),
-          ]
-        : canonicalRows;
+          return {
+            kind,
+            platform: 'steam' as const,
+            provenance: ['apps', 'latest_daily_metrics'] as const,
+            rows,
+          };
+        }
+
+        const rows = shouldUseLegacyFallback
+          ? [
+              ...canonicalRows,
+              ...await this.queryCompanies(kind, query, scanLimit),
+              ...await this.queryCompaniesLexical(kind, query, scanLimit),
+            ]
+          : canonicalRows;
+
+        return {
+          kind,
+          platform: 'publisheriq' as const,
+          provenance: [kind === 'publisher' ? 'publishers' : 'developers'] as const,
+          rows,
+        };
+      })
+    );
+
+    for (const kindResult of kindResults) {
       entities.push(
-        ...publisherRows.map((row) =>
-          this.mapResolvedEntity('publisher', 'publisheriq', row, query, includeMetrics)
+        ...kindResult.rows.map((row) =>
+          this.mapResolvedEntity(kindResult.kind, kindResult.platform, row, query, includeMetricsForSorting)
         )
       );
-      if (useCanonicalResolver) {
-        provenanceTables.add(this.relation('core_entities').sql);
-        provenanceTables.add(this.relation('core_entity_aliases').sql);
-      }
-      provenanceTables.add(this.relation('publishers').sql);
-    }
 
-    if (requestedKinds.has('developer')) {
-      const canonicalRows = useCanonicalResolver
-        ? await this.queryCanonicalEntities('developer', query, scanLimit)
-        : [];
-      const useLegacyFallback =
-        canonicalRows.length === 0 ||
-        canonicalRows.every((row) => (row.match_quality ?? 'fuzzy') === 'fuzzy');
-      const developerRows = useLegacyFallback
-        ? [
-            ...canonicalRows,
-            ...await this.queryCompanies('developer', query, scanLimit),
-            ...await this.queryCompaniesLexical('developer', query, scanLimit),
-          ]
-        : canonicalRows;
-      entities.push(
-        ...developerRows.map((row) =>
-          this.mapResolvedEntity('developer', 'publisheriq', row, query, includeMetrics)
-        )
-      );
       if (useCanonicalResolver) {
         provenanceTables.add(this.relation('core_entities').sql);
         provenanceTables.add(this.relation('core_entity_aliases').sql);
       }
-      provenanceTables.add(this.relation('developers').sql);
+
+      for (const relationKey of kindResult.provenance) {
+        provenanceTables.add(this.relation(relationKey).sql);
+      }
     }
 
     const sortedEntities = [...entities
@@ -1979,7 +2015,14 @@ export class DataPlaneService {
           : compareResolvedEntitiesByDefaultMode(left, right));
 
     const totalCandidates = sortedEntities.length;
-    const pagedEntities = sortedEntities.slice(offset, offset + limit);
+    const pagedEntities = sortedEntities
+      .slice(offset, offset + limit)
+      .map((entity) => includeMetrics
+        ? entity
+        : {
+            ...entity,
+            latestMetrics: undefined,
+          });
     const ambiguity = strictResolverKind
       ? buildStrictResolveAmbiguity(strictResolverKind, sortedEntities)
       : buildDefaultResolveAmbiguity(pagedEntities);
@@ -7097,448 +7140,714 @@ export class DataPlaneService {
   private async queryCanonicalEntities(
     kind: EntityKind,
     query: string,
-    limit: number
+    limit: number,
+    options: CanonicalEntityQueryOptions = {}
   ): Promise<EntityRow[]> {
-    const entitiesTable = this.relation('core_entities').sql;
-    const aliasesTable = this.relation('core_entity_aliases').sql;
-    const rawQuery = normalizeLookupTextPreservingPunctuation(query);
-    const normalizedQuery = normalizeLookupTextPreservingPunctuation(query);
-    const looseQuery = normalizeSemanticTextToken(query);
-    const compactQuery = looseQuery.replace(/\s+/g, '');
-    if (!rawQuery || !looseQuery || !compactQuery) {
+    const terms = buildCanonicalLookupTerms(query);
+    if (!terms) {
       return [];
     }
 
-    const rawPrefix = `${rawQuery}%`;
-    const normalizedPrefix = `${normalizedQuery}%`;
-    const loosePrefix = `${looseQuery}%`;
-    const compactPrefix = `${compactQuery}%`;
-    const rawSubstring = `%${rawQuery}%`;
-    const normalizedSubstring = `%${normalizedQuery}%`;
-    const looseSubstring = `%${looseQuery}%`;
-    const fuzzyThreshold = kind === 'game' ? 0.45 : 0.4;
+    const lexicalRows = await this.queryCanonicalEntitiesLexical(
+      kind,
+      terms,
+      limit,
+      options.lightweight ?? false
+    );
 
-    const candidateMetadataJoinSql =
+    if (lexicalRows.length > 0 || options.allowFuzzyFallback === false) {
+      return lexicalRows;
+    }
+
+    return this.queryCanonicalEntitiesFallback(
+      kind,
+      terms,
+      limit,
+      options.lightweight ?? false
+    );
+  }
+
+  private async queryCanonicalEntitiesLexical(
+    kind: EntityKind,
+    terms: CanonicalLookupTerms,
+    limit: number,
+    lightweight: boolean
+  ): Promise<EntityRow[]> {
+    const entitiesTable = this.relation('core_entities').sql;
+    const aliasesTable = this.relation('core_entity_aliases').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const platform = kind === 'game' ? 'steam' : 'publisheriq';
+    const visibilityPredicate =
       kind === 'game'
         ? `
-          FROM candidate_entities candidate
-          JOIN ${this.relation('apps').sql} a
-            ON a.appid = candidate.entity_id
-           AND a.is_delisted = false
-           AND ${GAME_TYPE_PREDICATE[this.config.source]}
-          LEFT JOIN ${this.relation('latest_daily_metrics').sql} ldm
-            ON ldm.appid = a.appid
-        `
+            AND COALESCE(e.metadata->>'type', '') = 'game'
+            AND COALESCE((e.metadata->>'is_delisted')::boolean, false) = false
+          `
         : '';
-
-    const companyJoinSql =
+    const releaseYearSql =
       kind === 'game'
-        ? ''
+        ? `
+            CASE
+              WHEN COALESCE(e.metadata->>'release_date', '') ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                THEN EXTRACT(YEAR FROM ((e.metadata->>'release_date')::date))::int
+              ELSE NULL::int
+            END
+          `
+        : 'NULL::int';
+    const gameCountSql =
+      kind === 'game'
+        ? 'NULL::int'
         : `
-          FROM candidate_entities candidate
-          LEFT JOIN ${this.relation(kind === 'publisher' ? 'publishers' : 'developers').sql} company
-            ON company.id = candidate.entity_id
-        `;
-
+            CASE
+              WHEN COALESCE(e.metadata->>'game_count', '') ~ '^\\d+$'
+                THEN (e.metadata->>'game_count')::int
+              ELSE NULL::int
+            END
+          `;
     const gameMetricSelect =
       kind === 'game'
         ? `
-          candidate.display_name,
-          candidate.entity_id,
-          candidate.match_quality,
-          candidate.match_rank,
-          candidate.match_source,
-          candidate.matched_name,
-          candidate.resolution_tier,
-          candidate.similarity_score,
-          EXTRACT(YEAR FROM a.release_date)::int AS release_year,
-          ldm.ccu_peak,
-          ldm.owners_midpoint,
-          ${reviewPercentageSql('ldm')} AS review_score,
-          ldm.total_reviews,
-          NULL::int AS game_count
-        `
+            ldm.ccu_peak,
+            ldm.owners_midpoint,
+            ${reviewPercentageSql('ldm')} AS review_score,
+            ldm.total_reviews
+          `
         : `
-          candidate.display_name,
-          candidate.entity_id,
-          candidate.match_quality,
-          candidate.match_rank,
-          candidate.match_source,
-          candidate.matched_name,
-          candidate.resolution_tier,
-          candidate.similarity_score,
-          NULL::int AS release_year,
-          NULL::double precision AS ccu_peak,
-          NULL::double precision AS owners_midpoint,
-          NULL::double precision AS review_score,
-          NULL::double precision AS total_reviews,
-          company.game_count
-        `;
+            NULL::double precision AS ccu_peak,
+            NULL::double precision AS owners_midpoint,
+            NULL::double precision AS review_score,
+            NULL::double precision AS total_reviews
+          `;
+    const gameMetricJoin =
+      kind === 'game'
+        ? `LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = candidate.entity_id`
+        : '';
+    const totalReviewOrderSql =
+      kind === 'game'
+        ? 'COALESCE(ldm.total_reviews, 0)'
+        : 'COALESCE(NULL::double precision, 0)';
 
-    const candidateRows = await runQuery<EntityRow>(
+    const result = await runQuery<EntityRow>(
       `
-        WITH query_terms AS (
-          SELECT
-            $1::text AS raw_query,
-            $2::text AS normalized_query,
-            $3::text AS loose_query,
-            $4::text AS compact_query,
-            $5::text AS raw_prefix,
-            $6::text AS normalized_prefix,
-            $7::text AS loose_prefix,
-            $8::text AS compact_prefix,
-            $9::text AS raw_substring,
-            $10::text AS normalized_substring,
-            $11::text AS loose_substring,
-            $12::double precision AS fuzzy_threshold
-        ),
-        lexical_entity_rows AS (
+        WITH lexical_candidate_rows AS (
           SELECT
             e.entity_uid,
             e.platform_entity_id::int AS entity_id,
             e.canonical_name AS display_name,
             e.canonical_name AS matched_name,
-            CASE
-              WHEN e.platform_entity_id = q.raw_query THEN 'platform_entity_id'
-              WHEN lower(e.canonical_name) = q.raw_query THEN 'canonical_name'
-              WHEN e.normalized_name = q.normalized_query THEN 'normalized_name'
-              WHEN e.loose_normalized_name = q.loose_query THEN 'normalized_name'
-              WHEN e.compact_normalized_name = q.compact_query THEN 'normalized_name'
-              ELSE 'canonical_name'
-            END AS match_source,
-            CASE
-              WHEN e.platform_entity_id = q.raw_query THEN 'exact'
-              WHEN lower(e.canonical_name) = q.raw_query THEN 'exact'
-              WHEN e.normalized_name = q.normalized_query THEN 'exact'
-              WHEN e.loose_normalized_name = q.loose_query THEN 'exact'
-              WHEN e.compact_normalized_name = q.compact_query THEN 'exact'
-              WHEN lower(e.canonical_name) LIKE q.raw_prefix THEN 'prefix'
-              WHEN e.normalized_name LIKE q.normalized_prefix THEN 'prefix'
-              WHEN e.loose_normalized_name LIKE q.loose_prefix THEN 'prefix'
-              ELSE 'prefix'
-            END AS match_quality,
-            CASE
-              WHEN e.platform_entity_id = q.raw_query THEN -1
-              WHEN lower(e.canonical_name) = q.raw_query THEN 0
-              WHEN e.normalized_name = q.normalized_query THEN 2
-              WHEN e.loose_normalized_name = q.loose_query THEN 2
-              WHEN e.compact_normalized_name = q.compact_query THEN 2
-              ELSE 3
-            END AS match_rank,
-            CASE
-              WHEN e.platform_entity_id = q.raw_query THEN 'platform_id_exact'
-              WHEN lower(e.canonical_name) = q.raw_query THEN 'canonical_exact'
-              WHEN e.normalized_name = q.normalized_query THEN 'normalized_exact'
-              WHEN e.loose_normalized_name = q.loose_query THEN 'normalized_exact'
-              WHEN e.compact_normalized_name = q.compact_query THEN 'normalized_exact'
-              ELSE 'canonical_prefix'
-            END AS resolution_tier,
+            'platform_entity_id'::text AS match_source,
+            'exact'::text AS match_quality,
+            -1::int AS match_rank,
+            'platform_id_exact'::text AS resolution_tier,
+            0::int AS dedupe_rank,
             GREATEST(
-              COALESCE(similarity(lower(e.canonical_name), q.raw_query), 0),
-              COALESCE(similarity(e.loose_normalized_name, q.loose_query), 0),
-              COALESCE(similarity(e.compact_normalized_name, q.compact_query), 0)
-            ) AS similarity_score
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
           FROM ${entitiesTable} e
-          CROSS JOIN query_terms q
-          WHERE e.entity_kind = $13
-            AND e.platform = $14
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
             AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
-            AND (
-              e.platform_entity_id = q.raw_query
-              OR
-              lower(e.canonical_name) = q.raw_query
-              OR e.normalized_name = q.normalized_query
-              OR e.loose_normalized_name = q.loose_query
-              OR e.compact_normalized_name = q.compact_query
-              OR lower(e.canonical_name) LIKE q.raw_prefix
-              OR e.normalized_name LIKE q.normalized_prefix
-              OR e.loose_normalized_name LIKE q.loose_prefix
-              OR e.compact_normalized_name LIKE q.compact_prefix
-            )
-        ),
-        lexical_alias_rows AS (
+            ${visibilityPredicate}
+            AND e.platform_entity_id = $3
+
+          UNION ALL
+
           SELECT
             e.entity_uid,
             e.platform_entity_id::int AS entity_id,
             e.canonical_name AS display_name,
-            entity_alias.alias AS matched_name,
-            CASE
-              WHEN lower(entity_alias.alias) = q.raw_query THEN 'alias'
-              WHEN entity_alias.normalized_alias = q.normalized_query THEN 'normalized_alias'
-              WHEN entity_alias.loose_normalized_alias = q.loose_query THEN 'normalized_alias'
-              WHEN entity_alias.compact_normalized_alias = q.compact_query THEN 'normalized_alias'
-              ELSE 'alias'
-            END AS match_source,
-            CASE
-              WHEN lower(entity_alias.alias) = q.raw_query THEN 'exact'
-              WHEN entity_alias.normalized_alias = q.normalized_query THEN 'exact'
-              WHEN entity_alias.loose_normalized_alias = q.loose_query THEN 'exact'
-              WHEN entity_alias.compact_normalized_alias = q.compact_query THEN 'exact'
-              WHEN lower(entity_alias.alias) LIKE q.raw_prefix THEN 'prefix'
-              WHEN entity_alias.normalized_alias LIKE q.normalized_prefix THEN 'prefix'
-              WHEN entity_alias.loose_normalized_alias LIKE q.loose_prefix THEN 'prefix'
-              ELSE 'prefix'
-            END AS match_quality,
-            CASE
-              WHEN lower(entity_alias.alias) = q.raw_query THEN 1
-              WHEN entity_alias.normalized_alias = q.normalized_query THEN 2
-              WHEN entity_alias.loose_normalized_alias = q.loose_query THEN 2
-              WHEN entity_alias.compact_normalized_alias = q.compact_query THEN 2
-              ELSE 3
-            END AS match_rank,
-            CASE
-              WHEN lower(entity_alias.alias) = q.raw_query THEN 'alias_exact'
-              WHEN entity_alias.normalized_alias = q.normalized_query THEN 'normalized_exact'
-              WHEN entity_alias.loose_normalized_alias = q.loose_query THEN 'normalized_exact'
-              WHEN entity_alias.compact_normalized_alias = q.compact_query THEN 'normalized_exact'
-              ELSE 'alias_prefix'
-            END AS resolution_tier,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            3::int AS dedupe_rank,
             GREATEST(
-              COALESCE(similarity(lower(entity_alias.alias), q.raw_query), 0),
-              COALESCE(similarity(entity_alias.loose_normalized_alias, q.loose_query), 0),
-              COALESCE(similarity(entity_alias.compact_normalized_alias, q.compact_query), 0)
-            ) AS similarity_score
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
           FROM ${entitiesTable} e
-          JOIN ${aliasesTable} entity_alias ON entity_alias.entity_uid = e.entity_uid
-          CROSS JOIN query_terms q
-          WHERE e.entity_kind = $13
-            AND e.platform = $14
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
             AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
-            AND NULLIF(BTRIM(entity_alias.alias), '') IS NOT NULL
-            AND (
-              lower(entity_alias.alias) = q.raw_query
-              OR entity_alias.normalized_alias = q.normalized_query
-              OR entity_alias.loose_normalized_alias = q.loose_query
-              OR entity_alias.compact_normalized_alias = q.compact_query
-              OR lower(entity_alias.alias) LIKE q.raw_prefix
-              OR entity_alias.normalized_alias LIKE q.normalized_prefix
-              OR entity_alias.loose_normalized_alias LIKE q.loose_prefix
-              OR entity_alias.compact_normalized_alias LIKE q.compact_prefix
-            )
-        ),
-        lexical_candidate_rows AS (
-          SELECT * FROM lexical_entity_rows
+            ${visibilityPredicate}
+            AND e.normalized_name = $4
+
           UNION ALL
-          SELECT * FROM lexical_alias_rows
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            3::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM ${entitiesTable} e
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+            AND e.loose_normalized_name = $5
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            3::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM ${entitiesTable} e
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+            AND e.compact_normalized_name = $6
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            'prefix'::text AS match_quality,
+            3::int AS match_rank,
+            'canonical_prefix'::text AS resolution_tier,
+            5::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM ${entitiesTable} e
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+            AND e.loose_normalized_name LIKE $7
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            'prefix'::text AS match_quality,
+            3::int AS match_rank,
+            'canonical_prefix'::text AS resolution_tier,
+            5::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(e.loose_normalized_name, $5), 0),
+              COALESCE(similarity(e.compact_normalized_name, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM ${entitiesTable} e
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+            AND e.compact_normalized_name LIKE $8
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            4::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $5), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND normalized_alias = $4
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            4::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $5), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND loose_normalized_alias = $5
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            'exact'::text AS match_quality,
+            2::int AS match_rank,
+            'normalized_exact'::text AS resolution_tier,
+            4::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $5), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND compact_normalized_alias = $6
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            'prefix'::text AS match_quality,
+            3::int AS match_rank,
+            'alias_prefix'::text AS resolution_tier,
+            6::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $5), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND loose_normalized_alias LIKE $7
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            'prefix'::text AS match_quality,
+            3::int AS match_rank,
+            'alias_prefix'::text AS resolution_tier,
+            6::int AS dedupe_rank,
+            GREATEST(
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $5), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $6), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND compact_normalized_alias LIKE $8
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
         ),
-        lexical_ranked_rows AS (
+        ranked_candidate_rows AS (
           SELECT
             lexical_candidate_rows.*,
             ROW_NUMBER() OVER (
               PARTITION BY entity_uid
-              ORDER BY match_rank ASC, similarity_score DESC, display_name ASC
+              ORDER BY dedupe_rank ASC, similarity_score DESC, display_name ASC
             ) AS row_rank
           FROM lexical_candidate_rows
         ),
-        lexical_candidates AS (
-          SELECT
-            display_name,
-            entity_id,
-            entity_uid,
-            match_quality,
-            match_rank,
-            match_source,
-            matched_name,
-            resolution_tier,
-            similarity_score
-          FROM lexical_ranked_rows
-          WHERE row_rank = 1
-        ),
-        lexical_stats AS (
-          SELECT COUNT(*)::int AS lexical_candidate_count
-          FROM lexical_candidates
-        ),
-        fallback_entity_rows AS (
-          SELECT
-            e.entity_uid,
-            e.platform_entity_id::int AS entity_id,
-            e.canonical_name AS display_name,
-            e.canonical_name AS matched_name,
-            CASE
-              WHEN lower(e.canonical_name) LIKE q.raw_substring THEN 'canonical_name'
-              ELSE 'normalized_name'
-            END AS match_source,
-            CASE
-              WHEN lower(e.canonical_name) LIKE q.raw_substring THEN 'substring'
-              WHEN e.normalized_name LIKE q.normalized_substring THEN 'substring'
-              WHEN e.loose_normalized_name LIKE q.loose_substring THEN 'substring'
-              ELSE 'fuzzy'
-            END AS match_quality,
-            CASE
-              WHEN lower(e.canonical_name) LIKE q.raw_substring THEN 4
-              WHEN e.normalized_name LIKE q.normalized_substring THEN 4
-              WHEN e.loose_normalized_name LIKE q.loose_substring THEN 4
-              ELSE 5
-            END AS match_rank,
-            CASE
-              WHEN lower(e.canonical_name) LIKE q.raw_substring THEN 'canonical_substring'
-              WHEN e.normalized_name LIKE q.normalized_substring THEN 'canonical_substring'
-              WHEN e.loose_normalized_name LIKE q.loose_substring THEN 'canonical_substring'
-              ELSE 'fuzzy'
-            END AS resolution_tier,
-            GREATEST(
-              COALESCE(similarity(lower(e.canonical_name), q.raw_query), 0),
-              COALESCE(similarity(e.loose_normalized_name, q.loose_query), 0),
-              COALESCE(similarity(e.compact_normalized_name, q.compact_query), 0)
-            ) AS similarity_score
-          FROM ${entitiesTable} e
-          CROSS JOIN query_terms q
-          CROSS JOIN lexical_stats stats
-          WHERE stats.lexical_candidate_count = 0
-            AND e.entity_kind = $13
-            AND e.platform = $14
-            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1
-              FROM lexical_candidates lexical_candidate
-              WHERE lexical_candidate.entity_uid = e.entity_uid
-            )
-            AND (
-              lower(e.canonical_name) LIKE q.raw_substring
-              OR e.normalized_name LIKE q.normalized_substring
-              OR e.loose_normalized_name LIKE q.loose_substring
-              OR GREATEST(
-                COALESCE(similarity(e.loose_normalized_name, q.loose_query), 0),
-                COALESCE(similarity(e.compact_normalized_name, q.compact_query), 0)
-              ) >= q.fuzzy_threshold
-            )
-        ),
-        fallback_alias_rows AS (
-          SELECT
-            e.entity_uid,
-            e.platform_entity_id::int AS entity_id,
-            e.canonical_name AS display_name,
-            entity_alias.alias AS matched_name,
-            CASE
-              WHEN lower(entity_alias.alias) LIKE q.raw_substring THEN 'alias'
-              ELSE 'normalized_alias'
-            END AS match_source,
-            CASE
-              WHEN lower(entity_alias.alias) LIKE q.raw_substring THEN 'substring'
-              WHEN entity_alias.normalized_alias LIKE q.normalized_substring THEN 'substring'
-              WHEN entity_alias.loose_normalized_alias LIKE q.loose_substring THEN 'substring'
-              ELSE 'fuzzy'
-            END AS match_quality,
-            CASE
-              WHEN lower(entity_alias.alias) LIKE q.raw_substring THEN 4
-              WHEN entity_alias.normalized_alias LIKE q.normalized_substring THEN 4
-              WHEN entity_alias.loose_normalized_alias LIKE q.loose_substring THEN 4
-              ELSE 5
-            END AS match_rank,
-            CASE
-              WHEN lower(entity_alias.alias) LIKE q.raw_substring THEN 'alias_substring'
-              WHEN entity_alias.normalized_alias LIKE q.normalized_substring THEN 'alias_substring'
-              WHEN entity_alias.loose_normalized_alias LIKE q.loose_substring THEN 'alias_substring'
-              ELSE 'fuzzy'
-            END AS resolution_tier,
-            GREATEST(
-              COALESCE(similarity(lower(entity_alias.alias), q.raw_query), 0),
-              COALESCE(similarity(entity_alias.loose_normalized_alias, q.loose_query), 0),
-              COALESCE(similarity(entity_alias.compact_normalized_alias, q.compact_query), 0)
-            ) AS similarity_score
-          FROM ${entitiesTable} e
-          JOIN ${aliasesTable} entity_alias ON entity_alias.entity_uid = e.entity_uid
-          CROSS JOIN query_terms q
-          CROSS JOIN lexical_stats stats
-          WHERE stats.lexical_candidate_count = 0
-            AND e.entity_kind = $13
-            AND e.platform = $14
-            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
-            AND NULLIF(BTRIM(entity_alias.alias), '') IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1
-              FROM lexical_candidates lexical_candidate
-              WHERE lexical_candidate.entity_uid = e.entity_uid
-            )
-            AND (
-              lower(entity_alias.alias) LIKE q.raw_substring
-              OR entity_alias.normalized_alias LIKE q.normalized_substring
-              OR entity_alias.loose_normalized_alias LIKE q.loose_substring
-              OR GREATEST(
-                COALESCE(similarity(entity_alias.loose_normalized_alias, q.loose_query), 0),
-                COALESCE(similarity(entity_alias.compact_normalized_alias, q.compact_query), 0)
-              ) >= q.fuzzy_threshold
-            )
-        ),
-        fallback_candidate_rows AS (
-          SELECT * FROM fallback_entity_rows
-          UNION ALL
-          SELECT * FROM fallback_alias_rows
-        ),
-        fallback_ranked_rows AS (
-          SELECT
-            fallback_candidate_rows.*,
-            ROW_NUMBER() OVER (
-              PARTITION BY entity_uid
-              ORDER BY match_rank ASC, similarity_score DESC, display_name ASC
-            ) AS row_rank
-          FROM fallback_candidate_rows
-        ),
-        fallback_candidates AS (
-          SELECT
-            display_name,
-            entity_id,
-            entity_uid,
-            match_quality,
-            match_rank,
-            match_source,
-            matched_name,
-            resolution_tier,
-            similarity_score
-          FROM fallback_ranked_rows
-          WHERE row_rank = 1
-        ),
         candidate_entities AS (
-          SELECT * FROM lexical_candidates
-          UNION ALL
-          SELECT * FROM fallback_candidates
-        ),
-        enriched_candidates AS (
           SELECT
-            ${gameMetricSelect}
-          ${candidateMetadataJoinSql}
-          ${companyJoinSql}
+            dedupe_rank,
+            display_name,
+            entity_id,
+            entity_uid,
+            game_count,
+            match_quality,
+            match_rank,
+            match_source,
+            matched_name,
+            release_year,
+            resolution_tier,
+            similarity_score
+          FROM ranked_candidate_rows
+          WHERE row_rank = 1
         )
         SELECT
-          ccu_peak,
-          display_name,
-          entity_id,
-          game_count,
-          match_quality,
-          match_rank,
-          match_source,
-          matched_name,
-          owners_midpoint,
-          release_year,
-          resolution_tier,
-          review_score,
-          similarity_score,
-          total_reviews
-        FROM enriched_candidates
-        ORDER BY match_rank ASC, similarity_score DESC, COALESCE(total_reviews, 0) DESC, display_name ASC
-        LIMIT $15
+          ${gameMetricSelect},
+          candidate.display_name,
+          candidate.entity_id,
+          candidate.game_count,
+          candidate.match_quality,
+          candidate.match_rank,
+          candidate.match_source,
+          candidate.matched_name,
+          candidate.release_year,
+          candidate.resolution_tier,
+          candidate.similarity_score
+        FROM candidate_entities candidate
+        ${gameMetricJoin}
+        ORDER BY
+          candidate.match_rank ASC,
+          candidate.dedupe_rank ASC,
+          COALESCE(candidate.game_count, 0) DESC,
+          COALESCE(candidate.release_year, 0) DESC,
+          ${totalReviewOrderSql} DESC,
+          candidate.display_name ASC
+        LIMIT $9
       `,
       [
-        rawQuery,
-        normalizedQuery,
-        looseQuery,
-        compactQuery,
-        rawPrefix,
-        normalizedPrefix,
-        loosePrefix,
-        compactPrefix,
-        rawSubstring,
-        normalizedSubstring,
-        looseSubstring,
-        fuzzyThreshold,
         kind,
-        kind === 'game' ? 'steam' : 'publisheriq',
+        platform,
+        terms.rawQuery,
+        terms.normalizedQuery,
+        terms.looseQuery,
+        terms.compactQuery,
+        terms.loosePrefix,
+        terms.compactPrefix,
         limit,
       ],
       this.config
     );
 
-    return candidateRows.rows;
+    return result.rows;
+  }
+
+  private async queryCanonicalEntitiesFallback(
+    kind: EntityKind,
+    terms: CanonicalLookupTerms,
+    limit: number,
+    lightweight: boolean
+  ): Promise<EntityRow[]> {
+    const entitiesTable = this.relation('core_entities').sql;
+    const aliasesTable = this.relation('core_entity_aliases').sql;
+    const latestDailyMetricsTable = this.relation('latest_daily_metrics').sql;
+    const platform = kind === 'game' ? 'steam' : 'publisheriq';
+    const fuzzyThreshold = kind === 'game' ? 0.45 : 0.4;
+    const visibilityPredicate =
+      kind === 'game'
+        ? `
+            AND COALESCE(e.metadata->>'type', '') = 'game'
+            AND COALESCE((e.metadata->>'is_delisted')::boolean, false) = false
+          `
+        : '';
+    const releaseYearSql =
+      kind === 'game'
+        ? `
+            CASE
+              WHEN COALESCE(e.metadata->>'release_date', '') ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                THEN EXTRACT(YEAR FROM ((e.metadata->>'release_date')::date))::int
+              ELSE NULL::int
+            END
+          `
+        : 'NULL::int';
+    const gameCountSql =
+      kind === 'game'
+        ? 'NULL::int'
+        : `
+            CASE
+              WHEN COALESCE(e.metadata->>'game_count', '') ~ '^\\d+$'
+                THEN (e.metadata->>'game_count')::int
+              ELSE NULL::int
+            END
+          `;
+    const gameMetricSelect =
+      kind === 'game'
+        ? `
+            ldm.ccu_peak,
+            ldm.owners_midpoint,
+            ${reviewPercentageSql('ldm')} AS review_score,
+            ldm.total_reviews
+          `
+        : `
+            NULL::double precision AS ccu_peak,
+            NULL::double precision AS owners_midpoint,
+            NULL::double precision AS review_score,
+            NULL::double precision AS total_reviews
+          `;
+    const gameMetricJoin =
+      kind === 'game'
+        ? `LEFT JOIN ${latestDailyMetricsTable} ldm ON ldm.appid = candidate.entity_id`
+        : '';
+    const totalReviewOrderSql =
+      kind === 'game'
+        ? 'COALESCE(ldm.total_reviews, 0)'
+        : 'COALESCE(NULL::double precision, 0)';
+
+    const result = await runQuery<EntityRow>(
+      `
+        WITH fallback_candidate_rows AS (
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            e.canonical_name AS matched_name,
+            'normalized_name'::text AS match_source,
+            CASE
+              WHEN e.loose_normalized_name LIKE $5 OR e.compact_normalized_name LIKE $6
+                THEN 'substring'::text
+              ELSE 'fuzzy'::text
+            END AS match_quality,
+            CASE
+              WHEN e.loose_normalized_name LIKE $5 OR e.compact_normalized_name LIKE $6
+                THEN 4::int
+              ELSE 5::int
+            END AS match_rank,
+            CASE
+              WHEN e.loose_normalized_name LIKE $5 OR e.compact_normalized_name LIKE $6
+                THEN 'canonical_substring'::text
+              ELSE 'fuzzy'::text
+            END AS resolution_tier,
+            CASE
+              WHEN e.loose_normalized_name LIKE $5 OR e.compact_normalized_name LIKE $6
+                THEN 7::int
+              ELSE 8::int
+            END AS dedupe_rank,
+            GREATEST(
+              CASE WHEN e.loose_normalized_name LIKE $5 THEN 1 ELSE 0 END,
+              CASE WHEN e.compact_normalized_name LIKE $6 THEN 1 ELSE 0 END,
+              COALESCE(similarity(e.loose_normalized_name, $3), 0),
+              COALESCE(similarity(e.compact_normalized_name, $4), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM ${entitiesTable} e
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+            AND (
+              e.loose_normalized_name LIKE $5
+              OR e.compact_normalized_name LIKE $6
+              OR GREATEST(
+                COALESCE(similarity(e.loose_normalized_name, $3), 0),
+                COALESCE(similarity(e.compact_normalized_name, $4), 0)
+              ) >= $7
+            )
+
+          UNION ALL
+
+          SELECT
+            e.entity_uid,
+            e.platform_entity_id::int AS entity_id,
+            e.canonical_name AS display_name,
+            alias_hit.alias AS matched_name,
+            'normalized_alias'::text AS match_source,
+            CASE
+              WHEN alias_hit.loose_normalized_alias LIKE $5 OR alias_hit.compact_normalized_alias LIKE $6
+                THEN 'substring'::text
+              ELSE 'fuzzy'::text
+            END AS match_quality,
+            CASE
+              WHEN alias_hit.loose_normalized_alias LIKE $5 OR alias_hit.compact_normalized_alias LIKE $6
+                THEN 4::int
+              ELSE 5::int
+            END AS match_rank,
+            CASE
+              WHEN alias_hit.loose_normalized_alias LIKE $5 OR alias_hit.compact_normalized_alias LIKE $6
+                THEN 'alias_substring'::text
+              ELSE 'fuzzy'::text
+            END AS resolution_tier,
+            CASE
+              WHEN alias_hit.loose_normalized_alias LIKE $5 OR alias_hit.compact_normalized_alias LIKE $6
+                THEN 9::int
+              ELSE 10::int
+            END AS dedupe_rank,
+            GREATEST(
+              CASE WHEN alias_hit.loose_normalized_alias LIKE $5 THEN 1 ELSE 0 END,
+              CASE WHEN alias_hit.compact_normalized_alias LIKE $6 THEN 1 ELSE 0 END,
+              COALESCE(similarity(alias_hit.loose_normalized_alias, $3), 0),
+              COALESCE(similarity(alias_hit.compact_normalized_alias, $4), 0)
+            ) AS similarity_score,
+            ${releaseYearSql} AS release_year,
+            ${gameCountSql} AS game_count
+          FROM (
+            SELECT
+              entity_uid,
+              alias,
+              loose_normalized_alias,
+              compact_normalized_alias
+            FROM ${aliasesTable}
+            WHERE NULLIF(BTRIM(alias), '') IS NOT NULL
+              AND (
+                loose_normalized_alias LIKE $5
+                OR compact_normalized_alias LIKE $6
+                OR GREATEST(
+                  COALESCE(similarity(loose_normalized_alias, $3), 0),
+                  COALESCE(similarity(compact_normalized_alias, $4), 0)
+                ) >= $7
+              )
+          ) alias_hit
+          JOIN ${entitiesTable} e ON e.entity_uid = alias_hit.entity_uid
+          WHERE e.entity_kind = $1
+            AND e.platform = $2
+            AND NULLIF(BTRIM(e.canonical_name), '') IS NOT NULL
+            ${visibilityPredicate}
+        ),
+        ranked_candidate_rows AS (
+          SELECT
+            fallback_candidate_rows.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY entity_uid
+              ORDER BY dedupe_rank ASC, similarity_score DESC, display_name ASC
+            ) AS row_rank
+          FROM fallback_candidate_rows
+        ),
+        candidate_entities AS (
+          SELECT
+            dedupe_rank,
+            display_name,
+            entity_id,
+            entity_uid,
+            game_count,
+            match_quality,
+            match_rank,
+            match_source,
+            matched_name,
+            release_year,
+            resolution_tier,
+            similarity_score
+          FROM ranked_candidate_rows
+          WHERE row_rank = 1
+        )
+        SELECT
+          ${gameMetricSelect},
+          candidate.display_name,
+          candidate.entity_id,
+          candidate.game_count,
+          candidate.match_quality,
+          candidate.match_rank,
+          candidate.match_source,
+          candidate.matched_name,
+          candidate.release_year,
+          candidate.resolution_tier,
+          candidate.similarity_score
+        FROM candidate_entities candidate
+        ${gameMetricJoin}
+        ORDER BY
+          candidate.match_rank ASC,
+          candidate.dedupe_rank ASC,
+          COALESCE(candidate.game_count, 0) DESC,
+          COALESCE(candidate.release_year, 0) DESC,
+          ${totalReviewOrderSql} DESC,
+          candidate.display_name ASC
+        LIMIT $8
+      `,
+      [
+        kind,
+        platform,
+        terms.looseQuery,
+        terms.compactQuery,
+        terms.looseSubstring,
+        terms.compactSubstring,
+        fuzzyThreshold,
+        limit,
+      ],
+      this.config
+    );
+
+    return result.rows;
   }
 
   private async queryCompanies(

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildEntityAutocompleteSuggestions,
   extractActiveMentionQuery,
   extractComposerEntityQuery,
   extractEntitySearchQuery,
+  inferAutocompleteEntityKinds,
   inferComposerEntityResolutionPreference,
   replaceComposerEntityQuery,
 } from './chat-entity-picker';
@@ -37,5 +39,41 @@ test('inferComposerEntityResolutionPreference defaults generic lookups to games 
   assert.equal(
     inferComposerEntityResolutionPreference('how many games has crimson published?', 'crimson'),
     'company'
+  );
+});
+
+test('inferAutocompleteEntityKinds keeps generic autocomplete game-only and company autocomplete company-only', () => {
+  assert.deepEqual(inferAutocompleteEntityKinds('game'), ['game']);
+  assert.deepEqual(inferAutocompleteEntityKinds('company'), ['publisher', 'developer']);
+});
+
+test('buildEntityAutocompleteSuggestions preserves Tiger result order', () => {
+  const suggestions = buildEntityAutocompleteSuggestions([
+    {
+      confidence: 0.92,
+      displayName: 'Crimson Desert',
+      entityKind: 'game',
+      entityUid: 'game:steam:3321460',
+      matchQuality: 'prefix',
+      matchedName: 'crimson desert',
+      platform: 'steam',
+      platformEntityId: '3321460',
+      releaseYear: 2026,
+    },
+    {
+      confidence: 0.99,
+      displayName: 'Crimson',
+      entityKind: 'publisher',
+      entityUid: 'publisher:publisheriq:200771',
+      matchQuality: 'exact',
+      matchedName: 'Crimson',
+      platform: 'publisheriq',
+      platformEntityId: '200771',
+    },
+  ], 'tell me about crimson');
+
+  assert.deepEqual(
+    suggestions.map((suggestion) => suggestion.label),
+    ['Crimson Desert', 'Crimson']
   );
 });

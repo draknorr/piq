@@ -1712,6 +1712,35 @@ test('resolveEntities autocomplete scans beyond the requested page size before r
   assert.equal(requestedLimit, 30);
 });
 
+test('resolveEntities autocomplete stays on the canonical fast path when lexical results are empty', async () => {
+  const service = createService();
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryCanonicalEntities = async () => [];
+  (service as any).queryGames = async () => {
+    throw new Error('autocomplete should not fall back to legacy game lookup');
+  };
+  (service as any).queryGamesLexical = async () => {
+    throw new Error('autocomplete should not fall back to legacy lexical lookup');
+  };
+  (service as any).queryCompanies = async () => {
+    throw new Error('autocomplete should not fall back to legacy company lookup');
+  };
+  (service as any).queryCompaniesLexical = async () => {
+    throw new Error('autocomplete should not fall back to legacy company lexical lookup');
+  };
+
+  const result = await service.resolveEntities({
+    entityKinds: ['game'],
+    query: 'crimson',
+    resolutionMode: 'autocomplete',
+    resolutionPreference: 'game',
+  });
+
+  assert.equal(result.entities.length, 0);
+  assert.equal(result.totalCandidates, 0);
+});
+
 test('resolveEntities autocomplete keeps companies first when company preference is explicit', async () => {
   const service = createService();
 

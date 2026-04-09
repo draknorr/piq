@@ -104,12 +104,13 @@ const NON_ENTITY_GAME_METRIC_QUERY_PATTERN =
   /^(?:the\s+)?(?:highest|most|top|best|largest|biggest|trending|breaking out|hot right now|all games?|all titles?|games?|titles?)\b/i;
 const ACTIVE_MENTION_QUERY_PATTERN = /(^|[\s([{,.;:!?])@(.+)$/;
 
-const ENTITY_QUALITY_ORDER: Record<ChatEntityMatchQuality, number> = {
-  exact: 0,
-  prefix: 1,
-  substring: 2,
-  fuzzy: 3,
-};
+export function inferAutocompleteEntityKinds(
+  preference: ChatEntityResolutionPreference | null | undefined
+): ChatEntityKind[] {
+  return preference === 'company'
+    ? ['publisher', 'developer']
+    : ['game'];
+}
 
 function normalizeText(value: string): string {
   return value
@@ -423,17 +424,7 @@ export function buildEntityAutocompleteSuggestions(
   entities: ChatEntityPickerEntity[],
   currentInput: string
 ): ChatEntitySuggestion[] {
-  return [...entities]
-    .sort((left, right) => {
-      const qualityDiff =
-        ENTITY_QUALITY_ORDER[left.matchQuality] - ENTITY_QUALITY_ORDER[right.matchQuality];
-      if (qualityDiff !== 0) {
-        return qualityDiff;
-      }
-
-      return right.confidence - left.confidence;
-    })
-    .map((entity) => ({
+  return entities.map((entity) => ({
       label: entity.displayName,
       query: buildEntitySelectionPrompt(entity, currentInput),
       category: 'entity',

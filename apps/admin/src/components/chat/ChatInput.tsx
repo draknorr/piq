@@ -9,6 +9,7 @@ import {
   buildEntityAutocompleteSuggestions,
   extractActiveMentionQuery,
   extractComposerEntityQuery,
+  inferAutocompleteEntityKinds,
   inferComposerEntityResolutionPreference,
   isSelectedEntityPrompt,
   replaceComposerEntityQuery,
@@ -24,8 +25,8 @@ interface ChatInputProps {
 }
 
 const ENTITY_AUTOCOMPLETE_LIMIT = 5;
-const ENTITY_KIND_FILTER = ['game', 'publisher', 'developer'] as const;
 const MIN_AUTOCOMPLETE_QUERY_LENGTH = 2;
+const AUTOCOMPLETE_CACHE_TTL_MS = 60_000;
 
 function dedupeBindings(bindings: ChatEntityBinding[], binding: ChatEntityBinding): ChatEntityBinding[] {
   if (bindings.some((item) => item.entity.entityUid === binding.entity.entityUid)) {
@@ -59,6 +60,66 @@ function mergeSuggestions(
   return merged;
 }
 
+interface AutocompleteCacheEntry {
+  cachedAt: number;
+  entityKindsKey: string;
+  payload: ChatEntityPickerResponse;
+  query: string;
+  resolutionPreference: 'company' | 'game';
+}
+
+function normalizeAutocompleteCacheText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function compactAutocompleteCacheText(value: string): string {
+  return normalizeAutocompleteCacheText(value).replace(/\s+/g, '');
+}
+
+function buildAutocompleteCacheKey(params: {
+  entityKinds: readonly string[];
+  query: string;
+  resolutionPreference: 'company' | 'game';
+}): string {
+  return [
+    params.resolutionPreference,
+    params.entityKinds.join(','),
+    normalizeAutocompleteCacheText(params.query),
+  ].join('::');
+}
+
+function filterCachedEntitiesForQuery(
+  payload: ChatEntityPickerResponse,
+  query: string
+): ChatEntityPickerResponse {
+  const normalizedQuery = normalizeAutocompleteCacheText(query);
+  const compactQuery = compactAutocompleteCacheText(query);
+  const filteredEntities = payload.results.entities.filter((entity) => {
+    const displayName = normalizeAutocompleteCacheText(entity.displayName);
+    const matchedName = normalizeAutocompleteCacheText(entity.matchedName);
+    const compactDisplayName = compactAutocompleteCacheText(entity.displayName);
+    const compactMatchedName = compactAutocompleteCacheText(entity.matchedName);
+
+    return (
+      displayName.startsWith(normalizedQuery)
+      || matchedName.startsWith(normalizedQuery)
+      || compactDisplayName.startsWith(compactQuery)
+      || compactMatchedName.startsWith(compactQuery)
+    );
+  });
+
+  return {
+    ...payload,
+    query,
+    results: {
+      ...payload.results,
+      continuationToken: payload.results.continuationToken ?? null,
+      entities: filteredEntities,
+      totalCandidates: filteredEntities.length,
+    },
+  };
+}
+
 export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<ChatEntitySuggestion[]>([]);
@@ -70,15 +131,51 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [selectedBindings, setSelectedBindings] = useState<ChatEntityBinding[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fetchControllerRef = useRef<AbortController | null>(null);
+  const autocompleteCacheRef = useRef<Map<string, AutocompleteCacheEntry>>(new Map());
   const keyboardSelectionEnabledRef = useRef(false);
   const activeAutocompleteQueryRef = useRef('');
+  const activeAutocompleteScopeRef = useRef('');
   const suppressNextAutocompleteRef = useRef(false);
 
   const autocompleteQuery = useMemo(() => extractComposerEntityQuery(input), [input]);
+  const autocompleteResolutionPreference = useMemo(
+    () => inferComposerEntityResolutionPreference(input, autocompleteQuery),
+    [autocompleteQuery, input]
+  );
+  const autocompleteEntityKinds = useMemo(
+    () => inferAutocompleteEntityKinds(autocompleteResolutionPreference),
+    [autocompleteResolutionPreference]
+  );
+  const autocompleteScopeKey = useMemo(
+    () => `${autocompleteResolutionPreference}:${autocompleteEntityKinds.join(',')}`,
+    [autocompleteEntityKinds, autocompleteResolutionPreference]
+  );
   const isAutocompleteQueryActive = autocompleteQuery.length >= MIN_AUTOCOMPLETE_QUERY_LENGTH;
   const isDropdownVisible =
     isAutocompleteQueryActive
     && (isLoading || isLoadingMore || suggestions.length > 0 || continuationToken !== null || totalCandidates !== null);
+
+  const applyAutocompletePayload = useCallback((payload: ChatEntityPickerResponse, append: boolean) => {
+    const entitySuggestions = buildEntityAutocompleteSuggestions(payload.results.entities, payload.query);
+    activeAutocompleteQueryRef.current = payload.query;
+    activeAutocompleteScopeRef.current = autocompleteScopeKey;
+
+    setSuggestions((previous) => {
+      const nextSuggestions = append
+        ? mergeSuggestions(previous, entitySuggestions)
+        : entitySuggestions;
+      setSelectedIndex((current) => {
+        if (nextSuggestions.length === 0) {
+          return -1;
+        }
+
+        return current >= 0 && current < nextSuggestions.length ? current : 0;
+      });
+      return nextSuggestions;
+    });
+    setContinuationToken(payload.results.continuationToken ?? null);
+    setTotalCandidates(payload.results.totalCandidates ?? payload.results.entities.length);
+  }, [autocompleteScopeKey]);
 
   const requestEntityMatches = useCallback(async ({
     append,
@@ -89,6 +186,46 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     continuation?: string | null;
     query: string;
   }): Promise<ChatEntityPickerResponse | null> => {
+    const trimmedQuery = query.trim();
+    const entityKindsKey = autocompleteEntityKinds.join(',');
+    const cacheKey = buildAutocompleteCacheKey({
+      entityKinds: autocompleteEntityKinds,
+      query: trimmedQuery,
+      resolutionPreference: autocompleteResolutionPreference,
+    });
+    const now = Date.now();
+
+    if (!append) {
+      const exactCacheEntry = autocompleteCacheRef.current.get(cacheKey);
+      if (exactCacheEntry && now - exactCacheEntry.cachedAt <= AUTOCOMPLETE_CACHE_TTL_MS) {
+        applyAutocompletePayload(exactCacheEntry.payload, false);
+        return exactCacheEntry.payload;
+      }
+
+      let prefixCacheEntry: AutocompleteCacheEntry | null = null;
+      for (const entry of autocompleteCacheRef.current.values()) {
+        if (entry.entityKindsKey !== entityKindsKey || entry.resolutionPreference !== autocompleteResolutionPreference) {
+          continue;
+        }
+
+        if (now - entry.cachedAt > AUTOCOMPLETE_CACHE_TTL_MS) {
+          continue;
+        }
+
+        if (!trimmedQuery.startsWith(entry.query) || entry.query.length >= trimmedQuery.length) {
+          continue;
+        }
+
+        if (!prefixCacheEntry || entry.query.length > prefixCacheEntry.query.length) {
+          prefixCacheEntry = entry;
+        }
+      }
+
+      if (prefixCacheEntry) {
+        applyAutocompletePayload(filterCachedEntitiesForQuery(prefixCacheEntry.payload, trimmedQuery), false);
+      }
+    }
+
     fetchControllerRef.current?.abort();
     const controller = new AbortController();
     fetchControllerRef.current = controller;
@@ -104,12 +241,12 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
       const response = await fetch('/api/chat/entities', {
         body: JSON.stringify({
           continuationToken: continuation ?? null,
-          entityKinds: [...ENTITY_KIND_FILTER],
-          includeMetrics: true,
+          entityKinds: [...autocompleteEntityKinds],
+          includeMetrics: false,
           limit: ENTITY_AUTOCOMPLETE_LIMIT,
-          query,
+          query: trimmedQuery,
           resolutionMode: 'autocomplete',
-          resolutionPreference: inferComposerEntityResolutionPreference(input, query),
+          resolutionPreference: autocompleteResolutionPreference,
         }),
         headers: {
           'Content-Type': 'application/json',
@@ -127,23 +264,16 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
         return null;
       }
 
-      activeAutocompleteQueryRef.current = query;
-      const entitySuggestions = buildEntityAutocompleteSuggestions(payload.results.entities, query);
-      setSuggestions((previous) => {
-        const nextSuggestions = append
-          ? mergeSuggestions(previous, entitySuggestions)
-          : entitySuggestions;
-        setSelectedIndex((current) => {
-          if (nextSuggestions.length === 0) {
-            return -1;
-          }
-
-          return current >= 0 && current < nextSuggestions.length ? current : 0;
+      applyAutocompletePayload(payload, append);
+      if (!append) {
+        autocompleteCacheRef.current.set(cacheKey, {
+          cachedAt: now,
+          entityKindsKey,
+          payload,
+          query: trimmedQuery,
+          resolutionPreference: autocompleteResolutionPreference,
         });
-        return nextSuggestions;
-      });
-      setContinuationToken(payload.results.continuationToken ?? null);
-      setTotalCandidates(payload.results.totalCandidates ?? payload.results.entities.length);
+      }
       return payload;
     } catch {
       if (controller.signal.aborted) {
@@ -163,7 +293,11 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
         setIsLoadingMore(false);
       }
     }
-  }, [input]);
+  }, [
+    applyAutocompletePayload,
+    autocompleteEntityKinds,
+    autocompleteResolutionPreference,
+  ]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -192,6 +326,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     if (!isAutocompleteQueryActive || disabled) {
       fetchControllerRef.current?.abort();
       activeAutocompleteQueryRef.current = '';
+      activeAutocompleteScopeRef.current = '';
       setSuggestions([]);
       setSelectedIndex(-1);
       setIsLoading(false);
@@ -202,9 +337,13 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
       return;
     }
 
-    if (activeAutocompleteQueryRef.current !== query) {
+    if (
+      activeAutocompleteQueryRef.current !== query
+      || activeAutocompleteScopeRef.current !== autocompleteScopeKey
+    ) {
       fetchControllerRef.current?.abort();
       activeAutocompleteQueryRef.current = query;
+      activeAutocompleteScopeRef.current = autocompleteScopeKey;
       setSuggestions([]);
       setSelectedIndex(-1);
       setContinuationToken(null);
@@ -218,7 +357,13 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [autocompleteQuery, disabled, isAutocompleteQueryActive, requestEntityMatches]);
+  }, [
+    autocompleteQuery,
+    autocompleteScopeKey,
+    disabled,
+    isAutocompleteQueryActive,
+    requestEntityMatches,
+  ]);
 
   useEffect(() => {
     setSelectedBindings((previous) => {
@@ -242,7 +387,8 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
       const canReuseCurrentSuggestions =
         autocompleteQuery === activeMentionQuery
         && !isLoading
-        && activeAutocompleteQueryRef.current === activeMentionQuery;
+        && activeAutocompleteQueryRef.current === activeMentionQuery
+        && activeAutocompleteScopeRef.current === autocompleteScopeKey;
 
       if (canReuseCurrentSuggestions) {
         payload = {
@@ -295,6 +441,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
 
     fetchControllerRef.current?.abort();
     activeAutocompleteQueryRef.current = '';
+    activeAutocompleteScopeRef.current = '';
 
     const bindings = nextBindings.length > 0
       ? nextBindings
@@ -316,6 +463,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     keyboardSelectionEnabledRef.current = false;
   }, [
     autocompleteQuery,
+    autocompleteScopeKey,
     continuationToken,
     disabled,
     input,
@@ -333,6 +481,7 @@ export function ChatInput({ onSend, disabled = false }: ChatInputProps) {
     }
 
     fetchControllerRef.current?.abort();
+    activeAutocompleteScopeRef.current = '';
     const nextInput = replaceComposerEntityQuery(input, autocompleteQuery, suggestion.entity.displayName);
     const binding: ChatEntityBinding = {
       entity: suggestion.entity,

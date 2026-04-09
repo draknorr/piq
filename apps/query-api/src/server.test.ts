@@ -293,6 +293,46 @@ test('query-api surfaces Tiger resolve-entities statement timeouts as 504 when n
   );
 });
 
+test('query-api preserves Tiger resolve-entities timeouts as 504 when source fallback also fails', async () => {
+  await withServer(
+    createDataPlaneStub({
+      resolveEntities: async () => {
+        const error = new Error('canceling statement due to statement timeout') as Error & {
+          code?: string;
+        };
+        error.code = '57014';
+        throw error;
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/resolve-entities`, {
+        body: JSON.stringify({
+          entityKinds: ['game'],
+          includeMetrics: false,
+          query: 'Crimson Desert',
+          resolutionMode: 'chat_strict',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 504);
+      assert.deepEqual(await response.json(), {
+        code: 'QUERY_TIMEOUT',
+        error: 'Tiger primary resolveEntities timed out and source fallback did not recover the request.',
+      });
+    },
+    {
+      sourceFallback: createDataPlaneStub({
+        resolveEntities: async () => {
+          throw new Error('Source fallback is unavailable');
+        },
+      }),
+    }
+  );
+});
+
 test('query-api routes get-user-context requests to the data-plane service', async () => {
   let receivedBody: unknown = null;
 

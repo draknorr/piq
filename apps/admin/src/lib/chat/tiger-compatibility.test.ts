@@ -1425,6 +1425,15 @@ test('Tiger primary routes overview prompts through get-entity-overview', async 
 
   setScopedFetch(t, async (url, init) => {
     if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      assert.deepEqual(JSON.parse(String(init.body)), {
+        entityKinds: ['game'],
+        includeMetrics: false,
+        limit: 25,
+        query: 'Hades II',
+        resolutionMode: 'chat_strict',
+        resolutionPreference: 'game',
+      });
       return jsonResponse({
         ambiguity: {
           requiresClarification: false,
@@ -1492,6 +1501,100 @@ test('Tiger primary routes overview prompts through get-entity-overview', async 
   assert.equal(result.info.route, 'primary_success');
   assert.match(result.renderedText ?? '', /latest snapshot for \*\*Hades II\*\*/);
   assert.match(result.renderedText ?? '', /\*\*Release status\*\*: released/);
+  assert.equal(result.contractResult?.contractName, 'getEntityOverview');
+});
+
+test('Tiger primary broadens plain overview prompts to company kinds only after a zero-hit game pass', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  const resolveBodies: unknown[] = [];
+
+  setScopedFetch(t, async (url, init) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body));
+      resolveBodies.push(body);
+
+      if (resolveBodies.length === 1) {
+        return jsonResponse({
+          ambiguity: {
+            requiresClarification: false,
+          },
+          entities: [],
+          provenance: {
+            capturedAt: '2026-04-09T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['core.entities'],
+          },
+          totalCandidates: 0,
+        });
+      }
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            displayName: 'Crimson',
+            entityKind: 'publisher',
+            entityUid: 'publisher:publisheriq:200771',
+            platform: 'publisheriq',
+            platformEntityId: '200771',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-entity-overview');
+    return jsonResponse({
+      entity: {
+        details: {
+          topGames: ['Crimson Frontier'],
+        },
+        displayName: 'Crimson',
+        entityKind: 'publisher',
+        metrics: {
+          ccuPeak: null,
+          gameCount: 12,
+          ownersMidpoint: null,
+          reviewScore: null,
+          totalReviews: null,
+        },
+        platformEntityId: '200771',
+      },
+      games: [],
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'tell me about crimson',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_overview');
+  assert.deepEqual(resolveBodies, [
+    {
+      entityKinds: ['game'],
+      includeMetrics: false,
+      limit: 25,
+      query: 'crimson',
+      resolutionMode: 'chat_strict',
+      resolutionPreference: 'game',
+    },
+    {
+      entityKinds: ['publisher', 'developer'],
+      includeMetrics: false,
+      limit: 6,
+      query: 'crimson',
+      resolutionMode: 'autocomplete',
+      resolutionPreference: 'company',
+    },
+  ]);
   assert.equal(result.contractResult?.contractName, 'getEntityOverview');
 });
 

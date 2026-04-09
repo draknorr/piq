@@ -123,9 +123,9 @@ test('chat entity route proxies resolve-entities and trims the query', async () 
     {
       path: '/v1/contracts/resolve-entities',
       body: {
-        entityKinds: ['game', 'publisher', 'developer'],
+        entityKinds: ['game'],
         continuationToken: 'cursor-1',
-        includeMetrics: true,
+        includeMetrics: false,
         limit: 3,
         query: 'Counter-Strike 2',
         resolutionMode: 'autocomplete',
@@ -147,4 +147,63 @@ test('chat entity route proxies resolve-entities and trims the query', async () 
   assert.equal(payload.results.continuationToken, 'cursor-2');
   assert.equal(payload.results.totalCandidates, 18);
   assert.equal(typeof payload.timing.total_ms, 'number');
+});
+
+test('chat entity route defaults explicit company autocomplete to publisher and developer kinds', async () => {
+  const queryApiCalls: Array<{ path: string; body: unknown }> = [];
+
+  const deps: ChatEntityRouteDeps = {
+    createServerClient: async () =>
+      ({
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+        },
+      }) as never,
+    postToQueryApi: (async (path, body) => {
+      queryApiCalls.push({ path, body });
+      return {
+        ok: true,
+        httpStatus: 200,
+        data: {
+          ambiguity: {
+            candidateNames: [],
+            message: null,
+            requiresClarification: false,
+          },
+          entities: [],
+          provenance: {
+            capturedAt: '2026-04-08T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['core.entities'],
+          },
+          totalCandidates: 0,
+        } satisfies ChatEntityPickerResults,
+      };
+    }) as ChatEntityRouteDeps['postToQueryApi'],
+  };
+
+  const response = await handleChatEntityRequest(
+    makeRequest({
+      query: 'crimson',
+      resolutionMode: 'autocomplete',
+      resolutionPreference: 'company',
+    }),
+    deps
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(queryApiCalls, [
+    {
+      path: '/v1/contracts/resolve-entities',
+      body: {
+        entityKinds: ['publisher', 'developer'],
+        continuationToken: null,
+        includeMetrics: false,
+        limit: 5,
+        query: 'crimson',
+        resolutionMode: 'autocomplete',
+        resolutionPreference: 'company',
+      },
+    },
+  ]);
 });

@@ -148,10 +148,20 @@ function methodNotAllowed(response: ServerResponse): void {
 }
 
 async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
+  const chunks: Uint8Array[] = [];
+  const textEncoder = new TextEncoder();
 
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    if (Buffer.isBuffer(chunk)) {
+      chunks.push(new Uint8Array(chunk));
+      continue;
+    }
+
+    chunks.push(
+      typeof chunk === 'string'
+        ? textEncoder.encode(chunk)
+        : Uint8Array.from(chunk)
+    );
   }
 
   if (chunks.length === 0) {
@@ -310,10 +320,12 @@ export function createQueryApiRequestHandler(params: {
           });
           sendJson(response, 200, result);
         } catch (error) {
-          if (!fallbackResolveEntitiesOperation && isStatementTimeoutError(error)) {
+          if (isStatementTimeoutError(error)) {
             sendJson(response, 504, {
               code: 'QUERY_TIMEOUT',
-              error: 'Tiger primary resolveEntities timed out before source fallback was available.',
+              error: fallbackResolveEntitiesOperation
+                ? 'Tiger primary resolveEntities timed out and source fallback did not recover the request.'
+                : 'Tiger primary resolveEntities timed out before source fallback was available.',
             });
             return;
           }
