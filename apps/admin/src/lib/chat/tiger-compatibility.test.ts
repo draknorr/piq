@@ -1065,9 +1065,9 @@ test('Tiger primary gives entity resolution more timeout budget than the default
       const body = JSON.parse(String(init.body));
       assert.equal(body.query, 'Counter Strike 2');
       assert.equal(body.includeMetrics, false);
-      assert.equal(body.limit, 6);
-      assert.equal(body.resolutionMode, 'default');
-      assert.deepEqual(body.entityKinds, ['game', 'publisher', 'developer']);
+      assert.equal(body.limit, 25);
+      assert.equal(body.resolutionMode, 'chat_strict');
+      assert.deepEqual(body.entityKinds, ['game']);
 
       return jsonResponse({
         ambiguity: {
@@ -1149,9 +1149,9 @@ test('Tiger primary routes "what CCU is <title>" prompts into entity-overview ha
       const body = JSON.parse(String(init.body));
       assert.equal(body.query, 'Counter Strike 2');
       assert.equal(body.includeMetrics, false);
-      assert.equal(body.limit, 6);
-      assert.equal(body.resolutionMode, 'default');
-      assert.deepEqual(body.entityKinds, ['game', 'publisher', 'developer']);
+      assert.equal(body.limit, 25);
+      assert.equal(body.resolutionMode, 'chat_strict');
+      assert.deepEqual(body.entityKinds, ['game']);
 
       return jsonResponse({
         ambiguity: {

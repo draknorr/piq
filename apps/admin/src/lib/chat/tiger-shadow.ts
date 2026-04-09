@@ -2351,6 +2351,10 @@ function inferEntityOverviewKindHint(
     return 'developer';
   }
 
+  if (hasGameMetricOverviewPrompt(prompt)) {
+    return 'game';
+  }
+
   return null;
 }
 
