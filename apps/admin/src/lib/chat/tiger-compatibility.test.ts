@@ -1041,6 +1041,104 @@ test('Tiger primary routes "what do you know about" prompts into entity-overview
   assert.match(result.renderedText ?? '', /Hades II|likely matches/i);
 });
 
+test('Tiger primary gives entity resolution more timeout budget than the default shadow timeout', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  const abortSignalWithTimeout = AbortSignal as typeof AbortSignal & {
+    timeout: typeof AbortSignal.timeout;
+  };
+  const originalAbortSignalTimeout = abortSignalWithTimeout.timeout;
+  const timeoutCalls: number[] = [];
+  abortSignalWithTimeout.timeout = ((delay: number) => {
+    timeoutCalls.push(delay);
+    return new AbortController().signal;
+  }) as typeof AbortSignal.timeout;
+
+  t.after(() => {
+    abortSignalWithTimeout.timeout = originalAbortSignalTimeout;
+  });
+
+  setScopedFetch(t, async (url, init) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.ok(init?.body);
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.query, 'Counter Strike 2');
+      assert.equal(body.includeMetrics, false);
+      assert.equal(body.limit, 6);
+      assert.equal(body.resolutionMode, 'default');
+      assert.deepEqual(body.entityKinds, ['game', 'publisher', 'developer']);
+
+      return jsonResponse({
+        ambiguity: {
+          requiresClarification: false,
+        },
+        entities: [
+          {
+            confidence: 0.99,
+            displayName: 'Counter-Strike 2',
+            entityKind: 'game',
+            entityUid: 'game:steam:730',
+            matchQuality: 'exact',
+            platform: 'steam',
+            platformEntityId: '730',
+          },
+        ],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-entity-overview');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      entityKind: 'game',
+      entityUid: 'game:steam:730',
+      gamesLimit: 0,
+      gamesSortBy: 'release_date',
+      platformEntityId: '730',
+    });
+    return jsonResponse({
+      entity: {
+        details: {
+          developers: ['Valve'],
+          discountPercent: 0,
+          isFree: true,
+          isReleased: true,
+          platforms: ['windows', 'linux'],
+          priceCents: 0,
+          publishers: ['Valve'],
+          releaseDate: '2023-09-27',
+          releaseState: 'released',
+          releaseYear: 2023,
+        },
+        displayName: 'Counter-Strike 2',
+        entityKind: 'game',
+        metrics: {
+          ccuPeak: 1818625,
+          gameCount: null,
+          ownersMidpoint: 150000000,
+          reviewScore: 87,
+          totalReviews: 9000000,
+        },
+      },
+      games: [],
+      sufficientToAnswer: true,
+      viewMode: 'single_game',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'what CCU is Counter Strike 2?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_overview');
+  assert.equal(timeoutCalls.length, 2);
+  assert.ok(timeoutCalls[0] >= 12000);
+  assert.ok(timeoutCalls[0] > timeoutCalls[1]);
+});
+
 test('Tiger primary routes "what CCU is <title>" prompts into entity-overview handling even with stale clarification state', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');

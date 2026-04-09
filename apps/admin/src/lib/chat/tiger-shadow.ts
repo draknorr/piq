@@ -42,6 +42,7 @@ import type {
 
 const DEFAULT_PRIMARY_TIMEOUT_MS = 8000;
 const DEFAULT_SHADOW_TIMEOUT_MS = 8000;
+const MIN_PRIMARY_ENTITY_RESOLUTION_TIMEOUT_MS = 12000;
 const NEWS_TOOL_NAMES = new Set([
   'get_recent_news_detail',
   'get_recent_news_digest',
@@ -1506,6 +1507,10 @@ function readPrimaryMode(): TigerPrimaryMode {
 function readPrimaryTimeoutMs(): number {
   const parsed = Number(process.env.CHAT_TIGER_PRIMARY_TIMEOUT_MS ?? DEFAULT_PRIMARY_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PRIMARY_TIMEOUT_MS;
+}
+
+function readPrimaryEntityResolutionTimeoutMs(): number {
+  return Math.max(readPrimaryTimeoutMs(), MIN_PRIMARY_ENTITY_RESOLUTION_TIMEOUT_MS);
 }
 
 function readCanaryUserIds(): Set<string> {
@@ -5608,6 +5613,7 @@ async function resolveSelectionSlotAttempt(params: {
   resolutionPreference?: EntityResolutionPreference;
   strictResolver?: boolean;
   slotId: string;
+  timeoutMs?: number;
 }): Promise<{
   attempt: TigerShadowAttempt;
   entitiesByUid: Map<string, ResolvedCompareEntity>;
@@ -5641,6 +5647,8 @@ async function resolveSelectionSlotAttempt(params: {
     limit: params.strictResolver ? 25 : 6,
     query: params.query,
     resolutionMode: params.strictResolver ? 'chat_strict' : 'default',
+  }, {
+    timeoutMs: params.timeoutMs ?? readShadowTimeoutMs(),
   });
   const timingMs = Math.round(performance.now() - startedAt);
 
@@ -5800,6 +5808,7 @@ async function resolvePrimaryEntityAttempt(params: {
     };
   }
 
+  const timeoutMs = readPrimaryEntityResolutionTimeoutMs();
   const resolved = await resolveSelectionSlotAttempt({
     expectedEntityKind: params.expectedEntityKind,
     label: params.query ?? 'entity',
@@ -5807,6 +5816,7 @@ async function resolvePrimaryEntityAttempt(params: {
     resolutionPreference: params.resolutionPreference ?? null,
     strictResolver: params.expectedEntityKind === 'game' && params.resolutionPreference === 'game',
     slotId: 'primary',
+    timeoutMs,
   });
   const slotWithBestCandidate =
     !resolved.slot.selectedEntityUid && resolved.slot.candidates[0]?.entityUid
