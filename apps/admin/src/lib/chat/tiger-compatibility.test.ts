@@ -3264,11 +3264,25 @@ for (const prompt of [
   test(`Tiger primary routes explicit compare prompts through Tiger compareEntities: ${prompt}`, async (t) => {
     setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
     setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+    const resolutionBodiesByQuery = new Map<string, Array<Record<string, unknown>>>();
 
     setScopedFetch(t, async (url, init) => {
       if (url.pathname === '/v1/contracts/resolve-entities') {
         assert.ok(init?.body);
-        const body = JSON.parse(String(init.body));
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        const recordedBodies = resolutionBodiesByQuery.get(String(body.query)) ?? [];
+        recordedBodies.push(body);
+        resolutionBodiesByQuery.set(String(body.query), recordedBodies);
+        const entityKinds = Array.isArray(body.entityKinds) ? body.entityKinds : [];
+
+        if (entityKinds.length === 1 && entityKinds[0] === 'game') {
+          return jsonResponse({
+            ambiguity: {
+              requiresClarification: false,
+            },
+            entities: [],
+          });
+        }
 
         if (body.query === 'FromSoftware') {
           return jsonResponse({
@@ -3399,6 +3413,38 @@ for (const prompt of [
     assert.match(result.renderedText ?? '', /FromSoftware/);
     assert.match(result.renderedText ?? '', /Team Cherry/);
     assert.match(result.renderedText ?? '', /Total Reviews/);
+    assert.deepEqual(resolutionBodiesByQuery.get('FromSoftware'), [
+      {
+        entityKinds: ['game'],
+        includeMetrics: false,
+        limit: 25,
+        query: 'FromSoftware',
+        resolutionMode: 'chat_strict',
+      },
+      {
+        entityKinds: ['game', 'publisher', 'developer'],
+        includeMetrics: false,
+        limit: 6,
+        query: 'FromSoftware',
+        resolutionMode: 'default',
+      },
+    ]);
+    assert.deepEqual(resolutionBodiesByQuery.get('Team Cherry'), [
+      {
+        entityKinds: ['game'],
+        includeMetrics: false,
+        limit: 25,
+        query: 'Team Cherry',
+        resolutionMode: 'chat_strict',
+      },
+      {
+        entityKinds: ['game', 'publisher', 'developer'],
+        includeMetrics: false,
+        limit: 6,
+        query: 'Team Cherry',
+        resolutionMode: 'default',
+      },
+    ]);
   });
 }
 
@@ -3407,12 +3453,17 @@ test('Tiger primary retries transient compare failures once before returning the
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
 
   let compareCallCount = 0;
+  const resolutionBodiesByQuery = new Map<string, Array<Record<string, unknown>>>();
 
   setScopedFetch(t, async (url, init) => {
     assert.ok(init?.body);
-    const body = JSON.parse(String(init.body));
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
 
     if (url.pathname === '/v1/contracts/resolve-entities') {
+      const recordedBodies = resolutionBodiesByQuery.get(String(body.query)) ?? [];
+      recordedBodies.push(body);
+      resolutionBodiesByQuery.set(String(body.query), recordedBodies);
+
       if (body.query === 'Hades') {
         return jsonResponse({
           ambiguity: {
@@ -3526,6 +3577,159 @@ test('Tiger primary retries transient compare failures once before returning the
   assert.match(result.renderedText ?? '', /Hades/);
   assert.match(result.renderedText ?? '', /Dead Cells/);
   assert.match(result.renderedText ?? '', /Total Reviews/);
+  assert.deepEqual(resolutionBodiesByQuery.get('Hades'), [
+    {
+      entityKinds: ['game'],
+      includeMetrics: false,
+      limit: 25,
+      query: 'Hades',
+      resolutionMode: 'chat_strict',
+    },
+  ]);
+  assert.deepEqual(resolutionBodiesByQuery.get('Dead Cells'), [
+    {
+      entityKinds: ['game'],
+      includeMetrics: false,
+      limit: 25,
+      query: 'Dead Cells',
+      resolutionMode: 'chat_strict',
+    },
+  ]);
+});
+
+test('Tiger primary resolves explicit Marathon comparisons through the strict game resolver before compareEntities', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  const resolutionBodiesByQuery = new Map<string, Array<Record<string, unknown>>>();
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      const recordedBodies = resolutionBodiesByQuery.get(String(body.query)) ?? [];
+      recordedBodies.push(body);
+      resolutionBodiesByQuery.set(String(body.query), recordedBodies);
+
+      if (body.query === 'Marathon') {
+        return jsonResponse({
+          ambiguity: {
+            requiresClarification: false,
+          },
+          entities: [
+            {
+              confidence: 0.99,
+              displayName: 'Marathon',
+              entityKind: 'game',
+              entityUid: 'game:steam:3065800',
+              platform: 'steam',
+              platformEntityId: '3065800',
+            },
+          ],
+        });
+      }
+
+      if (body.query === 'Destiny 2') {
+        return jsonResponse({
+          ambiguity: {
+            requiresClarification: false,
+          },
+          entities: [
+            {
+              confidence: 0.99,
+              displayName: 'Destiny 2',
+              entityKind: 'game',
+              entityUid: 'game:steam:1085660',
+              platform: 'steam',
+              platformEntityId: '1085660',
+            },
+          ],
+        });
+      }
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/compare-entities');
+    assert.deepEqual(body, {
+      entityUids: ['game:steam:3065800', 'game:steam:1085660'],
+    });
+
+    return jsonResponse({
+      entityKind: 'game',
+      highlights: [
+        {
+          displayName: 'Destiny 2',
+          entityUid: 'game:steam:1085660',
+          metric: 'total_reviews',
+          value: 645091,
+        },
+      ],
+      items: [
+        {
+          displayName: 'Marathon',
+          entityKind: 'game',
+          entityUid: 'game:steam:3065800',
+          metrics: {
+            ccuPeak: 27817,
+            gameCount: null,
+            ownersMidpoint: 10000,
+            reviewScore: 86.3,
+            totalReviews: 42501,
+          },
+          platform: 'steam',
+          platformEntityId: '3065800',
+        },
+        {
+          displayName: 'Destiny 2',
+          entityKind: 'game',
+          entityUid: 'game:steam:1085660',
+          metrics: {
+            ccuPeak: 24619,
+            gameCount: null,
+            ownersMidpoint: 35000000,
+            reviewScore: 77.3,
+            totalReviews: 645091,
+          },
+          platform: 'steam',
+          platformEntityId: '1085660',
+        },
+      ],
+      metrics: ['total_reviews'],
+      platform: 'steam',
+      sufficientToAnswer: true,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'compare Marathon to Destiny 2',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'entity_compare');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'compareEntities');
+  assert.match(result.renderedText ?? '', /Marathon/);
+  assert.match(result.renderedText ?? '', /Destiny 2/);
+  assert.deepEqual(resolutionBodiesByQuery.get('Marathon'), [
+    {
+      entityKinds: ['game'],
+      includeMetrics: false,
+      limit: 25,
+      query: 'Marathon',
+      resolutionMode: 'chat_strict',
+    },
+  ]);
+  assert.deepEqual(resolutionBodiesByQuery.get('Destiny 2'), [
+    {
+      entityKinds: ['game'],
+      includeMetrics: false,
+      limit: 25,
+      query: 'Destiny 2',
+      resolutionMode: 'chat_strict',
+    },
+  ]);
 });
 
 test('Tiger primary does not retry compare when Tiger reports the contract runtime is blocked', async (t) => {

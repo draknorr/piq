@@ -41,6 +41,7 @@ import type {
 } from './tiger-shadow-types';
 
 const DEFAULT_PRIMARY_TIMEOUT_MS = 8000;
+const DEFAULT_COMPARE_RESOLUTION_TIMEOUT_MS = 20000;
 const DEFAULT_SHADOW_TIMEOUT_MS = 8000;
 const MIN_PRIMARY_ENTITY_RESOLUTION_TIMEOUT_MS = 12000;
 const NEWS_TOOL_NAMES = new Set([
@@ -858,6 +859,20 @@ interface CompareRequestBuildResult {
   selectionState?: SessionChatSelectionState | null;
 }
 
+interface CompareSlotResolutionResult {
+  attempts: TigerShadowAttempt[];
+  slots: RankedSelectionSlot[];
+}
+
+interface ExplicitCompareAnalysisResult {
+  entityKind: 'developer' | 'game' | 'publisher' | null;
+  entityUids: string[];
+  failureReason: string | null;
+  selectedCandidates: RankedSelectionCandidate[];
+  selectionState: SessionChatSelectionState | null;
+  stable: boolean;
+}
+
 interface RankedSelectionCandidate
   extends Omit<
     SessionChatSelectionCandidate,
@@ -1572,6 +1587,15 @@ function readPrimaryTimeoutMs(): number {
 
 function readPrimaryEntityResolutionTimeoutMs(): number {
   return Math.max(readPrimaryTimeoutMs(), MIN_PRIMARY_ENTITY_RESOLUTION_TIMEOUT_MS);
+}
+
+function readCompareResolutionTimeoutMs(): number {
+  const parsed = Number(
+    process.env.CHAT_TIGER_COMPARE_RESOLUTION_TIMEOUT_MS ?? DEFAULT_COMPARE_RESOLUTION_TIMEOUT_MS
+  );
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(parsed, MIN_PRIMARY_ENTITY_RESOLUTION_TIMEOUT_MS)
+    : DEFAULT_COMPARE_RESOLUTION_TIMEOUT_MS;
 }
 
 function readCanaryUserIds(): Set<string> {
@@ -6178,33 +6202,102 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
     };
   }
 
-  const attempts: TigerShadowAttempt[] = [];
-  const slots: RankedSelectionSlot[] = [];
+  const allowBroadFallback = params.expectedEntityKind == null;
+  const primaryPass = await resolveExplicitCompareSlots({
+    entityNames: params.entityNames,
+    expectedEntityKind: allowBroadFallback ? 'game' : params.expectedEntityKind,
+    strictResolver: true,
+    timeoutMs: params.timeoutMs,
+  });
+  const primaryAnalysis = analyzeExplicitCompareSlots({
+    expectedEntityKind: allowBroadFallback ? 'game' : params.expectedEntityKind,
+    slots: primaryPass.slots,
+  });
+  const shouldFallbackToBroadResolver =
+    allowBroadFallback
+    && (
+      !primaryAnalysis.stable
+      || primaryAnalysis.selectedCandidates.every(
+        (candidate) => candidate.entityKind === 'game' && candidate.matchQuality === 'fuzzy'
+      )
+    );
 
-  for (const entityName of params.entityNames) {
-    const resolved = await resolveSelectionSlotAttempt({
-      expectedEntityKind: params.expectedEntityKind,
-      label: entityName,
-      query: entityName,
-      slotId: `compare:${slots.length}`,
-    });
-    attempts.push(resolved.attempt);
-    slots.push(resolved.slot);
+  if (!shouldFallbackToBroadResolver) {
+    return {
+      attempts: appendExplicitCompareFailureAttempt(
+        primaryPass.attempts,
+        primaryAnalysis.failureReason
+      ),
+      entityKind: primaryAnalysis.entityKind,
+      entityUids: primaryAnalysis.entityUids,
+      selectionState: primaryAnalysis.selectionState,
+    };
   }
 
-  const groupResult = pickCompareResolutionGroup({
+  const fallbackPass = await resolveExplicitCompareSlots({
+    entityNames: params.entityNames,
     expectedEntityKind: params.expectedEntityKind,
-    slots,
+    strictResolver: false,
+    timeoutMs: params.timeoutMs,
   });
-  const selectedCandidates = groupResult.group
-    ? slots.map((slot) =>
-      pickResolvedCompareEntityForGroup({
-        group: groupResult.group!,
-        slot,
+  const fallbackAnalysis = analyzeExplicitCompareSlots({
+    expectedEntityKind: params.expectedEntityKind,
+    slots: fallbackPass.slots,
+  });
+
+  return {
+    attempts: appendExplicitCompareFailureAttempt(
+      [...primaryPass.attempts, ...fallbackPass.attempts],
+      fallbackAnalysis.failureReason
+    ),
+    entityKind: fallbackAnalysis.entityKind,
+    entityUids: fallbackAnalysis.entityUids,
+    selectionState: fallbackAnalysis.selectionState,
+  };
+}
+
+async function resolveExplicitCompareSlots(params: {
+  entityNames: string[];
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  strictResolver: boolean;
+  timeoutMs: number;
+}): Promise<CompareSlotResolutionResult> {
+  const resolved = await Promise.all(
+    params.entityNames.map((entityName, index) =>
+      resolveSelectionSlotAttempt({
+        expectedEntityKind: params.expectedEntityKind,
+        label: entityName,
+        query: entityName,
+        slotId: `compare:${index}`,
+        strictResolver: params.strictResolver,
+        timeoutMs: params.timeoutMs,
       })
     )
+  );
+
+  return {
+    attempts: resolved.map((result) => result.attempt),
+    slots: resolved.map((result) => result.slot),
+  };
+}
+
+function analyzeExplicitCompareSlots(params: {
+  expectedEntityKind: 'developer' | 'game' | 'publisher' | null;
+  slots: RankedSelectionSlot[];
+}): ExplicitCompareAnalysisResult {
+  const groupResult = pickCompareResolutionGroup({
+    expectedEntityKind: params.expectedEntityKind,
+    slots: params.slots,
+  });
+  const selectedCandidates = groupResult.group
+    ? params.slots.map((slot) =>
+        pickResolvedCompareEntityForGroup({
+          group: groupResult.group!,
+          slot,
+        })
+      )
     : [];
-  const normalizedSlots = slots.map((slot, index) => ({
+  const normalizedSlots = params.slots.map((slot, index) => ({
     ...slot,
     requiresClarification: groupResult.requiresClarification || !selectedCandidates[index],
     selectedEntityUid:
@@ -6218,53 +6311,79 @@ async function resolveExplicitCompareEntitiesAttempt(params: {
   });
 
   if (!groupResult.group) {
-    attempts.push(
-      buildSkippedAttempt(
-        'resolveEntities',
-        'The system could not resolve all peers to the same entity kind and platform.'
-      )
-    );
-    return { attempts, entityKind: null, entityUids: [], selectionState };
+    return {
+      entityKind: null,
+      entityUids: [],
+      failureReason: 'The system could not resolve all peers to the same entity kind and platform.',
+      selectedCandidates: [],
+      selectionState,
+      stable: false,
+    };
   }
 
   if (groupResult.requiresClarification) {
     return {
-      attempts,
       entityKind: groupResult.group.entityKind,
       entityUids: [],
+      failureReason: null,
+      selectedCandidates: selectedCandidates.filter(
+        (candidate): candidate is RankedSelectionCandidate => Boolean(candidate)
+      ),
       selectionState,
+      stable: false,
     };
   }
 
   const entityUids = selectedCandidates.map((candidate) => candidate?.entityUid ?? null);
 
   if (entityUids.some((entityUid) => !entityUid)) {
-    attempts.push(
-      buildSkippedAttempt(
-        'resolveEntities',
-        'The system could not resolve every peer to a stable shared entity type.'
-      )
-    );
-    return { attempts, entityKind: null, entityUids: [], selectionState };
+    return {
+      entityKind: null,
+      entityUids: [],
+      failureReason: 'The system could not resolve every peer to a stable shared entity type.',
+      selectedCandidates: selectedCandidates.filter(
+        (candidate): candidate is RankedSelectionCandidate => Boolean(candidate)
+      ),
+      selectionState,
+      stable: false,
+    };
   }
 
   const uniqueEntityUids = [...new Set(entityUids.filter((entityUid): entityUid is string => Boolean(entityUid)))];
   if (uniqueEntityUids.length < 2) {
-    attempts.push(
-      buildSkippedAttempt(
-        'resolveEntities',
-        'The comparison collapsed to fewer than two distinct peers.'
-      )
-    );
-    return { attempts, entityKind: null, entityUids: [], selectionState };
+    return {
+      entityKind: null,
+      entityUids: [],
+      failureReason: 'The comparison collapsed to fewer than two distinct peers.',
+      selectedCandidates: selectedCandidates.filter(
+        (candidate): candidate is RankedSelectionCandidate => Boolean(candidate)
+      ),
+      selectionState,
+      stable: false,
+    };
   }
 
   return {
-    attempts,
     entityKind: groupResult.group.entityKind,
     entityUids: uniqueEntityUids,
+    failureReason: null,
+    selectedCandidates: selectedCandidates.filter(
+      (candidate): candidate is RankedSelectionCandidate => Boolean(candidate)
+    ),
     selectionState,
+    stable: true,
   };
+}
+
+function appendExplicitCompareFailureAttempt(
+  attempts: TigerShadowAttempt[],
+  failureReason: string | null
+): TigerShadowAttempt[] {
+  if (!failureReason) {
+    return attempts;
+  }
+
+  return [...attempts, buildSkippedAttempt('resolveEntities', failureReason)];
 }
 
 async function resolveDerivedCompareEntitiesAttempt(params: {
@@ -6464,7 +6583,7 @@ async function buildCompareRequestFromPrompt(params: {
     const resolved = await resolveExplicitCompareEntitiesAttempt({
       entityNames: explicitEntityNames,
       expectedEntityKind,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: readCompareResolutionTimeoutMs(),
     });
     const invalidMetricReason = validateCompareMetricsForEntityKind(resolved.entityKind, metrics);
     if (invalidMetricReason) {
