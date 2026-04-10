@@ -356,6 +356,22 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
     migrationNotes: 'Pinned items, alert preferences, and unread alert context now run through the system.',
     recommendedTigerContracts: ['getUserContext'],
   },
+  getYoutubeGameCoverage: {
+    backendKinds: ['tiger_query_api'],
+    dataSources: [
+      'query_api:getYoutubeGameCoverage',
+      'relation:core_entities',
+      'relation:docs_youtube_videos',
+      'relation:docs_youtube_channels',
+      'relation:docs_youtube_video_matches',
+      'relation:metrics_youtube_video_snapshots',
+      'relation:metrics_youtube_game_daily',
+    ],
+    migrationDisposition: 'already_tiger',
+    migrationNotes:
+      'Explicit single-game YouTube coverage now runs through the system-owned query-api contract.',
+    recommendedTigerContracts: ['getYoutubeGameCoverage'],
+  },
   rankEntities: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:rankEntities', ...SHARED_CATALOG_RELATIONS],

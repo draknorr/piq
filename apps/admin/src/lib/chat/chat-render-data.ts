@@ -96,6 +96,7 @@ type TigerRenderContractName =
   | 'discoverMomentum'
   | 'getEntityOverview'
   | 'getRelatedEntities'
+  | 'getYoutubeGameCoverage'
   | 'rankEntities'
   | 'searchCatalog'
   | 'semanticSearch'

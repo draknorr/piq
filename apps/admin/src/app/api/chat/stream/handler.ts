@@ -1810,6 +1810,7 @@ export async function handleChatStreamRequest(
 
             const syntheticToolCall =
               contractResult.contractName === 'traceMetricHistory'
+              || contractResult.contractName === 'getYoutubeGameCoverage'
                 ? null
                 : buildTigerSyntheticToolCall({
                     contractName: contractResult.contractName,

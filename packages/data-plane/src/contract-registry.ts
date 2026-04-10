@@ -253,4 +253,24 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
       'Resume a prior result set with offsets, exclusions, and conversational refinements.',
     naturalLanguageStrength: ['show me more', 'same set but only co-op'],
   },
+  {
+    name: 'getYoutubeGameCoverage',
+    endpoint: '/v1/contracts/get-youtube-game-coverage',
+    status: 'ready',
+    requiredRelations: [
+      'core_entities',
+      'docs_youtube_videos',
+      'docs_youtube_channels',
+      'docs_youtube_video_matches',
+      'metrics_youtube_video_snapshots',
+      'metrics_youtube_game_daily',
+    ],
+    description:
+      'Return current per-game YouTube coverage for the strongest v1 views: latest videos, creator coverage, top videos, growth, content mix, and cadence.',
+    naturalLanguageStrength: [
+      'explicit YouTube questions for one game',
+      'creator coverage for a tracked title',
+      'latest or fastest-growing matched videos',
+    ],
+  },
 ];

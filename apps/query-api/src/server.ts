@@ -15,6 +15,7 @@ import {
   type GetRelatedEntitiesRequest,
   type GetRelatedEntitiesResponse,
   type GetUserContextRequest,
+  type GetYoutubeGameCoverageRequest,
   loadQueryApiConfig,
   loadSourceBaselineConfig,
   type RankEntitiesRequest,
@@ -86,6 +87,7 @@ interface QueryApiService {
   getEntityOverview: DataPlaneService['getEntityOverview'];
   getRelatedEntities: DataPlaneService['getRelatedEntities'];
   getUserContext: DataPlaneService['getUserContext'];
+  getYoutubeGameCoverage: DataPlaneService['getYoutubeGameCoverage'];
   healthCheck: DataPlaneService['healthCheck'];
   rankEntities: DataPlaneService['rankEntities'];
   readinessCheck: DataPlaneService['readinessCheck'];
@@ -393,6 +395,13 @@ export function createQueryApiRequestHandler(params: {
           fallbackOperation: sourceFallback ? () => sourceFallback.getUserContext(body) : null,
           primaryOperation: () => dataPlane.getUserContext(body),
         });
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-youtube-game-coverage') {
+        const body = await readJsonBody<GetYoutubeGameCoverageRequest>(request);
+        const result = await dataPlane.getYoutubeGameCoverage(body);
         sendJson(response, 200, result);
         return;
       }

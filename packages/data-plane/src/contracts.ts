@@ -213,7 +213,12 @@ export type DataPlaneRelationKey =
   | 'steam_genres'
   | 'app_steam_tags'
   | 'steam_tags'
-  | 'steam_categories';
+  | 'steam_categories'
+  | 'docs_youtube_videos'
+  | 'docs_youtube_channels'
+  | 'docs_youtube_video_matches'
+  | 'metrics_youtube_video_snapshots'
+  | 'metrics_youtube_game_daily';
 
 export interface QueryProvenance {
   capturedAt: string;
@@ -1118,6 +1123,117 @@ export interface ContinueResultSetResponse {
   sufficientToAnswer: boolean;
 }
 
+export type YoutubeGameCoverageView =
+  | 'latest_videos'
+  | 'creator_coverage'
+  | 'top_videos'
+  | 'video_growth'
+  | 'content_mix'
+  | 'cadence';
+export type YoutubeContentClass =
+  | 'standard_video'
+  | 'short'
+  | 'live_or_recent_live';
+export type YoutubeCoverageWindow = 'current' | '1d' | '7d' | '30d';
+
+export interface GetYoutubeGameCoverageRequest {
+  contentClass?: YoutubeContentClass | null;
+  entityUid: string;
+  limit?: number;
+  view: YoutubeGameCoverageView;
+  window?: YoutubeCoverageWindow | null;
+}
+
+export interface YoutubeGameCoverageVideoItem {
+  channelCountry: string | null;
+  channelId: string;
+  channelSubscriberCount: number | null;
+  channelTitle: string;
+  commentCount: number | null;
+  confidenceScore: number | null;
+  contentClass: YoutubeContentClass;
+  firstSnapshotAt: string | null;
+  growthPct: number | null;
+  likeCount: number | null;
+  matchedAlias: string | null;
+  publishedAt: string | null;
+  url: string;
+  videoId: string;
+  viewCount: number | null;
+  viewDelta: number | null;
+  lastSnapshotAt: string | null;
+  title: string;
+}
+
+export interface YoutubeGameCoverageCreatorItem {
+  channelCountry: string | null;
+  channelId: string;
+  channelSubscriberCount: number | null;
+  channelTitle: string;
+  latestMatchedUploadAt: string | null;
+  matchedVideoCount: number;
+  totalMatchedViews: number | null;
+}
+
+export interface YoutubeGameCoverageContentMixItem {
+  contentClass: YoutubeContentClass;
+  distinctUploadChannels: number;
+  matchedPrimaryVideoCount: number;
+  matchedVideoViewDelta: number;
+  newMatchedVideos: number;
+}
+
+export interface YoutubeGameCoverageCadenceItem {
+  distinctUploadChannels: number;
+  matchedVideoViewDelta: number;
+  newMatchedVideos: number;
+  viewsOnNewVideos: number;
+  window: Exclude<YoutubeCoverageWindow, 'current'>;
+}
+
+export interface YoutubeGameCoverageEntity {
+  displayName: string;
+  entityKind: 'game';
+  entityUid: string;
+  platform: 'steam';
+  platformEntityId: string;
+}
+
+export interface YoutubeGameCoverageSummary {
+  freshestMatchedUploadAt: string | null;
+  latestSnapshotAt: string | null;
+  matchedPrimaryVideoCount: number;
+  matchedVideoViewDelta1d: number | null;
+  matchedVideoViewDelta7d: number | null;
+  newMatchedVideos1d: number;
+  newMatchedVideos30d: number;
+  newMatchedVideos7d: number;
+  distinctUploadChannels30d: number;
+  distinctUploadChannels7d: number;
+}
+
+export interface YoutubeGameCoverageAvailability {
+  blockingTables: string[];
+  reason: string | null;
+  state: 'ready' | 'blocked' | 'unavailable';
+}
+
+export interface GetYoutubeGameCoverageResponse {
+  availability: YoutubeGameCoverageAvailability;
+  contentClass: YoutubeContentClass | null;
+  creators: YoutubeGameCoverageCreatorItem[];
+  entity: YoutubeGameCoverageEntity;
+  items: YoutubeGameCoverageVideoItem[];
+  limit: number;
+  provenance: QueryProvenance;
+  resolvedWindow: YoutubeCoverageWindow;
+  sufficientToAnswer: boolean;
+  summary: YoutubeGameCoverageSummary;
+  view: YoutubeGameCoverageView;
+  cadence: YoutubeGameCoverageCadenceItem | null;
+  contentMix: YoutubeGameCoverageContentMixItem[];
+}
+
 export interface QueryContractDescriptor {
   description: string;
   endpoint: string;
@@ -1136,7 +1252,8 @@ export interface QueryContractDescriptor {
     | 'semanticSearch'
     | 'getUserContext'
     | 'getRelatedEntities'
-    | 'continueResultSet';
+    | 'continueResultSet'
+    | 'getYoutubeGameCoverage';
   naturalLanguageStrength: string[];
   requiredRelations: DataPlaneRelationKey[];
   status: ContractStatus;

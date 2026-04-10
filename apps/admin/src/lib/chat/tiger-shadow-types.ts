@@ -14,6 +14,7 @@ export type TigerShadowMatchedIntent =
   | 'relation_lookup'
   | 'semantic_search'
   | 'user_context'
+  | 'youtube_game_activity'
   | null;
 export type TigerShadowRoute =
   | 'disabled'
@@ -41,7 +42,8 @@ export type TigerShadowContractName =
   | 'getRelatedEntities'
   | 'getUserContext'
   | 'semanticSearch'
-  | 'traceMetricHistory';
+  | 'traceMetricHistory'
+  | 'getYoutubeGameCoverage';
 export type TigerShadowAttemptStatus = 'success' | 'error' | 'skipped';
 
 export interface TigerShadowAttempt {

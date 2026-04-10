@@ -6434,3 +6434,561 @@ test('Tiger primary can compare the top two visible results from ranking request
   assert.match(result.renderedText ?? '', /Counter-Strike 2/);
   assert.match(result.renderedText ?? '', /Dota 2/);
 });
+
+test('Tiger primary routes explicit YouTube latest-video prompts through get-youtube-game-coverage', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      return jsonResponse({
+        ambiguity: {
+          message: null,
+          requiresClarification: false,
+        },
+        entities: [{
+          confidence: 0.99,
+          displayName: 'ARC Raiders',
+          entityKind: 'game',
+          entityUid: '11111111-1111-4111-8111-111111111111',
+          matchQuality: 'exact',
+          platform: 'steam',
+          platformEntityId: '1149460',
+        }],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    assert.ok(init?.body);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      contentClass: null,
+      entityUid: '11111111-1111-4111-8111-111111111111',
+      limit: 10,
+      view: 'latest_videos',
+      window: null,
+    });
+
+    return jsonResponse({
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [],
+      entity: {
+        displayName: 'ARC Raiders',
+        entityKind: 'game',
+        entityUid: '11111111-1111-4111-8111-111111111111',
+        platform: 'steam',
+        platformEntityId: '1149460',
+      },
+      items: [{
+        channelTitle: 'Creator One',
+        contentClass: 'standard_video',
+        publishedAt: '2026-04-07T07:56:34.000Z',
+        title: 'ARC Raiders Just Buffed This Key Room',
+        viewCount: 32037,
+      }],
+      limit: 10,
+      resolvedWindow: 'current',
+      sufficientToAnswer: true,
+      summary: {
+        distinctUploadChannels30d: 32,
+        distinctUploadChannels7d: 18,
+        freshestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+        latestSnapshotAt: '2026-04-07T08:00:32.000Z',
+        matchedPrimaryVideoCount: 100,
+        matchedVideoViewDelta1d: 258971,
+        matchedVideoViewDelta7d: 258971,
+        newMatchedVideos1d: 51,
+        newMatchedVideos30d: 100,
+        newMatchedVideos7d: 88,
+      },
+      view: 'latest_videos',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the latest YouTube videos for ARC Raiders?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
+  assert.equal(result.info.attempts.at(-1)?.contractName, 'getYoutubeGameCoverage');
+  assert.match(result.renderedText ?? '', /Latest YouTube videos for ARC Raiders/);
+  assert.match(result.renderedText ?? '', /ARC Raiders Just Buffed This Key Room/);
+});
+
+test('Tiger primary resolves creator coverage prompts phrased as creator coverage', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const request = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(request.query, 'Palworld');
+      return jsonResponse({
+        ambiguity: {
+          message: null,
+          requiresClarification: false,
+        },
+        entities: [{
+          confidence: 0.99,
+          displayName: 'Palworld',
+          entityKind: 'game',
+          entityUid: '22222222-2222-4222-8222-222222222222',
+          matchQuality: 'exact',
+          platform: 'steam',
+          platformEntityId: '1623730',
+        }],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    assert.equal(request.entityUid, '22222222-2222-4222-8222-222222222222');
+    assert.equal(request.view, 'creator_coverage');
+    assert.equal(request.window, null);
+    return jsonResponse({
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [{
+        channelSubscriberCount: 512000,
+        channelTitle: 'Pocketpair Clips',
+        latestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+        matchedVideoCount: 12,
+        totalMatchedViews: 845000,
+      }],
+      entity: {
+        displayName: 'Palworld',
+        entityKind: 'game',
+        entityUid: '22222222-2222-4222-8222-222222222222',
+        platform: 'steam',
+        platformEntityId: '1623730',
+      },
+      items: [],
+      limit: 10,
+      resolvedWindow: 'current',
+      sufficientToAnswer: true,
+      summary: {
+        distinctUploadChannels30d: 96,
+        distinctUploadChannels7d: 37,
+        freshestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+        latestSnapshotAt: '2026-04-07T08:00:32.000Z',
+        matchedPrimaryVideoCount: 144,
+        matchedVideoViewDelta1d: 984221,
+        matchedVideoViewDelta7d: 3221991,
+        newMatchedVideos1d: 19,
+        newMatchedVideos30d: 144,
+        newMatchedVideos7d: 62,
+      },
+      view: 'creator_coverage',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Which creators are covering Palworld on YouTube right now?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
+  assert.match(result.renderedText ?? '', /YouTube creator coverage for Palworld/);
+  assert.match(result.renderedText ?? '', /Pocketpair Clips/);
+});
+
+test('Tiger primary resolves YouTube growth prompts and maps last 1 day to the 1d window', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const request = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.equal(request.query, 'Hollow Knight');
+      return jsonResponse({
+        ambiguity: {
+          message: null,
+          requiresClarification: false,
+        },
+        entities: [{
+          confidence: 0.99,
+          displayName: 'Hollow Knight',
+          entityKind: 'game',
+          entityUid: '33333333-3333-4333-8333-333333333333',
+          matchQuality: 'exact',
+          platform: 'steam',
+          platformEntityId: '367520',
+        }],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    assert.equal(request.entityUid, '33333333-3333-4333-8333-333333333333');
+    assert.equal(request.view, 'video_growth');
+    assert.equal(request.window, '1d');
+    return jsonResponse({
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [],
+      entity: {
+        displayName: 'Hollow Knight',
+        entityKind: 'game',
+        entityUid: '33333333-3333-4333-8333-333333333333',
+        platform: 'steam',
+        platformEntityId: '367520',
+      },
+      items: [{
+        channelTitle: 'Silksong Watch',
+        growthPct: 0.41,
+        publishedAt: '2026-04-07T05:14:00.000Z',
+        title: 'Hollow Knight Lore Theory Just Exploded',
+        viewCount: 145000,
+        viewDelta: 42000,
+      }],
+      limit: 10,
+      resolvedWindow: '1d',
+      sufficientToAnswer: true,
+      summary: {
+        distinctUploadChannels30d: 58,
+        distinctUploadChannels7d: 21,
+        freshestMatchedUploadAt: '2026-04-07T05:14:00.000Z',
+        latestSnapshotAt: '2026-04-07T08:00:32.000Z',
+        matchedPrimaryVideoCount: 73,
+        matchedVideoViewDelta1d: 621104,
+        matchedVideoViewDelta7d: 1112120,
+        newMatchedVideos1d: 9,
+        newMatchedVideos30d: 73,
+        newMatchedVideos7d: 28,
+      },
+      view: 'video_growth',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Which Hollow Knight YouTube videos are growing fastest in the last 1 day?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
+  assert.match(result.renderedText ?? '', /Fastest-growing YouTube videos for Hollow Knight/);
+  assert.match(result.renderedText ?? '', /Hollow Knight Lore Theory Just Exploded/);
+});
+
+test('Tiger primary does not silently route generic latest-video prompts to YouTube', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+
+  setScopedFetch(t, async () => {
+    assert.fail('generic latest-video prompt should not call query-api');
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the latest videos for ARC Raiders?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, null);
+  assert.equal(result.info.route, 'unmatched');
+});
+
+test('Tiger primary renders a blocked explanation for noisy YouTube titles', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      return jsonResponse({
+        ambiguity: {
+          message: null,
+          requiresClarification: false,
+        },
+        entities: [{
+          confidence: 0.99,
+          displayName: 'MENACE',
+          entityKind: 'game',
+          entityUid: '11111111-1111-4111-8111-111111111111',
+          matchQuality: 'exact',
+          platform: 'steam',
+          platformEntityId: '2436120',
+        }],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    return jsonResponse({
+      availability: {
+        blockingTables: [],
+        reason: 'This title is blocked for YouTube answers right now because the current match precision is not reliable enough.',
+        state: 'blocked',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [],
+      entity: {
+        displayName: 'MENACE',
+        entityKind: 'game',
+        entityUid: '11111111-1111-4111-8111-111111111111',
+        platform: 'steam',
+        platformEntityId: '2436120',
+      },
+      items: [],
+      limit: 10,
+      resolvedWindow: 'current',
+      sufficientToAnswer: false,
+      summary: {
+        distinctUploadChannels30d: 0,
+        distinctUploadChannels7d: 0,
+        freshestMatchedUploadAt: null,
+        latestSnapshotAt: null,
+        matchedPrimaryVideoCount: 0,
+        matchedVideoViewDelta1d: 0,
+        matchedVideoViewDelta7d: 0,
+        newMatchedVideos1d: 0,
+        newMatchedVideos30d: 0,
+        newMatchedVideos7d: 0,
+      },
+      view: 'latest_videos',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the latest YouTube videos for MENACE?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /not returning a YouTube answer for MENACE/i);
+});
+
+test('Tiger primary returns a deterministic unavailable message when mirrored YouTube data is not ready', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url) => {
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      return jsonResponse({
+        ambiguity: {
+          message: null,
+          requiresClarification: false,
+        },
+        entities: [{
+          confidence: 0.99,
+          displayName: 'ARC Raiders',
+          entityKind: 'game',
+          entityUid: '11111111-1111-4111-8111-111111111111',
+          matchQuality: 'exact',
+          platform: 'steam',
+          platformEntityId: '1149460',
+        }],
+      });
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    return jsonResponse({
+      availability: {
+        blockingTables: ['docs.youtube_videos', 'metrics.youtube_video_snapshots'],
+        reason: 'YouTube coverage is not available on this Tiger environment yet because the mirrored tables are still empty or missing.',
+        state: 'unavailable',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [],
+      entity: {
+        displayName: 'ARC Raiders',
+        entityKind: 'game',
+        entityUid: '11111111-1111-4111-8111-111111111111',
+        platform: 'steam',
+        platformEntityId: '1149460',
+      },
+      items: [],
+      limit: 10,
+      resolvedWindow: 'current',
+      sufficientToAnswer: false,
+      summary: {
+        distinctUploadChannels30d: 0,
+        distinctUploadChannels7d: 0,
+        freshestMatchedUploadAt: null,
+        latestSnapshotAt: null,
+        matchedPrimaryVideoCount: 0,
+        matchedVideoViewDelta1d: 0,
+        matchedVideoViewDelta7d: 0,
+        newMatchedVideos1d: 0,
+        newMatchedVideos30d: 0,
+        newMatchedVideos7d: 0,
+      },
+      view: 'latest_videos',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What are the latest YouTube videos for ARC Raiders?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.match(result.renderedText ?? '', /Tiger environment does not have mirrored YouTube data ready yet/i);
+  assert.match(result.renderedText ?? '', /docs\.youtube_videos/);
+});
+
+test('Tiger primary reuses a bound request selection for YouTube follow-up prompts', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'CHAT_TIGER_YOUTUBE_ENABLED', 'true');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+
+    if (url.pathname === '/v1/contracts/resolve-entities') {
+      assert.fail(`expected request binding reuse, but resolve-entities was called with ${JSON.stringify(body)}`);
+    }
+
+    assert.equal(url.pathname, '/v1/contracts/get-youtube-game-coverage');
+    assert.deepEqual(body, {
+      contentClass: null,
+      entityUid: 'game:steam:1623730',
+      limit: 10,
+      view: 'creator_coverage',
+      window: null,
+    });
+
+    return jsonResponse({
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      cadence: null,
+      contentClass: null,
+      contentMix: [],
+      creators: [{
+        channelSubscriberCount: 512000,
+        channelTitle: 'Pocketpair Clips',
+        latestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+        matchedVideoCount: 12,
+        totalMatchedViews: 845000,
+      }],
+      entity: {
+        displayName: 'Palworld',
+        entityKind: 'game',
+        entityUid: 'game:steam:1623730',
+        platform: 'steam',
+        platformEntityId: '1623730',
+      },
+      items: [],
+      limit: 10,
+      resolvedWindow: 'current',
+      sufficientToAnswer: true,
+      summary: {
+        distinctUploadChannels30d: 96,
+        distinctUploadChannels7d: 37,
+        freshestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+        latestSnapshotAt: '2026-04-07T08:00:32.000Z',
+        matchedPrimaryVideoCount: 144,
+        matchedVideoViewDelta1d: 984221,
+        matchedVideoViewDelta7d: 3221991,
+        newMatchedVideos1d: 19,
+        newMatchedVideos30d: 144,
+        newMatchedVideos7d: 62,
+      },
+      view: 'creator_coverage',
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Which creators are covering it on YouTube right now?',
+    sessionContext: {
+      version: 1,
+      entities: [{
+        id: 'game:steam:1623730',
+        kind: 'game',
+        name: 'Palworld',
+        platform: 'steam',
+        platformEntityId: '1623730',
+        sourceTool: 'tigerPrimarySelection',
+      }],
+      constraints: [],
+      candidateSet: null,
+      requestState: null,
+      selectionState: {
+        family: 'request_binding',
+        slots: [{
+          candidates: [{
+            displayName: 'Palworld',
+            entityKind: 'game',
+            entityUid: 'game:steam:1623730',
+            matchQuality: 'exact',
+            ordinal: 1,
+            platform: 'steam',
+            platformEntityId: '1623730',
+            score: 100,
+          }],
+          expectedEntityKind: 'game',
+          label: 'Palworld',
+          query: 'Palworld',
+          requiresClarification: false,
+          selectedEntityUid: 'game:steam:1623730',
+          slotId: 'bound-1',
+        }],
+      },
+      resultSet: null,
+      lastAnswer: {
+        family: 'entity_overview',
+        summary: 'Tiger answered entity_overview.',
+      },
+      updatedAt: '2026-04-09T00:00:00.000Z',
+    },
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'youtube_game_activity');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.info.attempts[0]?.reason, 'Reused the current entity selection from session context.');
+  assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
+  assert.match(result.renderedText ?? '', /YouTube creator coverage for Palworld/);
+});

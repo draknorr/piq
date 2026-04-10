@@ -16,6 +16,7 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
     getEntityOverview: async () => ({ ok: true }),
     getRelatedEntities: async () => ({ ok: true }),
     getUserContext: async () => ({ ok: true }),
+    getYoutubeGameCoverage: async () => ({ ok: true }),
     healthCheck: async () => ({
       capturedAt: '2026-04-01T00:00:00.000Z',
       source: 'tiger',
@@ -419,6 +420,105 @@ test('query-api routes get-user-context requests to the data-plane service', asy
       const payload = await response.json() as { totalPins: number; unreadAlertCount: number };
       assert.equal(payload.totalPins, 1);
       assert.equal(payload.unreadAlertCount, 0);
+    }
+  );
+});
+
+test('query-api routes get-youtube-game-coverage requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      getYoutubeGameCoverage: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          availability: {
+            blockingTables: [],
+            reason: null,
+            state: 'ready',
+          },
+          cadence: null,
+          contentClass: null,
+          contentMix: [],
+          creators: [],
+          entity: {
+            displayName: 'ARC Raiders',
+            entityKind: 'game',
+            entityUid: '11111111-1111-4111-8111-111111111111',
+            platform: 'steam',
+            platformEntityId: '1149460',
+          },
+          items: [{
+            channelCountry: 'US',
+            channelId: 'channel-1',
+            channelSubscriberCount: 120000,
+            channelTitle: 'Creator One',
+            commentCount: 40,
+            confidenceScore: 0.98,
+            contentClass: 'standard_video',
+            firstSnapshotAt: null,
+            growthPct: null,
+            lastSnapshotAt: null,
+            likeCount: 320,
+            matchedAlias: 'ARC Raiders',
+            publishedAt: '2026-04-01T00:00:00.000Z',
+            title: 'ARC Raiders preview',
+            url: 'https://www.youtube.com/watch?v=video-1',
+            videoId: 'video-1',
+            viewCount: 12000,
+            viewDelta: null,
+          }],
+          limit: 10,
+          provenance: {
+            capturedAt: '2026-04-01T00:00:00.000Z',
+            source: 'tiger',
+            tables: [
+              'core.entities',
+              'docs.youtube_videos',
+              'docs.youtube_channels',
+              'docs.youtube_video_matches',
+              'metrics.youtube_video_snapshots',
+              'metrics.youtube_game_daily',
+            ],
+          },
+          resolvedWindow: 'current',
+          sufficientToAnswer: true,
+          summary: {
+            distinctUploadChannels30d: 18,
+            distinctUploadChannels7d: 12,
+            freshestMatchedUploadAt: '2026-04-01T00:00:00.000Z',
+            latestSnapshotAt: '2026-04-01T01:00:00.000Z',
+            matchedPrimaryVideoCount: 42,
+            matchedVideoViewDelta1d: 9000,
+            matchedVideoViewDelta7d: 15000,
+            newMatchedVideos1d: 4,
+            newMatchedVideos30d: 42,
+            newMatchedVideos7d: 18,
+          },
+          view: 'latest_videos',
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-youtube-game-coverage`, {
+        body: JSON.stringify({
+          entityUid: '11111111-1111-4111-8111-111111111111',
+          limit: 10,
+          view: 'latest_videos',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {
+        entityUid: '11111111-1111-4111-8111-111111111111',
+        limit: 10,
+        view: 'latest_videos',
+      });
+      const payload = await response.json() as { items: Array<{ title: string }> };
+      assert.equal(payload.items[0]?.title, 'ARC Raiders preview');
     }
   );
 });

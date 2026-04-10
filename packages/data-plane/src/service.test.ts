@@ -2448,3 +2448,114 @@ test('explainChanges before_after mode prefers the strongest change moment over 
   assert.equal(selectedWindowStart, '2026-03-28T12:00:00.000Z');
   assert.equal(result.summary.strongestMomentStrength, 'high');
 });
+
+test('getYoutubeGameCoverage returns an unavailable response when YouTube tables are not mirrored yet', async () => {
+  const service = createService();
+
+  (service as any).getBlockingTables = async () => ['docs.youtube_videos', 'metrics.youtube_video_snapshots'];
+  (service as any).resolveCoreEntity = async () => ({
+    canonical_name: 'ARC Raiders',
+    entity_kind: 'game',
+    entity_uid: '11111111-1111-4111-8111-111111111111',
+    platform: 'steam',
+    platform_entity_id: '1149460',
+  });
+
+  const result = await service.getYoutubeGameCoverage({
+    entityUid: '11111111-1111-4111-8111-111111111111',
+    view: 'latest_videos',
+  });
+
+  assert.equal(result.availability.state, 'unavailable');
+  assert.equal(result.sufficientToAnswer, false);
+  assert.deepEqual(result.availability.blockingTables, [
+    'docs.youtube_videos',
+    'metrics.youtube_video_snapshots',
+  ]);
+  assert.equal(result.items.length, 0);
+});
+
+test('getYoutubeGameCoverage blocks noisy generic-title games before querying YouTube data', async () => {
+  const service = createService();
+  let summaryCalled = false;
+
+  (service as any).getBlockingTables = async () => [];
+  (service as any).resolveCoreEntity = async () => ({
+    canonical_name: 'MENACE',
+    entity_kind: 'game',
+    entity_uid: '11111111-1111-4111-8111-111111111111',
+    platform: 'steam',
+    platform_entity_id: '2436120',
+  });
+  (service as any).queryYoutubeCoverageSummary = async () => {
+    summaryCalled = true;
+    return null;
+  };
+
+  const result = await service.getYoutubeGameCoverage({
+    entityUid: '11111111-1111-4111-8111-111111111111',
+    view: 'latest_videos',
+  });
+
+  assert.equal(result.availability.state, 'blocked');
+  assert.equal(result.sufficientToAnswer, false);
+  assert.match(result.availability.reason ?? '', /precision is not reliable enough/i);
+  assert.equal(summaryCalled, false);
+});
+
+test('getYoutubeGameCoverage returns latest matched videos for a supported title', async () => {
+  const service = createService();
+
+  (service as any).getBlockingTables = async () => [];
+  (service as any).resolveCoreEntity = async () => ({
+    canonical_name: 'ARC Raiders',
+    entity_kind: 'game',
+    entity_uid: '11111111-1111-4111-8111-111111111111',
+    platform: 'steam',
+    platform_entity_id: '1149460',
+  });
+  (service as any).queryYoutubeGameOverrideState = async () => null;
+  (service as any).queryYoutubeCoverageSummary = async () => ({
+    distinctUploadChannels30d: 32,
+    distinctUploadChannels7d: 18,
+    freshestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
+    latestSnapshotAt: '2026-04-07T08:00:32.000Z',
+    matchedPrimaryVideoCount: 100,
+    matchedVideoViewDelta1d: 258971,
+    matchedVideoViewDelta7d: 258971,
+    newMatchedVideos1d: 51,
+    newMatchedVideos30d: 100,
+    newMatchedVideos7d: 88,
+  });
+  (service as any).queryYoutubeLatestVideoRows = async () => [{
+    channelCountry: 'US',
+    channelId: 'channel-1',
+    channelSubscriberCount: 240000,
+    channelTitle: 'Creator One',
+    commentCount: 44,
+    confidenceScore: 0.99,
+    contentClass: 'standard_video',
+    firstSnapshotAt: null,
+    growthPct: null,
+    lastSnapshotAt: null,
+    likeCount: 550,
+    matchedAlias: 'ARC Raiders',
+    publishedAt: '2026-04-07T07:56:34.000Z',
+    title: 'ARC Raiders Just Buffed This Key Room',
+    url: 'https://www.youtube.com/watch?v=video-1',
+    videoId: 'video-1',
+    viewCount: 32037,
+    viewDelta: null,
+  }];
+
+  const result = await service.getYoutubeGameCoverage({
+    entityUid: '11111111-1111-4111-8111-111111111111',
+    view: 'latest_videos',
+  });
+
+  assert.equal(result.availability.state, 'ready');
+  assert.equal(result.sufficientToAnswer, true);
+  assert.equal(result.entity.displayName, 'ARC Raiders');
+  assert.equal(result.items[0]?.title, 'ARC Raiders Just Buffed This Key Room');
+  assert.equal(result.summary.matchedPrimaryVideoCount, 100);
+});

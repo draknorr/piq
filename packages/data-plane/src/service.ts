@@ -33,6 +33,8 @@ import type {
   GetRelatedEntitiesResponse,
   GetUserContextRequest,
   GetUserContextResponse,
+  GetYoutubeGameCoverageRequest,
+  GetYoutubeGameCoverageResponse,
   MatchQuality,
   QueryProvenance,
   RankEntitiesRequest,
@@ -72,6 +74,15 @@ import type {
   UserContextAlert,
   UserContextAlertPreferences,
   UserContextPin,
+  YoutubeContentClass,
+  YoutubeCoverageWindow,
+  YoutubeGameCoverageCadenceItem,
+  YoutubeGameCoverageContentMixItem,
+  YoutubeGameCoverageCreatorItem,
+  YoutubeGameCoverageEntity,
+  YoutubeGameCoverageSummary,
+  YoutubeGameCoverageVideoItem,
+  YoutubeGameCoverageView,
 } from './contracts.js';
 import { CONTRACT_REGISTRY } from './contract-registry.js';
 import { loadDataPlaneConfig, type DataPlaneConfig } from './config.js';
@@ -214,6 +225,64 @@ interface DailyMetricHistoryRow extends QueryResultRow {
   price_cents: number | null;
   review_score: number | null;
   total_reviews: number | null;
+}
+
+interface YoutubeVideoCoverageRow extends QueryResultRow {
+  channel_country: string | null;
+  channel_id: string;
+  channel_subscriber_count: number | null;
+  channel_title: string;
+  comment_count: number | null;
+  confidence_score: number | null;
+  content_class: YoutubeContentClass;
+  first_snapshot_at: string | null;
+  growth_pct: number | null;
+  last_snapshot_at: string | null;
+  like_count: number | null;
+  matched_alias: string | null;
+  published_at: string | null;
+  title: string;
+  video_id: string;
+  view_count: number | null;
+  view_delta: number | null;
+}
+
+interface YoutubeCreatorCoverageRow extends QueryResultRow {
+  channel_country: string | null;
+  channel_id: string;
+  channel_subscriber_count: number | null;
+  channel_title: string;
+  latest_matched_upload_at: string | null;
+  matched_video_count: number;
+  total_matched_views: number | null;
+}
+
+interface YoutubeContentMixRow extends QueryResultRow {
+  content_class: YoutubeContentClass;
+  distinct_upload_channels: number;
+  matched_primary_video_count: number;
+  matched_video_view_delta: number;
+  new_matched_videos: number;
+}
+
+interface YoutubeCadenceRow extends QueryResultRow {
+  distinct_upload_channels: number;
+  matched_video_view_delta: number;
+  new_matched_videos: number;
+  views_on_new_videos: number;
+}
+
+interface YoutubeCoverageSummaryRow extends QueryResultRow {
+  distinct_upload_channels_30d: number;
+  distinct_upload_channels_7d: number;
+  freshest_matched_upload_at: string | null;
+  latest_snapshot_at: string | null;
+  matched_primary_video_count: number;
+  matched_video_view_delta_1d: number | null;
+  matched_video_view_delta_7d: number | null;
+  new_matched_videos_1d: number;
+  new_matched_videos_30d: number;
+  new_matched_videos_7d: number;
 }
 
 interface ChangeEventRow extends QueryResultRow {
@@ -655,6 +724,7 @@ const DEFAULT_EXPLAIN_CHANGES_LIMIT = 20;
 const DEFAULT_DOCUMENT_SEARCH_DAYS = 30;
 const DEFAULT_DOCUMENT_LIMIT = 8;
 const DEFAULT_USER_ALERT_LIMIT = 10;
+const DEFAULT_YOUTUBE_LIMIT = 10;
 const MAX_ENTITY_LIMIT = 15;
 const MAX_CHAT_STRICT_ENTITY_LIMIT = 50;
 const AUTOCOMPLETE_ENTITY_SCAN_BUFFER = 25;
@@ -678,6 +748,7 @@ const MAX_EXPLAIN_CHANGES_LIMIT = 50;
 const MAX_DOCUMENT_SEARCH_DAYS = 90;
 const MAX_DOCUMENT_LIMIT = 10;
 const MAX_USER_ALERT_LIMIT = 50;
+const MAX_YOUTUBE_LIMIT = 25;
 const EXPLAIN_CHANGE_MOMENT_GAP_MS = 6 * 60 * 60 * 1000;
 const EXPLAIN_NEWS_PROXIMITY_MS = 24 * 60 * 60 * 1000;
 const ALLOW_EMPTY_RELATIONS = new Set<DataPlaneRelationKey>([
@@ -888,6 +959,21 @@ const RELATION_LOCATIONS: Record<
     },
     franchises: { schema: 'public', sql: 'public.franchises', table: 'franchises' },
     publishers: { schema: 'public', sql: 'public.publishers', table: 'publishers' },
+    docs_youtube_channels: {
+      schema: 'public',
+      sql: 'public.youtube_channels',
+      table: 'youtube_channels',
+    },
+    docs_youtube_video_matches: {
+      schema: 'public',
+      sql: 'public.youtube_video_matches',
+      table: 'youtube_video_matches',
+    },
+    docs_youtube_videos: {
+      schema: 'public',
+      sql: 'public.youtube_videos',
+      table: 'youtube_videos',
+    },
     user_alert_preferences: {
       schema: 'public',
       sql: 'public.user_alert_preferences',
@@ -900,6 +986,16 @@ const RELATION_LOCATIONS: Record<
       table: 'user_pin_alert_settings',
     },
     user_pins: { schema: 'public', sql: 'public.user_pins', table: 'user_pins' },
+    metrics_youtube_game_daily: {
+      schema: 'public',
+      sql: 'public.youtube_game_daily',
+      table: 'youtube_game_daily',
+    },
+    metrics_youtube_video_snapshots: {
+      schema: 'public',
+      sql: 'public.youtube_video_snapshots',
+      table: 'youtube_video_snapshots',
+    },
     steam_categories: { schema: 'public', sql: 'public.steam_categories', table: 'steam_categories' },
     steam_genres: { schema: 'public', sql: 'public.steam_genres', table: 'steam_genres' },
     steam_tags: { schema: 'public', sql: 'public.steam_tags', table: 'steam_tags' },
@@ -957,6 +1053,21 @@ const RELATION_LOCATIONS: Record<
     },
     franchises: { schema: 'legacy', sql: 'legacy.franchises', table: 'franchises' },
     publishers: { schema: 'legacy', sql: 'legacy.publishers', table: 'publishers' },
+    docs_youtube_channels: {
+      schema: 'docs',
+      sql: 'docs.youtube_channels',
+      table: 'youtube_channels',
+    },
+    docs_youtube_video_matches: {
+      schema: 'docs',
+      sql: 'docs.youtube_video_matches',
+      table: 'youtube_video_matches',
+    },
+    docs_youtube_videos: {
+      schema: 'docs',
+      sql: 'docs.youtube_videos',
+      table: 'youtube_videos',
+    },
     user_alert_preferences: {
       schema: 'legacy',
       sql: 'legacy.user_alert_preferences',
@@ -969,6 +1080,16 @@ const RELATION_LOCATIONS: Record<
       table: 'user_pin_alert_settings',
     },
     user_pins: { schema: 'legacy', sql: 'legacy.user_pins', table: 'user_pins' },
+    metrics_youtube_game_daily: {
+      schema: 'metrics',
+      sql: 'metrics.youtube_game_daily',
+      table: 'youtube_game_daily',
+    },
+    metrics_youtube_video_snapshots: {
+      schema: 'metrics',
+      sql: 'metrics.youtube_video_snapshots',
+      table: 'youtube_video_snapshots',
+    },
     steam_categories: { schema: 'legacy', sql: 'legacy.steam_categories', table: 'steam_categories' },
     steam_genres: { schema: 'legacy', sql: 'legacy.steam_genres', table: 'steam_genres' },
     steam_tags: { schema: 'legacy', sql: 'legacy.steam_tags', table: 'steam_tags' },
@@ -3450,6 +3571,236 @@ export class DataPlaneService {
       unreadAlertCount,
       userId,
     };
+  }
+
+  async getYoutubeGameCoverage(
+    request: GetYoutubeGameCoverageRequest
+  ): Promise<GetYoutubeGameCoverageResponse> {
+    const view = this.normalizeYoutubeCoverageView(request.view);
+    const resolvedWindow = this.normalizeYoutubeCoverageWindow(view, request.window ?? null);
+    const contentClass = this.normalizeYoutubeContentClass(request.contentClass ?? null);
+    const limit = normalizeLimit(request.limit, DEFAULT_YOUTUBE_LIMIT, MAX_YOUTUBE_LIMIT);
+    const entity = await this.resolveCoreEntity(request.entityUid.trim(), {
+      invalidCode: 'INVALID_YOUTUBE_ENTITY_UID',
+      notFoundCode: 'YOUTUBE_ENTITY_NOT_FOUND',
+    });
+
+    if (entity.entity_kind !== 'game' || entity.platform !== 'steam') {
+      throw new PublisherIQError(
+        'getYoutubeGameCoverage currently supports only Steam game entities.',
+        'INVALID_YOUTUBE_ENTITY_KIND',
+        {
+          entityKind: entity.entity_kind,
+          entityUid: request.entityUid,
+          platform: entity.platform,
+        }
+      );
+    }
+
+    const appid = Number(entity.platform_entity_id);
+    if (!Number.isInteger(appid) || appid <= 0) {
+      throw new PublisherIQError(
+        'Resolved game entity does not have a valid Steam appid.',
+        'INVALID_YOUTUBE_ENTITY_ID',
+        {
+          entityUid: request.entityUid,
+          platformEntityId: entity.platform_entity_id,
+        }
+      );
+    }
+
+    const responseEntity: YoutubeGameCoverageEntity = {
+      displayName: entity.canonical_name,
+      entityKind: 'game',
+      entityUid: entity.entity_uid,
+      platform: 'steam',
+      platformEntityId: entity.platform_entity_id,
+    };
+    const provenance = buildProvenance(this.config.source, [
+      this.relation('core_entities').sql,
+      this.relation('docs_youtube_videos').sql,
+      this.relation('docs_youtube_channels').sql,
+      this.relation('docs_youtube_video_matches').sql,
+      this.relation('metrics_youtube_video_snapshots').sql,
+      this.relation('metrics_youtube_game_daily').sql,
+    ]);
+
+    if (this.config.source !== 'tiger') {
+      return this.buildYoutubeCoverageResponse({
+        availability: {
+          blockingTables: [this.relation('docs_youtube_videos').sql],
+          reason: 'YouTube game coverage is only available from the Tiger-backed query runtime.',
+          state: 'unavailable',
+        },
+        cadence: null,
+        contentClass,
+        contentMix: [],
+        creators: [],
+        entity: responseEntity,
+        items: [],
+        limit,
+        provenance,
+        resolvedWindow,
+        summary: this.buildEmptyYoutubeCoverageSummary(),
+        view,
+      });
+    }
+
+    const blockingTables = await this.getBlockingTables([
+      'docs_youtube_videos',
+      'docs_youtube_channels',
+      'docs_youtube_video_matches',
+      'metrics_youtube_video_snapshots',
+      'metrics_youtube_game_daily',
+    ]);
+    if (blockingTables.length > 0) {
+      return this.buildYoutubeCoverageResponse({
+        availability: {
+          blockingTables,
+          reason:
+            'YouTube coverage is not available on this Tiger environment yet because the mirrored tables are still empty or missing.',
+          state: 'unavailable',
+        },
+        cadence: null,
+        contentClass,
+        contentMix: [],
+        creators: [],
+        entity: responseEntity,
+        items: [],
+        limit,
+        provenance,
+        resolvedWindow,
+        summary: this.buildEmptyYoutubeCoverageSummary(),
+        view,
+      });
+    }
+
+    if (this.isBlockedYoutubeGameTitle(entity.canonical_name)) {
+      return this.buildYoutubeCoverageResponse({
+        availability: {
+          blockingTables: [],
+          reason:
+            'This title is blocked for YouTube answers right now because the current match precision is not reliable enough.',
+          state: 'blocked',
+        },
+        cadence: null,
+        contentClass,
+        contentMix: [],
+        creators: [],
+        entity: responseEntity,
+        items: [],
+        limit,
+        provenance,
+        resolvedWindow,
+        summary: this.buildEmptyYoutubeCoverageSummary(),
+        view,
+      });
+    }
+
+    const overrideState = await this.queryYoutubeGameOverrideState(appid);
+    if (overrideState === 'suppressed') {
+      return this.buildYoutubeCoverageResponse({
+        availability: {
+          blockingTables: [],
+          reason:
+            'This title is currently suppressed in the YouTube override state, so the system is not returning a user-facing YouTube answer.',
+          state: 'blocked',
+        },
+        cadence: null,
+        contentClass,
+        contentMix: [],
+        creators: [],
+        entity: responseEntity,
+        items: [],
+        limit,
+        provenance,
+        resolvedWindow,
+        summary: this.buildEmptyYoutubeCoverageSummary(),
+        view,
+      });
+    }
+
+    const summary = await this.queryYoutubeCoverageSummary({
+      appid,
+      contentClass,
+    });
+    const nonCurrentWindow: Exclude<YoutubeCoverageWindow, 'current'> =
+      resolvedWindow === 'current' ? '7d' : resolvedWindow;
+    const latestVideos =
+      view === 'latest_videos'
+        ? await this.queryYoutubeLatestVideoRows({
+            appid,
+            contentClass,
+            limit,
+            window: resolvedWindow,
+          })
+        : [];
+    const topVideos =
+      view === 'top_videos'
+        ? await this.queryYoutubeTopVideoRows({
+            appid,
+            contentClass,
+            limit,
+            window: resolvedWindow,
+          })
+        : [];
+    const growthVideos =
+      view === 'video_growth'
+        ? await this.queryYoutubeVideoGrowthRows({
+            appid,
+            contentClass,
+            limit,
+            window: nonCurrentWindow,
+          })
+        : [];
+    const creators =
+      view === 'creator_coverage'
+        ? await this.queryYoutubeCreatorCoverageRows({
+            appid,
+            contentClass,
+            limit,
+            window: resolvedWindow,
+          })
+        : [];
+    const contentMix =
+      view === 'content_mix'
+        ? await this.queryYoutubeContentMixRows({
+            appid,
+            contentClass,
+            window: nonCurrentWindow,
+          })
+        : [];
+    const cadence =
+      view === 'cadence'
+        ? await this.queryYoutubeCadenceRow({
+            appid,
+            contentClass,
+            window: nonCurrentWindow,
+          })
+        : null;
+
+    return this.buildYoutubeCoverageResponse({
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      cadence,
+      contentClass,
+      contentMix,
+      creators,
+      entity: responseEntity,
+      items: latestVideos.length > 0
+        ? latestVideos
+        : topVideos.length > 0
+          ? topVideos
+          : growthVideos,
+      limit,
+      provenance,
+      resolvedWindow,
+      summary,
+      view,
+    });
   }
 
   async continueResultSet(
@@ -10269,6 +10620,693 @@ export class DataPlaneService {
     );
 
     return result.rows;
+  }
+
+  private normalizeYoutubeCoverageView(view: string): YoutubeGameCoverageView {
+    if (
+      view === 'latest_videos'
+      || view === 'creator_coverage'
+      || view === 'top_videos'
+      || view === 'video_growth'
+      || view === 'content_mix'
+      || view === 'cadence'
+    ) {
+      return view;
+    }
+
+    throw new PublisherIQError(
+      'getYoutubeGameCoverage requires a supported view.',
+      'INVALID_YOUTUBE_VIEW',
+      { view }
+    );
+  }
+
+  private normalizeYoutubeContentClass(
+    value: string | null
+  ): YoutubeContentClass | null {
+    if (!value) {
+      return null;
+    }
+
+    if (
+      value === 'standard_video'
+      || value === 'short'
+      || value === 'live_or_recent_live'
+    ) {
+      return value;
+    }
+
+    throw new PublisherIQError(
+      'getYoutubeGameCoverage received an unsupported content class.',
+      'INVALID_YOUTUBE_CONTENT_CLASS',
+      { contentClass: value }
+    );
+  }
+
+  private normalizeYoutubeCoverageWindow(
+    view: YoutubeGameCoverageView,
+    window: string | null
+  ): YoutubeCoverageWindow {
+    if (window == null || window.trim().length === 0) {
+      if (view === 'video_growth') {
+        return '1d';
+      }
+
+      if (view === 'content_mix' || view === 'cadence') {
+        return '7d';
+      }
+
+      return 'current';
+    }
+
+    if (
+      window !== 'current'
+      && window !== '1d'
+      && window !== '7d'
+      && window !== '30d'
+    ) {
+      throw new PublisherIQError(
+        'getYoutubeGameCoverage requires a supported time window.',
+        'INVALID_YOUTUBE_WINDOW',
+        { window }
+      );
+    }
+
+    if (view === 'video_growth' && window === 'current') {
+      return '1d';
+    }
+
+    if ((view === 'content_mix' || view === 'cadence') && window === 'current') {
+      return '7d';
+    }
+
+    return window;
+  }
+
+  private buildYoutubeCoverageResponse(params: {
+    availability: GetYoutubeGameCoverageResponse['availability'];
+    cadence: YoutubeGameCoverageCadenceItem | null;
+    contentClass: YoutubeContentClass | null;
+    contentMix: YoutubeGameCoverageContentMixItem[];
+    creators: YoutubeGameCoverageCreatorItem[];
+    entity: YoutubeGameCoverageEntity;
+    items: YoutubeGameCoverageVideoItem[];
+    limit: number;
+    provenance: QueryProvenance;
+    resolvedWindow: YoutubeCoverageWindow;
+    summary: YoutubeGameCoverageSummary;
+    view: YoutubeGameCoverageView;
+  }): GetYoutubeGameCoverageResponse {
+    const sufficientToAnswer =
+      params.availability.state === 'ready'
+      && (
+        params.items.length > 0
+        || params.creators.length > 0
+        || params.contentMix.length > 0
+        || Boolean(params.cadence)
+      );
+
+    return {
+      availability: params.availability,
+      cadence: params.cadence,
+      contentClass: params.contentClass,
+      contentMix: params.contentMix,
+      creators: params.creators,
+      entity: params.entity,
+      items: params.items,
+      limit: params.limit,
+      provenance: params.provenance,
+      resolvedWindow: params.resolvedWindow,
+      sufficientToAnswer,
+      summary: params.summary,
+      view: params.view,
+    };
+  }
+
+  private buildEmptyYoutubeCoverageSummary(): YoutubeGameCoverageSummary {
+    return {
+      distinctUploadChannels30d: 0,
+      distinctUploadChannels7d: 0,
+      freshestMatchedUploadAt: null,
+      latestSnapshotAt: null,
+      matchedPrimaryVideoCount: 0,
+      matchedVideoViewDelta1d: 0,
+      matchedVideoViewDelta7d: 0,
+      newMatchedVideos1d: 0,
+      newMatchedVideos30d: 0,
+      newMatchedVideos7d: 0,
+    };
+  }
+
+  private isBlockedYoutubeGameTitle(name: string): boolean {
+    const normalized = name.trim().toLowerCase();
+    return normalized === 'menace' || normalized === 'forager';
+  }
+
+  private youtubePublishedWindowPredicate(
+    alias: string,
+    window: YoutubeCoverageWindow
+  ): string {
+    if (window === 'current') {
+      return '';
+    }
+
+    return ` AND ${alias}.published_at >= now() - ${this.youtubeIntervalLiteral(window)}`;
+  }
+
+  private youtubeSnapshotWindowPredicate(
+    alias: string,
+    window: Exclude<YoutubeCoverageWindow, 'current'>
+  ): string {
+    return ` AND ${alias}.snapshot_time >= now() - ${this.youtubeIntervalLiteral(window)}`;
+  }
+
+  private youtubeIntervalLiteral(
+    window: Exclude<YoutubeCoverageWindow, 'current'>
+  ): string {
+    if (window === '1d') {
+      return "INTERVAL '1 day'";
+    }
+
+    if (window === '7d') {
+      return "INTERVAL '7 days'";
+    }
+
+    return "INTERVAL '30 days'";
+  }
+
+  private async queryYoutubeGameOverrideState(appid: number): Promise<string | null> {
+    const existsResult = await runQuery<{ exists: boolean }>(
+      'SELECT to_regclass($1) IS NOT NULL AS exists',
+      ['ops.youtube_game_overrides'],
+      this.config
+    );
+
+    if (!(existsResult.rows[0]?.exists ?? false)) {
+      return null;
+    }
+
+    const result = await runQuery<{ override_state: string | null }>(
+      `
+        SELECT override_state
+        FROM ops.youtube_game_overrides
+        WHERE appid = $1
+        LIMIT 1
+      `,
+      [appid],
+      this.config
+    );
+
+    return result.rows[0]?.override_state ?? null;
+  }
+
+  private async queryYoutubeCoverageSummary(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+  }): Promise<YoutubeGameCoverageSummary> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
+    const summaryResult = await runQuery<YoutubeCoverageSummaryRow>(
+      `
+        WITH matched_videos AS (
+          SELECT
+            v.video_id,
+            v.channel_id,
+            v.published_at
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          WHERE m.appid = $1
+            AND m.match_state = 'matched_primary'
+            AND ($2::text IS NULL OR v.content_class = $2::text)
+        )
+        SELECT
+          COALESCE((SELECT count(*)::int FROM matched_videos), 0) AS matched_primary_video_count,
+          COALESCE(
+            (SELECT count(*)::int FROM matched_videos WHERE published_at >= now() - INTERVAL '1 day'),
+            0
+          ) AS new_matched_videos_1d,
+          COALESCE(
+            (SELECT count(*)::int FROM matched_videos WHERE published_at >= now() - INTERVAL '7 days'),
+            0
+          ) AS new_matched_videos_7d,
+          COALESCE(
+            (SELECT count(*)::int FROM matched_videos WHERE published_at >= now() - INTERVAL '30 days'),
+            0
+          ) AS new_matched_videos_30d,
+          COALESCE(
+            (
+              SELECT count(DISTINCT channel_id)::int
+              FROM matched_videos
+              WHERE published_at >= now() - INTERVAL '7 days'
+            ),
+            0
+          ) AS distinct_upload_channels_7d,
+          COALESCE(
+            (
+              SELECT count(DISTINCT channel_id)::int
+              FROM matched_videos
+              WHERE published_at >= now() - INTERVAL '30 days'
+            ),
+            0
+          ) AS distinct_upload_channels_30d,
+          (
+            SELECT max(published_at)::text
+            FROM matched_videos
+          ) AS freshest_matched_upload_at,
+          (
+            SELECT max(snapshot_time)::text
+            FROM ${snapshotsTable}
+            WHERE appid = $1
+              AND ($2::text IS NULL OR content_class = $2::text)
+          ) AS latest_snapshot_at,
+          NULL::bigint AS matched_video_view_delta_1d,
+          NULL::bigint AS matched_video_view_delta_7d
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    const row = summaryResult.rows[0];
+    if (!row) {
+      return this.buildEmptyYoutubeCoverageSummary();
+    }
+
+    return {
+      distinctUploadChannels30d: row.distinct_upload_channels_30d ?? 0,
+      distinctUploadChannels7d: row.distinct_upload_channels_7d ?? 0,
+      freshestMatchedUploadAt: row.freshest_matched_upload_at,
+      latestSnapshotAt: row.latest_snapshot_at,
+      matchedPrimaryVideoCount: row.matched_primary_video_count ?? 0,
+      matchedVideoViewDelta1d: await this.queryYoutubeAggregateViewDelta({
+        appid: params.appid,
+        contentClass: params.contentClass,
+        window: '1d',
+      }),
+      matchedVideoViewDelta7d: await this.queryYoutubeAggregateViewDelta({
+        appid: params.appid,
+        contentClass: params.contentClass,
+        window: '7d',
+      }),
+      newMatchedVideos1d: row.new_matched_videos_1d ?? 0,
+      newMatchedVideos30d: row.new_matched_videos_30d ?? 0,
+      newMatchedVideos7d: row.new_matched_videos_7d ?? 0,
+    };
+  }
+
+  private async queryYoutubeLatestVideoRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    window: YoutubeCoverageWindow;
+  }): Promise<YoutubeGameCoverageVideoItem[]> {
+    return this.queryYoutubeRankedVideoRows({
+      ...params,
+      orderBy: 'v.published_at DESC NULLS LAST, v.video_id ASC',
+    });
+  }
+
+  private async queryYoutubeTopVideoRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    window: YoutubeCoverageWindow;
+  }): Promise<YoutubeGameCoverageVideoItem[]> {
+    return this.queryYoutubeRankedVideoRows({
+      ...params,
+      orderBy: 'v.view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC',
+    });
+  }
+
+  private async queryYoutubeRankedVideoRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    orderBy: string;
+    window: YoutubeCoverageWindow;
+  }): Promise<YoutubeGameCoverageVideoItem[]> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const channelsTable = this.relation('docs_youtube_channels').sql;
+    const result = await runQuery<YoutubeVideoCoverageRow>(
+      `
+        SELECT
+          v.video_id,
+          v.title,
+          v.published_at::text,
+          v.content_class,
+          v.view_count,
+          v.like_count,
+          v.comment_count,
+          v.channel_id,
+          COALESCE(c.title, v.channel_title, v.channel_id) AS channel_title,
+          c.subscriber_count AS channel_subscriber_count,
+          c.country AS channel_country,
+          m.confidence_score::double precision AS confidence_score,
+          m.matched_alias,
+          NULL::text AS first_snapshot_at,
+          NULL::text AS last_snapshot_at,
+          NULL::bigint AS view_delta,
+          NULL::double precision AS growth_pct
+        FROM ${matchesTable} m
+        JOIN ${videosTable} v ON v.video_id = m.video_id
+        LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+        WHERE m.appid = $1
+          AND m.match_state = 'matched_primary'
+          AND ($2::text IS NULL OR v.content_class = $2::text)
+          ${this.youtubePublishedWindowPredicate('v', params.window)}
+        ORDER BY ${params.orderBy}
+        LIMIT $3
+      `,
+      [params.appid, params.contentClass, params.limit],
+      this.config
+    );
+
+    return result.rows.map((row) => this.mapYoutubeVideoItem(row));
+  }
+
+  private async queryYoutubeVideoGrowthRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<YoutubeGameCoverageVideoItem[]> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const channelsTable = this.relation('docs_youtube_channels').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
+    const result = await runQuery<YoutubeVideoCoverageRow>(
+      `
+        WITH scoped_snapshots AS (
+          SELECT
+            s.video_id,
+            MIN(s.snapshot_time) AS first_snapshot_at,
+            MAX(s.snapshot_time) AS last_snapshot_at
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+            ${this.youtubeSnapshotWindowPredicate('s', params.window)}
+          GROUP BY s.video_id
+          HAVING MIN(s.snapshot_time) < MAX(s.snapshot_time)
+        )
+        SELECT
+          v.video_id,
+          v.title,
+          v.published_at::text,
+          v.content_class,
+          last_snapshot.view_count,
+          v.like_count,
+          v.comment_count,
+          v.channel_id,
+          COALESCE(c.title, v.channel_title, v.channel_id) AS channel_title,
+          c.subscriber_count AS channel_subscriber_count,
+          c.country AS channel_country,
+          m.confidence_score::double precision AS confidence_score,
+          m.matched_alias,
+          scoped.first_snapshot_at::text,
+          scoped.last_snapshot_at::text,
+          GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0)::bigint AS view_delta,
+          CASE
+            WHEN first_snapshot.view_count > 0
+              THEN (
+                GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0)::double precision
+                / first_snapshot.view_count::double precision
+              ) * 100.0
+            ELSE NULL
+          END AS growth_pct
+        FROM scoped_snapshots scoped
+        JOIN ${snapshotsTable} first_snapshot
+          ON first_snapshot.video_id = scoped.video_id
+         AND first_snapshot.snapshot_time = scoped.first_snapshot_at
+        JOIN ${snapshotsTable} last_snapshot
+          ON last_snapshot.video_id = scoped.video_id
+         AND last_snapshot.snapshot_time = scoped.last_snapshot_at
+        JOIN ${matchesTable} m
+          ON m.video_id = scoped.video_id
+         AND m.appid = $1
+         AND m.match_state = 'matched_primary'
+        JOIN ${videosTable} v ON v.video_id = scoped.video_id
+        LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+        WHERE GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0) > 0
+        ORDER BY view_delta DESC, view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC
+        LIMIT $3
+      `,
+      [params.appid, params.contentClass, params.limit],
+      this.config
+    );
+
+    return result.rows.map((row) => this.mapYoutubeVideoItem(row));
+  }
+
+  private async queryYoutubeCreatorCoverageRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    window: YoutubeCoverageWindow;
+  }): Promise<YoutubeGameCoverageCreatorItem[]> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const channelsTable = this.relation('docs_youtube_channels').sql;
+    const result = await runQuery<YoutubeCreatorCoverageRow>(
+      `
+        SELECT
+          v.channel_id,
+          COALESCE(c.title, max(v.channel_title), v.channel_id) AS channel_title,
+          c.subscriber_count AS channel_subscriber_count,
+          c.country AS channel_country,
+          count(*)::int AS matched_video_count,
+          max(v.published_at)::text AS latest_matched_upload_at,
+          sum(v.view_count)::bigint AS total_matched_views
+        FROM ${matchesTable} m
+        JOIN ${videosTable} v ON v.video_id = m.video_id
+        LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+        WHERE m.appid = $1
+          AND m.match_state = 'matched_primary'
+          AND ($2::text IS NULL OR v.content_class = $2::text)
+          ${this.youtubePublishedWindowPredicate('v', params.window)}
+        GROUP BY v.channel_id, c.title, c.subscriber_count, c.country
+        ORDER BY
+          matched_video_count DESC,
+          total_matched_views DESC NULLS LAST,
+          latest_matched_upload_at DESC NULLS LAST,
+          channel_title ASC
+        LIMIT $3
+      `,
+      [params.appid, params.contentClass, params.limit],
+      this.config
+    );
+
+    return result.rows.map((row) => ({
+      channelCountry: row.channel_country,
+      channelId: row.channel_id,
+      channelSubscriberCount: row.channel_subscriber_count,
+      channelTitle: row.channel_title,
+      latestMatchedUploadAt: row.latest_matched_upload_at,
+      matchedVideoCount: row.matched_video_count,
+      totalMatchedViews: row.total_matched_views,
+    }));
+  }
+
+  private async queryYoutubeContentMixRows(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<YoutubeGameCoverageContentMixItem[]> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const deltaByClass = await this.queryYoutubeViewDeltaByContentClass({
+      appid: params.appid,
+      contentClass: params.contentClass,
+      window: params.window,
+    });
+    const result = await runQuery<YoutubeContentMixRow>(
+      `
+        WITH content_classes AS (
+          SELECT unnest(ARRAY['standard_video', 'short', 'live_or_recent_live']::text[]) AS content_class
+        ),
+        matched_totals AS (
+          SELECT
+            v.content_class,
+            count(*)::int AS matched_primary_video_count
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          WHERE m.appid = $1
+            AND m.match_state = 'matched_primary'
+          GROUP BY v.content_class
+        ),
+        window_rows AS (
+          SELECT
+            v.content_class,
+            count(*)::int AS new_matched_videos,
+            count(DISTINCT v.channel_id)::int AS distinct_upload_channels
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          WHERE m.appid = $1
+            AND m.match_state = 'matched_primary'
+            ${this.youtubePublishedWindowPredicate('v', params.window)}
+          GROUP BY v.content_class
+        )
+        SELECT
+          cc.content_class::text,
+          COALESCE(mt.matched_primary_video_count, 0) AS matched_primary_video_count,
+          COALESCE(wr.new_matched_videos, 0) AS new_matched_videos,
+          COALESCE(wr.distinct_upload_channels, 0) AS distinct_upload_channels,
+          0::bigint AS matched_video_view_delta
+        FROM content_classes cc
+        LEFT JOIN matched_totals mt ON mt.content_class = cc.content_class
+        LEFT JOIN window_rows wr ON wr.content_class = cc.content_class
+        WHERE ($2::text IS NULL OR cc.content_class = $2::text)
+        ORDER BY
+          CASE cc.content_class
+            WHEN 'standard_video' THEN 1
+            WHEN 'short' THEN 2
+            ELSE 3
+          END ASC
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    return result.rows
+      .map((row) => ({
+        contentClass: row.content_class,
+        distinctUploadChannels: row.distinct_upload_channels,
+        matchedPrimaryVideoCount: row.matched_primary_video_count,
+        matchedVideoViewDelta: deltaByClass.get(row.content_class) ?? 0,
+        newMatchedVideos: row.new_matched_videos,
+      }))
+      .filter((row) =>
+        params.contentClass
+          ? row.contentClass === params.contentClass
+          : row.matchedPrimaryVideoCount > 0 || row.newMatchedVideos > 0 || row.matchedVideoViewDelta > 0
+      );
+  }
+
+  private async queryYoutubeCadenceRow(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<YoutubeGameCoverageCadenceItem | null> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const result = await runQuery<YoutubeCadenceRow>(
+      `
+        SELECT
+          count(*)::int AS new_matched_videos,
+          count(DISTINCT v.channel_id)::int AS distinct_upload_channels,
+          COALESCE(sum(v.view_count), 0)::bigint AS views_on_new_videos,
+          0::bigint AS matched_video_view_delta
+        FROM ${matchesTable} m
+        JOIN ${videosTable} v ON v.video_id = m.video_id
+        WHERE m.appid = $1
+          AND m.match_state = 'matched_primary'
+          AND ($2::text IS NULL OR v.content_class = $2::text)
+          ${this.youtubePublishedWindowPredicate('v', params.window)}
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      distinctUploadChannels: row.distinct_upload_channels ?? 0,
+      matchedVideoViewDelta:
+        (await this.queryYoutubeAggregateViewDelta({
+          appid: params.appid,
+          contentClass: params.contentClass,
+          window: params.window,
+        })) ?? 0,
+      newMatchedVideos: row.new_matched_videos ?? 0,
+      viewsOnNewVideos: row.views_on_new_videos ?? 0,
+      window: params.window,
+    };
+  }
+
+  private async queryYoutubeAggregateViewDelta(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<number> {
+    const deltaByClass = await this.queryYoutubeViewDeltaByContentClass(params);
+    return [...deltaByClass.values()].reduce((sum, value) => sum + value, 0);
+  }
+
+  private async queryYoutubeViewDeltaByContentClass(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<Map<YoutubeContentClass, number>> {
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
+    const result = await runQuery<{
+      content_class: YoutubeContentClass;
+      matched_video_view_delta: number;
+    }>(
+      `
+        WITH scoped_snapshots AS (
+          SELECT
+            s.video_id,
+            s.content_class,
+            MIN(s.snapshot_time) AS first_snapshot_at,
+            MAX(s.snapshot_time) AS last_snapshot_at
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+            ${this.youtubeSnapshotWindowPredicate('s', params.window)}
+          GROUP BY s.video_id, s.content_class
+          HAVING MIN(s.snapshot_time) < MAX(s.snapshot_time)
+        ),
+        video_deltas AS (
+          SELECT
+            scoped.content_class,
+            GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0)::bigint AS view_delta
+          FROM scoped_snapshots scoped
+          JOIN ${snapshotsTable} first_snapshot
+            ON first_snapshot.video_id = scoped.video_id
+           AND first_snapshot.snapshot_time = scoped.first_snapshot_at
+          JOIN ${snapshotsTable} last_snapshot
+            ON last_snapshot.video_id = scoped.video_id
+           AND last_snapshot.snapshot_time = scoped.last_snapshot_at
+        )
+        SELECT
+          content_class,
+          COALESCE(sum(view_delta), 0)::bigint AS matched_video_view_delta
+        FROM video_deltas
+        GROUP BY content_class
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    return new Map(
+      result.rows.map((row) => [row.content_class, row.matched_video_view_delta ?? 0] as const)
+    );
+  }
+
+  private mapYoutubeVideoItem(row: YoutubeVideoCoverageRow): YoutubeGameCoverageVideoItem {
+    return {
+      channelCountry: row.channel_country,
+      channelId: row.channel_id,
+      channelSubscriberCount: row.channel_subscriber_count,
+      channelTitle: row.channel_title,
+      commentCount: row.comment_count,
+      confidenceScore: row.confidence_score,
+      contentClass: row.content_class,
+      firstSnapshotAt: row.first_snapshot_at,
+      growthPct: row.growth_pct,
+      lastSnapshotAt: row.last_snapshot_at,
+      likeCount: row.like_count,
+      matchedAlias: row.matched_alias,
+      publishedAt: row.published_at,
+      title: row.title,
+      url: `https://www.youtube.com/watch?v=${row.video_id}`,
+      videoId: row.video_id,
+      viewCount: row.view_count,
+      viewDelta: row.view_delta,
+    };
   }
 
   private async resolveCoreEntity(
