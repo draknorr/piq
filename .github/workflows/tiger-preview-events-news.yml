@@ -72,35 +72,35 @@ jobs:
       - name: Capture app change watermark
         id: capture_app_change_watermark
         run: |
-          APP_CHANGE_MAX_ID="$(
-            node <<'NODE'
-            const { Client } = require('pg');
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { Client } = require('pg');
 
-            async function main() {
-              const client = new Client({ connectionString: process.env.DATABASE_URL });
-              await client.connect();
-              try {
-                const result = await client.query(
-                  'SELECT coalesce(max(id), 0)::text AS max_id FROM public.app_change_events'
-                );
-                process.stdout.write(result.rows[0]?.max_id ?? '0');
-              } finally {
-                await client.end();
-              }
+          async function main() {
+            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+
+            try {
+              const result = await client.query(
+                'SELECT coalesce(max(id), 0)::text AS max_id FROM public.app_change_events'
+              );
+              const maxId = result.rows[0]?.max_id ?? '0';
+
+              fs.appendFileSync(process.env.GITHUB_ENV, `APP_CHANGE_MAX_ID=${maxId}\n`);
+              fs.appendFileSync(
+                process.env.GITHUB_STEP_SUMMARY,
+                `Tiger events/news app change watermark\n\n- app_change_max_id: \`${maxId}\`\n`
+              );
+            } finally {
+              await client.end();
             }
+          }
 
-            main().catch((error) => {
-              console.error(error);
-              process.exit(1);
-            });
-            NODE
-          )"
-          echo "APP_CHANGE_MAX_ID=${APP_CHANGE_MAX_ID}" >> "$GITHUB_ENV"
-          {
-            echo "Tiger events/news app change watermark"
-            echo ""
-            echo "- app_change_max_id: \`${APP_CHANGE_MAX_ID}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
 
       - name: Reconcile Tiger events and news
         id: reconcile_events_news
