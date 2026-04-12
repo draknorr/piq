@@ -165,6 +165,7 @@ interface EventsNewsSyncManifest {
   capturedAt: string;
   mode: SyncMode;
   settings: {
+    appChangeMaxId: string | null;
     eventDayLookback: number;
     newsDayLookback: number;
     projectionDayLookback: number;
@@ -188,6 +189,22 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
   }
 
   return Math.floor(parsed);
+}
+
+function readOptionalBigIntString(
+  envName: string,
+  value: string | undefined,
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`Unsupported ${envName} value: ${value}`);
+  }
+
+  return trimmed;
 }
 
 function serializeJsonColumnValue(value: unknown): string | null {
@@ -300,6 +317,70 @@ async function fetchDayCountMap(
   return counts;
 }
 
+function addQueryParam(params: unknown[], value: unknown): string {
+  params.push(value);
+  return `$${params.length}`;
+}
+
+async function fetchAppChangeCount(
+  pool: Pool,
+  relation: string,
+  appChangeMaxId: string | null = null,
+): Promise<number> {
+  const params: unknown[] = [];
+  const maxIdFilter = appChangeMaxId
+    ? ` WHERE id <= ${addQueryParam(params, appChangeMaxId)}::bigint`
+    : "";
+  const result = await pool.query<{ row_count: string }>(
+    `SELECT count(*)::bigint AS row_count FROM ${relation}${maxIdFilter}`,
+    params,
+  );
+
+  return Number(result.rows[0]?.row_count ?? 0);
+}
+
+async function fetchAppChangeDayCountMap(
+  pool: Pool,
+  relation: string,
+  dayKeys: string[],
+  appChangeMaxId: string | null = null,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (dayKeys.length === 0) {
+    return counts;
+  }
+
+  const params: unknown[] = [];
+  const startParam = addQueryParam(params, dayKeys[0]!);
+  const endParam = addQueryParam(params, addOneDay(dayKeys[dayKeys.length - 1]!));
+  const maxIdFilter = appChangeMaxId
+    ? `\n        AND id <= ${addQueryParam(params, appChangeMaxId)}::bigint`
+    : "";
+  const result = await pool.query<{ day_key: string; row_count: string }>(
+    `
+      SELECT
+        occurred_at::date::text AS day_key,
+        count(*)::bigint AS row_count
+      FROM ${relation}
+      WHERE occurred_at >= ${startParam}::date
+        AND occurred_at < ${endParam}::date${maxIdFilter}
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `,
+    params,
+  );
+
+  for (const dayKey of dayKeys) {
+    counts.set(dayKey, 0);
+  }
+
+  for (const row of result.rows) {
+    counts.set(row.day_key, Number(row.row_count));
+  }
+
+  return counts;
+}
+
 async function fetchMonthCountMap(
   pool: Pool,
   relation: string,
@@ -329,6 +410,32 @@ async function fetchFullDayCountMap(
 ): Promise<Map<string, number>> {
   const plans = await fetchDailyPlans(pool, relation, timeColumn, cursorColumn);
   return new Map(plans.map((plan) => [plan.partitionKey, plan.sourceCount]));
+}
+
+async function fetchAppChangeFullDayCountMap(
+  pool: Pool,
+  relation: string,
+  appChangeMaxId: string | null = null,
+): Promise<Map<string, number>> {
+  const params: unknown[] = [];
+  const maxIdFilter = appChangeMaxId
+    ? ` WHERE id <= ${addQueryParam(params, appChangeMaxId)}::bigint`
+    : "";
+  const result = await pool.query<{ day_key: string; row_count: string }>(
+    `
+      SELECT
+        occurred_at::date::text AS day_key,
+        count(*)::bigint AS row_count
+      FROM ${relation}${maxIdFilter}
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `,
+    params,
+  );
+
+  return new Map(
+    result.rows.map((row) => [row.day_key, Number(row.row_count)]),
+  );
 }
 
 async function fetchNewsItemsDayCount(
@@ -691,6 +798,7 @@ async function reconcileAppChangeEventsDay(
   dayKey: string,
   sourceCountBefore: number,
   tigerCountBefore: number,
+  appChangeMaxId: string | null,
   reason: string,
 ): Promise<PartitionActionSummary> {
   const targetColumns = [
@@ -717,6 +825,15 @@ async function reconcileAppChangeEventsDay(
     let batchResult: QueryResult<AppChangeEventRow>;
 
     if (cursorOccurredAt && cursorId) {
+      const params: unknown[] = [];
+      const dayStartParam = addQueryParam(params, dayKey);
+      const dayEndParam = addQueryParam(params, addOneDay(dayKey));
+      const maxIdFilter = appChangeMaxId
+        ? `\n            AND id <= ${addQueryParam(params, appChangeMaxId)}::bigint`
+        : "";
+      const cursorOccurredAtParam = addQueryParam(params, cursorOccurredAt);
+      const cursorIdParam = addQueryParam(params, cursorId);
+      const limitParam = addQueryParam(params, EVENT_BATCH_SIZE);
       batchResult = await sourcePool.query<AppChangeEventRow>(
         `
           SELECT
@@ -735,21 +852,22 @@ async function reconcileAppChangeEventsDay(
             trigger_cursor,
             created_at::text
           FROM public.app_change_events
-          WHERE occurred_at >= $1::date
-            AND occurred_at < $2::date
-            AND (occurred_at, id) > ($3::timestamptz, $4::bigint)
+          WHERE occurred_at >= ${dayStartParam}::date
+            AND occurred_at < ${dayEndParam}::date${maxIdFilter}
+            AND (occurred_at, id) > (${cursorOccurredAtParam}::timestamptz, ${cursorIdParam}::bigint)
           ORDER BY occurred_at ASC, id ASC
-          LIMIT $5
+          LIMIT ${limitParam}
         `,
-        [
-          dayKey,
-          addOneDay(dayKey),
-          cursorOccurredAt,
-          cursorId,
-          EVENT_BATCH_SIZE,
-        ],
+        params,
       );
     } else {
+      const params: unknown[] = [];
+      const dayStartParam = addQueryParam(params, dayKey);
+      const dayEndParam = addQueryParam(params, addOneDay(dayKey));
+      const maxIdFilter = appChangeMaxId
+        ? `\n            AND id <= ${addQueryParam(params, appChangeMaxId)}::bigint`
+        : "";
+      const limitParam = addQueryParam(params, EVENT_BATCH_SIZE);
       batchResult = await sourcePool.query<AppChangeEventRow>(
         `
           SELECT
@@ -768,12 +886,12 @@ async function reconcileAppChangeEventsDay(
             trigger_cursor,
             created_at::text
           FROM public.app_change_events
-          WHERE occurred_at >= $1::date
-            AND occurred_at < $2::date
+          WHERE occurred_at >= ${dayStartParam}::date
+            AND occurred_at < ${dayEndParam}::date${maxIdFilter}
           ORDER BY occurred_at ASC, id ASC
-          LIMIT $3
+          LIMIT ${limitParam}
         `,
-        [dayKey, addOneDay(dayKey), EVENT_BATCH_SIZE],
+        params,
       );
     }
 
@@ -1148,25 +1266,29 @@ async function summarizeAppChangeEvents(
   sourcePool: Pool,
   tigerPool: Pool,
   lookbackDays: number,
+  sourceAppChangeMaxId: string | null,
   actions: PartitionActionSummary[],
 ): Promise<TableSyncSummary> {
   const dayKeys = listRecentUtcDayKeys(lookbackDays);
   const [sourceCounts, tigerCounts, sourceTotalCount, tigerTotalCount] =
     await Promise.all([
-      fetchDayCountMap(
+      fetchAppChangeDayCountMap(
         sourcePool,
         "public.app_change_events",
-        "occurred_at",
         dayKeys,
+        sourceAppChangeMaxId,
       ),
-      fetchDayCountMap(
+      fetchAppChangeDayCountMap(
         tigerPool,
         "events.app_change_events",
-        "occurred_at",
         dayKeys,
       ),
-      fetchCount(sourcePool, "public.app_change_events"),
-      fetchCount(tigerPool, "events.app_change_events"),
+      fetchAppChangeCount(
+        sourcePool,
+        "public.app_change_events",
+        sourceAppChangeMaxId,
+      ),
+      fetchAppChangeCount(tigerPool, "events.app_change_events"),
     ]);
   const dayMismatches = comparePartitionCounts(sourceCounts, tigerCounts);
 
@@ -1260,6 +1382,10 @@ async function main(): Promise<void> {
   const projectionRepairScope = parseProjectionRepairScope(
     process.env.EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE,
   );
+  const appChangeMaxId = readOptionalBigIntString(
+    "EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID",
+    process.env.EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID,
+  );
   const selectedTables = parseSelectedEventsNewsTables(
     process.env.EVENTS_NEWS_SYNC_TABLES,
   );
@@ -1326,6 +1452,7 @@ async function main(): Promise<void> {
       mode,
       manifestLabel,
       selectedTables: activeTables,
+      appChangeMaxId,
       eventDayLookback,
       newsDayLookback,
       projectionDayLookback,
@@ -1535,16 +1662,15 @@ async function main(): Promise<void> {
       const recentDayKeys = listRecentUtcDayKeys(eventDayLookback);
       const recentDayKeySet = new Set(recentDayKeys);
       const [sourceDayCountsBefore, tigerDayCountsBefore] = await Promise.all([
-        fetchDayCountMap(
+        fetchAppChangeDayCountMap(
           sourcePool,
           "public.app_change_events",
-          "occurred_at",
           recentDayKeys,
+          appChangeMaxId,
         ),
-        fetchDayCountMap(
+        fetchAppChangeDayCountMap(
           tigerPool,
           "events.app_change_events",
-          "occurred_at",
           recentDayKeys,
         ),
       ]);
@@ -1554,17 +1680,14 @@ async function main(): Promise<void> {
       );
       const [sourceHistoricalCountsBefore, tigerHistoricalCountsBefore] =
         await Promise.all([
-          fetchFullDayCountMap(
+          fetchAppChangeFullDayCountMap(
             sourcePool,
             "public.app_change_events",
-            "occurred_at",
-            "id",
+            appChangeMaxId,
           ),
-          fetchFullDayCountMap(
+          fetchAppChangeFullDayCountMap(
             tigerPool,
             "events.app_change_events",
-            "occurred_at",
-            "id",
           ),
         ]);
       const historicalDayMismatchesBefore = comparePartitionCounts(
@@ -1591,6 +1714,7 @@ async function main(): Promise<void> {
               partitionKey,
               sourceDayCountsBefore.get(partitionKey) ?? 0,
               tigerDayCountsBefore.get(partitionKey) ?? 0,
+              appChangeMaxId,
               reason,
             ),
           );
@@ -1600,6 +1724,7 @@ async function main(): Promise<void> {
           sourcePool,
           tigerPool,
           eventDayLookback,
+          appChangeMaxId,
           actions,
         );
         if (
@@ -1617,6 +1742,7 @@ async function main(): Promise<void> {
                 mismatch.partitionKey,
                 sourceHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
                 tigerHistoricalCountsBefore.get(mismatch.partitionKey) ?? 0,
+                appChangeMaxId,
                 "mismatched_historical_day",
               ),
             );
@@ -1626,16 +1752,15 @@ async function main(): Promise<void> {
             sourceDayCountsAfterHistorical,
             tigerDayCountsAfterHistorical,
           ] = await Promise.all([
-            fetchDayCountMap(
+            fetchAppChangeDayCountMap(
               sourcePool,
               "public.app_change_events",
-              "occurred_at",
               recentDayKeys,
+              appChangeMaxId,
             ),
-            fetchDayCountMap(
+            fetchAppChangeDayCountMap(
               tigerPool,
               "events.app_change_events",
-              "occurred_at",
               recentDayKeys,
             ),
           ]);
@@ -1663,6 +1788,7 @@ async function main(): Promise<void> {
                 partitionKey,
                 sourceDayCountsAfterHistorical.get(partitionKey) ?? 0,
                 tigerDayCountsAfterHistorical.get(partitionKey) ?? 0,
+                appChangeMaxId,
                 `post_historical_${reason}`,
               ),
             );
@@ -1674,6 +1800,7 @@ async function main(): Promise<void> {
         sourcePool,
         tigerPool,
         eventDayLookback,
+        appChangeMaxId,
         actions,
       );
       summary.dayMismatchesBefore = dayMismatchesBefore;
@@ -1681,17 +1808,14 @@ async function main(): Promise<void> {
       {
         const [sourceHistoricalCountsAfter, tigerHistoricalCountsAfter] =
           await Promise.all([
-            fetchFullDayCountMap(
+            fetchAppChangeFullDayCountMap(
               sourcePool,
               "public.app_change_events",
-              "occurred_at",
-              "id",
+              appChangeMaxId,
             ),
-            fetchFullDayCountMap(
+            fetchAppChangeFullDayCountMap(
               tigerPool,
               "events.app_change_events",
-              "occurred_at",
-              "id",
             ),
           ]);
         summary.historicalDayMismatchesAfter = comparePartitionCounts(
@@ -1896,6 +2020,7 @@ async function main(): Promise<void> {
         capturedAt: new Date().toISOString(),
         mode,
         settings: {
+          appChangeMaxId,
           eventDayLookback,
           newsDayLookback,
           projectionDayLookback,
@@ -1935,6 +2060,7 @@ async function main(): Promise<void> {
           capturedAt: new Date().toISOString(),
           mode,
           settings: {
+            appChangeMaxId,
             eventDayLookback,
             newsDayLookback,
             projectionDayLookback,

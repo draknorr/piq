@@ -69,6 +69,39 @@ jobs:
         run: |
           echo "TIGER_RUN_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
 
+      - name: Capture app change watermark
+        id: capture_app_change_watermark
+        run: |
+          APP_CHANGE_MAX_ID="$(
+            node <<'NODE'
+            const { Client } = require('pg');
+
+            async function main() {
+              const client = new Client({ connectionString: process.env.DATABASE_URL });
+              await client.connect();
+              try {
+                const result = await client.query(
+                  'SELECT coalesce(max(id), 0)::text AS max_id FROM public.app_change_events'
+                );
+                process.stdout.write(result.rows[0]?.max_id ?? '0');
+              } finally {
+                await client.end();
+              }
+            }
+
+            main().catch((error) => {
+              console.error(error);
+              process.exit(1);
+            });
+            NODE
+          )"
+          echo "APP_CHANGE_MAX_ID=${APP_CHANGE_MAX_ID}" >> "$GITHUB_ENV"
+          {
+            echo "Tiger events/news app change watermark"
+            echo ""
+            echo "- app_change_max_id: \`${APP_CHANGE_MAX_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Reconcile Tiger events and news
         id: reconcile_events_news
         continue-on-error: true
@@ -76,6 +109,7 @@ jobs:
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
           EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID: ${{ env.APP_CHANGE_MAX_ID }}
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
@@ -287,6 +321,7 @@ jobs:
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
           EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID: ${{ env.APP_CHANGE_MAX_ID }}
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-app-change-retry-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
@@ -302,6 +337,7 @@ jobs:
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
           EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID: ${{ env.APP_CHANGE_MAX_ID }}
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-validate-app-change-retry-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: validate
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
@@ -417,6 +453,7 @@ jobs:
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
           EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID: ${{ env.APP_CHANGE_MAX_ID }}
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-exact-parity-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
@@ -430,6 +467,7 @@ jobs:
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
           EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_APP_CHANGE_MAX_ID: ${{ env.APP_CHANGE_MAX_ID }}
           EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-validate-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: validate
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
