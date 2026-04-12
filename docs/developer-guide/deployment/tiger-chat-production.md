@@ -139,6 +139,9 @@ Production sync:
 - refreshes the legacy compatibility slice
 - replays the trailing metrics window into `metrics.daily_metrics`
 - reconciles and validates the events/news slice
+- automatically retries one `app_change_events`-only reconcile/validate pass
+  when the first reconcile fails only because `app_change_events` still has
+  count-only drift and integrity checks remain zero
 - starts with `recent_window` projection repair by default so daily runs only
   replay trailing projection churn
 - automatically reruns a projection-only `exact_parity` reconcile when the
@@ -154,10 +157,18 @@ Preview sync:
 
 - manual only
 - uses the same sync path against the preview Tiger database
-- starts with the same `recent_window` reconcile path and automatic
-  projection-only exact-parity fallback as production
+- uses the same app-change retry, recent-window-first reconcile path, and
+  projection-only exact-parity fallback behavior as production
 - supports the same `projection_repair_scope` input when an operator wants the
   first reconcile pass to use exact parity
+
+Fast preview validation:
+
+- use `.github/workflows/tiger-preview-events-news.yml` when you want to test
+  only the events/news reconcile logic on preview without waiting for legacy or
+  metrics backfills
+- this workflow supports optional table narrowing through
+  `events_news_tables=steam_news_items,app_change_events,steam_news_search_projection`
 
 ## 7. Smoke Test Before Go-Live
 

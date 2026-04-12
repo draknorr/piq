@@ -1,42 +1,47 @@
-name: Tiger Preview Sync
+name: Tiger Preview Events/News
 
 on:
   workflow_dispatch:
     inputs:
-      metrics_lookback_days:
-        description: "How many trailing UTC days to replay into metrics.daily_metrics"
+      events_news_tables:
+        description: "Optional comma-separated EVENTS_NEWS_SYNC_TABLES override"
+        required: false
+        default: ""
+      event_day_lookback:
+        description: "Trailing UTC days to replay for app_change_events"
+        required: false
+        default: "3"
+      news_day_lookback:
+        description: "Trailing UTC days to replay for steam_news_items"
         required: false
         default: "7"
       projection_day_lookback:
-        description: "How many trailing UTC days of projection churn to replay during events/news reconcile"
+        description: "Trailing UTC days of projection churn to consider"
         required: false
         default: "7"
       projection_repair_scope:
         description: "Projection repair scope for events/news reconcile (recent_window or exact_parity)"
         required: false
         default: "recent_window"
-      legacy_tables:
-        description: "Optional comma-separated LEGACY_BACKFILL_TABLES override"
-        required: false
-        default: ""
 
 concurrency:
-  group: tiger-preview-sync
+  group: tiger-preview-events-news
   cancel-in-progress: false
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PREVIEW_URL }}
   DATA_PLANE_STATEMENT_TIMEOUT_MS: "15000"
-  METRICS_LOOKBACK_DAYS: ${{ github.event.inputs.metrics_lookback_days || '7' }}
+  EVENTS_NEWS_TABLES: ${{ github.event.inputs.events_news_tables || '' }}
+  EVENT_DAY_LOOKBACK: ${{ github.event.inputs.event_day_lookback || '3' }}
+  NEWS_DAY_LOOKBACK: ${{ github.event.inputs.news_day_lookback || '7' }}
   PROJECTION_DAY_LOOKBACK: ${{ github.event.inputs.projection_day_lookback || '7' }}
   PROJECTION_REPAIR_SCOPE: ${{ github.event.inputs.projection_repair_scope || 'recent_window' }}
-  LEGACY_BACKFILL_TABLES: ${{ github.event.inputs.legacy_tables || '' }}
 
 jobs:
-  sync:
+  reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -57,16 +62,6 @@ jobs:
       - name: Compute sync windows
         run: |
           echo "TIGER_RUN_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
-          echo "METRICS_BACKFILL_DATE_TO=$(date -u +%F)" >> "$GITHUB_ENV"
-          echo "METRICS_BACKFILL_DATE_FROM=$(date -u -d "${METRICS_LOOKBACK_DAYS} days ago" +%F)" >> "$GITHUB_ENV"
-
-      - name: Backfill legacy compatibility slice
-        run: pnpm tiger:backfill-legacy
-
-      - name: Backfill recent daily metrics
-        run: pnpm tiger:backfill-daily-metrics
-        env:
-          METRICS_BACKFILL_MANIFEST_LABEL: tiger-preview-metrics-${{ github.run_id }}
 
       - name: Reconcile Tiger events and news
         id: reconcile_events_news
@@ -74,18 +69,19 @@ jobs:
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
-          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-reconcile-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
+          EVENTS_NEWS_SYNC_TABLES: ${{ env.EVENTS_NEWS_TABLES }}
 
       - name: Inspect Tiger events/news reconcile manifest
         id: inspect_reconcile_manifest
         if: always()
         env:
-          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
+          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-news-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
           RECONCILE_OUTCOME: ${{ steps.reconcile_events_news.outcome }}
           REQUESTED_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
         run: |
@@ -256,7 +252,7 @@ jobs:
         if: steps.reconcile_events_news.outcome == 'failure' && steps.inspect_reconcile_manifest.outputs.needs_app_change_retry != 'true' && steps.inspect_reconcile_manifest.outputs.needs_exact_parity_fallback != 'true'
         env:
           RECONCILE_CLASSIFICATION: ${{ steps.inspect_reconcile_manifest.outputs.classification }}
-          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
+          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-news-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
         run: |
           {
             echo "Tiger events/news reconcile failed without an eligible recovery path."
@@ -276,10 +272,10 @@ jobs:
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
-          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-reconcile-app-change-retry-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-app-change-retry-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
           EVENTS_NEWS_SYNC_TABLES: app_change_events
@@ -291,10 +287,10 @@ jobs:
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
-          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-validate-app-change-retry-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-validate-app-change-retry-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: validate
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
           EVENTS_NEWS_SYNC_TABLES: app_change_events
@@ -303,7 +299,7 @@ jobs:
         id: inspect_app_change_retry_manifest
         if: always() && steps.inspect_reconcile_manifest.outputs.needs_app_change_retry == 'true'
         env:
-          APP_CHANGE_VALIDATE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-validate-app-change-retry-${{ github.run_id }}/events-news-sync-manifest.json
+          APP_CHANGE_VALIDATE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-news-validate-app-change-retry-${{ github.run_id }}/events-news-sync-manifest.json
         run: |
           node <<'NODE'
           const fs = require('node:fs');
@@ -388,7 +384,7 @@ jobs:
         if: steps.inspect_reconcile_manifest.outputs.needs_app_change_retry == 'true' && steps.inspect_app_change_retry_manifest.outputs.app_change_retry_passed != 'true'
         env:
           APP_CHANGE_RETRY_CLASSIFICATION: ${{ steps.inspect_app_change_retry_manifest.outputs.app_change_retry_classification }}
-          APP_CHANGE_VALIDATE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-validate-app-change-retry-${{ github.run_id }}/events-news-sync-manifest.json
+          APP_CHANGE_VALIDATE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-news-validate-app-change-retry-${{ github.run_id }}/events-news-sync-manifest.json
         run: |
           {
             echo "Tiger app change retry failed."
@@ -406,10 +402,10 @@ jobs:
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
-          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-reconcile-exact-parity-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-reconcile-exact-parity-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: reconcile
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: exact_parity
           EVENTS_NEWS_SYNC_TABLES: steam_news_search_projection
@@ -418,18 +414,19 @@ jobs:
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
-          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
-          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-validate-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: ${{ env.EVENT_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-news-validate-${{ github.run_id }}
           EVENTS_NEWS_SYNC_MODE: validate
-          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: ${{ env.NEWS_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ steps.inspect_reconcile_manifest.outputs.validate_projection_repair_scope }}
+          EVENTS_NEWS_SYNC_TABLES: ${{ env.EVENTS_NEWS_TABLES }}
 
-      - name: Upload Tiger preview sync manifests
+      - name: Upload Tiger preview events/news manifests
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tiger-preview-sync-${{ github.run_id }}
+          name: tiger-preview-events-news-${{ github.run_id }}
           path: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}
           if-no-files-found: ignore
           retention-days: 14
