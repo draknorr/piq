@@ -72,34 +72,27 @@ jobs:
       - name: Capture app change watermark
         id: capture_app_change_watermark
         run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const { Client } = require('pg');
+          pnpm --filter @publisheriq/data-plane exec node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { Client } from 'pg';
 
-          async function main() {
-            const client = new Client({ connectionString: process.env.DATABASE_URL });
+          const client = new Client({ connectionString: process.env.DATABASE_URL });
+
+          try {
             await client.connect();
+            const result = await client.query(
+              'SELECT coalesce(max(id), 0)::text AS max_id FROM public.app_change_events'
+            );
+            const maxId = result.rows[0]?.max_id ?? '0';
 
-            try {
-              const result = await client.query(
-                'SELECT coalesce(max(id), 0)::text AS max_id FROM public.app_change_events'
-              );
-              const maxId = result.rows[0]?.max_id ?? '0';
-
-              fs.appendFileSync(process.env.GITHUB_ENV, `APP_CHANGE_MAX_ID=${maxId}\n`);
-              fs.appendFileSync(
-                process.env.GITHUB_STEP_SUMMARY,
-                `Tiger events/news app change watermark\n\n- app_change_max_id: \`${maxId}\`\n`
-              );
-            } finally {
-              await client.end();
-            }
+            fs.appendFileSync(process.env.GITHUB_ENV, `APP_CHANGE_MAX_ID=${maxId}\n`);
+            fs.appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              `Tiger events/news app change watermark\n\n- app_change_max_id: \`${maxId}\`\n`
+            );
+          } finally {
+            await client.end();
           }
-
-          main().catch((error) => {
-            console.error(error);
-            process.exit(1);
-          });
           NODE
 
       - name: Reconcile Tiger events and news
