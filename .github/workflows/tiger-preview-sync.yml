@@ -69,6 +69,8 @@ jobs:
           METRICS_BACKFILL_MANIFEST_LABEL: tiger-preview-metrics-${{ github.run_id }}
 
       - name: Reconcile Tiger events and news
+        id: reconcile_events_news
+        continue-on-error: true
         run: pnpm tiger:reconcile-events-news
         env:
           DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
@@ -79,6 +81,174 @@ jobs:
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
           EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
 
+      - name: Inspect Tiger events/news reconcile manifest
+        id: inspect_reconcile_manifest
+        if: always()
+        env:
+          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
+          RECONCILE_OUTCOME: ${{ steps.reconcile_events_news.outcome }}
+          REQUESTED_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          const manifestPath = process.env.RECONCILE_MANIFEST_PATH;
+          const reconcileOutcome = process.env.RECONCILE_OUTCOME;
+          const requestedScope = process.env.REQUESTED_PROJECTION_REPAIR_SCOPE ?? 'recent_window';
+
+          function setOutput(name, value) {
+            fs.appendFileSync(outputPath, `${name}=${value}\n`);
+          }
+
+          function appendSummary(line) {
+            if (summaryPath) {
+              fs.appendFileSync(summaryPath, `${line}\n`);
+            }
+          }
+
+          const defaults = {
+            classification: 'initial_reconcile_succeeded',
+            manifest_found: 'false',
+            manifest_parsed: 'false',
+            needs_exact_parity_fallback: 'false',
+            validate_projection_repair_scope: requestedScope,
+          };
+
+          for (const [key, value] of Object.entries(defaults)) {
+            setOutput(key, value);
+          }
+
+          if (reconcileOutcome !== 'failure') {
+            appendSummary(`Initial Tiger events/news reconcile succeeded with scope \`${requestedScope}\`.`);
+            process.exit(0);
+          }
+
+          if (!manifestPath || !fs.existsSync(manifestPath)) {
+            setOutput('classification', 'missing_manifest');
+            appendSummary(
+              `Initial Tiger events/news reconcile failed and did not produce a manifest at \`${manifestPath ?? '(missing path)'}\`.`
+            );
+            process.exit(0);
+          }
+
+          setOutput('manifest_found', 'true');
+
+          let manifest;
+          try {
+            manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          } catch (error) {
+            setOutput('classification', 'malformed_manifest');
+            appendSummary(
+              `Initial Tiger events/news reconcile failed and the manifest at \`${manifestPath}\` could not be parsed: ${error.message}`
+            );
+            process.exit(0);
+          }
+
+          setOutput('manifest_parsed', 'true');
+
+          const tableSummaries = Array.isArray(manifest.tableSummaries) ? manifest.tableSummaries : [];
+          const validations = manifest.validations ?? {};
+          const steamNewsItems = tableSummaries.find(
+            (summary) => summary?.tableName === 'steam_news_items'
+          );
+          const appChangeEvents = tableSummaries.find(
+            (summary) => summary?.tableName === 'app_change_events'
+          );
+          const projection = tableSummaries.find(
+            (summary) => summary?.tableName === 'steam_news_search_projection'
+          );
+
+          const duplicateEventIds = Number(validations.duplicateEventIds ?? Number.NaN);
+          const orphanedNewsItemGids = Number(validations.orphanedNewsItemGids ?? Number.NaN);
+          const projectionRowsMissingNewsItems = Number(
+            validations.projectionRowsMissingNewsItems ?? Number.NaN
+          );
+          const projectionMonthMismatches = Array.isArray(projection?.monthMismatchesAfter)
+            ? projection.monthMismatchesAfter.length
+            : -1;
+          const projectionDayMismatches = Array.isArray(projection?.dayMismatchesAfter)
+            ? projection.dayMismatchesAfter.length
+            : -1;
+
+          const needsExactParityFallback =
+            requestedScope === 'recent_window' &&
+            manifest.success === false &&
+            steamNewsItems?.passed === true &&
+            appChangeEvents?.passed === true &&
+            projection?.passed === false &&
+            projectionMonthMismatches > 0 &&
+            projectionDayMismatches === 0 &&
+            duplicateEventIds === 0 &&
+            orphanedNewsItemGids === 0 &&
+            projectionRowsMissingNewsItems === 0;
+
+          if (needsExactParityFallback) {
+            setOutput('classification', 'historical_projection_drift');
+            setOutput('needs_exact_parity_fallback', 'true');
+            setOutput('validate_projection_repair_scope', 'exact_parity');
+            appendSummary(
+              `Initial Tiger events/news reconcile failed due only to historical projection drift. Running projection-only \`exact_parity\` fallback before final validate.`
+            );
+            process.exit(0);
+          }
+
+          const classification =
+            requestedScope !== 'recent_window'
+              ? 'initial_reconcile_failed_without_recent_window_scope'
+              : steamNewsItems?.passed !== true
+                ? 'steam_news_items_failed'
+                : appChangeEvents?.passed !== true
+                  ? 'app_change_events_failed'
+                  : duplicateEventIds !== 0 ||
+                      orphanedNewsItemGids !== 0 ||
+                      projectionRowsMissingNewsItems !== 0
+                    ? 'integrity_validation_failed'
+                    : projection?.passed !== false
+                      ? 'unexpected_projection_summary'
+                      : projectionDayMismatches > 0
+                        ? 'projection_recent_window_drift'
+                        : projectionMonthMismatches > 0
+                          ? 'projection_nonrecoverable_drift'
+                          : 'reconcile_failed_unknown_shape';
+
+          setOutput('classification', classification);
+          appendSummary(
+            `Initial Tiger events/news reconcile failed without eligible fallback. Classification: \`${classification}\`.`
+          );
+          NODE
+
+      - name: Fail on non-recoverable Tiger events/news reconcile failure
+        if: steps.reconcile_events_news.outcome == 'failure' && steps.inspect_reconcile_manifest.outputs.needs_exact_parity_fallback != 'true'
+        env:
+          RECONCILE_CLASSIFICATION: ${{ steps.inspect_reconcile_manifest.outputs.classification }}
+          RECONCILE_MANIFEST_PATH: docs/reference/tiger-target-baseline/${{ env.TIGER_RUN_DATE }}/tiger-preview-events-reconcile-${{ github.run_id }}/events-news-sync-manifest.json
+        run: |
+          {
+            echo "Tiger events/news reconcile failed without an eligible exact-parity fallback."
+            echo ""
+            echo "- classification: \`${RECONCILE_CLASSIFICATION}\`"
+            echo "- manifest: \`${RECONCILE_MANIFEST_PATH}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Tiger events/news reconcile failed without an eligible exact-parity fallback." >&2
+          echo "classification=${RECONCILE_CLASSIFICATION}" >&2
+          echo "manifest=${RECONCILE_MANIFEST_PATH}" >&2
+          exit 1
+
+      - name: Reconcile Tiger projection exact parity fallback
+        if: steps.inspect_reconcile_manifest.outputs.needs_exact_parity_fallback == 'true'
+        run: pnpm tiger:reconcile-events-news
+        env:
+          DATA_PLANE_STATEMENT_TIMEOUT_MS: "120000"
+          EVENTS_NEWS_SYNC_EVENT_DAY_LOOKBACK: "3"
+          EVENTS_NEWS_SYNC_MANIFEST_LABEL: tiger-preview-events-reconcile-exact-parity-${{ github.run_id }}
+          EVENTS_NEWS_SYNC_MODE: reconcile
+          EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
+          EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
+          EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: exact_parity
+          EVENTS_NEWS_SYNC_TABLES: steam_news_search_projection
+
       - name: Validate Tiger events and news parity
         run: pnpm tiger:reconcile-events-news
         env:
@@ -88,7 +258,7 @@ jobs:
           EVENTS_NEWS_SYNC_MODE: validate
           EVENTS_NEWS_SYNC_NEWS_DAY_LOOKBACK: "7"
           EVENTS_NEWS_SYNC_PROJECTION_DAY_LOOKBACK: ${{ env.PROJECTION_DAY_LOOKBACK }}
-          EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ env.PROJECTION_REPAIR_SCOPE }}
+          EVENTS_NEWS_SYNC_PROJECTION_REPAIR_SCOPE: ${{ steps.inspect_reconcile_manifest.outputs.validate_projection_repair_scope }}
 
       - name: Upload Tiger preview sync manifests
         if: always()

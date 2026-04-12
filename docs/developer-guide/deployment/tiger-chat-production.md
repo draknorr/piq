@@ -139,18 +139,25 @@ Production sync:
 - refreshes the legacy compatibility slice
 - replays the trailing metrics window into `metrics.daily_metrics`
 - reconciles and validates the events/news slice
-- uses `recent_window` projection repair by default so daily runs only replay
-  trailing projection churn
-- supports manual `projection_repair_scope=exact_parity` when a historical
-  projection repair is explicitly required
+- starts with `recent_window` projection repair by default so daily runs only
+  replay trailing projection churn
+- automatically reruns a projection-only `exact_parity` reconcile when the
+  first reconcile fails only because `docs.steam_news_search_projection` still
+  has historical month drift
+- still fails if the fallback path does not converge or any non-projection
+  parity/integrity check fails
+- supports manual `projection_repair_scope=exact_parity` when an operator wants
+  the first reconcile pass to do historical projection repair immediately
 - uploads manifest artifacts for each run
 
 Preview sync:
 
 - manual only
 - uses the same sync path against the preview Tiger database
-- supports the same `projection_repair_scope` input for manual exact-parity
-  projection repair
+- starts with the same `recent_window` reconcile path and automatic
+  projection-only exact-parity fallback as production
+- supports the same `projection_repair_scope` input when an operator wants the
+  first reconcile pass to use exact parity
 
 ## 7. Smoke Test Before Go-Live
 

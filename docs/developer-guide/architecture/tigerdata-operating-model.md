@@ -156,11 +156,14 @@ Important parity expectations:
 - duplicate event IDs remain zero
 - orphaned or projection-missing news rows remain zero
 
-The scheduled production and preview sync workflows use `recent_window`
-projection repair by default so daily runs only chase the trailing projection
-window. Exact historical projection repair remains available, but only when an
-operator explicitly selects `projection_repair_scope=exact_parity` for a manual
-run.
+The scheduled production and preview sync workflows start with
+`recent_window` projection repair by default so normal runs only chase the
+trailing projection window. When the initial reconcile fails only because
+`docs.steam_news_search_projection` still has historical month drift, the
+workflow automatically reruns a projection-only `exact_parity` reconcile before
+the final validate step. Operators can still select
+`projection_repair_scope=exact_parity` to force that historical repair on the
+first reconcile pass.
 
 The exact-parity milestone note remains historical documentation, but the current operational expectation is that these validations continue to gate trust in the Tiger-backed document and change contracts.
 
