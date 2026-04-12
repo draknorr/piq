@@ -118,6 +118,9 @@ Tiger-specific workflows:
   - assumes the Tiger target is already bootstrapped before the refresh job starts
   - refreshes `legacy`, the trailing `metrics.daily_metrics` window, and the
     events/news reconcile surfaces for the production TigerData target
+  - automatically retries one `app_change_events`-only reconcile/validate pass
+    when the initial reconcile fails only because `app_change_events` still
+    has count-only drift and integrity checks remain zero
   - starts with `recent_window` projection repair by default
   - automatically retries a projection-only `exact_parity` reconcile when the
     initial reconcile fails only because historical projection month drift
@@ -128,12 +131,18 @@ Tiger-specific workflows:
   - manual only
   - assumes the preview Tiger target is already bootstrapped
   - runs the same sync path against the preview TigerData target
-  - uses the same recent-window-first and projection-only exact-parity fallback
-    behavior as production
+  - uses the same app-change retry, recent-window-first, and projection-only
+    exact-parity fallback behavior as production
   - supports the same `projection_repair_scope` input to force exact parity on
     the first reconcile pass
+- `tiger-preview-events-news.yml`
+  - manual only
+  - builds the sync packages and runs only the events/news reconcile,
+    recovery, and validate path against preview
+  - supports optional table narrowing and custom lookbacks for fast workflow
+    verification without legacy or metrics backfills
 
-Both workflows upload the generated Tiger manifest directory as a workflow
+All Tiger workflows upload the generated Tiger manifest directory as a workflow
 artifact so you can inspect parity output after each run.
 
 ### From GitHub UI
@@ -182,12 +191,22 @@ gh workflow run steamspy-sync.yml -f max_pages=10
 
 ### Tiger Production / Preview Sync
 
-| Input                     | Default         | Description                                                                                                                                                                                      |
-| ------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `metrics_lookback_days`   | `7`             | Trailing UTC days to replay into `metrics.daily_metrics`                                                                                                                                         |
-| `projection_day_lookback` | `7`             | Trailing UTC days of projection churn to consider when selecting recent-window replay months                                                                                                     |
-| `projection_repair_scope` | `recent_window` | First-pass projection repair scope; `recent_window` auto-falls back to projection-only `exact_parity` for historical projection drift, and `exact_parity` forces that behavior on the first pass |
-| `legacy_tables`           | empty           | Optional comma-separated override for the legacy compatibility slice                                                                                                                             |
+| Input                     | Default         | Description                                                                                                                                                                                                                                                                    |
+| ------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `metrics_lookback_days`   | `7`             | Trailing UTC days to replay into `metrics.daily_metrics`                                                                                                                                                                                                                       |
+| `projection_day_lookback` | `7`             | Trailing UTC days of projection churn to consider when selecting recent-window replay months                                                                                                                                                                                   |
+| `projection_repair_scope` | `recent_window` | First-pass projection repair scope; `recent_window` auto-retries recoverable `app_change_events` count-only drift, auto-falls back to projection-only `exact_parity` for historical projection drift, and `exact_parity` forces historical projection repair on the first pass |
+| `legacy_tables`           | empty           | Optional comma-separated override for the legacy compatibility slice                                                                                                                                                                                                           |
+
+### Tiger Preview Events/News
+
+| Input                     | Default         | Description                                                                                               |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `events_news_tables`      | empty           | Optional comma-separated `EVENTS_NEWS_SYNC_TABLES` override; empty runs all three events/news tables      |
+| `event_day_lookback`      | `3`             | Trailing UTC days to reconcile for `app_change_events`                                                    |
+| `news_day_lookback`       | `7`             | Trailing UTC days to reconcile for `steam_news_items`                                                     |
+| `projection_day_lookback` | `7`             | Trailing UTC days of projection churn to consider during reconcile and validate                           |
+| `projection_repair_scope` | `recent_window` | First-pass projection repair scope; uses the same app-change retry and projection fallback recovery rules |
 
 ## Monitoring
 
