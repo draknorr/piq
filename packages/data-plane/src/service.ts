@@ -80,6 +80,7 @@ import type {
   YoutubeGameCoverageContentMixItem,
   YoutubeGameCoverageCreatorItem,
   YoutubeGameCoverageEntity,
+  YoutubeGameCoveragePagination,
   YoutubeGameCoverageSummary,
   YoutubeGameCoverageVideoItem,
   YoutubeGameCoverageView,
@@ -259,6 +260,7 @@ interface YoutubeCreatorCoverageRow extends QueryResultRow {
 
 interface YoutubeContentMixRow extends QueryResultRow {
   content_class: YoutubeContentClass;
+  current_views: number;
   distinct_upload_channels: number;
   matched_primary_video_count: number;
   matched_video_view_delta: number;
@@ -283,6 +285,11 @@ interface YoutubeCoverageSummaryRow extends QueryResultRow {
   new_matched_videos_1d: number;
   new_matched_videos_30d: number;
   new_matched_videos_7d: number;
+}
+
+interface YoutubeCoveragePage<T> {
+  rows: T[];
+  totalRows: number;
 }
 
 interface ChangeEventRow extends QueryResultRow {
@@ -1102,6 +1109,14 @@ function normalizeLimit(value: number | undefined, fallback: number, max: number
   }
 
   return Math.max(1, Math.min(max, Math.floor(value)));
+}
+
+function normalizeOffset(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function normalizeLikeValue(value: string): string {
@@ -3580,6 +3595,7 @@ export class DataPlaneService {
     const resolvedWindow = this.normalizeYoutubeCoverageWindow(view, request.window ?? null);
     const contentClass = this.normalizeYoutubeContentClass(request.contentClass ?? null);
     const limit = normalizeLimit(request.limit, DEFAULT_YOUTUBE_LIMIT, MAX_YOUTUBE_LIMIT);
+    const offset = normalizeOffset(request.offset);
     const entity = await this.resolveCoreEntity(request.entityUid.trim(), {
       invalidCode: 'INVALID_YOUTUBE_ENTITY_UID',
       notFoundCode: 'YOUTUBE_ENTITY_NOT_FOUND',
@@ -3639,6 +3655,7 @@ export class DataPlaneService {
         entity: responseEntity,
         items: [],
         limit,
+        pagination: null,
         provenance,
         resolvedWindow,
         summary: this.buildEmptyYoutubeCoverageSummary(),
@@ -3668,6 +3685,7 @@ export class DataPlaneService {
         entity: responseEntity,
         items: [],
         limit,
+        pagination: null,
         provenance,
         resolvedWindow,
         summary: this.buildEmptyYoutubeCoverageSummary(),
@@ -3690,6 +3708,7 @@ export class DataPlaneService {
         entity: responseEntity,
         items: [],
         limit,
+        pagination: null,
         provenance,
         resolvedWindow,
         summary: this.buildEmptyYoutubeCoverageSummary(),
@@ -3713,6 +3732,7 @@ export class DataPlaneService {
         entity: responseEntity,
         items: [],
         limit,
+        pagination: null,
         provenance,
         resolvedWindow,
         summary: this.buildEmptyYoutubeCoverageSummary(),
@@ -3726,42 +3746,46 @@ export class DataPlaneService {
     });
     const nonCurrentWindow: Exclude<YoutubeCoverageWindow, 'current'> =
       resolvedWindow === 'current' ? '7d' : resolvedWindow;
-    const latestVideos =
+    const latestVideosPage =
       view === 'latest_videos'
         ? await this.queryYoutubeLatestVideoRows({
             appid,
             contentClass,
             limit,
+            offset,
             window: resolvedWindow,
           })
-        : [];
-    const topVideos =
+        : null;
+    const topVideosPage =
       view === 'top_videos'
         ? await this.queryYoutubeTopVideoRows({
             appid,
             contentClass,
             limit,
+            offset,
             window: resolvedWindow,
           })
-        : [];
-    const growthVideos =
+        : null;
+    const growthVideosPage =
       view === 'video_growth'
         ? await this.queryYoutubeVideoGrowthRows({
             appid,
             contentClass,
             limit,
+            offset,
             window: nonCurrentWindow,
           })
-        : [];
-    const creators =
+        : null;
+    const creatorsPage =
       view === 'creator_coverage'
         ? await this.queryYoutubeCreatorCoverageRows({
             appid,
             contentClass,
             limit,
+            offset,
             window: resolvedWindow,
           })
-        : [];
+        : null;
     const contentMix =
       view === 'content_mix'
         ? await this.queryYoutubeContentMixRows({
@@ -3778,6 +3802,32 @@ export class DataPlaneService {
             window: nonCurrentWindow,
           })
         : null;
+    const pagination =
+      latestVideosPage
+        ? this.buildYoutubePagination({
+            limit,
+            offset,
+            totalRows: latestVideosPage.totalRows,
+          })
+        : topVideosPage
+          ? this.buildYoutubePagination({
+              limit,
+              offset,
+              totalRows: topVideosPage.totalRows,
+            })
+          : growthVideosPage
+            ? this.buildYoutubePagination({
+                limit,
+                offset,
+                totalRows: growthVideosPage.totalRows,
+              })
+            : creatorsPage
+              ? this.buildYoutubePagination({
+                  limit,
+                  offset,
+                  totalRows: creatorsPage.totalRows,
+                })
+              : null;
 
     return this.buildYoutubeCoverageResponse({
       availability: {
@@ -3788,14 +3838,15 @@ export class DataPlaneService {
       cadence,
       contentClass,
       contentMix,
-      creators,
+      creators: creatorsPage?.rows ?? [],
       entity: responseEntity,
-      items: latestVideos.length > 0
-        ? latestVideos
-        : topVideos.length > 0
-          ? topVideos
-          : growthVideos,
+      items: latestVideosPage?.rows.length
+        ? latestVideosPage.rows
+        : topVideosPage?.rows.length
+          ? topVideosPage.rows
+          : growthVideosPage?.rows ?? [],
       limit,
+      pagination,
       provenance,
       resolvedWindow,
       summary,
@@ -10711,6 +10762,7 @@ export class DataPlaneService {
     entity: YoutubeGameCoverageEntity;
     items: YoutubeGameCoverageVideoItem[];
     limit: number;
+    pagination: YoutubeGameCoveragePagination | null;
     provenance: QueryProvenance;
     resolvedWindow: YoutubeCoverageWindow;
     summary: YoutubeGameCoverageSummary;
@@ -10734,6 +10786,7 @@ export class DataPlaneService {
       entity: params.entity,
       items: params.items,
       limit: params.limit,
+      pagination: params.pagination,
       provenance: params.provenance,
       resolvedWindow: params.resolvedWindow,
       sufficientToAnswer,
@@ -10754,6 +10807,20 @@ export class DataPlaneService {
       newMatchedVideos1d: 0,
       newMatchedVideos30d: 0,
       newMatchedVideos7d: 0,
+    };
+  }
+
+  private buildYoutubePagination(params: {
+    limit: number;
+    offset: number;
+    totalRows: number;
+  }): YoutubeGameCoveragePagination {
+    return {
+      hasNextPage: params.offset + params.limit < params.totalRows,
+      hasPreviousPage: params.offset > 0,
+      limit: params.limit,
+      offset: params.offset,
+      totalRows: params.totalRows,
     };
   }
 
@@ -10941,30 +11008,43 @@ export class DataPlaneService {
     appid: number;
     contentClass: YoutubeContentClass | null;
     limit: number;
+    offset: number;
     window: YoutubeCoverageWindow;
-  }): Promise<YoutubeGameCoverageVideoItem[]> {
-    return this.queryYoutubeRankedVideoRows({
-      ...params,
-      orderBy: 'v.published_at DESC NULLS LAST, v.video_id ASC',
-    });
+  }): Promise<YoutubeCoveragePage<YoutubeGameCoverageVideoItem>> {
+    const [rows, totalRows] = await Promise.all([
+      this.queryYoutubeRankedVideoRows({
+        ...params,
+        orderBy: 'v.published_at DESC NULLS LAST, v.video_id ASC',
+      }),
+      this.queryYoutubeRankedVideoRowCount(params),
+    ]);
+
+    return { rows, totalRows };
   }
 
   private async queryYoutubeTopVideoRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
     limit: number;
+    offset: number;
     window: YoutubeCoverageWindow;
-  }): Promise<YoutubeGameCoverageVideoItem[]> {
-    return this.queryYoutubeRankedVideoRows({
-      ...params,
-      orderBy: 'view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC',
-    });
+  }): Promise<YoutubeCoveragePage<YoutubeGameCoverageVideoItem>> {
+    const [rows, totalRows] = await Promise.all([
+      this.queryYoutubeRankedVideoRows({
+        ...params,
+        orderBy: 'view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC',
+      }),
+      this.queryYoutubeRankedVideoRowCount(params),
+    ]);
+
+    return { rows, totalRows };
   }
 
   private async queryYoutubeRankedVideoRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
     limit: number;
+    offset: number;
     orderBy: string;
     window: YoutubeCoverageWindow;
   }): Promise<YoutubeGameCoverageVideoItem[]> {
@@ -11011,25 +11091,52 @@ export class DataPlaneService {
           ${this.youtubePublishedWindowPredicate('v', params.window)}
         ORDER BY ${params.orderBy}
         LIMIT $3
+        OFFSET $4
       `,
-      [params.appid, params.contentClass, params.limit],
+      [params.appid, params.contentClass, params.limit, params.offset],
       this.config
     );
 
     return result.rows.map((row) => this.mapYoutubeVideoItem(row));
   }
 
+  private async queryYoutubeRankedVideoRowCount(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: YoutubeCoverageWindow;
+  }): Promise<number> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const result = await runQuery<{ total_rows: number }>(
+      `
+        SELECT count(*)::int AS total_rows
+        FROM ${matchesTable} m
+        JOIN ${videosTable} v ON v.video_id = m.video_id
+        WHERE m.appid = $1
+          AND m.match_state = 'matched_primary'
+          AND ($2::text IS NULL OR v.content_class = $2::text)
+          ${this.youtubePublishedWindowPredicate('v', params.window)}
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    return result.rows[0]?.total_rows ?? 0;
+  }
+
   private async queryYoutubeVideoGrowthRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
     limit: number;
+    offset: number;
     window: Exclude<YoutubeCoverageWindow, 'current'>;
-  }): Promise<YoutubeGameCoverageVideoItem[]> {
+  }): Promise<YoutubeCoveragePage<YoutubeGameCoverageVideoItem>> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
     const channelsTable = this.relation('docs_youtube_channels').sql;
     const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
-    const result = await runQuery<YoutubeVideoCoverageRow>(
+    const [result, totalRows] = await Promise.all([
+      runQuery<YoutubeVideoCoverageRow>(
       `
         WITH scoped_snapshots AS (
           SELECT
@@ -11084,25 +11191,33 @@ export class DataPlaneService {
         WHERE GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0) > 0
         ORDER BY view_delta DESC, view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC
         LIMIT $3
+        OFFSET $4
       `,
-      [params.appid, params.contentClass, params.limit],
+      [params.appid, params.contentClass, params.limit, params.offset],
       this.config
-    );
+    ),
+      this.queryYoutubeVideoGrowthRowCount(params),
+    ]);
 
-    return result.rows.map((row) => this.mapYoutubeVideoItem(row));
+    return {
+      rows: result.rows.map((row) => this.mapYoutubeVideoItem(row)),
+      totalRows,
+    };
   }
 
   private async queryYoutubeCreatorCoverageRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
     limit: number;
+    offset: number;
     window: YoutubeCoverageWindow;
-  }): Promise<YoutubeGameCoverageCreatorItem[]> {
+  }): Promise<YoutubeCoveragePage<YoutubeGameCoverageCreatorItem>> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
     const channelsTable = this.relation('docs_youtube_channels').sql;
     const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
-    const result = await runQuery<YoutubeCreatorCoverageRow>(
+    const [result, totalRows] = await Promise.all([
+      runQuery<YoutubeCreatorCoverageRow>(
       `
         WITH latest_snapshots AS (
           SELECT DISTINCT ON (s.video_id)
@@ -11136,20 +11251,96 @@ export class DataPlaneService {
           latest_matched_upload_at DESC NULLS LAST,
           channel_title ASC
         LIMIT $3
+        OFFSET $4
       `,
-      [params.appid, params.contentClass, params.limit],
+      [params.appid, params.contentClass, params.limit, params.offset],
+      this.config
+    ),
+      this.queryYoutubeCreatorCoverageRowCount(params),
+    ]);
+
+    return {
+      rows: result.rows.map((row) => ({
+        channelCountry: row.channel_country,
+        channelId: row.channel_id,
+        channelSubscriberCount: row.channel_subscriber_count,
+        channelTitle: row.channel_title,
+        latestMatchedUploadAt: row.latest_matched_upload_at,
+        matchedVideoCount: row.matched_video_count,
+        totalMatchedViews: row.total_matched_views,
+      })),
+      totalRows,
+    };
+  }
+
+  private async queryYoutubeVideoGrowthRowCount(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: Exclude<YoutubeCoverageWindow, 'current'>;
+  }): Promise<number> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
+    const result = await runQuery<{ total_rows: number }>(
+      `
+        WITH scoped_snapshots AS (
+          SELECT
+            s.video_id,
+            MIN(s.snapshot_time) AS first_snapshot_at,
+            MAX(s.snapshot_time) AS last_snapshot_at
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+            ${this.youtubeSnapshotWindowPredicate('s', params.window)}
+          GROUP BY s.video_id
+          HAVING MIN(s.snapshot_time) < MAX(s.snapshot_time)
+        )
+        SELECT count(*)::int AS total_rows
+        FROM scoped_snapshots scoped
+        JOIN ${matchesTable} m
+          ON m.video_id = scoped.video_id
+         AND m.appid = $1
+         AND m.match_state = 'matched_primary'
+        JOIN ${snapshotsTable} first_snapshot
+          ON first_snapshot.video_id = scoped.video_id
+         AND first_snapshot.snapshot_time = scoped.first_snapshot_at
+        JOIN ${snapshotsTable} last_snapshot
+          ON last_snapshot.video_id = scoped.video_id
+         AND last_snapshot.snapshot_time = scoped.last_snapshot_at
+        WHERE GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0) > 0
+      `,
+      [params.appid, params.contentClass],
       this.config
     );
 
-    return result.rows.map((row) => ({
-      channelCountry: row.channel_country,
-      channelId: row.channel_id,
-      channelSubscriberCount: row.channel_subscriber_count,
-      channelTitle: row.channel_title,
-      latestMatchedUploadAt: row.latest_matched_upload_at,
-      matchedVideoCount: row.matched_video_count,
-      totalMatchedViews: row.total_matched_views,
-    }));
+    return result.rows[0]?.total_rows ?? 0;
+  }
+
+  private async queryYoutubeCreatorCoverageRowCount(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: YoutubeCoverageWindow;
+  }): Promise<number> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const result = await runQuery<{ total_rows: number }>(
+      `
+        SELECT count(*)::int AS total_rows
+        FROM (
+          SELECT v.channel_id
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          WHERE m.appid = $1
+            AND m.match_state = 'matched_primary'
+            AND ($2::text IS NULL OR v.content_class = $2::text)
+            ${this.youtubePublishedWindowPredicate('v', params.window)}
+          GROUP BY v.channel_id
+        ) grouped_channels
+      `,
+      [params.appid, params.contentClass],
+      this.config
+    );
+
+    return result.rows[0]?.total_rows ?? 0;
   }
 
   private async queryYoutubeContentMixRows(params: {
@@ -11159,6 +11350,7 @@ export class DataPlaneService {
   }): Promise<YoutubeGameCoverageContentMixItem[]> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
     const deltaByClass = await this.queryYoutubeViewDeltaByContentClass({
       appid: params.appid,
       contentClass: params.contentClass,
@@ -11169,12 +11361,23 @@ export class DataPlaneService {
         WITH content_classes AS (
           SELECT unnest(ARRAY['standard_video', 'short', 'live_or_recent_live']::text[]) AS content_class
         ),
+        latest_snapshots AS (
+          SELECT DISTINCT ON (s.video_id)
+            s.video_id,
+            s.view_count
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+          ORDER BY s.video_id, s.snapshot_time DESC
+        ),
         matched_totals AS (
           SELECT
             v.content_class,
-            count(*)::int AS matched_primary_video_count
+            count(*)::int AS matched_primary_video_count,
+            COALESCE(sum(COALESCE(v.view_count, latest_snapshots.view_count, 0)), 0)::bigint AS current_views
           FROM ${matchesTable} m
           JOIN ${videosTable} v ON v.video_id = m.video_id
+          LEFT JOIN latest_snapshots ON latest_snapshots.video_id = v.video_id
           WHERE m.appid = $1
             AND m.match_state = 'matched_primary'
           GROUP BY v.content_class
@@ -11193,6 +11396,7 @@ export class DataPlaneService {
         )
         SELECT
           cc.content_class::text,
+          COALESCE(mt.current_views, 0) AS current_views,
           COALESCE(mt.matched_primary_video_count, 0) AS matched_primary_video_count,
           COALESCE(wr.new_matched_videos, 0) AS new_matched_videos,
           COALESCE(wr.distinct_upload_channels, 0) AS distinct_upload_channels,
@@ -11215,6 +11419,7 @@ export class DataPlaneService {
     return result.rows
       .map((row) => ({
         contentClass: row.content_class,
+        currentViews: row.current_views ?? 0,
         distinctUploadChannels: row.distinct_upload_channels,
         matchedPrimaryVideoCount: row.matched_primary_video_count,
         matchedVideoViewDelta: deltaByClass.get(row.content_class) ?? 0,

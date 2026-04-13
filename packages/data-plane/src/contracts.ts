@@ -1141,6 +1141,7 @@ export interface GetYoutubeGameCoverageRequest {
   contentClass?: YoutubeContentClass | null;
   entityUid: string;
   limit?: number;
+  offset?: number;
   view: YoutubeGameCoverageView;
   window?: YoutubeCoverageWindow | null;
 }
@@ -1178,6 +1179,7 @@ export interface YoutubeGameCoverageCreatorItem {
 
 export interface YoutubeGameCoverageContentMixItem {
   contentClass: YoutubeContentClass;
+  currentViews: number;
   distinctUploadChannels: number;
   matchedPrimaryVideoCount: number;
   matchedVideoViewDelta: number;
@@ -1219,6 +1221,14 @@ export interface YoutubeGameCoverageAvailability {
   state: 'ready' | 'blocked' | 'unavailable';
 }
 
+export interface YoutubeGameCoveragePagination {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  limit: number;
+  offset: number;
+  totalRows: number;
+}
+
 export interface GetYoutubeGameCoverageResponse {
   availability: YoutubeGameCoverageAvailability;
   contentClass: YoutubeContentClass | null;
@@ -1226,6 +1236,7 @@ export interface GetYoutubeGameCoverageResponse {
   entity: YoutubeGameCoverageEntity;
   items: YoutubeGameCoverageVideoItem[];
   limit: number;
+  pagination?: YoutubeGameCoveragePagination | null;
   provenance: QueryProvenance;
   resolvedWindow: YoutubeCoverageWindow;
   sufficientToAnswer: boolean;

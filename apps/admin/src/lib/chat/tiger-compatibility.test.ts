@@ -7290,7 +7290,7 @@ test('Tiger primary routes generic latest-video prompts to YouTube when they cle
         contentClass: 'standard_video',
         publishedAt: '2026-04-07T07:56:34.000Z',
         title: 'ARC Raiders Just Buffed This Key Room',
-        viewCount: 32037,
+        viewCount: null,
       }],
       limit: 10,
       resolvedWindow: 'current',
@@ -7322,6 +7322,8 @@ test('Tiger primary routes generic latest-video prompts to YouTube when they cle
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /Latest YouTube videos for ARC Raiders/);
+  assert.match(result.renderedText ?? '', /\| Video \| Channel \| Published \| Views \| Format \|/);
+  assert.match(result.renderedText ?? '', /\| n\/a \| Standard video \|/);
 });
 
 test('Tiger primary routes generic creator-coverage prompts to YouTube with a weekly window', async (t) => {
@@ -7375,7 +7377,7 @@ test('Tiger primary routes generic creator-coverage prompts to YouTube with a we
         channelTitle: 'Creator One',
         latestMatchedUploadAt: '2026-04-07T07:56:34.000Z',
         matchedVideoCount: 4,
-        totalMatchedViews: 98000,
+        totalMatchedViews: null,
       }],
       entity: {
         displayName: 'ARC Raiders',
@@ -7415,6 +7417,8 @@ test('Tiger primary routes generic creator-coverage prompts to YouTube with a we
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube creator coverage for ARC Raiders in the last 7 days/);
+  assert.match(result.renderedText ?? '', /\| Channel \| Videos \| Views \| Subscribers \| Latest Upload \|/);
+  assert.match(result.renderedText ?? '', /\| Creator One \| 4 \| n\/a \| 120K \|/);
 });
 
 test('Tiger primary routes cadence prompts to YouTube with a 14-day window', async (t) => {
@@ -7564,12 +7568,14 @@ test('Tiger primary routes generic content-mix prompts to YouTube with a monthly
       contentClass: null,
       contentMix: [{
         contentClass: 'standard_video',
+        currentViews: 880000,
         distinctUploadChannels: 12,
         matchedPrimaryVideoCount: 44,
         matchedVideoViewDelta: 120000,
         newMatchedVideos: 18,
       }, {
         contentClass: 'short',
+        currentViews: 1200000,
         distinctUploadChannels: 19,
         matchedPrimaryVideoCount: 31,
         matchedVideoViewDelta: 240000,
@@ -7614,9 +7620,9 @@ test('Tiger primary routes generic content-mix prompts to YouTube with a monthly
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube content mix for ARC Raiders in the last 30 days/);
-  assert.match(result.renderedText ?? '', /\| Format \| Videos \| New Videos \| Channels \| View Delta \|/);
-  assert.match(result.renderedText ?? '', /\| Standard video \| 44 \| 18 \| 12 \| 120K \|/);
-  assert.match(result.renderedText ?? '', /\| Shorts \| 31 \| 26 \| 19 \| 240K \|/);
+  assert.match(result.renderedText ?? '', /\| Format \| Videos \| New Videos \| Channels \| Views \| View Delta \|/);
+  assert.match(result.renderedText ?? '', /\| Standard video \| 44 \| 18 \| 12 \| 880K \| 120K \|/);
+  assert.match(result.renderedText ?? '', /\| Shorts \| 31 \| 26 \| 19 \| 1M \| 240K \|/);
 });
 
 test('Tiger primary routes generic most-viewed prompts to YouTube top videos with a 3-day window', async (t) => {

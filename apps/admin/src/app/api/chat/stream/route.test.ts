@@ -1743,6 +1743,90 @@ const TIGER_PRIMARY_SUCCESS_CASES = [
     testName: 'metric history',
   },
   {
+    attemptContract: 'getYoutubeGameCoverage',
+    contractResult: {
+      contractName: 'getYoutubeGameCoverage' as const,
+      request: {
+        entityUid: '29e00ab0-9557-57e7-bae5-19d19d27c711',
+        limit: 10,
+        offset: 0,
+        view: 'latest_videos',
+        window: '7d',
+      },
+      response: {
+        availability: {
+          blockingTables: [],
+          reason: null,
+          state: 'ready',
+        },
+        cadence: null,
+        contentClass: null,
+        contentMix: [],
+        creators: [],
+        entity: {
+          displayName: 'Hades',
+          entityKind: 'game',
+          entityUid: '29e00ab0-9557-57e7-bae5-19d19d27c711',
+          platform: 'steam',
+          platformEntityId: '1145360',
+        },
+        items: [
+          {
+            channelCountry: 'US',
+            channelId: 'channel-1',
+            channelSubscriberCount: 240000,
+            channelTitle: 'Creator One',
+            commentCount: 44,
+            confidenceScore: 0.99,
+            contentClass: 'standard_video',
+            firstSnapshotAt: null,
+            growthPct: null,
+            lastSnapshotAt: null,
+            likeCount: 550,
+            matchedAlias: 'Hades',
+            publishedAt: '2026-04-12T07:00:00.000Z',
+            title: 'Hades Build Guide',
+            url: 'https://www.youtube.com/watch?v=video-1',
+            videoId: 'video-1',
+            viewCount: 32037,
+            viewDelta: null,
+          },
+        ],
+        limit: 10,
+        pagination: {
+          hasNextPage: true,
+          hasPreviousPage: false,
+          limit: 10,
+          offset: 0,
+          totalRows: 14,
+        },
+        provenance: {
+          capturedAt: '2026-04-12T00:00:00.000Z',
+          dataSources: ['query_api:getYoutubeGameCoverage'],
+        },
+        resolvedWindow: '7d',
+        sufficientToAnswer: true,
+        summary: {
+          distinctUploadChannels30d: 22,
+          distinctUploadChannels7d: 12,
+          freshestMatchedUploadAt: '2026-04-12T07:00:00.000Z',
+          latestSnapshotAt: '2026-04-12T08:00:00.000Z',
+          matchedPrimaryVideoCount: 40,
+          matchedVideoViewDelta1d: 12000,
+          matchedVideoViewDelta7d: 48000,
+          newMatchedVideos1d: 4,
+          newMatchedVideos30d: 40,
+          newMatchedVideos7d: 19,
+        },
+        view: 'latest_videos',
+      },
+    },
+    matchedIntent: 'youtube_game_activity' as const,
+    prompt: 'show the latest YouTube videos for Hades in the last 7 days',
+    renderedText: 'Here are the latest YouTube videos for Hades.',
+    testName: 'YouTube latest videos',
+  },
+  {
     attemptContract: 'searchDocuments',
     contractResult: null,
     matchedIntent: 'news_search' as const,
@@ -1835,6 +1919,34 @@ for (const testCase of TIGER_PRIMARY_SUCCESS_CASES) {
         ],
         startDate: '2026-03-01',
       });
+    }
+    if (testCase.contractResult?.contractName === 'getYoutubeGameCoverage') {
+      const youtubeRenderData = endEvent.renderData;
+      assert.ok(youtubeRenderData && youtubeRenderData.kind === 'youtube_game_activity');
+      if (!youtubeRenderData || youtubeRenderData.kind !== 'youtube_game_activity') {
+        assert.fail('Expected YouTube game activity render data');
+      }
+
+      assert.equal(youtubeRenderData.request.entityUid, '29e00ab0-9557-57e7-bae5-19d19d27c711');
+      assert.equal(youtubeRenderData.request.view, 'latest_videos');
+      assert.equal(youtubeRenderData.request.window, '7d');
+      assert.deepEqual(youtubeRenderData.pagination, {
+        hasNextPage: true,
+        hasPreviousPage: false,
+        limit: 10,
+        offset: 0,
+        totalRows: 14,
+      });
+      assert.deepEqual(youtubeRenderData.table.columns.map((column) => column.label), [
+        'Video',
+        'Channel',
+        'Published',
+        'Views',
+        'Format',
+      ]);
+      assert.equal(youtubeRenderData.table.rows[0]?.cells[0]?.href, 'https://www.youtube.com/watch?v=video-1');
+      assert.equal(youtubeRenderData.table.rows[0]?.cells[1]?.href, 'https://www.youtube.com/channel/channel-1');
+      assert.equal(youtubeRenderData.table.rows[0]?.cells[3]?.text, '32,037');
     }
     if (testCase.contractResult?.contractName === 'compareEntities') {
       assert.equal(endEvent.sessionContext?.candidateSet?.sourceTool, 'compareEntities');

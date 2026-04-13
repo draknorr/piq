@@ -634,6 +634,7 @@ interface GetYoutubeGameCoverageRequest {
   contentClass?: YoutubeContentClass | null;
   entityUid: string;
   limit?: number;
+  offset?: number;
   view: YoutubeCoverageView;
   window?: YoutubeCoverageWindow | null;
 }
@@ -654,6 +655,7 @@ interface GetYoutubeGameCoverageResponse {
   contentClass?: YoutubeContentClass | null;
   contentMix?: Array<{
     contentClass?: YoutubeContentClass;
+    currentViews?: number;
     distinctUploadChannels?: number;
     matchedPrimaryVideoCount?: number;
     matchedVideoViewDelta?: number;
@@ -696,6 +698,13 @@ interface GetYoutubeGameCoverageResponse {
     viewDelta?: number | null;
   }>;
   limit?: number;
+  pagination?: {
+    hasNextPage?: boolean;
+    hasPreviousPage?: boolean;
+    limit?: number;
+    offset?: number;
+    totalRows?: number;
+  } | null;
   resolvedWindow?: YoutubeCoverageWindow;
   sufficientToAnswer?: boolean;
   summary?: {
@@ -9969,21 +9978,20 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
 
   if (response.view === 'creator_coverage') {
     const rows = (response.creators ?? []).slice(0, response.limit ?? 10);
-    const hasCurrentMatchedViews = rows.some((row) => hasYoutubeNumericMetric(row.totalMatchedViews ?? null));
     const hasSubscribers = rows.some((row) => hasYoutubeNumericMetric(row.channelSubscriberCount ?? null));
     const body = rows.length > 0
       ? buildYoutubeMarkdownTable(
           [
             'Channel',
             'Videos',
-            ...(hasCurrentMatchedViews ? ['Views'] : []),
+            'Views',
             ...(hasSubscribers ? ['Subscribers'] : []),
             'Latest Upload',
           ],
           rows.map((row) => [
             formatYoutubeChannelLink(row),
             formatYoutubeMetric(row.matchedVideoCount ?? null),
-            ...(hasCurrentMatchedViews ? [formatYoutubeMetric(row.totalMatchedViews ?? null)] : []),
+            formatYoutubeMetric(row.totalMatchedViews ?? null),
             ...(hasSubscribers ? [formatYoutubeMetric(row.channelSubscriberCount ?? null)] : []),
             formatYoutubeDate(row.latestMatchedUploadAt),
           ])
@@ -9997,12 +10005,13 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
     const rows = response.contentMix ?? [];
     const body = rows.length > 0
       ? buildYoutubeMarkdownTable(
-          ['Format', 'Videos', 'New Videos', 'Channels', 'View Delta'],
+          ['Format', 'Videos', 'New Videos', 'Channels', 'Views', 'View Delta'],
           rows.map((row) => [
             formatYoutubeContentClassTableLabel(row.contentClass),
             formatYoutubeMetric(row.matchedPrimaryVideoCount ?? null),
             formatYoutubeMetric(row.newMatchedVideos ?? null),
             formatYoutubeMetric(row.distinctUploadChannels ?? null),
+            formatYoutubeMetric(row.currentViews ?? null),
             formatYoutubeMetric(row.matchedVideoViewDelta ?? null),
           ])
         )
@@ -10035,9 +10044,7 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
             detailRows.push(['New videos', formatYoutubeMetric(cadence.newMatchedVideos)]);
           }
 
-          if (hasYoutubeNumericMetric(cadence.viewsOnNewVideos)) {
-            detailRows.push(['Current views', formatYoutubeMetric(cadence.viewsOnNewVideos)]);
-          }
+          detailRows.push(['Current views', formatYoutubeMetric(cadence.viewsOnNewVideos)]);
 
           if (hasYoutubeNumericMetric(cadence.matchedVideoViewDelta)) {
             detailRows.push(['View delta', formatYoutubeMetric(cadence.matchedVideoViewDelta)]);
@@ -10055,7 +10062,6 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
   }
 
   const rows = (response.items ?? []).slice(0, response.limit ?? 10);
-  const hasViewCounts = rows.some((row) => hasYoutubeNumericMetric(row.viewCount ?? null));
   const body = rows.length > 0
     ? response.view === 'video_growth'
       ? buildYoutubeMarkdownTable(
@@ -10065,7 +10071,7 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
             'Published',
             'View Delta',
             'Growth',
-            ...(hasViewCounts ? ['Views'] : []),
+            'Views',
             'Format',
           ],
           rows.map((row) => [
@@ -10074,17 +10080,17 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
             formatYoutubeDate(row.publishedAt),
             formatYoutubeMetric(row.viewDelta ?? null),
             formatYoutubePercent(row.growthPct ?? null),
-            ...(hasViewCounts ? [formatYoutubeMetric(row.viewCount ?? null)] : []),
+            formatYoutubeMetric(row.viewCount ?? null),
             formatYoutubeContentClassTableLabel(row.contentClass),
           ])
         )
       : buildYoutubeMarkdownTable(
-          ['Video', 'Channel', 'Published', ...(hasViewCounts ? ['Views'] : []), 'Format'],
+          ['Video', 'Channel', 'Published', 'Views', 'Format'],
           rows.map((row) => [
             formatYoutubeVideoLink(row),
             formatYoutubeChannelLink(row),
             formatYoutubeDate(row.publishedAt),
-            ...(hasViewCounts ? [formatYoutubeMetric(row.viewCount ?? null)] : []),
+            formatYoutubeMetric(row.viewCount ?? null),
             formatYoutubeContentClassTableLabel(row.contentClass),
           ])
         )

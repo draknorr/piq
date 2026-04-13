@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AreaChartComponent, PlatformIcons, TrendSparkline } from '@/components/data-display';
 import type {
@@ -9,7 +9,9 @@ import type {
   ChatHistoryMetric,
   ChatMetricHistorySeries,
   ChatRenderData,
+  ChatYoutubeGameActivityRenderData,
 } from '@/lib/chat/chat-render-data';
+import { buildTigerChatRenderData } from '@/lib/chat/chat-render-data';
 import type { ChatEntityPickerEntity, ChatEntityPickerResponse } from '@/lib/chat/chat-entity-picker';
 import type { ChatRequestOptions } from '@/lib/llm/types';
 
@@ -289,6 +291,181 @@ function MomentumCurrentPlayersVisual({
   );
 }
 
+interface ChatYoutubeCoverageApiResponse {
+  error?: string;
+  result?: unknown | null;
+  success: boolean;
+}
+
+function formatYoutubePaginationLabel(
+  renderData: ChatYoutubeGameActivityRenderData
+): string | null {
+  const pagination = renderData.pagination;
+  if (!pagination || pagination.totalRows <= 0) {
+    return null;
+  }
+
+  const rangeStart = Math.min(pagination.totalRows, pagination.offset + 1);
+  const rangeEnd = Math.min(
+    pagination.totalRows,
+    pagination.offset + renderData.table.rows.length
+  );
+
+  return `Showing ${rangeStart.toLocaleString('en-US')}-${rangeEnd.toLocaleString('en-US')} of ${pagination.totalRows.toLocaleString('en-US')}`;
+}
+
+function YoutubeGameActivityVisual({
+  renderData,
+}: {
+  renderData: Extract<ChatRenderData, { kind: 'youtube_game_activity' }>;
+}): ReactNode {
+  const [currentRenderData, setCurrentRenderData] = useState(renderData);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
+
+  useEffect(() => {
+    setCurrentRenderData(renderData);
+    setIsLoadingPage(false);
+  }, [renderData]);
+
+  const handlePageChange = useCallback(async (nextOffset: number) => {
+    if (isLoadingPage || nextOffset < 0) {
+      return;
+    }
+
+    setIsLoadingPage(true);
+
+    try {
+      const response = await fetch('/api/chat/youtube-coverage', {
+        body: JSON.stringify({
+          ...currentRenderData.request,
+          offset: nextOffset,
+        }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as ChatYoutubeCoverageApiResponse;
+      if (!payload.success || !payload.result) {
+        throw new Error(payload.error ?? 'Unable to load YouTube coverage');
+      }
+
+      const nextRenderData = buildTigerChatRenderData({
+        contractName: 'getYoutubeGameCoverage',
+        response: payload.result,
+      });
+
+      if (nextRenderData?.kind === 'youtube_game_activity') {
+        setCurrentRenderData(nextRenderData);
+      }
+    } catch {
+      // Keep the current page visible if inline pagination fails.
+    } finally {
+      setIsLoadingPage(false);
+    }
+  }, [currentRenderData, isLoadingPage]);
+
+  if (currentRenderData.table.rows.length === 0) {
+    return null;
+  }
+
+  const pagination = currentRenderData.pagination;
+  const showPagination = Boolean(
+    pagination && (pagination.hasPreviousPage || pagination.hasNextPage)
+  );
+  const paginationLabel = formatYoutubePaginationLabel(currentRenderData);
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-border-subtle bg-surface-base/70 p-4">
+      <div className="chat-response-table-shell my-0">
+        <div className="chat-response-table-scroll">
+          <table className="chat-response-table">
+            <thead>
+              <tr>
+                {currentRenderData.table.columns.map((column) => (
+                  <th
+                    key={`${currentRenderData.view}-${column.label}`}
+                    data-align={column.align ?? (column.numeric ? 'right' : 'left')}
+                    scope="col"
+                  >
+                    {column.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {currentRenderData.table.rows.map((row) => (
+                <tr key={row.key}>
+                  {row.cells.map((cell, index) => {
+                    const column = currentRenderData.table.columns[index];
+                    const align = column?.align ?? (column?.numeric ? 'right' : 'left');
+
+                    return (
+                      <td
+                        key={`${row.key}-${index}`}
+                        data-align={align}
+                        data-cell-kind={column?.numeric ? 'numeric' : undefined}
+                      >
+                        {cell.href ? (
+                          <a
+                            href={cell.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="chat-accent-link"
+                          >
+                            {cell.text}
+                          </a>
+                        ) : (
+                          cell.text
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {showPagination && pagination && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle/80 bg-surface-raised/70 px-4 py-3">
+            <p className="text-caption text-text-muted">
+              {paginationLabel}
+            </p>
+            <div className="flex items-center gap-2">
+              {pagination.hasPreviousPage && (
+                <button
+                  type="button"
+                  onClick={() => void handlePageChange(Math.max(0, pagination.offset - pagination.limit))}
+                  disabled={isLoadingPage}
+                  className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-base px-3 py-1.5 text-caption font-medium text-text-secondary transition-colors hover:border-border-muted hover:text-text-primary disabled:cursor-default disabled:opacity-60"
+                >
+                  Previous
+                </button>
+              )}
+              {pagination.hasNextPage && (
+                <button
+                  type="button"
+                  onClick={() => void handlePageChange(pagination.offset + pagination.limit)}
+                  disabled={isLoadingPage}
+                  className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-base px-3 py-1.5 text-caption font-medium text-text-secondary transition-colors hover:border-border-muted hover:text-text-primary disabled:cursor-default disabled:opacity-60"
+                >
+                  {isLoadingPage ? 'Loading...' : 'Next'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function clarificationTierLabel(candidate: ChatEntityClarificationCandidate): string {
   switch (candidate.resolutionTier) {
     case 'platform_id_exact':
@@ -547,6 +724,10 @@ export function ChatStructuredVisuals({
 
   if (renderData.kind === 'momentum_current_players') {
     return <MomentumCurrentPlayersVisual renderData={renderData} />;
+  }
+
+  if (renderData.kind === 'youtube_game_activity') {
+    return <YoutubeGameActivityVisual renderData={renderData} />;
   }
 
   if (renderData.kind === 'entity_clarification') {

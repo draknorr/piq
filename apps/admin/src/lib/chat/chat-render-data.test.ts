@@ -138,6 +138,166 @@ test('buildTigerChatRenderData maps metric-history responses to chart render dat
   });
 });
 
+test('buildTigerChatRenderData maps YouTube latest-video responses to structured paginated tables', () => {
+  const renderData = buildTigerChatRenderData({
+    contractName: 'getYoutubeGameCoverage',
+    response: {
+      availability: { blockingTables: [], reason: null, state: 'ready' },
+      entity: {
+        displayName: 'ARC Raiders',
+        entityKind: 'game',
+        entityUid: 'steam:game:1149460',
+        platform: 'steam',
+        platformEntityId: '1149460',
+      },
+      items: [
+        {
+          channelId: 'channel-1',
+          channelTitle: 'Creator One',
+          contentClass: 'standard_video',
+          publishedAt: '2026-04-12T07:00:00.000Z',
+          title: 'ARC Raiders Just Buffed This Key Room',
+          url: 'https://www.youtube.com/watch?v=video-1',
+          videoId: 'video-1',
+          viewCount: 32037,
+        },
+      ],
+      limit: 10,
+      pagination: {
+        hasNextPage: true,
+        hasPreviousPage: false,
+        limit: 10,
+        offset: 0,
+        totalRows: 12,
+      },
+      resolvedWindow: '7d',
+      view: 'latest_videos',
+    },
+  });
+
+  if (!renderData || renderData.kind !== 'youtube_game_activity') {
+    assert.fail('Expected YouTube game activity render data');
+  }
+
+  assert.equal(renderData.request.entityUid, 'steam:game:1149460');
+  assert.equal(renderData.request.limit, 10);
+  assert.equal(renderData.request.offset, 0);
+  assert.equal(renderData.request.window, '7d');
+  assert.deepEqual(renderData.pagination, {
+    hasNextPage: true,
+    hasPreviousPage: false,
+    limit: 10,
+    offset: 0,
+    totalRows: 12,
+  });
+  assert.deepEqual(renderData.table.columns.map((column) => column.label), [
+    'Video',
+    'Channel',
+    'Published',
+    'Views',
+    'Format',
+  ]);
+  assert.equal(renderData.table.rows[0]?.cells[0]?.href, 'https://www.youtube.com/watch?v=video-1');
+  assert.equal(renderData.table.rows[0]?.cells[0]?.text, 'ARC Raiders Just Buffed This Key Room');
+  assert.equal(renderData.table.rows[0]?.cells[1]?.href, 'https://www.youtube.com/channel/channel-1');
+  assert.equal(renderData.table.rows[0]?.cells[3]?.text, '32,037');
+});
+
+test('buildTigerChatRenderData maps YouTube content-mix responses with views', () => {
+  const renderData = buildTigerChatRenderData({
+    contractName: 'getYoutubeGameCoverage',
+    response: {
+      availability: { blockingTables: [], reason: null, state: 'ready' },
+      contentMix: [
+        {
+          contentClass: 'short',
+          currentViews: 125000,
+          distinctUploadChannels: 48,
+          matchedPrimaryVideoCount: 79,
+          matchedVideoViewDelta: 42000,
+          newMatchedVideos: 25,
+        },
+      ],
+      entity: {
+        displayName: 'ARC Raiders',
+        entityKind: 'game',
+        entityUid: 'steam:game:1149460',
+        platform: 'steam',
+        platformEntityId: '1149460',
+      },
+      limit: 10,
+      resolvedWindow: '30d',
+      view: 'content_mix',
+    },
+  });
+
+  if (!renderData || renderData.kind !== 'youtube_game_activity') {
+    assert.fail('Expected YouTube game activity render data');
+  }
+
+  assert.equal(renderData.pagination, null);
+  assert.deepEqual(renderData.table.columns.map((column) => column.label), [
+    'Format',
+    'Videos',
+    'New Videos',
+    'Channels',
+    'Views',
+    'View Delta',
+  ]);
+  assert.deepEqual(renderData.table.rows[0]?.cells.map((cell) => cell.text), [
+    'Shorts',
+    '79',
+    '25',
+    '48',
+    '125,000',
+    '42,000',
+  ]);
+});
+
+test('buildTigerChatRenderData maps YouTube cadence responses with current views', () => {
+  const renderData = buildTigerChatRenderData({
+    contractName: 'getYoutubeGameCoverage',
+    response: {
+      availability: { blockingTables: [], reason: null, state: 'ready' },
+      cadence: {
+        distinctUploadChannels: 23,
+        matchedVideoViewDelta: 145000,
+        newMatchedVideos: 31,
+        viewsOnNewVideos: 420000,
+        window: '14d',
+      },
+      entity: {
+        displayName: 'ARC Raiders',
+        entityKind: 'game',
+        entityUid: 'steam:game:1149460',
+        platform: 'steam',
+        platformEntityId: '1149460',
+      },
+      limit: 10,
+      resolvedWindow: '14d',
+      summary: {
+        freshestMatchedUploadAt: '2026-04-12T07:00:00.000Z',
+      },
+      view: 'cadence',
+    },
+  });
+
+  if (!renderData || renderData.kind !== 'youtube_game_activity') {
+    assert.fail('Expected YouTube game activity render data');
+  }
+
+  assert.equal(renderData.pagination, null);
+  assert.deepEqual(renderData.table.columns.map((column) => column.label), ['Metric', 'Value']);
+  assert.deepEqual(renderData.table.rows.map((row) => row.cells[0]?.text), [
+    'Upload channels',
+    'New videos',
+    'Current views',
+    'View delta',
+    'Most recent upload',
+  ]);
+  assert.equal(renderData.table.rows[2]?.cells[1]?.text, '420,000');
+});
+
 test('buildTigerClarificationRenderData maps ambiguous selection state to clickable render data', () => {
   const renderData = buildTigerClarificationRenderData({
     originalPrompt: "What's the CCU for Counter-Strike 2?",

@@ -732,9 +732,14 @@ export function ChatMessage({
   );
   const querySummary = message.toolCalls ? summarizeToolCalls(message.toolCalls) : null;
   const visibleAssistantContent =
-    !isUser && message.renderData?.kind === 'momentum_current_players'
+    !isUser
+    && (
+      message.renderData?.kind === 'momentum_current_players'
+      || message.renderData?.kind === 'youtube_game_activity'
+    )
       ? removeMarkdownTables(message.content)
       : message.content;
+  const renderStructuredAfterContent = !isUser && message.renderData?.kind === 'youtube_game_activity';
   const selectedEntities = isUser ? message.selectedEntities ?? [] : [];
 
   return (
@@ -789,14 +794,24 @@ export function ChatMessage({
               className="space-y-4 pr-10 sm:pr-12"
             >
               {!isStreaming && (
-                <ChatStructuredVisuals
-                  onSuggestionClick={onSuggestionClick}
-                  renderData={message.renderData}
-                />
+                !renderStructuredAfterContent && (
+                  <ChatStructuredVisuals
+                    onSuggestionClick={onSuggestionClick}
+                    renderData={message.renderData}
+                  />
+                )
               )}
               <EntityLinkProvider toolCalls={message.toolCalls}>
                 <StreamingContent content={visibleAssistantContent} isStreaming={isStreaming} />
               </EntityLinkProvider>
+              {!isStreaming && (
+                renderStructuredAfterContent && (
+                  <ChatStructuredVisuals
+                    onSuggestionClick={onSuggestionClick}
+                    renderData={message.renderData}
+                  />
+                )
+              )}
 
               <TrustStrip
                 badge={tigerDebugBadge}
