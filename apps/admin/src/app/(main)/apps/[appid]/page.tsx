@@ -574,6 +574,7 @@ export default async function AppDetailPage({
   const isFree = appSummary?.is_free ?? app.is_free;
   const discountPercent = appSummary?.current_discount_percent ?? app.current_discount_percent ?? 0;
   const priceCents = appSummary?.price_cents ?? app.current_price_cents;
+  const shouldShowDiscountBadge = !isFree && priceCents !== null && discountPercent > 0;
   const totalReviews = preferLatestReviewMetrics
     ? latestMetrics?.total_reviews ?? appSummary?.total_reviews ?? null
     : appSummary?.total_reviews ?? latestMetrics?.total_reviews ?? null;
@@ -829,13 +830,13 @@ export default async function AppDetailPage({
         <span className="text-text-tertiary">·</span>
         <div className="flex items-center gap-2">
           <span className={`text-subheading font-semibold ${
-            discountPercent > 0
+            shouldShowDiscountBadge
               ? 'text-accent-green'
               : 'text-text-primary'
           }`}>
             {formatPrice(priceCents, isFree)}
           </span>
-          {discountPercent > 0 && (
+          {shouldShowDiscountBadge && (
             <span className="px-2 py-0.5 rounded-md bg-accent-green/15 text-accent-green text-body-sm font-medium">
               -{discountPercent}%
             </span>

@@ -38,6 +38,62 @@ interface FreshReviewOverlay {
   lastReviewsSync: string | null;
 }
 
+type AppRpcRow = Record<string, unknown> & {
+  appid: number;
+  name: string;
+  type: string;
+  is_free: boolean;
+};
+
+export function mapAppRpcRowToApp(row: AppRpcRow): App {
+  return {
+    appid: row.appid,
+    name: row.name,
+    type: row.type,
+    is_free: row.is_free,
+    is_delisted: (row.is_delisted as boolean | null | undefined) ?? false,
+    ccu_peak: (row.ccu_peak as number | null | undefined) ?? 0,
+    owners_min: (row.owners_min as number | null | undefined) ?? 0,
+    owners_max: (row.owners_max as number | null | undefined) ?? 0,
+    owners_midpoint: (row.owners_midpoint as number | null | undefined) ?? 0,
+    total_reviews: (row.total_reviews as number | null | undefined) ?? 0,
+    positive_reviews: (row.positive_reviews as number | null | undefined) ?? 0,
+    review_score: (row.review_score as number | null | undefined) ?? null,
+    positive_percentage: (row.positive_percentage as number | null | undefined) ?? null,
+    price_cents: (row.price_cents as number | null | undefined) ?? null,
+    current_discount_percent: (row.current_discount_percent as number | null | undefined) ?? 0,
+    average_playtime_forever: (row.average_playtime_forever as number | null | undefined) ?? null,
+    average_playtime_2weeks: (row.average_playtime_2weeks as number | null | undefined) ?? null,
+    ccu_growth_7d_percent: (row.ccu_growth_7d_percent as number | null | undefined) ?? null,
+    ccu_growth_30d_percent: (row.ccu_growth_30d_percent as number | null | undefined) ?? null,
+    ccu_tier: ((row.ccu_tier as number | null | undefined) ?? null) as CcuTier | null,
+    velocity_7d: (row.velocity_7d as number | null | undefined) ?? null,
+    velocity_30d: (row.velocity_30d as number | null | undefined) ?? null,
+    velocity_tier: ((row.velocity_tier as string | null | undefined) ?? null) as VelocityTier | null,
+    sentiment_delta: (row.sentiment_delta as number | null | undefined) ?? null,
+    momentum_score: (row.momentum_score as number | null | undefined) ?? null,
+    velocity_acceleration: (row.velocity_acceleration as number | null | undefined) ?? null,
+    active_player_pct: (row.active_player_pct as number | null | undefined) ?? null,
+    review_rate: (row.review_rate as number | null | undefined) ?? null,
+    value_score: (row.value_score as number | null | undefined) ?? null,
+    vs_publisher_avg: (row.vs_publisher_avg as number | null | undefined) ?? null,
+    release_date: (row.release_date as string | null | undefined) ?? null,
+    days_live: (row.days_live as number | null | undefined) ?? null,
+    hype_duration: (row.hype_duration as number | null | undefined) ?? null,
+    release_state: (row.release_state as string | null | undefined) ?? null,
+    platforms: (row.platforms as string | null | undefined) ?? null,
+    steam_deck_category: ((row.steam_deck_category as string | null | undefined) ?? null) as SteamDeckCategory | null,
+    controller_support: (row.controller_support as App['controller_support'] | undefined) ?? null,
+    publisher_id: (row.publisher_id as number | null | undefined) ?? null,
+    publisher_name: (row.publisher_name as string | null | undefined) ?? null,
+    publisher_game_count: (row.publisher_game_count as number | null | undefined) ?? null,
+    developer_id: (row.developer_id as number | null | undefined) ?? null,
+    developer_name: (row.developer_name as string | null | undefined) ?? null,
+    metric_date: (row.metric_date as string | null | undefined) ?? null,
+    data_updated_at: (row.data_updated_at as string | null | undefined) ?? null,
+  };
+}
+
 /**
  * Fetch apps from the database using the unified RPC
  * Note: Uses type assertion until database types are regenerated after migration
@@ -417,54 +473,8 @@ export async function getAppsByIds(appids: number[]): Promise<App[]> {
   const appsMap = new Map<number, App>();
 
   for (const row of data) {
-    const app: App = {
-      appid: row.appid,
-      name: row.name,
-      type: row.type,
-      is_free: row.is_free,
-      is_delisted: row.is_delisted ?? false,
-      ccu_peak: row.ccu_peak ?? 0,
-      owners_min: row.owners_min ?? 0,
-      owners_max: row.owners_max ?? 0,
-      owners_midpoint: row.owners_midpoint ?? 0,
-      total_reviews: row.total_reviews ?? 0,
-      positive_reviews: row.positive_reviews ?? 0,
-      review_score: row.review_score ?? null,
-      positive_percentage: row.positive_percentage ?? null,
-      price_cents: row.price_cents ?? 0,
-      current_discount_percent: row.current_discount_percent ?? 0,
-      average_playtime_forever: row.average_playtime_forever ?? null,
-      average_playtime_2weeks: row.average_playtime_2weeks ?? null,
-      ccu_growth_7d_percent: row.ccu_growth_7d_percent ?? null,
-      ccu_growth_30d_percent: row.ccu_growth_30d_percent ?? null,
-      ccu_tier: row.ccu_tier as CcuTier | null,
-      velocity_7d: row.velocity_7d ?? null,
-      velocity_30d: row.velocity_30d ?? null,
-      velocity_tier: row.velocity_tier as VelocityTier | null,
-      sentiment_delta: row.sentiment_delta ?? null,
-      momentum_score: row.momentum_score ?? null,
-      velocity_acceleration: row.velocity_acceleration ?? null,
-      active_player_pct: row.active_player_pct ?? null,
-      review_rate: row.review_rate ?? null,
-      value_score: row.value_score ?? null,
-      vs_publisher_avg: row.vs_publisher_avg ?? null,
-      release_date: row.release_date ?? null,
-      days_live: row.days_live ?? null,
-      hype_duration: row.hype_duration ?? null,
-      release_state: row.release_state ?? null,
-      platforms: row.platforms ?? null,
-      steam_deck_category: row.steam_deck_category as SteamDeckCategory | null,
-      controller_support: row.controller_support ?? null,
-      publisher_id: row.publisher_id ?? null,
-      publisher_name: row.publisher_name ?? null,
-      publisher_game_count: row.publisher_game_count ?? null,
-      developer_id: row.developer_id ?? null,
-      developer_name: row.developer_name ?? null,
-      metric_date: row.metric_date ?? null,
-      data_updated_at: row.data_updated_at ?? null,
-    };
-
-    appsMap.set(row.appid, app);
+    const app = mapAppRpcRowToApp(row as AppRpcRow);
+    appsMap.set(app.appid, app);
   }
 
   // Return in original order
