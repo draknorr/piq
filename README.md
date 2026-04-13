@@ -8,6 +8,7 @@ Steam analytics platform for browsing games and companies, tracking change intel
 - **TigerData (Timescale)** powers the contract-serving read plane through `apps/query-api` and `packages/data-plane`.
 - **Cube.js** remains in the stack for legacy and compatibility analytics paths that have not moved onto Tiger-backed contracts yet.
 - **TypeScript workers** and the **PICS service** ingest, normalize, and project source data into Supabase; selected hot read slices are then refreshed into TigerData.
+- **`@publisheriq/youtube`** adds Steam-scoped YouTube discovery, refresh, and daily rollup capture directly into TigerData for the chat coverage surface.
 
 ## Current Highlights
 
@@ -15,8 +16,9 @@ Steam analytics platform for browsing games and companies, tracking change intel
 - **Games + Companies analytics** with advanced filters, saved views, compare, and export
 - **Insights dashboard** for top games, newest releases, and personalized monitoring
 - **AI chat** backed by the Tiger query-api, streaming responses, and current change/news contract families
+- **Per-game YouTube coverage in chat** for latest videos, creator coverage, top videos, growth, content mix, and cadence
 - **OTP-first auth** with waitlist approval, `?next=` redirects, and hardened callback handling
-- **Tiger contract surface** for entity resolution, catalog discovery, momentum discovery, semantic search, change analysis, news search, user context, and result continuation
+- **Tiger contract surface** for entity resolution, catalog discovery, momentum discovery, semantic search, change analysis, news search, YouTube coverage, user context, and result continuation
 
 ## Quick Start
 
@@ -50,6 +52,11 @@ pnpm --filter @publisheriq/query-api dev
 pnpm --filter @publisheriq/ingestion applist-sync
 pnpm --filter @publisheriq/ingestion storefront-sync
 pnpm --filter @publisheriq/ingestion change-intel-worker
+pnpm --filter @publisheriq/ingestion repair-storefront-authority
+
+pnpm youtube:seed-routing
+pnpm youtube:sync-discovery
+pnpm youtube:sync-refresh
 
 cd services/pics-service && pytest
 ```
@@ -66,6 +73,7 @@ Start with [docs/START-HERE.md](docs/START-HERE.md).
 | Area | Path |
 |------|------|
 | Documentation index | [docs/README.md](docs/README.md) |
+| Latest release | [docs/releases/v2.12-youtube-tiger-price-refresh.md](docs/releases/v2.12-youtube-tiger-price-refresh.md) |
 | User guides | [docs/user-guide/](docs/user-guide/) |
 | Admin guides | [docs/admin-guide/](docs/admin-guide/) |
 | Developer guides | [docs/developer-guide/](docs/developer-guide/) |
@@ -82,6 +90,7 @@ publisheriq/
 ├── packages/data-plane/     # Query contracts, Tiger SQL, and sync scripts
 ├── packages/database/       # Supabase client + generated types
 ├── packages/ingestion/      # Steam clients, workers, change-intel runtime
+├── packages/youtube/        # Steam-scoped YouTube collector and rollups
 ├── packages/shared/         # Shared utilities and logger
 ├── packages/cube/           # Cube.js semantic layer
 ├── services/pics-service/   # Python PICS microservice
@@ -94,6 +103,7 @@ publisheriq/
 | Surface | Primary Read Path | Primary Store |
 |---------|-------------------|---------------|
 | `/chat` supported contract families | Admin route -> `query-api` | TigerData |
+| `/chat` YouTube coverage for one tracked game | Admin route -> `query-api` | TigerData |
 | Chat logging, auth, credits | Admin route -> Supabase | Supabase |
 | `/apps` | Supabase RPCs + views | Supabase |
 | `/companies` | Supabase RPCs + views | Supabase |

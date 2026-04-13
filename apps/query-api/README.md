@@ -26,9 +26,10 @@ Current ready contracts:
 - `searchDocuments`
 - `semanticSearch`
 - `getUserContext`
+- `getYoutubeGameCoverage`
 - `continueResultSet`
 
-These contracts are what `/chat`, similarity routes, momentum screens, and recent-news/change-intel paths should use. The service is no longer a placeholder for future Tiger work.
+These contracts are what `/chat`, similarity routes, momentum screens, YouTube coverage, and recent-news/change-intel paths should use. The service is no longer a placeholder for future Tiger work.
 
 ## Endpoints
 
@@ -49,6 +50,7 @@ These contracts are what `/chat`, similarity routes, momentum screens, and recen
 - `POST /v1/contracts/search-documents`
 - `POST /v1/contracts/semantic-search`
 - `POST /v1/contracts/get-user-context`
+- `POST /v1/contracts/get-youtube-game-coverage`
 - `POST /v1/contracts/continue-result-set`
 
 ## Runtime Model
@@ -102,6 +104,7 @@ without an HTTP healthcheck.
 - Local admin chat can point at `http://127.0.0.1:4318`.
 - If `QUERY_API_BASE_URL` is unset outside Vercel preview/production, the app falls back to localhost.
 - Use the local `query-api` process to exercise the same contract boundary the deployed app uses.
+- The shipped YouTube chat flow proxies normalized `/api/chat/youtube-coverage` requests through `POST /v1/contracts/get-youtube-game-coverage`.
 
 ## Container Build
 

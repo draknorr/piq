@@ -151,6 +151,83 @@ function VersionCard({ version, isLatest }: { version: Version; isLatest: boolea
 // All versions data
 const versions: Version[] = [
   {
+    version: 'v2.12',
+    name: 'YouTube Coverage & Runtime Recovery',
+    date: 'April 2026',
+    headline: 'Public YouTube chat coverage, stronger Tiger recovery paths, and more reliable storefront pricing sharpen the current runtime',
+    accentColor: 'bg-accent-red/10',
+    icon: <Search className="h-6 w-6 text-accent-red" />,
+    highlights: [
+      'Chat now supports public per-game YouTube coverage for latest uploads, creator coverage, top videos, growth, content mix, and cadence',
+      'Tiger sync workflows now document the live retry, fallback, watermark, and fast preview classification behavior',
+      'Games pricing now prefers storefront current prices and hides sale state when there is no real non-free price',
+      'Operators now have explicit storefront-authority repair guidance and commands',
+    ],
+    features: [
+      {
+        title: 'YouTube Coverage In Chat',
+        description: 'Ask about one tracked game’s recent creator pickup and get structured tables for latest uploads, creator coverage, top videos, growth, content mix, and cadence.',
+        icon: <Search className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Fast Tiger Recovery Paths',
+        description: 'Preview and production sync workflows now support bounded app-change retries, projection exact-parity fallback, and a preview-only classification mode for faster incident triage.',
+        icon: <Gauge className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Storefront Authority Repair',
+        description: 'A dedicated repair command now exists for missing storefront-authoritative latest-state fields, alongside clearer docs for PICS retry and cooldown behavior.',
+        icon: <Shield className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Price Reliability Fixes',
+        description: 'The Games surface now prefers storefront-backed effective pricing and only shows discount state when there is a real paid price to display.',
+        icon: <LineChart className="h-4 w-4 text-text-tertiary" />,
+      },
+    ],
+    improvements: [
+      'YouTube chat tables now support inline pagination without leaving the current conversation',
+      'Projection-drift recovery is documented as current operator behavior rather than implied historical context',
+      'Storefront pricing, `is_free`, and related authority rules are now clearer across user and operator docs',
+    ],
+  },
+  {
+    version: 'v2.11',
+    name: 'Chat Contract Cutover',
+    date: 'April 2026',
+    headline: 'Tiger-backed contracts became the canonical chat and discovery runtime while Supabase stayed the write and page-serving control plane',
+    accentColor: 'bg-accent-cyan/10',
+    icon: <BarChart3 className="h-6 w-6 text-accent-cyan" />,
+    highlights: [
+      'Chat and discovery moved onto the Tiger query-api contract boundary',
+      'Execution traces, contract summaries, and session carry-forward metadata became part of the normal chat runtime',
+      'Preview and production now use separate Tiger and query-api deployment pairs',
+      'Current docs now describe the live Supabase, TigerData, and Cube split directly',
+    ],
+    features: [
+      {
+        title: 'Contract-First Chat',
+        description: 'Supported chat answers now route through typed Tiger-backed contracts for entity resolution, search, momentum, change analysis, and continuation.',
+        icon: <Search className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Richer Query Diagnostics',
+        description: 'Query details now surface execution traces, quality summaries, and Tiger primary or shadow metadata for easier debugging.',
+        icon: <Gauge className="h-4 w-4 text-text-tertiary" />,
+      },
+      {
+        title: 'Split Serving Model',
+        description: 'Supabase remains the write and control plane while TigerData serves the current contract-backed read paths through `query-api`.',
+        icon: <Shield className="h-4 w-4 text-text-tertiary" />,
+      },
+    ],
+    improvements: [
+      'Deployed Vercel environments now require an explicit `QUERY_API_BASE_URL`',
+      'Tiger refresh automation became part of the normal preview and production operating model',
+      'Compatibility reads are now documented as transitional instead of canonical',
+    ],
+  },
+  {
     version: 'v2.10',
     name: 'Chat News & Ops Refresh',
     date: 'March 2026',

@@ -54,6 +54,23 @@ The stream returns:
 - `usage`
 - `creditsCharged`
 
+### `POST /api/chat/youtube-coverage`
+
+Authenticated JSON helper route for the YouTube coverage subflow used by chat.
+
+Request body fields:
+
+- `entityUid` - required Steam game entity UID
+- `view` - required YouTube coverage view
+- `contentClass` - optional `standard_video`, `short`, or `live_or_recent_live`
+- `window` - optional `current`, `1d`, `2d`, `3d`, `7d`, `14d`, or `30d`
+- `limit` - optional list size, normalized to `1..25`
+- `offset` - optional zero-based pagination offset
+
+The route validates auth, normalizes request fields, and proxies to `POST /v1/contracts/get-youtube-game-coverage` on query-api.
+
+The response is the same contract result that the chat streamer uses to render `youtube_game_activity`.
+
 ### `POST /api/chat/eval`
 
 Internal evaluation endpoint used by chat smoke tests and eval tooling.
@@ -187,6 +204,7 @@ Server-side callback router that validates origin handling and forwards callback
 - Change Feed endpoints return `503` when the required SQL read surfaces are not available yet.
 - The unified activity list uses server-side cursor pagination when the new read surface is available and a legacy fallback when it is not.
 - Chat endpoints should be debugged from the query details panel and execution trace when a Tiger-backed contract is involved.
+- YouTube chat turns should be debugged with the `/api/chat/youtube-coverage` route name, `youtube_game_activity` render data, and the `getYoutubeGameCoverage` contract summary.
 - Protected-route UX redirects through `/login?next=...`; APIs return JSON errors instead of redirects.
 
 ## Related Documentation

@@ -2,7 +2,7 @@
 
 This document describes the current PublisherIQ chat runtime after the Tiger/query-api cutover.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## Summary
 
@@ -10,7 +10,7 @@ The canonical `/chat` path is now contract-first:
 
 - the admin app handles auth, rate limiting, credit reservation, streaming, and logging
 - `query-api` is the contract boundary for TigerData-backed reads
-- TigerData serves the current contract families for catalog discovery, momentum, semantic retrieval, change/news analysis, user context, and continuation
+- TigerData serves the current contract families for catalog discovery, momentum, semantic retrieval, change/news analysis, YouTube coverage, user context, and continuation
 - Cube and direct Supabase reads still exist only as compatibility paths for prompt families that have not yet moved to typed contracts
 
 ## Current Architecture
@@ -27,6 +27,7 @@ User
 Alongside:
   - Supabase for auth, credits, chat logs, and current page/control-plane data
   - optional compatibility reads through Cube or legacy Supabase helpers
+  - optional `/api/chat/youtube-coverage` pagination requests for structured YouTube cards
 ```
 
 ## Request Lifecycle
@@ -110,8 +111,22 @@ The live contract registry currently includes:
 | `explainChanges` | single-entity change/news explanation |
 | `searchDocuments` | news/document search |
 | `semanticSearch` | concept and similarity search |
+| `getYoutubeGameCoverage` | YouTube coverage for a single Steam game |
 | `getUserContext` | pins, alerts, and portfolio-aware context |
 | `continueResultSet` | contract-backed conversational continuation |
+
+## YouTube Coverage
+
+YouTube is now a first-class chat family rather than a compatibility side path.
+
+- `CHAT_TIGER_YOUTUBE_ENABLED=true` enables the YouTube family in the admin chat router.
+- The primary contract is `POST /v1/contracts/get-youtube-game-coverage` on `query-api`.
+- The admin app exposes `/api/chat/youtube-coverage` for inline pagination of structured YouTube cards.
+- The request shape is `entityUid`, `view`, and optional `contentClass`, `window`, `limit`, and `offset`.
+- Supported views are `latest_videos`, `creator_coverage`, `top_videos`, `video_growth`, `content_mix`, and `cadence`.
+- Successful responses render as `message_end.renderData.kind = youtube_game_activity`.
+- The chat UI keeps the current page visible if inline pagination fails and reuses the existing entity/view/window filters with a new offset.
+- Unavailable results surface the blocking tables and reason from TigerData so operators can tell whether the mirrored YouTube slices are empty or missing.
 
 ## Contract Families in Practice
 
@@ -150,6 +165,17 @@ Used for:
 - cross-game change discovery
 - change-pattern discovery
 
+### YouTube coverage
+
+Used for:
+
+- explicit YouTube questions about a single Steam game
+- latest matched videos
+- creator coverage and upload-channel density
+- fastest-growing matched videos
+- content mix and cadence summaries
+- inline pagination through the structured YouTube card
+
 ### User context and continuation
 
 Used for:
@@ -172,6 +198,7 @@ These prompt families are now intended to land on Tiger-backed contracts:
 - cross-game change discovery
 - change-pattern discovery
 - document/news search
+- YouTube coverage
 - result continuation
 
 ### Still transitional / compatibility-owned
@@ -202,6 +229,7 @@ The `message_end` event now carries the current runtime summary, not just raw ti
 | `executionTrace` | backend and migration trace for tools/contracts used |
 | `followUpSuggestions` | suggested next prompts |
 | `renderData` | structured render metadata for the UI |
+| `renderData.kind = youtube_game_activity` | structured YouTube coverage card data |
 | `tigerPrimary` | primary-evaluation route and attempt data |
 | `tigerShadow` | shadow-evaluation route and attempt data |
 | `usage` | token usage when available |
@@ -249,6 +277,7 @@ Important stored fields include:
 - session context summary
 - guardrail trace
 - answer contract summary
+- YouTube route and render-data details when the turn lands on `getYoutubeGameCoverage`
 
 These logs are used for:
 
@@ -277,6 +306,7 @@ When debugging the current chat stack, inspect these layers in order:
 4. `query-api` health, readiness, and contract registry
 5. TigerData parity and refresh state
 6. compatibility traces showing Cube/Supabase fallback
+7. `/api/chat/youtube-coverage` pagination responses when the YouTube card is involved
 
 ## Related Documentation
 

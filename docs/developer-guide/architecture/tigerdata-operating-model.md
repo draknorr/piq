@@ -2,14 +2,14 @@
 
 This document is the current source of truth for how PublisherIQ uses **TigerData (Timescale)** alongside Supabase and Cube.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## Summary
 
 PublisherIQ is currently a **split-serving system**:
 
 - **Supabase** remains the write authority and control plane.
-- **TigerData** serves the contract-backed read plane through `apps/query-api`.
+- **TigerData** serves the contract-backed read plane through `apps/query-api`, including YouTube coverage.
 - **Cube.js** remains available for compatibility and legacy analytics reads that have not yet moved to typed contracts.
 
 This is the live operating model today. It is not a future-state memo and it is not a full Supabase exit.
@@ -25,6 +25,7 @@ Vercel Production   -> Railway Production query-api   -> Tiger Production
 Shared write/control path:
 Workers + PICS service -> Supabase
 Supabase -> Tiger refresh workflows -> Tiger targets
+Supabase + source DB -> @publisheriq/youtube -> Tiger targets
 ```
 
 ### Local Shape
@@ -49,6 +50,7 @@ Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BAS
 | `/changes`               | Supabase                                          | Supabase RPCs/projections          | Supabase      | page stays on Supabase change surfaces             |
 | `/admin`                 | Supabase                                          | Supabase RPCs/tables               | Supabase      | queue, catalog, CCU, usage, logs                   |
 | Chat contract reads      | Supabase source materialized into TigerData       | `query-api` contracts              | TigerData     | canonical path for supported families              |
+| YouTube chat coverage    | Supabase source routing plus TigerData collector   | `query-api` contracts              | TigerData     | `getYoutubeGameCoverage` and `/api/chat/youtube-coverage` |
 | Legacy chat analytics    | Supabase                                          | Cube compatibility or legacy reads | Supabase      | shrinking fallback layer                           |
 | Semantic retrieval       | Supabase data embedded then loaded into TigerData | `query-api` -> `semanticSearch`    | TigerData     | no longer separate vector DB in the canonical path |
 
@@ -75,6 +77,7 @@ TigerData is not a generic mirror of the full Supabase database. It contains the
 - momentum and ranking relations
 - semantic retrieval inputs and embeddings
 - change/news event and search relations
+- YouTube coverage relations and daily rollups across `ops`, `docs`, `events`, and `metrics`
 - user-context relations for pins and alerts
 
 ## Current Contract Surface
@@ -94,6 +97,7 @@ The live contract registry in `packages/data-plane/src/contract-registry.ts` cur
 - `explainChanges`
 - `searchDocuments`
 - `semanticSearch`
+- `getYoutubeGameCoverage`
 - `getUserContext`
 - `continueResultSet`
 
@@ -137,6 +141,8 @@ The primary backfill flow is:
 4. reconcile
 5. validate
 
+YouTube has a separate collector path and does not participate in this Tiger bootstrap/backfill order. It is loaded and refreshed by the `@publisheriq/youtube` scripts and GitHub Actions workflows described in the deployment guide.
+
 ### 4. Keep TigerData current
 
 Scheduled GitHub Actions refresh selected TigerData slices from Supabase:
@@ -144,6 +150,7 @@ Scheduled GitHub Actions refresh selected TigerData slices from Supabase:
 - production Tiger refresh runs daily
 - preview Tiger refresh is manual
 - reconcile and validate artifacts are uploaded for inspection
+- YouTube bootstrap, sync, and preview-mirror workflows run separately and write directly to TigerData
 
 ## Events / News Parity Expectations
 
@@ -186,6 +193,7 @@ Important environment variables:
 - `CHAT_TIGER_PRIMARY_MODE`
 - `CHAT_TIGER_SHADOW_MODE`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED`
+- `CHAT_TIGER_YOUTUBE_ENABLED`
 
 ### Query API / Data Plane
 
@@ -203,6 +211,7 @@ Important environment variables:
 - `TIGER_PRIMARY_URL` points at the TigerData target.
 - `DATA_PLANE_SOURCE_URL` / `DATABASE_URL` represent the live source for bootstrap, backfill, and local fallback cases.
 - The admin app never needs `TIGER_PRIMARY_URL` directly.
+- `CHAT_TIGER_YOUTUBE_ENABLED=true` exposes the YouTube coverage family in `/chat`; the contract itself remains available through `query-api`.
 
 ## Operational Checks
 
@@ -225,6 +234,7 @@ Verify:
 - workflow success
 - uploaded manifest artifacts
 - reconcile / validate outputs
+- YouTube bootstrap/sync workflow success and preview mirror completion for the `youtube:*` collector jobs
 
 ### Admin-side debugging
 
@@ -235,6 +245,7 @@ When chat results look wrong, inspect:
 - execution traces
 - contract summaries
 - query-api health and readiness
+- `/api/chat/youtube-coverage` responses and inline pagination when YouTube cards are involved
 
 ## What TigerData Does Not Own Yet
 
@@ -244,6 +255,7 @@ TigerData does **not** currently replace Supabase for:
 - auth and user/session state
 - credits and chat logs
 - general warehouse writes
+- the YouTube collector's source routing and Tiger write path, which are owned by `@publisheriq/youtube`
 
 TigerData should therefore be described as the **contract-serving read plane**, not the universal product database.
 

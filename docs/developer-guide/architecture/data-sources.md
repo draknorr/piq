@@ -2,7 +2,7 @@
 
 PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived metadata, then serves those inputs through two different data planes.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## Source Hierarchy
 
@@ -14,6 +14,7 @@ PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived
 | 1 | Steam CCU API | Exact current player counts |
 | 1 | Steam News | Public announcements and update posts |
 | 2 | SteamSpy | Owners, playtime, and tag enrichment |
+| 2 | YouTube Data API | Creator/channel/video coverage for tracked Steam games |
 | 3 | PICS | Specialized metadata, relationships, Steam Deck, and PICS-side history |
 | 3 | Internal projections | change bursts, pattern windows, cached admin stats, and search projections derived from the source feeds |
 
@@ -38,6 +39,7 @@ TigerData receives selected hot read slices from Supabase for:
 - momentum and ranking contracts
 - change/news document contracts
 - user-context contract reads
+- YouTube coverage, channel, and rollup tables written by `@publisheriq/youtube`
 
 TigerData is therefore a **serving target**, not the first ingestion target.
 
@@ -107,6 +109,12 @@ PublisherIQ’s change-intelligence runtime depends on five source families:
 
 - owner estimates and playtime remain useful enrichment
 - CCU is no longer authoritative here; current CCU comes from Steam’s native player-count API
+
+### YouTube
+
+- YouTube API data is used for tracked-game video and channel coverage only; it is not a general site-wide media crawl
+- `@publisheriq/youtube` reads Steam-tracked routing state and writes the coverage, match, and rollup slices directly into TigerData
+- preview environments can mirror production Tiger slices for this collector without re-running the entire discovery pass
 
 ### PICS
 

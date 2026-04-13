@@ -23,6 +23,7 @@ This installs dependencies for:
 - `packages/data-plane` - TigerData contracts, bootstrap, and backfills
 - `packages/database` - Supabase client
 - `packages/ingestion` - Data workers
+- `packages/youtube` - Steam-scoped YouTube collector and rollups
 - `packages/shared` - Shared utilities
 
 ## 3. Build Packages
@@ -94,6 +95,12 @@ pnpm --filter @publisheriq/admin dev
 
 Visit [http://localhost:3001](http://localhost:3001) to see the dashboard.
 
+For the local contract-backed chat stack, also run:
+
+```bash
+pnpm --filter @publisheriq/query-api dev
+```
+
 ## Project Structure
 
 After installation, your directory should look like:
@@ -106,6 +113,7 @@ publisheriq/
 │   ├── data-plane/         # TigerData contracts, bootstrap, backfills
 │   ├── database/           # Supabase client + types
 │   ├── ingestion/          # API clients and workers
+│   ├── youtube/            # YouTube collector and rollups
 │   └── shared/             # Logger, errors, constants
 ├── services/
 │   └── pics-service/       # Python PICS microservice
@@ -151,4 +159,5 @@ pnpm --filter @publisheriq/admin dev -- --port 3001
 ## Next Steps
 
 1. [Environment Setup](setup.md) - Configure all environment variables
-2. [First Run](first-run.md) - Run your first data sync
+2. [Running Workers](workers/running-workers.md) - Run bounded sync and operator commands
+3. [Getting Started](../user-guide/getting-started.md) - Validate the product routes locally

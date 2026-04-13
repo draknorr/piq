@@ -11,7 +11,7 @@ This package provides:
 - Steam, SteamSpy, reviews, storefront, CCU, and embedding clients
 - scheduled sync workers for metadata and metrics
 - the change-intelligence queue worker, hint seeding worker, and news hot-refresh paths
-- repair and backfill scripts for review truth, CCU quality, and change-intel projections
+- repair and backfill scripts for review truth, CCU quality, storefront authority, and change-intel projections
 - rate limiting, retry, and change-intel support utilities
 - source-side preparation for TigerData refresh flows via the `@publisheriq/data-plane` package
 
@@ -39,6 +39,7 @@ pnpm --filter @publisheriq/ingestion change-intel-worker
 pnpm --filter @publisheriq/ingestion change-intel-backfill-projection
 pnpm --filter @publisheriq/ingestion repair-current-ccu-state
 pnpm --filter @publisheriq/ingestion repair-review-truth
+pnpm --filter @publisheriq/ingestion repair-storefront-authority
 pnpm --filter @publisheriq/ingestion reviews-queue-health
 pnpm --filter @publisheriq/ingestion test:change-intel
 ```
@@ -67,6 +68,8 @@ TigerData refresh and parity workflows are not run from this package, but they a
 - scheduled Tiger syncs are triggered from GitHub Actions using the same package-level contract assumptions
 
 The ingestion workers continue to own the live source side of the pipeline. TigerData owns the query-serving slice.
+The separate `@publisheriq/youtube` package owns YouTube collection and rollup
+work for the shipped YouTube chat contract family.
 
 `pnpm --filter @publisheriq/ingestion refresh-views` refreshes the heavyweight materialized-view chain only. `app_filter_data` and the Games page filter-count views are scheduled separately.
 
@@ -135,3 +138,4 @@ pnpm --filter @publisheriq/ingestion... build
 - [Running Workers](../../docs/developer-guide/workers/running-workers.md)
 - [Steam Change Intelligence](../../docs/developer-guide/workers/steam-change-intelligence.md)
 - [Sync Pipeline](../../docs/developer-guide/architecture/sync-pipeline.md)
+- [YouTube Collector](../../packages/youtube/README.md)

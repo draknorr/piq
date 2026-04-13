@@ -2,7 +2,7 @@
 
 Common issues and solutions for PublisherIQ.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## Database and Query API Connection Issues
 
@@ -203,6 +203,18 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY latest_daily_metrics;
 **Explanation:** Some chat paths are now contract-driven rather than raw SQL, while others still use legacy Supabase or Cube paths. The failure mode depends on which path the turn used.
 
 **Solution:** Rephrase the question to match a supported capability, or inspect `/admin` chat logs for the exact route and guardrail trace.
+
+### "YouTube coverage is empty or unavailable"
+
+**Cause:** The chat prompt routed to the YouTube coverage path, but the game is blocked, the Tiger data slice is not ready, or the feature flag is off in the deployed environment.
+
+**Solution:**
+
+1. Inspect `/admin` chat logs for `youtube_game_activity`, `getYoutubeGameCoverage`, and `/api/chat/youtube-coverage`
+2. Confirm `CHAT_TIGER_YOUTUBE_ENABLED=true` where Tiger YouTube routing is expected
+3. Check the query details panel for the normalized request and pagination state
+4. Verify the mirrored Tiger tables have data before expecting a populated result set
+5. If the route is blocked for a specific title, treat the result as an intentional guardrail rather than a failure
 
 ### "No results found"
 

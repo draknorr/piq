@@ -6,7 +6,7 @@ This section covers the product-facing internal APIs and the external data sourc
 
 | API | Purpose | Primary Backend |
 |-----|---------|-----------------|
-| Chat JSON and streaming | AI responses, contract execution, follow-up context, and turn metadata | Query API + Tiger-backed contracts |
+| Chat JSON and streaming | AI responses, contract execution, follow-up context, YouTube coverage, and turn metadata | Query API + Tiger-backed contracts |
 | Dashboard internals | Pins, alerts, auth validation, and user state | Supabase session + tables/RPCs |
 | Change Feed internals | Activity, detail, news, and status surfaces | Supabase RPCs and read surfaces |
 
@@ -33,6 +33,7 @@ Common failure response:
 ## Routing Split
 
 - `/api/chat/*` is the system contract boundary for chat and related query workflows.
+- `/api/chat/youtube-coverage` is the authenticated helper route for the YouTube coverage subflow.
 - `/api/change-feed/*` is Supabase-backed and serves the `/changes` experience.
 - `/api/pins/*`, `/api/alerts/*`, and admin data routes remain Supabase-backed.
 

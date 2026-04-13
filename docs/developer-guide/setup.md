@@ -72,14 +72,19 @@ ANTHROPIC_API_KEY=sk-ant-...
 |----------|----------|-------------|
 | `QUERY_API_BASE_URL` | Yes for deployed admin chat | Base URL for the Tiger query-api |
 | `QUERY_API_BEARER_TOKEN` | Yes for protected query-api routes | Shared bearer token between admin and query-api |
+| `CHAT_TIGER_YOUTUBE_ENABLED` | No | Enables the YouTube chat coverage family in the admin app |
 | `TIGER_PRIMARY_URL` | Yes for query-api | TigerData / Timescale Postgres connection string |
+| `DATA_PLANE_SOURCE_URL` | No for local serving, yes for source-side workflows | Source database used by backfill, baseline, and preview mirror flows |
+| `DATABASE_URL` | Yes for Supabase/source scripts | Supabase source fallback used by workers and repair scripts |
 
 **Notes:**
 - `/chat` and the Tiger-backed discovery routes use the Tiger query-api for contract execution.
 - `QUERY_API_BASE_URL` / `QUERY_API_BEARER_TOKEN` belong in `apps/admin/.env.local`.
+- `CHAT_TIGER_YOUTUBE_ENABLED=true` enables the public one-game YouTube coverage prompts in `/chat`.
 - `TIGER_PRIMARY_URL` belongs in the query-api / data-plane runtime environment.
 - `DATA_PLANE_SOURCE_URL` is reserved for source-side baseline/backfill reads.
 - `DATABASE_URL` is the Supabase source fallback used by worker and repair scripts.
+- The YouTube collector has its own source-side envs such as `YOUTUBE_API_KEY`, `YOUTUBE_WRITE_TARGET`, and `YOUTUBE_MIRROR_SOURCE_URL`; see `packages/youtube/README.md`.
 
 ### Authentication (v2.1+)
 
@@ -293,4 +298,5 @@ pnpm --filter @publisheriq/admin dev
 
 ## Next Steps
 
-1. [First Run](first-run.md) - Run your first data sync
+1. [Running Workers](workers/running-workers.md) - Run your first bounded syncs and operator commands
+2. [Getting Started](../user-guide/getting-started.md) - Walk the main product surfaces locally

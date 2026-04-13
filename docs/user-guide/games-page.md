@@ -36,6 +36,14 @@ By default, you'll see:
 - 10 default columns visible (including Momentum and Sparkline)
 - 50 games per page
 
+## Pricing Notes
+
+Price display on the Games and app-detail surfaces is storefront-first:
+
+- the current effective price prefers storefront-backed `apps.current_price_cents` and falls back to the latest summary price only when storefront price is missing
+- the sale badge only appears when the app is paid and a real current price is known
+- free apps do not show a discount badge even if stale discount data exists
+
 ---
 
 ## Game Type Toggle
@@ -198,7 +206,7 @@ Set minimum and/or maximum values for core metrics:
 | Owners | Estimated total owners |
 | Reviews | Total review count |
 | Review Score | Positive review percentage |
-| Price | Current price in dollars |
+| Price | Current effective price in dollars, using storefront-first fallback |
 | Playtime | Average playtime in hours |
 
 ### Growth Filters

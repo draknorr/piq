@@ -2,7 +2,7 @@
 
 > **Steam Data Analytics Platform with AI Chat Interface**
 
-PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, and PICS into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, and a TigerData-backed query-api, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, and market trends.
+PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, PICS, and matched Steam-scoped YouTube coverage into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, a TigerData-backed query-api, and a direct-to-Tiger YouTube collector, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, market shifts, and creator pickup.
 
 ---
 
@@ -42,7 +42,8 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 - **Unified View**: All Steam game data consolidated into a single, searchable platform
 - **Real-Time Tracking**: Hourly concurrent user monitoring for top games, with tiered polling for the full catalog
 - **Change Intelligence**: Track grouped storefront, media, PICS, and news changes in a unified Steam Activity feed, plus recent-news and before/after detail in chat
-- **AI-Powered Analysis**: Ask natural language questions and receive structured, data-backed answers across analytics, discovery, and change-intel tools
+- **AI-Powered Analysis**: Ask natural language questions and receive structured, data-backed answers across analytics, discovery, change-intel tools, and per-game YouTube coverage
+- **Creator Signal**: Inspect matched YouTube uploads, creator coverage, fastest-growing videos, content mix, and upload cadence for a tracked game
 - **Deep Discovery**: 12 preset views, 40+ filter parameters, and 6 computed insight metrics for finding hidden gems, tracking trends, and comparing games
 - **Personalized Monitoring**: Pin games and companies, receive alerts on CCU spikes, trend reversals, review surges, and more
 
@@ -64,6 +65,7 @@ This means the system should be understood as a multi-plane runtime, not a singl
 | Write / Control Plane | Supabase (PostgreSQL) with materialized views and RPC read surfaces |
 | Semantic Layer | Cube.js (27 cubes across 9 model files, now primarily compatibility-focused) |
 | Contract Read Plane | TigerData-backed `query-api` contracts for chat, semantic retrieval, momentum, change/news, user context, and continuation |
+| YouTube Collector | `@publisheriq/youtube` direct-to-Tiger discovery, refresh, and daily rollups for chat coverage |
 | Semantic Retrieval | Tiger-backed retrieval tables with OpenAI embeddings |
 | LLM | GPT-4o-mini (default), streaming via SSE |
 | Ingestion | TypeScript workers, repair scripts, and change-intel runtime |

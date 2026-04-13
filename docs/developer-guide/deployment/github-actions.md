@@ -19,6 +19,7 @@ Go to **Settings > Secrets and variables > Actions > New repository secret**:
 | `SUPABASE_URL`         | `https://xxx.supabase.co`                              |
 | `SUPABASE_SERVICE_KEY` | `eyJ...`                                               |
 | `STEAM_API_KEY`        | Your Steam API key                                     |
+| `YOUTUBE_API_KEY`      | YouTube Data API key for the YouTube collector         |
 | `DATABASE_URL`         | PostgreSQL connection string (for refresh-views, v2.1) |
 | `TIGER_PRODUCTION_URL` | Production TigerData / Timescale connection string     |
 | `TIGER_PREVIEW_URL`    | Preview TigerData / Timescale connection string        |
@@ -55,6 +56,9 @@ All times are UTC:
 | CCU Cleanup             | `ccu-cleanup.yml`             | Sun 03:00                      | Aggregate + cleanup snapshots (v2.2)       |
 | Cleanup Reservations    | `cleanup-reservations.yml`    | :00 hourly                     | Stale credit reservation cleanup           |
 | Cleanup Chat Logs       | `cleanup-chat-logs.yml`       | 03:00 daily                    | 7-day log retention                        |
+| YouTube Production Bootstrap | `youtube-production-bootstrap.yml` | Manual                    | Bootstrap YouTube routing, discovery, refresh, and rollups |
+| YouTube Production Sync | `youtube-production-sync.yml` | 15 */6 * * *                   | Steady-state YouTube discovery, refresh, and rollups |
+| YouTube Preview Mirror  | `youtube-preview-mirror.yml`  | Manual                         | Mirror production YouTube slices into preview Tiger |
 | Tiger Production Sync   | `tiger-production-sync.yml`   | 07:45 daily                    | Refresh production Tiger chat-serving data |
 | Tiger Preview Sync      | `tiger-preview-sync.yml`      | Manual                         | Refresh preview Tiger chat-serving data    |
 | CI                      | `ci.yml`                      | On push/PR                     | Type checking                              |
@@ -147,6 +151,23 @@ Tiger-specific workflows:
 All Tiger workflows upload the generated Tiger manifest directory as a workflow
 artifact so you can inspect parity output after each run.
 
+YouTube workflows:
+
+- `youtube-production-bootstrap.yml`
+  - manual only
+  - seeds the routing cohort, runs the bootstrap backfill, refreshes bootstrap-era coverage, and rebuilds daily rollups
+  - accepts `bootstrap_lookback_days`, `discovery_limit`, and `refresh_limit`
+  - writes directly to the production Tiger YouTube slice through `pnpm youtube:seed-routing`, `pnpm youtube:bootstrap-backfill`, `pnpm youtube:sync-refresh`, and `pnpm youtube:rollup-daily`
+- `youtube-production-sync.yml`
+  - runs every 6 hours and also supports manual dispatch
+  - runs the same seed-routing, discovery, refresh, and rollup scripts in steady state
+  - accepts the same YouTube bootstrap/discovery/refresh limit inputs
+- `youtube-preview-mirror.yml`
+  - manual only
+  - mirrors production Tiger YouTube slices into preview Tiger
+  - accepts `bootstrap_lookback_days`
+  - runs `pnpm youtube:mirror-preview`
+
 ### From GitHub UI
 
 1. Go to **Actions** tab
@@ -210,6 +231,26 @@ gh workflow run steamspy-sync.yml -f max_pages=10
 | `projection_day_lookback`   | `7`             | Trailing UTC days of projection churn to consider during reconcile and validate                                                    |
 | `projection_repair_scope`   | `recent_window` | First-pass projection repair scope; uses the same app-change retry and projection fallback recovery rules                          |
 | `stop_after_classification` | `false`         | Smoke-test mode; runs the initial reconcile and classification only, then skips retries, exact-parity fallback, and final validate |
+
+### YouTube Workflows
+
+| Input                    | Default | Description                                                               |
+| ------------------------ | ------- | ------------------------------------------------------------------------- |
+| `bootstrap_lookback_days` | `30`    | Historical window to backfill or mirror before steady-state sync starts   |
+| `discovery_limit`        | `25`    | Maximum number of games to process during discovery sync                  |
+| `refresh_limit`          | `500`   | Maximum number of matched videos to refresh during YouTube sync            |
+
+## Related Operator Scripts
+
+- `pnpm youtube:seed-routing`
+- `pnpm youtube:bootstrap-backfill`
+- `pnpm youtube:sync-discovery`
+- `pnpm youtube:sync-refresh`
+- `pnpm youtube:rollup-daily`
+- `pnpm youtube:mirror-preview`
+- `pnpm --filter @publisheriq/ingestion repair-storefront-authority`
+
+Use the YouTube scripts when you need to bootstrap, refresh, or mirror the coverage slice outside the GitHub Actions jobs. Use `repair-storefront-authority` when storefront fields such as `is_free`, `is_released`, or `release_date` need to be repaired before downstream refreshes.
 
 ## Monitoring
 

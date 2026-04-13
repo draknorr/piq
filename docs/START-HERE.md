@@ -23,9 +23,10 @@ Start with:
 - [System Overview](./developer-guide/architecture/overview.md)
 - [TigerData Operating Model](./developer-guide/architecture/tigerdata-operating-model.md)
 - [Query API README](../apps/query-api/README.md)
+- [YouTube Collector README](../packages/youtube/README.md)
 
 ## Quick Links
 
-- [Latest Release Notes](./releases/v2.11-chat-contract-cutover.md)
+- [Latest Release Notes](./releases/v2.12-youtube-tiger-price-refresh.md)
 - [API Overview](./api/overview.md)
 - [Reference Docs](./reference/)

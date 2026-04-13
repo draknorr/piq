@@ -11,6 +11,7 @@ These docs describe the live April 2026 operating model and should be treated as
 - **[System Overview](developer-guide/architecture/overview.md)** - high-level architecture and load sharing
 - **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current Supabase/TigerData/Cube split and operational flow
 - **[Query API README](../apps/query-api/README.md)** - live contract service, environments, and contract ownership
+- **[YouTube Collector README](../packages/youtube/README.md)** - current Steam-scoped YouTube ingestion and rollup surface
 - **[Tiger Chat Production](developer-guide/deployment/tiger-chat-production.md)** - preview/production deployment and refresh topology
 
 Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are no longer the primary source of truth.
@@ -27,17 +28,20 @@ Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are
 | [API](api/) | Developers | Internal dashboard and streaming APIs |
 | [Reference](reference/) | All | Data dictionaries, source notes, and research docs |
 | [Releases](releases/) | All | Release notes and changelogs |
+| [Specs](specs/) | Historical | Dated design records and implementation plans |
+| [Reports](reports/) | Historical | Point-in-time analysis and research outputs |
+| [Archive](archive/) | Historical | Older docs kept for reference |
 
 ---
 
 ## Latest Release
 
-**[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** (April 6, 2026)
+**[v2.12 - YouTube Coverage, Tiger Recovery, and Price Reliability](releases/v2.12-youtube-tiger-price-refresh.md)** (April 13, 2026)
 
 Highlights:
-- contract-backed chat/search families now reflect the current Tiger/query-api cutover state
-- documentation now describes the live split between Supabase writes, TigerData contract reads, and Cube compatibility reads
-- deployment, setup, eval, and sync docs now align around the current preview/production operating model
+- `/chat` now supports public per-game YouTube coverage across latest uploads, creator coverage, top videos, growth, content mix, and cadence
+- Tiger preview/production workflows now document the current retry, fallback, watermark, and fast-preview-classification behavior
+- pricing and repair docs now reflect storefront-first effective pricing and the storefront-authority repair tooling
 
 ---
 
@@ -137,6 +141,7 @@ Highlights:
 
 ## Previous Releases
 
+- **[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** - contract-first Tiger/query-api cutover baseline
 - **[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** - recent-news and ops baseline before the broader contract cutover doc refresh
 - **[v2.9 - Change Feed, Auth Hardening, and Change Intelligence](releases/v2.9-change-feed-auth-intelligence.md)** - Change Feed, auth, and change-intel baseline
 - **[v2.8 - Security Fixes](releases/v2.8-security-fixes.md)** - OTP auth and security hardening baseline

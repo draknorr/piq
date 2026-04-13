@@ -12,6 +12,7 @@ This guide explains the main search and discovery styles available through Publi
 | Concept search | Natural-language game ideas | Describe the kind of game you want in plain English |
 | Similarity search | "Games like X" | Ask for close matches to a title or company |
 | Change and news search | Recent Steam activity, announcements, before/after diffs | Ask what changed, what was announced, or what the latest news says |
+| YouTube coverage | Game-scoped YouTube activity | Ask for latest videos, creator coverage, growth, or content mix |
 
 ## Concept Search
 
@@ -101,12 +102,31 @@ The current chat can also search recent Steam activity and Steam news:
 
 These prompts use the change-intelligence and recent-news capabilities rather than the older discovery-only paths.
 
+## YouTube Coverage
+
+Use YouTube coverage when the question is about Steam-game-scoped video activity:
+
+> "Show the latest YouTube videos for Hades II in the last 7 days"
+
+> "Which creators cover ARC Raiders the most?"
+
+> "Show top YouTube videos for Stardew Valley this month"
+
+> "What does the YouTube content mix look like for Hades II?"
+
+This path stays game-first:
+
+- resolve the Steam game first
+- choose a view such as `latest_videos`, `creator_coverage`, `top_videos`, `video_growth`, `content_mix`, or `cadence`
+- narrow by window when you want a bounded recent slice
+
 ## Tips
 
 - Use a specific title when you want detail about one game.
 - Use ranking language like "top", "most players", or "highest momentum" when you want a strict screen.
 - Use theme language when you want concept search.
 - Use "recent news", "what changed", or "before and after" when your question is really about Steam activity rather than catalog metrics.
+- Use YouTube-specific language when you want creator, video, or content-mix coverage rather than Steam news.
 
 ## Related Documentation
 

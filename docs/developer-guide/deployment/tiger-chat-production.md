@@ -8,7 +8,7 @@ Target topology:
 - Vercel Preview -> Railway Preview `query-api` -> Tiger Preview database
 - Vercel Production -> Railway Production `query-api` -> Tiger Production database
 - Supabase remains the write authority
-- TigerData powers the contract-serving query plane used by `/chat`, similarity, momentum, and change-intel routes
+- TigerData powers the contract-serving query plane used by `/chat`, similarity, momentum, change-intel, and YouTube coverage routes
 
 ## 1. Provision The Tiger Databases
 
@@ -110,6 +110,7 @@ Preview envs:
 - `CHAT_TIGER_PRIMARY_MODE=all`
 - `CHAT_TIGER_SHADOW_MODE=off`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
+- `CHAT_TIGER_YOUTUBE_ENABLED=true` when the preview environment should expose YouTube coverage
 - `NEXT_PUBLIC_CHAT_TIGER_DEBUG=true`
 
 Production envs:
@@ -119,6 +120,7 @@ Production envs:
 - `CHAT_TIGER_PRIMARY_MODE=all`
 - `CHAT_TIGER_SHADOW_MODE=off`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
+- `CHAT_TIGER_YOUTUBE_ENABLED=true` when the production environment should expose YouTube coverage
 - `NEXT_PUBLIC_CHAT_TIGER_DEBUG=false`
 
 Important:
@@ -195,6 +197,8 @@ Contract checks:
 - `traceMetricHistory`
 - `searchDocuments`
 - `explainChanges`
+- `getYoutubeGameCoverage`
+- `POST /api/chat/youtube-coverage` inline pagination
 
 Chat prompts:
 
@@ -203,9 +207,13 @@ Chat prompts:
 - `What are the top games by reviews?`
 - `What are the top indie games currently?`
 - `Any recent announcements about Primeval?`
+- `Show the latest YouTube videos for ARC Raiders`
+- `Which YouTube creators are covering ARC Raiders this week?`
+- `What YouTube videos are growing fastest for ARC Raiders?`
 
 Expected outcome:
 
 - source trail shows Tiger-backed contracts rather than legacy catalog-screen helpers
 - Preview and Production each call their own Railway service
 - production chat works without legacy fallback
+- YouTube prompts render `youtube_game_activity` cards with inline pagination when the gate is enabled

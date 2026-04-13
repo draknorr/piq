@@ -14,6 +14,7 @@ The dashboard shows the last 7 days of chat queries, including:
 
 - query text
 - routed capabilities and tool families
+- YouTube coverage turns and their routed contract family
 - performance timing
 - iteration counts
 - route-level answer family
@@ -62,6 +63,17 @@ If a query is slow, check for:
 | `recent news` or `change` routed through the system contract | News, activity, or before/after analysis |
 
 The logs also record the Tiger routing summary for turns that used the query-api path.
+
+### YouTube Cues
+
+When a turn used the YouTube coverage path, look for:
+
+- `Family: youtube_game_activity`
+- `Contract Summary: getYoutubeGameCoverage`
+- `Tools: query_api:getYoutubeGameCoverage`
+- `Execution Trace` entries that mention `/api/chat/youtube-coverage`
+
+The same turn should also include the normalized request shape in the render data when the answer was successful.
 
 ## Retention
 

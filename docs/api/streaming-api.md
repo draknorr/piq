@@ -126,6 +126,18 @@ What those fields mean:
 - `tigerPrimary` and `tigerShadow` summarize Tiger routing decisions when the turn used the system contracts.
 - `usage` and `creditsCharged` are returned when token accounting is available.
 
+### Render Data
+
+`message_end.renderData` carries the structured payload for the UI when the turn resolves to a contract-backed result.
+
+For YouTube coverage turns, the render data kind is `youtube_game_activity`:
+
+- `request` includes the normalized `entityUid`, `view`, optional `contentClass`, optional `window`, `limit`, and `offset`
+- `pagination` is present for list-style views and is `null` for summary-only views
+- pagination is used for `latest_videos`, `creator_coverage`, `top_videos`, and `video_growth`
+- `content_mix` and `cadence` are summary views and do not page
+- the UI uses the render data to show clickable YouTube video and channel links, plus the selected window and content class when present
+
 ---
 
 ## Tool Loop

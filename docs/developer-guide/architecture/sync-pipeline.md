@@ -2,14 +2,14 @@
 
 This document describes how PublisherIQ moves data from external sources into Supabase and then into TigerData-backed contract reads.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## Pipeline Summary
 
 PublisherIQ currently has two data-plane layers:
 
 - **Supabase write/control plane** for ingestion, latest-state storage, queues, projections, auth, and page-facing RPCs
-- **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, and change/news contracts
+- **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, change/news, and YouTube contracts
 
 That means the pipeline is now:
 
@@ -18,6 +18,7 @@ source APIs
   -> workers / PICS service
   -> Supabase
   -> Tiger bootstrap/backfill/refresh workflows
+  -> YouTube routing / discovery / refresh / rollup workflows
   -> query-api
   -> contract-backed reads
 ```
@@ -41,8 +42,21 @@ The TypeScript workers in `packages/ingestion` handle the regular Supabase wareh
 | `embedding-sync` | Embedding generation for the Tiger-backed retrieval pipeline |
 | `refresh-views` | Materialized view refreshes |
 | `change-intel-backfill-projection` | Seed projection refresh jobs for change-intel backfills |
+| `repair-storefront-authority` | Repair missing storefront-authority fields before downstream refreshes |
 
 These workers write to Supabase. They do not write directly to TigerData in the normal application runtime.
+
+## YouTube Collector Pipeline
+
+The YouTube collector is a separate TigerData-facing pipeline in `@publisheriq/youtube`.
+
+- `pnpm youtube:seed-routing` seeds per-game routing from the Steam-tracked cohort and writes `ops.youtube_game_routing`.
+- `pnpm youtube:bootstrap-backfill` performs the initial historical discovery backfill into TigerData.
+- `pnpm youtube:sync-discovery` and `pnpm youtube:sync-refresh` run the steady-state discovery and video-hydration passes.
+- `pnpm youtube:rollup-daily` rebuilds `metrics.youtube_game_daily` and keeps the coverage summary current.
+- `pnpm youtube:mirror-preview` mirrors production Tiger YouTube slices into preview Tiger for validation.
+
+This collector reads the source database for routing state and writes the YouTube coverage slice directly into TigerData. It does not flow through the normal Supabase ingestion landing path.
 
 ## Change-Intelligence Runtime
 
@@ -93,6 +107,7 @@ GitHub Actions now includes Tiger refresh workflows:
 - preview Tiger sync
 
 Those workflows refresh selected slices from Supabase into the TigerData targets and upload manifest artifacts for parity review.
+They do not manage the YouTube collector, which has its own `youtube-production-*` and `youtube-preview-mirror` workflows.
 
 ## Operational Characteristics
 
@@ -108,7 +123,7 @@ Those workflows refresh selected slices from Supabase into the TigerData targets
 After data lands:
 
 - `/apps`, `/companies`, `/changes`, `/admin`, and most operational reads still use Supabase RPCs/views/tables
-- `query-api` contracts read TigerData for chat/search/discovery families that have already moved
+- `query-api` contracts read TigerData for chat/search/discovery families that have already moved, including `getYoutubeGameCoverage`
 - Cube reads Supabase-backed analytical models for compatibility and page-level paths not yet cut over
 
 ## Authority Rules
@@ -118,6 +133,7 @@ After data lands:
 - projection refresh is a derived read surface only and never the source of truth for Storefront values
 - Supabase remains the current write authority
 - TigerData is a contract-serving read target, not the write authority
+- YouTube coverage data is written directly to TigerData by `@publisheriq/youtube`; Supabase only holds the source-side routing and operational state that the collector reads
 
 ## Useful Runtime Knobs
 

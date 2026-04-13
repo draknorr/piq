@@ -11,7 +11,7 @@ The dashboard provides:
 - Insights and personalization surfaces
 - admin system-status pages, catalog control, and CCU quality
 - OTP-first authentication and invite/waitlist flows
-- TigerData-backed chat, similarity, momentum, and change-intel contract routing through `apps/query-api`
+- TigerData-backed chat, similarity, momentum, YouTube coverage, and change-intel contract routing through `apps/query-api`
 
 ## Development
 
@@ -33,6 +33,11 @@ pnpm test:e2e:headed
 
 The Playwright smoke suite targets `/chat` on the local admin dev server and mocks
 `/api/chat/stream`, `/api/search`, and `/api/autocomplete/tags` so it stays deterministic.
+
+The shipped `/chat` surface also supports YouTube coverage turns when
+`CHAT_TIGER_YOUTUBE_ENABLED` is enabled. Those requests are proxied through
+`/api/chat/youtube-coverage` and render `youtube_game_activity` responses in the
+structured chat UI.
 
 For the main full prompt-quality pass against the local TigerData-backed stack, run:
 
@@ -127,4 +132,6 @@ Notes:
 - [Documentation Index](../../docs/README.md)
 - [Change Feed User Guide](../../docs/user-guide/change-feed.md)
 - [Change Feed Developer Guide](../../docs/developer-guide/features/change-feed.md)
+- [YouTube Chat Interface](../../docs/user-guide/chat-interface.md)
+- [YouTube Collector](../../packages/youtube/README.md)
 - [Admin Guide](../../docs/admin-guide/overview.md)

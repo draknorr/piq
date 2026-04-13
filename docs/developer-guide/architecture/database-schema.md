@@ -4,9 +4,9 @@
 
 **Databases**: Supabase Postgres + TigerData (Timescale)
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
-**Semantic Layer**: Cube.js still provides compatibility analytics queries over Supabase-backed models. TigerData now serves the contract-backed chat/query plane through `apps/query-api`.
+**Semantic Layer**: Cube.js still provides compatibility analytics queries over Supabase-backed models. TigerData now serves the contract-backed chat/query plane, including YouTube coverage, through `apps/query-api`.
 
 ---
 
@@ -47,6 +47,7 @@ TigerData-backed contracts currently depend on relations in these categories:
 - news and document search projections
 - change events and change-pattern slices
 - user pins, alerts, and alert settings for `getUserContext`
+- YouTube coverage, channel, and rollup relations for `getYoutubeGameCoverage`
 
 For the exact live contract list and ownership, see:
 
@@ -77,7 +78,25 @@ TigerData schema detail currently lives primarily in:
 | `/changes` | Supabase |
 | `/admin` | Supabase |
 | contract-backed chat/search/discovery | TigerData |
+| contract-backed YouTube coverage | TigerData |
 | Cube compatibility analytics | Supabase-backed Cube models |
+
+### TigerData YouTube Relations
+
+TigerData now also stores the contract-serving YouTube coverage slice used by `getYoutubeGameCoverage`.
+
+| Relation | Purpose |
+|---------|---------|
+| `ops.youtube_game_routing` | Per-game routing state, discovery cursors, and cohort priority |
+| `ops.youtube_search_runs` | Search and playlist run history |
+| `ops.youtube_channel_monitors` | Uploads-playlist polling state for monitored creator channels |
+| `ops.youtube_game_overrides` | Manual per-game routing overrides |
+| `ops.youtube_channel_overrides` | Manual per-channel match and monitoring overrides |
+| `docs.youtube_videos` | Latest YouTube video metadata and hydration state |
+| `docs.youtube_channels` | Latest YouTube channel metadata and hydration state |
+| `docs.youtube_video_matches` | Current Steam app to YouTube video match state |
+| `metrics.youtube_video_snapshots` | Time-series video snapshots for view deltas and growth |
+| `metrics.youtube_game_daily` | Derived per-game daily rollups by content class |
 
 ---
 
@@ -209,6 +228,11 @@ Steam apps (games, DLC, demos, etc).
 - `idx_apps_released` on `(is_released, is_delisted)`
 - `idx_apps_parent_appid` on `parent_appid` WHERE `parent_appid IS NOT NULL`
 - `idx_apps_platforms` on `platforms` WHERE `platforms IS NOT NULL`
+
+**Pricing semantics**:
+- `current_price_cents` is the storefront-first effective price signal; `NULL` means unavailable, not free.
+- `current_discount_percent` only reflects an active discount. Sale badges and discount UI should only render when the app is not free and the storefront has a real discounted price.
+- Downstream consumers should prefer the storefront price over derived or inferred price state when both are available.
 
 ---
 

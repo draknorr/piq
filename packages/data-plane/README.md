@@ -11,6 +11,7 @@ This package owns the TigerData-facing data plane:
 - source-to-Tiger backfill and reconcile scripts
 - target/source baseline capture utilities
 - the contract source of truth used by `apps/query-api`
+- the shipped YouTube contract family, including `getYoutubeGameCoverage`
 
 The package is intentionally separate from `@publisheriq/database`, which remains the Supabase client/types package.
 
@@ -38,7 +39,12 @@ Current ready contracts include:
 - `searchDocuments`
 - `semanticSearch`
 - `getUserContext`
+- `getYoutubeGameCoverage`
 - `continueResultSet`
+
+The YouTube contract reads from the Tiger-side tables bootstrapped under
+`packages/data-plane/sql/tiger-bootstrap/0060_youtube.sql` and backs the
+admin-side `/api/chat/youtube-coverage` helper through `apps/query-api`.
 
 ## Scripts
 
@@ -70,3 +76,4 @@ pnpm --filter @publisheriq/data-plane reconcile-events-news
 - [Tiger Chat Production](../../docs/developer-guide/deployment/tiger-chat-production.md)
 - [Sync Pipeline](../../docs/developer-guide/architecture/sync-pipeline.md)
 - [Database Schema](../../docs/developer-guide/architecture/database-schema.md)
+- [YouTube Collector](../../packages/youtube/README.md)

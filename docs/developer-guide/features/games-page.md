@@ -2,7 +2,7 @@
 
 This document describes the technical architecture of the Games page in PublisherIQ.
 
-**Last Updated:** January 31, 2026
+**Last Updated:** April 13, 2026
 
 ---
 
@@ -590,6 +590,12 @@ interface ColumnDefinition {
   renderCell?: (app: App, value: any) => React.ReactNode;
 }
 ```
+
+### Pricing Semantics
+
+- The current Games page price field is storefront-first: the RPC and `app_filter_data` use `COALESCE(a.current_price_cents, ldm.price_cents)` for the effective price.
+- Sale state is only rendered when the app is paid and the effective price is non-null.
+- This prevents stale summary pricing from surfacing `$0.00` or orphaned discount badges on paid titles.
 
 ---
 

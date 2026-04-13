@@ -6,7 +6,7 @@ PublisherIQ is a Steam analytics platform with three main product surfaces:
 - a Change Feed for recent storefront, media, PICS, and news activity
 - an AI chat interface over curated catalog, momentum, semantic, and change-intelligence contracts
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 ## High-Level Stack
 
@@ -15,8 +15,8 @@ PublisherIQ is a Steam analytics platform with three main product surfaces:
 | Frontend | Next.js 15 + React 19 | Signed-in dashboard and public entry surfaces |
 | Write / Control Plane | Supabase Postgres | warehouse tables, queues, auth, RPCs, admin stats, product-page reads |
 | Semantic Layer | Cube.js | legacy and compatibility analytics reads that still have not moved to Tiger-backed contracts |
-| Contract Read Plane | `apps/query-api` + `packages/data-plane` | TigerData-backed typed contracts for chat, semantic retrieval, momentum, change search, news search, and continuation |
-| TS Workers | `@publisheriq/ingestion` | scheduled syncs, queue workers, change-intel maintenance |
+| Contract Read Plane | `apps/query-api` + `packages/data-plane` | TigerData-backed typed contracts for chat, semantic retrieval, momentum, change search, news search, YouTube coverage, and continuation |
+| TS Workers | `@publisheriq/ingestion` + `@publisheriq/youtube` | scheduled syncs, queue workers, change-intel maintenance, and YouTube collector jobs |
 | Python Service | `services/pics-service` | PICS ingestion, latest-state enrichment, and PICS history capture |
 
 ## Current Serving Model
@@ -37,7 +37,7 @@ The important boundary is:
 
 | Surface | Primary Read Path | Primary Store | Notes |
 |--------|-------------------|---------------|-------|
-| `/chat` supported contract families | `/api/chat/stream` -> `query-api` | TigerData | canonical path for entity resolution, catalog search, momentum, semantic, news/change analysis, user context, and continuation |
+| `/chat` supported contract families | `/api/chat/stream` -> `query-api` | TigerData | canonical path for entity resolution, catalog search, momentum, semantic, news/change analysis, YouTube coverage, user context, and continuation |
 | Chat auth, credits, logging | admin app + Supabase | Supabase | sessions, rate limiting, reservations, logs, and final billing remain on Supabase |
 | `/apps` | Supabase RPCs/views | Supabase | page-serving path remains Supabase-first today |
 | `/companies` | Supabase RPCs/views | Supabase | page-serving path remains Supabase-first today |
@@ -51,7 +51,7 @@ The important boundary is:
 ```text
 Steam APIs / Steam News / SteamSpy / PICS
         ↓
-TypeScript workers + PICS service
+TypeScript workers + PICS service + @publisheriq/youtube
         ↓
 Supabase
   - source ingestion landing
@@ -61,11 +61,12 @@ Supabase
   - page-facing RPCs and projections
         ↓
 Tiger refresh / bootstrap / reconcile workflows
+YouTube routing / discovery / refresh / rollup workflows
         ↓
 TigerData + query-api
   - typed contract-serving read plane
   - semantic retrieval and continuation
-  - momentum, entity, change, and news contracts
+  - momentum, entity, change, news, and YouTube contracts
         ↓
 Next.js dashboard
 ```
@@ -107,6 +108,7 @@ Live contract families include:
 - change explanation
 - news/document search
 - semantic search
+- YouTube game coverage and structured video activity
 - user context
 - continuation
 
@@ -137,6 +139,7 @@ The `/changes` page still reads Supabase SQL functions and internal APIs on top 
 - **Supabase** is the current write authority for operational data and most page-serving data.
 - **TigerData** is the current contract-serving read plane, not the write authority.
 - **Cube** is a compatibility analytics layer over Supabase-backed data, not the primary chat contract system.
+- **@publisheriq/youtube** writes YouTube coverage and rollup state directly into TigerData for the chat contract plane; it is not part of the Supabase ingestion path.
 
 ## Current Operational Reality
 
@@ -144,6 +147,7 @@ The `/changes` page still reads Supabase SQL functions and internal APIs on top 
 - deployed Vercel environments must set `QUERY_API_BASE_URL`; there is no silent localhost fallback
 - local admin development can still default to `http://127.0.0.1:4318`
 - TigerData slices are kept current through explicit bootstrap/backfill/reconcile/validate flows and scheduled Tiger refresh workflows
+- YouTube chat coverage is gated in the admin app by `CHAT_TIGER_YOUTUBE_ENABLED`, and the collector runs through the `youtube:*` scripts plus the `youtube-production-*` and `youtube-preview-mirror` workflows
 
 ## Related Documentation
 

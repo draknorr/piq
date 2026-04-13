@@ -2,7 +2,7 @@
 
 Curated examples for the PublisherIQ chat interface.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 > Related docs:
 > - [Chat Interface Guide](./chat-interface.md)
@@ -23,6 +23,7 @@ Curated examples for the PublisherIQ chat interface.
 | Inspect the latest Steam news item | Ask for the latest news item |
 | Summarize recent news for one or more titles | Ask for a news digest |
 | Search recent news by topic | Ask for topic search |
+| Check YouTube coverage for a game | Ask for a YouTube coverage view |
 | Drill into one change card | Ask for change detail |
 | Compare before and after | Ask for before/after comparison |
 | Find marketing / launch patterns | Ask for change-pattern analysis |
@@ -113,7 +114,36 @@ Notes:
 
 ---
 
-## 5. Company and Portfolio Questions
+## 5. YouTube Coverage
+
+Use these when you want Steam-game-scoped YouTube activity, creator coverage, or content mix details.
+
+Examples:
+
+- "Show the latest YouTube videos for Hades II in the last 7 days"
+- "Which creators cover ARC Raiders the most?"
+- "Show top YouTube videos for Stardew Valley this month"
+- "How is YouTube activity changing for Hades II?"
+- "What does the YouTube content mix look like for ARC Raiders?"
+
+Useful prompt patterns:
+
+- "Show the latest YouTube videos for [game] in the last [window]."
+- "Which creators are covering [game] the most?"
+- "Show top YouTube videos for [game]."
+- "Show video growth for [game] over the last [window]."
+- "What does the YouTube content mix look like for [game]?"
+- "Show the YouTube cadence for [game]."
+
+Notes:
+
+- Supported views are `latest_videos`, `creator_coverage`, `top_videos`, `video_growth`, `content_mix`, and `cadence`.
+- Pagination applies to the list-style views and is exposed in the render data.
+- `content_mix` and `cadence` are summary views and do not page.
+
+---
+
+## 6. Company and Portfolio Questions
 
 Examples:
 
@@ -131,7 +161,7 @@ Good follow-up questions:
 
 ---
 
-## 6. Combined Queries
+## 7. Combined Queries
 
 These combine discovery, recent data, and change intelligence.
 
@@ -145,7 +175,7 @@ Examples:
 
 ---
 
-## 7. Response Interpretation
+## 8. Response Interpretation
 
 When chat answers well, you should usually see:
 
@@ -162,7 +192,7 @@ When the answer is thin or ambiguous, the route may:
 
 ---
 
-## 8. Strong Prompt Patterns
+## 9. Strong Prompt Patterns
 
 - "What actually changed in the latest Steam news for [title]?"
 - "What changed on [title] in the last 30/90 days?"
@@ -171,3 +201,6 @@ When the answer is thin or ambiguous, the route may:
 - "Find recent games that look like signable candidates."
 - "Which games posted patch notes lately?"
 - "What games have developer diaries in recent Steam news?"
+- "Show the latest YouTube videos for [game] in the last 7 days."
+- "Which creators cover [game] the most?"
+- "Show video growth for [game] over the last 30 days."

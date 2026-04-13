@@ -1,6 +1,6 @@
 # CLAUDE.md - PublisherIQ
 
-> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData-backed query-api. Last updated: April 6, 2026.
+> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData-backed query-api. Last updated: April 13, 2026.
 
 ## When Uncertain, Ask
 
@@ -42,6 +42,7 @@ Before ANY write operation, STOP and explain:
 pnpm install && pnpm build              # Build all packages
 pnpm check-types                        # TypeScript type checking
 pnpm --filter @publisheriq/admin dev    # Dashboard on http://localhost:3001
+pnpm --filter @publisheriq/query-api dev
 pnpm --filter database generate         # Regenerate Supabase types
 ```
 
@@ -51,6 +52,7 @@ Targeted suites also exist for change intelligence:
 - `cd services/pics-service && pytest`
 
 Worker scripts: `pnpm --filter @publisheriq/ingestion <script-name>`. See `.claude/skills/data-pipeline/` for the full list.
+YouTube operator scripts: `pnpm youtube:seed-routing`, `pnpm youtube:sync-discovery`, `pnpm youtube:sync-refresh`, `pnpm youtube:rollup-daily`.
 
 ---
 
@@ -73,6 +75,8 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 - Using `getSupabase()` in client hooks (use `createBrowserClient()` instead)
 - Referencing `LatestMetrics.js` as a separate file (it's defined inside `DailyMetrics.js`)
 - Running `trends-calculate` or `priority-calculate` (correct: `calculate-trends`, `update-priorities`)
+- Assuming `/apps` is Tiger-backed today (it is still Supabase/RPC-backed)
+- Forgetting that YouTube chat coverage depends on the `getYoutubeGameCoverage` contract and `CHAT_TIGER_YOUTUBE_ENABLED`
 - Creating tests (no test framework configured; use `pnpm build` + `pnpm check-types`)
 
 ---
@@ -90,6 +94,7 @@ Current high-level ownership:
 | Surface | Primary Read Path |
 |---------|-------------------|
 | `/chat` supported contract families | `apps/query-api` -> TigerData |
+| `/chat` per-game YouTube coverage | `apps/query-api` -> TigerData |
 | auth, credits, chat logs | Supabase |
 | `/apps`, `/companies`, `/changes`, `/admin` | Supabase RPCs/tables/views |
 | legacy analytics compatibility | Cube.js over Supabase |
@@ -122,6 +127,7 @@ All paths relative to `apps/admin/src/` unless fully qualified.
 - Browser session readiness helper lives in `apps/admin/src/lib/auth/browser-session.ts`
 - Change Feed UI lives in `apps/admin/src/app/(main)/changes/`
 - Change Feed read APIs live in `apps/admin/src/app/api/change-feed/`
+- YouTube chat follow-up paging route lives in `apps/admin/src/app/api/chat/youtube-coverage/`
 
 ### Command Palette & Filters
 Each page has its **own** filter system (NOT shared):
@@ -134,6 +140,8 @@ Each page has its **own** filter system (NOT shared):
 - `Apps.js` contains 5 cubes: Apps, AppPublishers, AppDevelopers, AppTrends, AppSteamDeck
 - `Discovery.js` contains 5 cubes: Discovery, Genres, AppGenres, Tags, AppTags
 - Chat LLM files: `apps/admin/src/lib/llm/` (tools, system prompt, providers, entity links)
+- Tiger chat routing and YouTube prompt handling live in `apps/admin/src/lib/chat/tiger-shadow.ts`
+- Direct-to-Tiger YouTube ingestion lives in `packages/youtube/`
 - When modifying cubes, always update `cube-system-prompt.ts` too
 - Change Feed SQL read surfaces are created by:
   - `20260315114500_add_change_feed_read_surfaces.sql`
@@ -173,6 +181,7 @@ For full schema details (tables, views, enums, RPC functions, column schemas), s
 | Query API | Railway |
 | PICS Service | Railway |
 | Cube.js | Fly.io |
+| YouTube sync | GitHub Actions + TigerData |
 | Supabase Write / Control Plane | Supabase |
 | Tiger Contract Read Plane | Tiger / Timescale |
 

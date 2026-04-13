@@ -24,9 +24,18 @@ pnpm --filter @publisheriq/ingestion alert-detection
 pnpm --filter @publisheriq/ingestion app-change-hints
 pnpm --filter @publisheriq/ingestion change-intel-worker
 pnpm --filter @publisheriq/ingestion change-intel-backfill-projection
+pnpm --filter @publisheriq/ingestion repair-storefront-authority
+pnpm youtube:seed-routing
+pnpm youtube:bootstrap-backfill
+pnpm youtube:sync-discovery
+pnpm youtube:sync-refresh
+pnpm youtube:rollup-daily
+pnpm youtube:mirror-preview
 ```
 
 `refresh-views` refreshes the heavyweight materialized-view chain only. `app_filter_data` is refreshed by GitHub Actions, and the small Games page filter-count views are refreshed by `pg_cron`.
+
+`repair-storefront-authority` repairs missing storefront fields (`is_free`, `is_released`, `release_date`) before downstream refreshes or change-intel reruns. The `youtube:*` scripts run the direct-to-Tiger YouTube collector and do not touch the Supabase ingestion path.
 
 ## Useful Environment Overrides
 
@@ -79,6 +88,24 @@ STALE_CLAIM_SWEEP_INTERVAL_MS=60000
 cd services/pics-service
 MODE=first_pass python3 -m src.main
 ```
+
+### YouTube Collector
+
+```bash
+pnpm youtube:seed-routing
+pnpm youtube:bootstrap-backfill
+pnpm youtube:sync-discovery
+pnpm youtube:sync-refresh
+pnpm youtube:rollup-daily
+pnpm youtube:mirror-preview
+```
+
+Required environment:
+
+- `TIGER_PRIMARY_URL`
+- `DATABASE_URL` or `YOUTUBE_SOURCE_DATABASE_URL`
+- `YOUTUBE_API_KEY`
+- `YOUTUBE_WRITE_TARGET`
 
 ## Validation
 

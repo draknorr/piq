@@ -91,6 +91,7 @@ Rollback guidance:
 - `.github/workflows/news-catchup.yml`: manual bounded news catch-up using `QUEUE_SOURCES=news` and `MAX_IDLE_POLLS`.
 - `.github/workflows/storefront-initial-sync.yml`: existing manual storefront bootstrap workflow.
 - `pnpm --filter @publisheriq/ingestion requeue-hero-asset-404-dead-letters`: dry-run-by-default helper that requeues current `hero_asset` dead letters caused by Steam `404`s.
+- `pnpm --filter @publisheriq/ingestion repair-storefront-authority`: repairs missing storefront-authority fields (`is_free`, `is_released`, `release_date`) before downstream storefront or change-intel reruns.
 
 ## Read Surfaces
 

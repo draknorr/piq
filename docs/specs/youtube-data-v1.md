@@ -2,7 +2,9 @@
 
 Date: April 6, 2026  
 Audience: Founder/operator and future implementers  
-Scope: Documentation-only design for future YouTube ingestion, matching, and per-game trend data
+Scope: Historical design for the original YouTube ingestion, matching, and per-game trend data proposal
+
+> Historical note: this document captures the original v1 proposal. The shipped YouTube collector and chat contract family now live in `packages/youtube`, `packages/data-plane`, and `apps/query-api`. Keep the sections below as the original design record.
 
 ## Executive Summary
 
@@ -29,7 +31,7 @@ The recommended v1 operating model is:
 5. separate `standard_videos`, `shorts`, and `live_or_recent_live` content classes
 6. manual suppressions and match controls from day one
 
-This phase is documentation only. No package, schema, API route, or UI work is part of the deliverable.
+At the time, this phase was documentation only. No package, schema, API route, or UI work was part of the deliverable; the shipped runtime now exists separately.
 
 ## Immediate Goal
 
@@ -491,7 +493,7 @@ That gives PublisherIQ the best chance of shipping a useful YouTube explanation 
 - YouTube search.list: https://developers.google.com/youtube/v3/docs/search/list
 - YouTube videos resource: https://developers.google.com/youtube/v3/docs/videos
 - YouTube videoCategories.list: https://developers.google.com/youtube/v3/docs/videoCategories/list
-- Existing Steam priority logic: [packages/ingestion/src/workers/priority-worker.ts](/Users/ryanbohmann/Desktop/publisheriq/packages/ingestion/src/workers/priority-worker.ts)
-- Existing launch-window and override logic: [packages/ingestion/src/workers-support/reviews-sync.ts](/Users/ryanbohmann/Desktop/publisheriq/packages/ingestion/src/workers-support/reviews-sync.ts)
-- Existing Steam change-hint promotion logic: [packages/ingestion/src/workers/app-change-hints-worker.ts](/Users/ryanbohmann/Desktop/publisheriq/packages/ingestion/src/workers/app-change-hints-worker.ts)
-- Existing core alias model: [packages/data-plane/sql/tiger-bootstrap/0010_core_identity.sql](/Users/ryanbohmann/Desktop/publisheriq/packages/data-plane/sql/tiger-bootstrap/0010_core_identity.sql)
+- Existing Steam priority logic: [packages/ingestion/src/workers/priority-worker.ts](../../packages/ingestion/src/workers/priority-worker.ts)
+- Existing launch-window and override logic: [packages/ingestion/src/workers-support/reviews-sync.ts](../../packages/ingestion/src/workers-support/reviews-sync.ts)
+- Existing Steam change-hint promotion logic: [packages/ingestion/src/workers/app-change-hints-worker.ts](../../packages/ingestion/src/workers/app-change-hints-worker.ts)
+- Existing core alias model: [packages/data-plane/sql/tiger-bootstrap/0010_core_identity.sql](../../packages/data-plane/sql/tiger-bootstrap/0010_core_identity.sql)

@@ -14,6 +14,7 @@ This guide covers the admin-only surfaces in PublisherIQ.
 | Review waitlist requests | `/admin/waitlist` | [Dashboard](./dashboard.md#waitlist-management) |
 | Review credit usage | `/admin/usage` | [Dashboard](./dashboard.md#usage-analytics) |
 | Debug chat issues | `/admin` | [Chat Logs](./chat-logs.md) |
+| Debug YouTube chat coverage | `/admin` | [Chat Logs](./chat-logs.md) |
 | Troubleshoot auth or runtime issues | `/admin` | [Troubleshooting](./troubleshooting.md) |
 
 ## Admin Pages
@@ -30,7 +31,7 @@ The main dashboard focuses on operational status:
 - PICS service metrics
 - sync errors
 - recent jobs
-- chat logs
+- chat logs, including Tiger route families such as YouTube coverage
 
 ### `/admin/users`
 
@@ -57,6 +58,7 @@ The main dashboard focuses on operational status:
 | User needs more credits | `/admin/users` |
 | Queue or PICS health looks off | `/admin` |
 | Chat feels slow or tool-heavy | `/admin` chat logs section |
+| YouTube chat coverage looks wrong | `/admin` chat logs and [Troubleshooting](./troubleshooting.md) |
 
 ## Related Documentation
 

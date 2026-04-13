@@ -1,8 +1,8 @@
 # Chat Interface Guide
 
-PublisherIQ chat is a natural-language interface for querying Steam data, similarity search, and Steam change intelligence.
+PublisherIQ chat is a natural-language interface for querying Steam data, similarity search, Steam change intelligence, and YouTube coverage for Steam games.
 
-**Last Updated:** April 6, 2026
+**Last Updated:** April 13, 2026
 
 > Related docs:
 > - [Chat Query Examples](./chat-query-examples.md)
@@ -25,6 +25,7 @@ The chat route supports these capability families:
 - Trend and screening for momentum, velocity, and market screens
 - Change intelligence for store-page, announcement, and before/after analysis
 - Recent news search for the latest stored Steam news and topic lookups
+- YouTube coverage for Steam games, including latest videos, creator coverage, top videos, growth, content mix, and cadence
 - Follow-up continuation so "show me more" and "same but..." stay on the same result set
 
 Use these rules as a shortcut:
@@ -36,6 +37,16 @@ Use these rules as a shortcut:
 - Use topic search when you care about content across many games rather than one named title.
 - Use a market screen when you want a strict ranked list with explicit filters and sorting.
 - Use momentum discovery when you want accelerating, breakout, or declining titles.
+- For YouTube questions, name the Steam game first and then ask for a specific view, window, or content class.
+- The YouTube path only supports Steam game entities, so prompts should be scoped to one game title.
+
+### YouTube Coverage
+
+- "Show the latest YouTube videos for Hades II in the last 7 days"
+- "Which creators cover ARC Raiders the most?"
+- "Show top YouTube videos for Stardew Valley this month"
+- "How has YouTube activity changed for Hades II over the last 30 days?"
+- "What does the YouTube content mix look like for ARC Raiders?"
 
 ## What You Can Ask
 
