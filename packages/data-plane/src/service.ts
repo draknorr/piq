@@ -10957,7 +10957,7 @@ export class DataPlaneService {
   }): Promise<YoutubeGameCoverageVideoItem[]> {
     return this.queryYoutubeRankedVideoRows({
       ...params,
-      orderBy: 'v.view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC',
+      orderBy: 'view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC',
     });
   }
 
@@ -10971,14 +10971,24 @@ export class DataPlaneService {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
     const channelsTable = this.relation('docs_youtube_channels').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
     const result = await runQuery<YoutubeVideoCoverageRow>(
       `
+        WITH latest_snapshots AS (
+          SELECT DISTINCT ON (s.video_id)
+            s.video_id,
+            s.view_count
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+          ORDER BY s.video_id, s.snapshot_time DESC
+        )
         SELECT
           v.video_id,
           v.title,
           v.published_at::text,
           v.content_class,
-          v.view_count,
+          COALESCE(v.view_count, latest_snapshots.view_count) AS view_count,
           v.like_count,
           v.comment_count,
           v.channel_id,
@@ -10994,6 +11004,7 @@ export class DataPlaneService {
         FROM ${matchesTable} m
         JOIN ${videosTable} v ON v.video_id = m.video_id
         LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+        LEFT JOIN latest_snapshots ON latest_snapshots.video_id = v.video_id
         WHERE m.appid = $1
           AND m.match_state = 'matched_primary'
           AND ($2::text IS NULL OR v.content_class = $2::text)
@@ -11090,8 +11101,18 @@ export class DataPlaneService {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
     const channelsTable = this.relation('docs_youtube_channels').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
     const result = await runQuery<YoutubeCreatorCoverageRow>(
       `
+        WITH latest_snapshots AS (
+          SELECT DISTINCT ON (s.video_id)
+            s.video_id,
+            s.view_count
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+          ORDER BY s.video_id, s.snapshot_time DESC
+        )
         SELECT
           v.channel_id,
           COALESCE(c.title, max(v.channel_title), v.channel_id) AS channel_title,
@@ -11099,10 +11120,11 @@ export class DataPlaneService {
           c.country AS channel_country,
           count(*)::int AS matched_video_count,
           max(v.published_at)::text AS latest_matched_upload_at,
-          sum(v.view_count)::bigint AS total_matched_views
+          sum(COALESCE(v.view_count, latest_snapshots.view_count, 0))::bigint AS total_matched_views
         FROM ${matchesTable} m
         JOIN ${videosTable} v ON v.video_id = m.video_id
         LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+        LEFT JOIN latest_snapshots ON latest_snapshots.video_id = v.video_id
         WHERE m.appid = $1
           AND m.match_state = 'matched_primary'
           AND ($2::text IS NULL OR v.content_class = $2::text)
@@ -11212,15 +11234,26 @@ export class DataPlaneService {
   }): Promise<YoutubeGameCoverageCadenceItem | null> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
     const videosTable = this.relation('docs_youtube_videos').sql;
+    const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
     const result = await runQuery<YoutubeCadenceRow>(
       `
+        WITH latest_snapshots AS (
+          SELECT DISTINCT ON (s.video_id)
+            s.video_id,
+            s.view_count
+          FROM ${snapshotsTable} s
+          WHERE s.appid = $1
+            AND ($2::text IS NULL OR s.content_class = $2::text)
+          ORDER BY s.video_id, s.snapshot_time DESC
+        )
         SELECT
           count(*)::int AS new_matched_videos,
           count(DISTINCT v.channel_id)::int AS distinct_upload_channels,
-          COALESCE(sum(v.view_count), 0)::bigint AS views_on_new_videos,
+          COALESCE(sum(COALESCE(v.view_count, latest_snapshots.view_count, 0)), 0)::bigint AS views_on_new_videos,
           0::bigint AS matched_video_view_delta
         FROM ${matchesTable} m
         JOIN ${videosTable} v ON v.video_id = m.video_id
+        LEFT JOIN latest_snapshots ON latest_snapshots.video_id = v.video_id
         WHERE m.appid = $1
           AND m.match_state = 'matched_primary'
           AND ($2::text IS NULL OR v.content_class = $2::text)

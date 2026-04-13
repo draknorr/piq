@@ -7030,12 +7030,17 @@ test('Tiger primary routes explicit YouTube latest-video prompts through get-you
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.equal(result.info.attempts.at(-1)?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /Latest YouTube videos for ARC Raiders/);
+  assert.match(result.renderedText ?? '', /ARC Raiders currently has 100 tracked YouTube videos\./);
+  assert.match(result.renderedText ?? '', /In the last 7 days, there were 88 new videos from 18 channels\./);
   assert.match(result.renderedText ?? '', /ARC Raiders Just Buffed This Key Room/);
   assert.match(result.renderedText ?? '', /\| Video \| Channel \| Published \| Views \| Format \|/);
   assert.match(result.renderedText ?? '', /\[ARC Raiders Just Buffed This Key Room\]\(<https:\/\/www\.youtube\.com\/watch\?v=video-1>\)/);
   assert.match(result.renderedText ?? '', /\[Creator One\]\(<https:\/\/www\.youtube\.com\/channel\/channel-1>\)/);
   assert.match(result.renderedText ?? '', /ARC Raiders \[Guide\] \\| Fast Route Line 2/);
   assert.match(result.renderedText ?? '', /Creator \[Two\] Daily/);
+  assert.doesNotMatch(result.renderedText ?? '', /matched set/i);
+  assert.doesNotMatch(result.renderedText ?? '', /creator breadth/i);
+  assert.doesNotMatch(result.renderedText ?? '', /latest snapshot/i);
 });
 
 test('Tiger primary resolves creator coverage prompts phrased as creator coverage', async (t) => {
@@ -7126,7 +7131,7 @@ test('Tiger primary resolves creator coverage prompts phrased as creator coverag
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube creator coverage for Palworld/);
   assert.match(result.renderedText ?? '', /Pocketpair Clips/);
-  assert.match(result.renderedText ?? '', /\| Channel \| Matched Videos \| Current Matched Views \| Subscribers \| Latest Upload \|/);
+  assert.match(result.renderedText ?? '', /\| Channel \| Videos \| Views \| Subscribers \| Latest Upload \|/);
   assert.match(result.renderedText ?? '', /\[Pocketpair Clips\]\(<https:\/\/www\.youtube\.com\/channel\/channel-pocketpair>\)/);
 });
 
@@ -7221,7 +7226,7 @@ test('Tiger primary resolves YouTube growth prompts and maps last 1 day to the 1
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /Fastest-growing YouTube videos for Hollow Knight/);
   assert.match(result.renderedText ?? '', /Hollow Knight Lore Theory Just Exploded/);
-  assert.match(result.renderedText ?? '', /\| Video \| Channel \| Published \| View Delta \| Growth \| Current Views \| Format \|/);
+  assert.match(result.renderedText ?? '', /\| Video \| Channel \| Published \| View Delta \| Growth \| Views \| Format \|/);
   assert.match(result.renderedText ?? '', /\[Hollow Knight Lore Theory Just Exploded\]\(<https:\/\/www\.youtube\.com\/watch\?v=video-growth-1>\)/);
   assert.match(result.renderedText ?? '', /\[Silksong Watch\]\(<https:\/\/www\.youtube\.com\/channel\/channel-silksong>\)/);
 });
@@ -7503,12 +7508,13 @@ test('Tiger primary routes cadence prompts to YouTube with a 14-day window', asy
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube activity for ARC Raiders in the last 14 days/);
-  assert.match(result.renderedText ?? '', /In the last 14 days, ARC Raiders had 31 new matched videos from 23 upload channels\./);
+  assert.match(result.renderedText ?? '', /In the last 14 days, 23 channels posted 31 new videos about ARC Raiders\./);
   assert.match(result.renderedText ?? '', /\| Metric \| Value \|/);
   assert.match(result.renderedText ?? '', /\| Upload channels \| 23 \|/);
-  assert.match(result.renderedText ?? '', /\| New matched videos \| 31 \|/);
-  assert.match(result.renderedText ?? '', /\| Views on new uploads \| 420K \|/);
+  assert.match(result.renderedText ?? '', /\| New videos \| 31 \|/);
+  assert.match(result.renderedText ?? '', /\| Current views \| 420K \|/);
   assert.match(result.renderedText ?? '', /\| View delta \| 145K \|/);
+  assert.doesNotMatch(result.renderedText ?? '', /latest snapshot/i);
 });
 
 test('Tiger primary routes generic content-mix prompts to YouTube with a monthly window', async (t) => {
@@ -7608,7 +7614,7 @@ test('Tiger primary routes generic content-mix prompts to YouTube with a monthly
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube content mix for ARC Raiders in the last 30 days/);
-  assert.match(result.renderedText ?? '', /\| Format \| Matched Videos \| New Videos \| Upload Channels \| View Delta \|/);
+  assert.match(result.renderedText ?? '', /\| Format \| Videos \| New Videos \| Channels \| View Delta \|/);
   assert.match(result.renderedText ?? '', /\| Standard video \| 44 \| 18 \| 12 \| 120K \|/);
   assert.match(result.renderedText ?? '', /\| Shorts \| 31 \| 26 \| 19 \| 240K \|/);
 });
