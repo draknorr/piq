@@ -9813,7 +9813,7 @@ function buildYoutubeMarkdownTable(columns: string[], rows: string[][]): string 
 }
 
 function buildYoutubeCoverageHeader(response: GetYoutubeGameCoverageResponse): string {
-  const entityName = response.entity.displayName;
+  const entityName = response.entity?.displayName ?? 'this game';
   const windowLabel = formatYoutubeWindowLabel(response.resolvedWindow);
   const classLabel = formatYoutubeContentClassLabel(response.contentClass, { plural: true });
   const windowSuffix = windowLabel ? ` in ${windowLabel}` : '';
