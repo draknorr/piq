@@ -7503,8 +7503,12 @@ test('Tiger primary routes cadence prompts to YouTube with a 14-day window', asy
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult?.contractName, 'getYoutubeGameCoverage');
   assert.match(result.renderedText ?? '', /YouTube activity for ARC Raiders in the last 14 days/);
-  assert.match(result.renderedText ?? '', /\| Window \| New Videos \| Upload Channels \| Views On New Uploads \| View Delta \|/);
-  assert.match(result.renderedText ?? '', /\| the last 14 days \| 31 \| 23 \| 420K \| 145K \|/);
+  assert.match(result.renderedText ?? '', /In the last 14 days, ARC Raiders had 31 new matched videos from 23 upload channels\./);
+  assert.match(result.renderedText ?? '', /\| Metric \| Value \|/);
+  assert.match(result.renderedText ?? '', /\| Upload channels \| 23 \|/);
+  assert.match(result.renderedText ?? '', /\| New matched videos \| 31 \|/);
+  assert.match(result.renderedText ?? '', /\| Views on new uploads \| 420K \|/);
+  assert.match(result.renderedText ?? '', /\| View delta \| 145K \|/);
 });
 
 test('Tiger primary routes generic content-mix prompts to YouTube with a monthly window', async (t) => {

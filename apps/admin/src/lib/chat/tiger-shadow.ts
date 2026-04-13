@@ -9696,6 +9696,10 @@ function formatYoutubeDate(value: string | null | undefined): string {
   });
 }
 
+function hasYoutubeNumericMetric(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function formatYoutubeWindowLabel(value: YoutubeCoverageWindow | null | undefined): string | null {
   if (!value || value === 'current') {
     return null;
@@ -9963,19 +9967,45 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
   if (response.view === 'cadence') {
     const cadence = response.cadence;
     const body = cadence
-      ? buildYoutubeMarkdownTable(
-          ['Window', 'New Videos', 'Upload Channels', 'Views On New Uploads', 'View Delta'],
-          [[
-            formatYoutubeWindowLabel(cadence.window) ?? 'current',
-            formatYoutubeMetric(cadence.newMatchedVideos ?? null),
-            formatYoutubeMetric(cadence.distinctUploadChannels ?? null),
-            formatYoutubeMetric(cadence.viewsOnNewVideos ?? null),
-            formatYoutubeMetric(cadence.matchedVideoViewDelta ?? null),
-          ]]
-        )
+      ? (() => {
+          const windowLabel = formatYoutubeWindowLabel(cadence.window ?? response.resolvedWindow) ?? 'the current window';
+          const intro =
+            hasYoutubeNumericMetric(cadence.newMatchedVideos) && hasYoutubeNumericMetric(cadence.distinctUploadChannels)
+              ? `In ${windowLabel}, ${entityName} had ${formatYoutubeMetric(cadence.newMatchedVideos)} new matched videos from ${formatYoutubeMetric(cadence.distinctUploadChannels)} upload channels.`
+              : hasYoutubeNumericMetric(cadence.distinctUploadChannels)
+                ? `In ${windowLabel}, ${formatYoutubeMetric(cadence.distinctUploadChannels)} upload channels posted about ${entityName}.`
+                : hasYoutubeNumericMetric(cadence.newMatchedVideos)
+                  ? `In ${windowLabel}, ${entityName} had ${formatYoutubeMetric(cadence.newMatchedVideos)} new matched videos.`
+                  : `Here is the current YouTube activity summary for ${entityName}.`;
+
+          const detailRows: string[][] = [
+            ['Window', windowLabel],
+          ];
+
+          if (hasYoutubeNumericMetric(cadence.distinctUploadChannels)) {
+            detailRows.push(['Upload channels', formatYoutubeMetric(cadence.distinctUploadChannels)]);
+          }
+
+          if (hasYoutubeNumericMetric(cadence.newMatchedVideos)) {
+            detailRows.push(['New matched videos', formatYoutubeMetric(cadence.newMatchedVideos)]);
+          }
+
+          if (hasYoutubeNumericMetric(cadence.viewsOnNewVideos)) {
+            detailRows.push(['Views on new uploads', formatYoutubeMetric(cadence.viewsOnNewVideos)]);
+          }
+
+          if (hasYoutubeNumericMetric(cadence.matchedVideoViewDelta)) {
+            detailRows.push(['View delta', formatYoutubeMetric(cadence.matchedVideoViewDelta)]);
+          }
+
+          detailRows.push(['Freshest matched upload', formatYoutubeDate(summary.freshestMatchedUploadAt)]);
+          detailRows.push(['Latest snapshot seen', formatYoutubeDate(summary.latestSnapshotAt)]);
+
+          return `${intro}\n\n${buildYoutubeMarkdownTable(['Metric', 'Value'], detailRows)}`;
+        })()
       : 'No cadence summary was available in the current filtered slice.';
 
-    return `${heading}\n\n${summaryLines.join('\n')}\n\n${body}`.trim();
+    return `${heading}\n\n${body}`.trim();
   }
 
   const rows = (response.items ?? []).slice(0, response.limit ?? 10);
