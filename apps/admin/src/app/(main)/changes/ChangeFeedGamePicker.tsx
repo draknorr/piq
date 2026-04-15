@@ -109,7 +109,7 @@ export function ChangeFeedGamePicker({
     }
 
     return availableGames
-      .map((game) => {
+      .map((game): ChatEntityPickerEntity | null => {
         const matchQuality = getMatchQuality(game.name, trimmedQuery);
         if (!matchQuality) {
           return null;
