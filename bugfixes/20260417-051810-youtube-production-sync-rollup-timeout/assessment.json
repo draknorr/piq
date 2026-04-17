@@ -1,0 +1,117 @@
+{
+  "bug_id": "20260417-051810-youtube-production-sync-rollup-timeout",
+  "slug": "youtube-production-sync-rollup-timeout",
+  "created_at": "2026-04-17T05:18:10.724427+00:00",
+  "status": "fixed",
+  "summary": "The YouTube production sync failed because rebuildDailyRollups used correlated snapshot lookups that exceeded the default 15s Postgres statement timeout on current production data. The fix rewrites the rollup to compute snapshot boundaries in a set-based way, preserving the old result set while dropping runtime from about 29.5s to about 4.0s in read-only validation.",
+  "triage_score": 5,
+  "triage_tier": 3,
+  "depth_classification": "broad",
+  "spawned_agents": [
+    "bug_mapper",
+    "runtime_reproducer",
+    "impact_analyst"
+  ],
+  "why_this_tier": "This bug touched DB-backed metrics correctness, arrived with screenshot-only evidence, involved a background sync pipeline, and affected downstream Tiger-backed chat coverage surfaces.",
+  "observed_facts": [
+    "The failing workflow step was `pnpm youtube:rollup-daily` in `.github/workflows/youtube-production-sync.yml`.",
+    "The workflow did not override `DATA_PLANE_STATEMENT_TIMEOUT_MS`, so the default `15000` ms timeout from `packages/youtube/src/config.ts` applied.",
+    "The failing SQL lived in `packages/youtube/src/storage.ts` inside `rebuildDailyRollups()`.",
+    "Production Tiger had the expected indexes on `metrics.youtube_video_snapshots`, `docs.youtube_video_matches`, `docs.youtube_videos`, and `metrics.youtube_game_daily`.",
+    "The read-only SELECT equivalent of the old rollup timed out under a 15s statement timeout and completed in 29483.777 ms under a 60s timeout.",
+    "The read-only SELECT equivalent of the new rollup completed in 4040.450 ms under a 15s statement timeout.",
+    "A full-row comparison of the old and new 30-day rollup queries returned 0 differing rows.",
+    "Before the fix, `metrics.youtube_game_daily` was stale through 2026-04-14 while `metrics.youtube_video_snapshots` remained fresh through 2026-04-17 03:45:48 UTC."
+  ],
+  "reproduction_status": {
+    "state": "reproduced",
+    "summary": "Read-only SQL against production Tiger reproduced the statement-timeout failure for the old rollup query and verified the new query completed within the existing timeout budget.",
+    "evidence_paths": [
+      "bugfixes/20260417-051810-youtube-production-sync-rollup-timeout/artifacts/reproduction/read-only-rollup-repro.md",
+      "bugfixes/20260417-051810-youtube-production-sync-rollup-timeout/artifacts/db/source-of-truth-checks.md"
+    ]
+  },
+  "owning_files": [
+    ".github/workflows/youtube-production-sync.yml",
+    "packages/youtube/src/config.ts",
+    "packages/youtube/src/db.ts",
+    "packages/youtube/src/storage.ts"
+  ],
+  "affected_surfaces": [
+    "YouTube production GitHub Actions sync",
+    "metrics.youtube_game_daily",
+    "getYoutubeGameCoverage",
+    "/api/chat/youtube-coverage",
+    "youtube-preview-mirror"
+  ],
+  "db_checks": [
+    {
+      "status": "run",
+      "purpose": "Confirm production scale for the YouTube rollup inputs.",
+      "sql": "SELECT (SELECT count(*) FROM docs.youtube_video_matches WHERE match_state IN ('matched_primary','matched_secondary')) AS matched_videos, (SELECT count(*) FROM metrics.youtube_video_snapshots) AS snapshots, (SELECT count(*) FROM metrics.youtube_game_daily WHERE metric_date >= current_date - 29) AS rollup_rows_30d, (SELECT count(*) FROM events.youtube_search_hits WHERE captured_at >= current_date - INTERVAL '30 days') AS search_hits_30d;",
+      "result_summary": "Production Tiger had 30,969 matched videos, 46,960 snapshots, 5,112 recent rollup rows, and 36,614 recent search hits.",
+      "artifact_path": "bugfixes/20260417-051810-youtube-production-sync-rollup-timeout/artifacts/db/source-of-truth-checks.md"
+    },
+    {
+      "status": "run",
+      "purpose": "Confirm the rollup table was stale while raw snapshots were still fresh.",
+      "sql": "SELECT max(metric_date) AS latest_metric_date, count(*) FILTER (WHERE metric_date = current_date) AS rows_today, count(*) FILTER (WHERE metric_date = current_date - 1) AS rows_yesterday FROM metrics.youtube_game_daily; SELECT to_char(max(snapshot_time), 'YYYY-MM-DD HH24:MI:SS TZ') AS latest_snapshot_at, count(*) FILTER (WHERE snapshot_time >= now() - interval '24 hours') AS snapshots_last_24h FROM metrics.youtube_video_snapshots;",
+      "result_summary": "The latest rollup date was 2026-04-14 with no current-day rows, while snapshots were fresh through 2026-04-17 03:45:48 UTC with 4,048 snapshots in the last 24 hours.",
+      "artifact_path": "bugfixes/20260417-051810-youtube-production-sync-rollup-timeout/artifacts/db/source-of-truth-checks.md"
+    },
+    {
+      "status": "run",
+      "purpose": "Confirm production had the expected indexes and the failure was not caused by schema drift.",
+      "sql": "SELECT schemaname, tablename, indexname FROM pg_indexes WHERE schemaname IN ('docs','metrics') AND tablename IN ('youtube_video_snapshots','youtube_video_matches','youtube_videos','youtube_game_daily') ORDER BY schemaname, tablename, indexname LIMIT 50;",
+      "result_summary": "Production had the expected indexes, including `idx_metrics_youtube_video_snapshots_video_time`, so the timeout was due to query shape and data volume rather than missing migrations.",
+      "artifact_path": "bugfixes/20260417-051810-youtube-production-sync-rollup-timeout/artifacts/db/source-of-truth-checks.md"
+    }
+  ],
+  "root_cause_hypotheses": [
+    {
+      "label": "The pre-fix rollup exceeded the 15s statement timeout because it performed repeated correlated snapshot boundary lookups inside the aggregate.",
+      "confidence": "high",
+      "evidence": "The read-only reproduction matched the timeout, the old query needed about 29.5s to complete, and the set-based rewrite reduced runtime to about 4.0s without changing the result set."
+    },
+    {
+      "label": "Missing indexes or missing YouTube bootstrap migrations caused the timeout.",
+      "confidence": "low",
+      "evidence": "Production Tiger had the expected indexes on the relevant docs and metrics tables, and the failure persisted until the query shape changed."
+    }
+  ],
+  "fix_options": [
+    {
+      "title": "Set-based rollup rewrite",
+      "behavior_change": false,
+      "summary": "Replace the correlated snapshot subqueries with precomputed snapshot intervals and boundary joins, keeping the rollup output unchanged.",
+      "tradeoffs": "More SQL structure inside the rollup query, but much better runtime and no behavior change."
+    },
+    {
+      "title": "Increase statement timeout only",
+      "behavior_change": false,
+      "summary": "Raise `DATA_PLANE_STATEMENT_TIMEOUT_MS` in the workflow so the existing query has more time to finish.",
+      "tradeoffs": "Fast to apply but leaves the expensive query shape in place and hides future growth regressions."
+    },
+    {
+      "title": "Reduce the rebuilt lookback window",
+      "behavior_change": true,
+      "summary": "Lower `YOUTUBE_ROLLUP_LOOKBACK_DAYS` so the existing query processes fewer metric days.",
+      "tradeoffs": "Changes the rebuilt history surface and still leaves the expensive query structure in place."
+    }
+  ],
+  "recommended_fix": "Use the set-based rollup rewrite in `packages/youtube/src/storage.ts` and keep the existing timeout as-is unless a later workflow run shows a separate need for an ops-side timeout increase.",
+  "open_questions": [],
+  "verification_plan": [
+    "Run `pnpm --filter @publisheriq/youtube check-types`.",
+    "Run `pnpm --filter @publisheriq/youtube lint`.",
+    "Run `pnpm --filter @publisheriq/youtube test`.",
+    "Verify the read-only SELECT equivalent of the new rollup completes under a 15s statement timeout.",
+    "Verify the old and new read-only 30-day rollup queries produce identical rows.",
+    "Re-run the write path in a safe environment or the scheduled workflow and confirm `metrics.youtube_game_daily` catches up."
+  ],
+  "residual_risks": [
+    "The new query is much faster on current data, but rollup runtime should still be watched as the snapshot table grows.",
+    "I did not run the write path against production Tiger because that would modify live rollup data.",
+    "If the scheduled workflow still competes with unusual production load, an ops-side timeout override may still be useful as a secondary safeguard."
+  ]
+}

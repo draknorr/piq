@@ -928,14 +928,117 @@ export async function rebuildDailyRollups(pool: Pool, lookbackDays: number): Pro
           WHERE vm.match_state IN ('matched_primary', 'matched_secondary')
             AND v.published_at IS NOT NULL
         ),
-        app_days AS (
-          SELECT DISTINCT
+        rollup_counts AS (
+          SELECT
             d.metric_date,
             m.appid,
-            m.content_class
+            m.content_class,
+            count(*) FILTER (WHERE m.match_state = 'matched_primary')::int AS matched_primary_video_count,
+            count(*) FILTER (WHERE m.match_state = 'matched_secondary')::int AS matched_secondary_video_count,
+            count(*) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date = d.metric_date
+            )::int AS new_matched_videos_1d,
+            count(*) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 6 AND d.metric_date
+            )::int AS new_matched_videos_7d,
+            count(*) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 29 AND d.metric_date
+            )::int AS new_matched_videos_30d,
+            count(DISTINCT m.channel_id) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 6 AND d.metric_date
+            )::int AS distinct_upload_channels_7d,
+            count(DISTINCT m.channel_id) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 29 AND d.metric_date
+            )::int AS distinct_upload_channels_30d,
+            COALESCE(sum(m.latest_view_count) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 6 AND d.metric_date
+            ), 0)::bigint AS views_on_new_videos_7d,
+            COALESCE(sum(m.latest_view_count) FILTER (
+              WHERE m.match_state = 'matched_primary'
+                AND m.published_date BETWEEN d.metric_date - 29 AND d.metric_date
+            ), 0)::bigint AS views_on_new_videos_30d
           FROM days d
           JOIN matched m
             ON m.published_date <= d.metric_date
+          GROUP BY 1, 2, 3
+        ),
+        primary_matched_days AS (
+          SELECT
+            d.metric_date,
+            m.appid,
+            m.content_class,
+            m.video_id
+          FROM days d
+          JOIN matched m
+            ON m.match_state = 'matched_primary'
+           AND m.published_date <= d.metric_date
+        ),
+        boundary_days AS (
+          SELECT generate_series(
+            current_date - ($1::int + 5),
+            current_date + 1,
+            INTERVAL '1 day'
+          )::date AS boundary_date
+        ),
+        primary_video_ids AS (
+          SELECT DISTINCT video_id
+          FROM matched
+          WHERE match_state = 'matched_primary'
+        ),
+        snapshot_intervals AS (
+          SELECT
+            s.video_id,
+            s.snapshot_time,
+            s.view_count,
+            lead(s.snapshot_time) OVER (
+              PARTITION BY s.video_id
+              ORDER BY s.snapshot_time
+            ) AS next_snapshot_time
+          FROM metrics.youtube_video_snapshots s
+          JOIN primary_video_ids p
+            ON p.video_id = s.video_id
+          WHERE s.snapshot_time < current_date + INTERVAL '1 day'
+        ),
+        boundary_view_counts AS (
+          SELECT
+            b.boundary_date,
+            s.video_id,
+            s.view_count
+          FROM boundary_days b
+          JOIN snapshot_intervals s
+            ON s.snapshot_time < b.boundary_date
+           AND (s.next_snapshot_time IS NULL OR s.next_snapshot_time >= b.boundary_date)
+        ),
+        primary_delta_rollups AS (
+          SELECT
+            p.metric_date,
+            p.appid,
+            p.content_class,
+            COALESCE(sum(GREATEST(
+              COALESCE(end_views.view_count, 0) - COALESCE(start_1d.view_count, 0),
+              0
+            )), 0)::bigint AS matched_video_view_delta_1d,
+            COALESCE(sum(GREATEST(
+              COALESCE(end_views.view_count, 0) - COALESCE(start_7d.view_count, 0),
+              0
+            )), 0)::bigint AS matched_video_view_delta_7d
+          FROM primary_matched_days p
+          LEFT JOIN boundary_view_counts end_views
+            ON end_views.video_id = p.video_id
+           AND end_views.boundary_date = p.metric_date + 1
+          LEFT JOIN boundary_view_counts start_1d
+            ON start_1d.video_id = p.video_id
+           AND start_1d.boundary_date = p.metric_date
+          LEFT JOIN boundary_view_counts start_7d
+            ON start_7d.video_id = p.video_id
+           AND start_7d.boundary_date = p.metric_date - 6
+          GROUP BY 1, 2, 3
         ),
         discovered AS (
           SELECT
@@ -992,115 +1095,42 @@ export async function rebuildDailyRollups(pool: Pool, lookbackDays: number): Pro
           updated_at
         )
         SELECT
-          ad.metric_date,
-          ad.appid,
-          ad.content_class,
+          c.metric_date,
+          c.appid,
+          c.content_class,
           'partial' AS coverage_state,
-          count(*) FILTER (WHERE m.match_state = 'matched_primary')::int AS matched_primary_video_count,
-          count(*) FILTER (WHERE m.match_state = 'matched_secondary')::int AS matched_secondary_video_count,
+          c.matched_primary_video_count,
+          c.matched_secondary_video_count,
           COALESCE(mc.monitored_channel_count, 0) AS monitored_channel_count,
           COALESCE(dv.discovered_video_count, 0) AS discovered_video_count,
-          count(*) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date = ad.metric_date
-          )::int AS new_matched_videos_1d,
-          count(*) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 6 AND ad.metric_date
-          )::int AS new_matched_videos_7d,
-          count(*) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 29 AND ad.metric_date
-          )::int AS new_matched_videos_30d,
-          count(DISTINCT m.channel_id) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 6 AND ad.metric_date
-          )::int AS distinct_upload_channels_7d,
-          count(DISTINCT m.channel_id) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 29 AND ad.metric_date
-          )::int AS distinct_upload_channels_30d,
-          COALESCE(sum(m.latest_view_count) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 6 AND ad.metric_date
-          ), 0)::bigint AS views_on_new_videos_7d,
-          COALESCE(sum(m.latest_view_count) FILTER (
-            WHERE m.match_state = 'matched_primary'
-              AND m.published_date BETWEEN ad.metric_date - 29 AND ad.metric_date
-          ), 0)::bigint AS views_on_new_videos_30d,
-          COALESCE(sum(
-            CASE
-              WHEN m.match_state <> 'matched_primary' THEN 0
-              ELSE GREATEST(
-                COALESCE((
-                  SELECT s_end.view_count
-                  FROM metrics.youtube_video_snapshots s_end
-                  WHERE s_end.video_id = m.video_id
-                    AND s_end.snapshot_time < ad.metric_date + INTERVAL '1 day'
-                  ORDER BY s_end.snapshot_time DESC
-                  LIMIT 1
-                ), 0) - COALESCE((
-                  SELECT s_start.view_count
-                  FROM metrics.youtube_video_snapshots s_start
-                  WHERE s_start.video_id = m.video_id
-                    AND s_start.snapshot_time < ad.metric_date
-                  ORDER BY s_start.snapshot_time DESC
-                  LIMIT 1
-                ), 0),
-                0
-              )
-            END
-          ), 0)::bigint AS matched_video_view_delta_1d,
-          COALESCE(sum(
-            CASE
-              WHEN m.match_state <> 'matched_primary' THEN 0
-              ELSE GREATEST(
-                COALESCE((
-                  SELECT s_end.view_count
-                  FROM metrics.youtube_video_snapshots s_end
-                  WHERE s_end.video_id = m.video_id
-                    AND s_end.snapshot_time < ad.metric_date + INTERVAL '1 day'
-                  ORDER BY s_end.snapshot_time DESC
-                  LIMIT 1
-                ), 0) - COALESCE((
-                  SELECT s_start.view_count
-                  FROM metrics.youtube_video_snapshots s_start
-                  WHERE s_start.video_id = m.video_id
-                    AND s_start.snapshot_time < ad.metric_date - INTERVAL '6 days'
-                  ORDER BY s_start.snapshot_time DESC
-                  LIMIT 1
-                ), 0),
-                0
-              )
-            END
-          ), 0)::bigint AS matched_video_view_delta_7d,
+          c.new_matched_videos_1d,
+          c.new_matched_videos_7d,
+          c.new_matched_videos_30d,
+          c.distinct_upload_channels_7d,
+          c.distinct_upload_channels_30d,
+          c.views_on_new_videos_7d,
+          c.views_on_new_videos_30d,
+          COALESCE(pdr.matched_video_view_delta_1d, 0) AS matched_video_view_delta_1d,
+          COALESCE(pdr.matched_video_view_delta_7d, 0) AS matched_video_view_delta_7d,
           COALESCE(sc.total_snapshot_count, 0) AS total_snapshot_count,
           sc.latest_snapshot_at,
           $2 AS rollup_methodology_version,
           now(),
           now()
-        FROM app_days ad
-        JOIN matched m
-          ON m.appid = ad.appid
-         AND m.content_class = ad.content_class
-         AND m.published_date <= ad.metric_date
+        FROM rollup_counts c
+        LEFT JOIN primary_delta_rollups pdr
+          ON pdr.metric_date = c.metric_date
+         AND pdr.appid = c.appid
+         AND pdr.content_class = c.content_class
         LEFT JOIN discovered dv
-          ON dv.metric_date = ad.metric_date
-         AND dv.appid = ad.appid
-         AND dv.content_class = ad.content_class
+          ON dv.metric_date = c.metric_date
+         AND dv.appid = c.appid
+         AND dv.content_class = c.content_class
         LEFT JOIN monitor_counts mc
-          ON mc.appid = ad.appid
+          ON mc.appid = c.appid
         LEFT JOIN snapshot_counts sc
-          ON sc.appid = ad.appid
-         AND sc.content_class = ad.content_class
-        GROUP BY
-          ad.metric_date,
-          ad.appid,
-          ad.content_class,
-          mc.monitored_channel_count,
-          dv.discovered_video_count,
-          sc.total_snapshot_count,
-          sc.latest_snapshot_at
+          ON sc.appid = c.appid
+         AND sc.content_class = c.content_class
       `,
       [lookbackDays, CONTENT_CLASSIFICATION_VERSION]
     );
