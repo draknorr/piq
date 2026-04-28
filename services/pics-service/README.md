@@ -10,6 +10,7 @@ The PICS service connects directly to Steam's Product Info Cache Server and now 
 - normalized PICS history capture for change intelligence
 
 During change monitoring, the service writes normalized snapshots and PICS diff events before the latest-state upserts that keep the `apps` table and relationship tables current.
+`PICS_CHANGE_HISTORY_TARGET=tiger` moves only that normalized history capture to Tiger/R2; latest-state PICS metadata writes remain on Supabase until a later migration.
 
 ## Modes
 
@@ -62,7 +63,16 @@ MODE=change_monitor python -m src.main
 |----------|---------|-------------|
 | `SUPABASE_URL` | required | Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | required | Supabase service role key |
-| `MODE` | `change_monitor` | `bulk_sync`, `first_pass`, or `change_monitor` |
+| `PICS_CHANGE_HISTORY_TARGET` | `supabase` | `supabase` or `tiger`; controls only PICS `app_source_snapshots` and `app_change_events` writes |
+| `PICS_CHANGE_HISTORY_TIGER_URL` | `TIGER_PRIMARY_URL` | Tiger Postgres URL for PICS change-history writes |
+| `CHANGE_INTEL_ARCHIVE_TARGET` | `disabled` | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger` |
+| `CHANGE_INTEL_ARCHIVE_BUCKET` | required for Tiger | S3-compatible bucket for archived normalized PICS snapshots |
+| `CHANGE_INTEL_ARCHIVE_PREFIX` | `change-intel` | Object key prefix, e.g. `production/change-intel` |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | optional | S3-compatible endpoint, e.g. Cloudflare R2 account endpoint |
+| `CHANGE_INTEL_ARCHIVE_REGION` | `us-east-1` | S3 region; R2 commonly uses `auto` |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | optional | S3-compatible access key |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional | S3-compatible secret key |
+| `MODE` | `change_monitor` | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history` |
 | `PORT` | `8080` | Health-check port |
 | `BULK_BATCH_SIZE` | `200` | Apps per PICS request |
 | `BULK_REQUEST_DELAY` | `0.5` | Seconds between bulk requests |
@@ -79,6 +89,29 @@ MODE=change_monitor python -m src.main
 | `STEAM_AUTO_RECONNECT` | `true` | Automatically reconnect after a disconnect |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `LOG_JSON` | `true` | JSON log formatting |
+
+## PICS Change-History Backfill
+
+After applying the Tiger write-surface SQL, run the one-time backfill in dry-run mode first:
+
+```bash
+MODE=backfill_change_history PICS_CHANGE_HISTORY_BACKFILL_DRY_RUN=true python -m src.main
+```
+
+Then run the write pass with Tiger/R2 env vars present:
+
+```bash
+MODE=backfill_change_history PICS_CHANGE_HISTORY_BACKFILL_DRY_RUN=false python -m src.main
+```
+
+Useful controls:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PICS_CHANGE_HISTORY_BACKFILL_BATCH_SIZE` | `500` | Rows per Supabase page |
+| `PICS_CHANGE_HISTORY_BACKFILL_LIMIT` | unset | Optional per-surface max rows |
+| `PICS_CHANGE_HISTORY_BACKFILL_MIN_ID` | `0` | Resume cursor by source row id |
+| `PICS_CHANGE_HISTORY_BACKFILL_SURFACES` | `snapshots,events` | `snapshots`, `events`, or both |
 
 ## Health Endpoints
 

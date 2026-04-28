@@ -15,6 +15,8 @@ from .change_intelligence import (
     hash_normalized_snapshot,
     normalize_pics_snapshot,
 )
+from .tiger_change_history import TigerPICSChangeHistoryStore
+from ..config.settings import settings
 from ..extractors.common import ExtractedPICSData, Association
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,15 @@ class PICSDatabase:
         self._load_tag_names()
         self._history_available = True
         self._history_disabled_until: Optional[float] = None
+        self._history_target = settings.pics_change_history_target.strip().lower()
+        if self._history_target not in {"supabase", "tiger"}:
+            raise ValueError("PICS_CHANGE_HISTORY_TARGET must be 'supabase' or 'tiger'")
+        self._tiger_history_store = (
+            self._create_tiger_change_history_store() if self._history_target == "tiger" else None
+        )
+
+    def _create_tiger_change_history_store(self) -> TigerPICSChangeHistoryStore:
+        return TigerPICSChangeHistoryStore.from_settings(settings)
 
     def _load_tag_names(self):
         """Load Steam tag names from API (cached at class level)."""
@@ -548,8 +559,18 @@ class PICSDatabase:
         if event_rows:
             self._insert_change_events(event_rows)
 
-    def _get_latest_history_snapshots(self, appids: List[int]) -> Optional[Dict[int, Dict[str, Any]]]:
+    def _get_latest_history_snapshots(
+        self,
+        appids: List[int],
+    ) -> Optional[Dict[int, Dict[str, Any]]]:
         """Fetch the latest stored PICS snapshot per app."""
+        if self._tiger_history_store is not None:
+            return self._run_history_operation(
+                "query Tiger PICS history snapshots",
+                lambda: self._tiger_history_store.get_latest_snapshots(appids),
+                retry_policy="transient",
+            )
+
         latest_by_appid: Dict[int, Dict[str, Any]] = {}
         batch_size = 200
 
@@ -580,6 +601,17 @@ class PICSDatabase:
 
     def _update_last_seen_snapshots(self, snapshot_ids: List[int], observed_at: str) -> None:
         """Extend last_seen_at for unchanged snapshots."""
+        if self._tiger_history_store is not None:
+            self._run_history_operation(
+                "update Tiger PICS snapshot last_seen_at",
+                lambda: self._tiger_history_store.update_last_seen_snapshots(
+                    snapshot_ids,
+                    observed_at,
+                ),
+                retry_policy="transient",
+            )
+            return
+
         for snapshot_id in snapshot_ids:
             result = self._run_history_operation(
                 f"update last_seen_at for snapshot {snapshot_id}",
@@ -594,8 +626,18 @@ class PICSDatabase:
             if result is None:
                 return
 
-    def _insert_history_snapshots(self, snapshot_rows: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    def _insert_history_snapshots(
+        self,
+        snapshot_rows: List[Dict[str, Any]],
+    ) -> Optional[List[Dict[str, Any]]]:
         """Insert new PICS history snapshots in batches."""
+        if self._tiger_history_store is not None:
+            return self._run_history_operation(
+                "insert Tiger PICS history snapshots",
+                lambda: self._tiger_history_store.insert_snapshots(snapshot_rows),
+                retry_policy="transient",
+            )
+
         inserted_rows: List[Dict[str, Any]] = []
 
         for i in range(0, len(snapshot_rows), self.UPSERT_BATCH_SIZE):
@@ -614,6 +656,14 @@ class PICSDatabase:
 
     def _insert_change_events(self, event_rows: List[Dict[str, Any]]) -> None:
         """Insert structured PICS change events in batches."""
+        if self._tiger_history_store is not None:
+            self._run_history_operation(
+                "insert Tiger PICS change events",
+                lambda: self._tiger_history_store.insert_change_events(event_rows),
+                retry_policy="transient",
+            )
+            return
+
         for i in range(0, len(event_rows), self.UPSERT_BATCH_SIZE):
             batch = event_rows[i : i + self.UPSERT_BATCH_SIZE]
             result = self._run_history_operation(
@@ -715,9 +765,13 @@ class PICSDatabase:
         transient_markers = (
             "timeout",
             "timed out",
+            "connection failed",
             "connection reset",
             "connection aborted",
+            "connection closed",
             "connection refused",
+            "could not connect",
+            "ssl syscall",
             "server disconnected",
             "temporarily unavailable",
             "502",
