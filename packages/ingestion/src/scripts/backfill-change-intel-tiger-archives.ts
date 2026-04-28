@@ -96,6 +96,30 @@ function readBoolean(value: string | undefined, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
 }
 
+function readMinFirstSeenAt(): string | null {
+  const explicitValue = process.env.CHANGE_INTEL_TIGER_BACKFILL_MIN_FIRST_SEEN_AT;
+  if (explicitValue) {
+    const parsed = new Date(explicitValue);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error('CHANGE_INTEL_TIGER_BACKFILL_MIN_FIRST_SEEN_AT must be a valid date or ISO timestamp.');
+    }
+
+    return parsed.toISOString();
+  }
+
+  const recentDays = process.env.CHANGE_INTEL_TIGER_BACKFILL_RECENT_DAYS;
+  if (!recentDays) {
+    return null;
+  }
+
+  const parsed = Number(recentDays);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error('CHANGE_INTEL_TIGER_BACKFILL_RECENT_DAYS must be a positive number.');
+  }
+
+  return new Date(Date.now() - parsed * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function requireSourceUrl(): string {
   const sourceUrl = process.env.CHANGE_INTEL_SOURCE_URL ?? process.env.DATABASE_URL;
   if (!sourceUrl) {
@@ -175,11 +199,26 @@ function emptyStats(surface: string): BackfillStats {
   };
 }
 
+function logSurfaceProgress(stats: BackfillStats, params: { dryRun: boolean; lastId: string; limit: number | null }): void {
+  console.error(
+    JSON.stringify({
+      archived: stats.archived,
+      dryRun: params.dryRun,
+      lastId: params.lastId,
+      limit: params.limit,
+      read: stats.read,
+      surface: stats.surface,
+      upserted: stats.upserted,
+    })
+  );
+}
+
 async function backfillAppSourceSnapshots(params: {
   batchSize: number;
   concurrency: number;
   dryRun: boolean;
   limit: number | null;
+  minFirstSeenAt: string | null;
   sourcePool: Pool;
   store: ChangeIntelArchiveStore | null;
   targetPool: Pool;
@@ -206,10 +245,11 @@ async function backfillAppSourceSnapshots(params: {
           snapshot_data
         FROM public.app_source_snapshots
         WHERE id > $1::bigint
+          AND ($2::timestamptz IS NULL OR first_seen_at >= $2::timestamptz)
         ORDER BY id ASC
-        LIMIT $2
+        LIMIT $3
       `,
-      [lastId, batchSize]
+      [lastId, params.minFirstSeenAt, batchSize]
     );
 
     if (rows.length === 0) {
@@ -220,6 +260,7 @@ async function backfillAppSourceSnapshots(params: {
     lastId = rows[rows.length - 1]?.id ?? lastId;
 
     if (params.dryRun) {
+      logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
       continue;
     }
 
@@ -318,6 +359,8 @@ async function backfillAppSourceSnapshots(params: {
       stats.archived += result.archived;
       stats.upserted += result.upserted;
     }
+
+    logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
   }
 
   return stats;
@@ -328,6 +371,7 @@ async function backfillSteamNewsVersions(params: {
   concurrency: number;
   dryRun: boolean;
   limit: number | null;
+  minFirstSeenAt: string | null;
   sourcePool: Pool;
   store: ChangeIntelArchiveStore | null;
   targetPool: Pool;
@@ -353,10 +397,11 @@ async function backfillSteamNewsVersions(params: {
           last_seen_at::text
         FROM public.steam_news_versions
         WHERE id > $1::bigint
+          AND ($2::timestamptz IS NULL OR first_seen_at >= $2::timestamptz)
         ORDER BY id ASC
-        LIMIT $2
+        LIMIT $3
       `,
-      [lastId, batchSize]
+      [lastId, params.minFirstSeenAt, batchSize]
     );
 
     if (rows.length === 0) {
@@ -367,6 +412,7 @@ async function backfillSteamNewsVersions(params: {
     lastId = rows[rows.length - 1]?.id ?? lastId;
 
     if (params.dryRun) {
+      logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
       continue;
     }
 
@@ -467,6 +513,8 @@ async function backfillSteamNewsVersions(params: {
       stats.archived += result.archived;
       stats.upserted += result.upserted;
     }
+
+    logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
   }
 
   return stats;
@@ -477,6 +525,7 @@ async function backfillAppMediaVersions(params: {
   concurrency: number;
   dryRun: boolean;
   limit: number | null;
+  minFirstSeenAt: string | null;
   sourcePool: Pool;
   targetPool: Pool;
 }): Promise<BackfillStats> {
@@ -501,10 +550,11 @@ async function backfillAppMediaVersions(params: {
           last_seen_at::text
         FROM public.app_media_versions
         WHERE id > $1::bigint
+          AND ($2::timestamptz IS NULL OR first_seen_at >= $2::timestamptz)
         ORDER BY id ASC
-        LIMIT $2
+        LIMIT $3
       `,
-      [lastId, batchSize]
+      [lastId, params.minFirstSeenAt, batchSize]
     );
 
     if (rows.length === 0) {
@@ -515,6 +565,7 @@ async function backfillAppMediaVersions(params: {
     lastId = rows[rows.length - 1]?.id ?? lastId;
 
     if (params.dryRun) {
+      logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
       continue;
     }
 
@@ -574,6 +625,7 @@ async function backfillAppMediaVersions(params: {
     );
 
     stats.upserted += results.reduce((total, value) => total + value, 0);
+    logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
   }
 
   return stats;
@@ -584,6 +636,7 @@ async function backfillHeroAssetVersions(params: {
   concurrency: number;
   dryRun: boolean;
   limit: number | null;
+  minFirstSeenAt: string | null;
   sourcePool: Pool;
   targetPool: Pool;
 }): Promise<BackfillStats> {
@@ -612,10 +665,11 @@ async function backfillHeroAssetVersions(params: {
           created_at::text
         FROM public.app_hero_asset_versions
         WHERE id::text > $1::text
+          AND ($2::timestamptz IS NULL OR first_seen_at >= $2::timestamptz)
         ORDER BY id::text ASC
-        LIMIT $2
+        LIMIT $3
       `,
-      [lastId, batchSize]
+      [lastId, params.minFirstSeenAt, batchSize]
     );
 
     if (rows.length === 0) {
@@ -626,6 +680,7 @@ async function backfillHeroAssetVersions(params: {
     lastId = rows[rows.length - 1]?.id ?? lastId;
 
     if (params.dryRun) {
+      logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
       continue;
     }
 
@@ -696,6 +751,7 @@ async function backfillHeroAssetVersions(params: {
     );
 
     stats.upserted += results.reduce((total, value) => total + value, 0);
+    logSurfaceProgress(stats, { dryRun: params.dryRun, lastId, limit: params.limit });
   }
 
   return stats;
@@ -708,6 +764,7 @@ async function main(): Promise<void> {
     readNumber(process.env.CHANGE_INTEL_TIGER_BACKFILL_CONCURRENCY, DEFAULT_CONCURRENCY),
     MAX_CONCURRENCY
   );
+  const minFirstSeenAt = readMinFirstSeenAt();
   const limitValue = process.env.CHANGE_INTEL_TIGER_BACKFILL_LIMIT;
   const limit = limitValue ? readNumber(limitValue, DEFAULT_BATCH_SIZE) : null;
   const sourcePool = new Pool({
@@ -736,6 +793,7 @@ async function main(): Promise<void> {
         concurrency,
         dryRun,
         limit,
+        minFirstSeenAt,
         sourcePool,
         store,
         targetPool,
@@ -747,6 +805,7 @@ async function main(): Promise<void> {
         concurrency,
         dryRun,
         limit,
+        minFirstSeenAt,
         sourcePool,
         store,
         targetPool,
@@ -758,6 +817,7 @@ async function main(): Promise<void> {
         concurrency,
         dryRun,
         limit,
+        minFirstSeenAt,
         sourcePool,
         targetPool,
       })
@@ -768,6 +828,7 @@ async function main(): Promise<void> {
         concurrency,
         dryRun,
         limit,
+        minFirstSeenAt,
         sourcePool,
         targetPool,
       })
@@ -780,6 +841,7 @@ async function main(): Promise<void> {
           concurrency,
           dryRun,
           limit,
+          minFirstSeenAt,
           results,
         },
         null,
