@@ -13,6 +13,8 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
     continueResultSet: async () => ({ ok: true }),
     describeContracts: async () => ({ contracts: [], source: 'tiger' }),
     explainChanges: async () => ({ ok: true }),
+    getChangeActivityDetail: async () => ({ ok: true }),
+    getChangeFeedStatus: async () => ({ ok: true }),
     getEntityOverview: async () => ({ ok: true }),
     getRelatedEntities: async () => ({ ok: true }),
     getUserContext: async () => ({ ok: true }),
@@ -593,6 +595,8 @@ test('query-api routes search-change-activity requests to the data-plane service
         return {
           continuationToken: null,
           interpretedFilters: {
+            allHistory: false,
+            appids: [],
             appTypes: ['game'],
             days: 14,
             mode: 'all',
@@ -635,6 +639,8 @@ test('query-api routes search-change-activity requests to the data-plane service
     async (origin) => {
       const response = await fetch(`${origin}/v1/contracts/search-change-activity`, {
         body: JSON.stringify({
+          allHistory: true,
+          appids: [730],
           appTypes: ['game'],
           days: 14,
           query: 'refresh',
@@ -647,6 +653,8 @@ test('query-api routes search-change-activity requests to the data-plane service
 
       assert.equal(response.status, 200);
       assert.deepEqual(receivedBody, {
+        allHistory: true,
+        appids: [730],
         appTypes: ['game'],
         days: 14,
         query: 'refresh',
@@ -655,6 +663,83 @@ test('query-api routes search-change-activity requests to the data-plane service
       });
       const payload = await response.json() as { items: Array<{ activityId: string }> };
       assert.equal(payload.items[0]?.activityId, 'change:730:1:2');
+    }
+  );
+});
+
+test('query-api routes get-change-activity-detail requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      getChangeActivityDetail: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          item: null,
+          provenance: {
+            capturedAt: '2026-04-02T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['events.app_change_events'],
+          },
+          sufficientToAnswer: false,
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-change-activity-detail`, {
+        body: JSON.stringify({
+          activityId: 'change:730:1:2',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {
+        activityId: 'change:730:1:2',
+      });
+      const payload = await response.json() as { sufficientToAnswer: boolean };
+      assert.equal(payload.sufficientToAnswer, false);
+    }
+  );
+});
+
+test('query-api routes get-change-feed-status requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      getChangeFeedStatus: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          latestNewsEventAt: '2026-04-02T00:00:00.000Z',
+          latestProjectionRefreshAt: '2026-04-02T00:01:00.000Z',
+          latestStorefrontEventAt: '2026-04-02T00:00:00.000Z',
+          oldestProjectionQueuedAt: null,
+          oldestQueuedAt: null,
+          projectionQueuedJobs: 0,
+          provenance: {
+            capturedAt: '2026-04-02T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['events.app_change_events'],
+          },
+          queuedJobs: 0,
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-change-feed-status`, {
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {});
+      const payload = await response.json() as { queuedJobs: number };
+      assert.equal(payload.queuedJobs, 0);
     }
   );
 });

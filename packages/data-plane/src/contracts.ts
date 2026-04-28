@@ -206,6 +206,8 @@ export type DataPlaneRelationKey =
   | 'metrics_daily_metrics'
   | 'core_entities'
   | 'events_app_change_events'
+  | 'events_change_activity_bursts'
+  | 'ops_app_capture_work_state'
   | 'docs_steam_news_items'
   | 'docs_steam_news_search_projection'
   | 'franchises'
@@ -693,6 +695,8 @@ export interface SearchDocumentsResponse {
 
 export interface SearchChangeActivityRequest {
   activityId?: string | null;
+  allHistory?: boolean;
+  appids?: number[];
   appTypes?: string[];
   continuationToken?: string | null;
   days?: number;
@@ -732,6 +736,8 @@ export interface SearchChangeActivityItem {
 export interface SearchChangeActivityResponse {
   continuationToken: string | null;
   interpretedFilters: {
+    allHistory: boolean;
+    appids: number[];
     appTypes: string[];
     days: number;
     mode: ChangeActivityMode;
@@ -743,6 +749,61 @@ export interface SearchChangeActivityResponse {
   items: SearchChangeActivityItem[];
   provenance: QueryProvenance;
   sufficientToAnswer: boolean;
+}
+
+export interface GetChangeActivityDetailRequest {
+  activityId: string;
+}
+
+export interface ChangeActivityDetailEventItem {
+  afterValue: unknown | null;
+  appid: number;
+  beforeValue: unknown | null;
+  changeType: string;
+  context: Record<string, unknown> | null;
+  eventId: string;
+  newsItemGid: string | null;
+  occurredAt: string;
+  source: string;
+}
+
+export interface ChangeActivityDetailNewsItem {
+  appid: number;
+  appName: string;
+  appType: string | null;
+  feedLabel: string | null;
+  feedName: string | null;
+  firstSeenAt: string | null;
+  gid: string;
+  publishedAt: string | null;
+  title: string | null;
+  url: string | null;
+}
+
+export interface ChangeActivityDetailItem {
+  activity: SearchChangeActivityItem;
+  events: ChangeActivityDetailEventItem[];
+  impact: Record<string, unknown> | null;
+  relatedNews: ChangeActivityDetailNewsItem[];
+}
+
+export interface GetChangeActivityDetailResponse {
+  item: ChangeActivityDetailItem | null;
+  provenance: QueryProvenance;
+  sufficientToAnswer: boolean;
+}
+
+export interface GetChangeFeedStatusRequest {}
+
+export interface GetChangeFeedStatusResponse {
+  latestNewsEventAt: string | null;
+  latestProjectionRefreshAt: string | null;
+  latestStorefrontEventAt: string | null;
+  oldestProjectionQueuedAt: string | null;
+  oldestQueuedAt: string | null;
+  projectionQueuedJobs: number;
+  provenance: QueryProvenance;
+  queuedJobs: number;
 }
 
 export interface DiscoverChangePatternProof {
@@ -1254,6 +1315,8 @@ export interface QueryContractDescriptor {
     | 'getEntityOverview'
     | 'searchCatalog'
     | 'searchChangeActivity'
+    | 'getChangeActivityDetail'
+    | 'getChangeFeedStatus'
     | 'discoverMomentum'
     | 'discoverChangePatterns'
     | 'rankEntities'

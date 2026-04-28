@@ -1,4 +1,5 @@
 import type { PostgrestError } from '@supabase/supabase-js';
+import { resolveQueryApiBaseUrl } from '@/lib/query-api-config';
 import { getServiceSupabase } from '@/lib/supabase-service';
 import type {
   AppType,
@@ -10,6 +11,7 @@ import type {
   ChangeBurstDetail,
   ChangeBurstImpact,
   ChangeBurstImpactWindow,
+  ChangeDetailEvent,
   ChangeFeedActivityResponse,
   ChangeFeedBurstsResponse,
   ChangeFeedNewsResponse,
@@ -30,6 +32,8 @@ import type {
 import {
   CHANGE_ACTIVITY_SIGNAL_FAMILIES,
   CHANGE_ACTIVITY_STORY_KINDS,
+  CHANGE_FEED_APP_TYPES,
+  CHANGE_FEED_SOURCES,
 } from './change-feed-types';
 import {
   buildAnnouncementActivityDetail,
@@ -66,6 +70,7 @@ const CHAT_RECENT_NEWS_MAX_TOTAL_CHARS = 8_000;
 const CHAT_RECENT_NEWS_MAX_ITEM_CHARS = 2_000;
 const BURST_DETAIL_NEWS_LIMIT = 50;
 const BURST_DETAIL_RELATED_NEWS_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CHANGE_FEED_QUERY_API_TIMEOUT_MS = 15_000;
 
 let defaultBurstsCache:
   | {
@@ -106,6 +111,77 @@ const chatRecentNewsTopicCache = new Map<
 
 const SIGNAL_FAMILY_SET = new Set<ChangeActivitySignalFamily>(CHANGE_ACTIVITY_SIGNAL_FAMILIES);
 const STORY_KIND_SET = new Set<ChangeActivityStoryKind>(CHANGE_ACTIVITY_STORY_KINDS);
+const APP_TYPE_SET = new Set<AppType>(CHANGE_FEED_APP_TYPES);
+const SOURCE_SET = new Set<ChangeFeedSource>(CHANGE_FEED_SOURCES);
+
+type TigerChangeActivityStoryKind =
+  | 'announcement'
+  | 'change-roundup'
+  | 'commercial-move'
+  | 'launch-prep'
+  | 'store-refresh'
+  | 'taxonomy-shift'
+  | 'update-tease';
+
+interface TigerSearchChangeActivityItem {
+  activityId: string;
+  activityKind: 'change' | 'announcement';
+  appType: string | null;
+  appid: number;
+  externalUrl: string | null;
+  facts: string[];
+  hasBeforeAfter: boolean;
+  headline: string;
+  highlightLabels: string[];
+  isReleased: boolean | null;
+  name: string;
+  occurredAt: string;
+  relatedAnnouncementCount: number;
+  releaseDate: string | null;
+  signalFamilies: string[];
+  storyKind: TigerChangeActivityStoryKind | string;
+  summary: string;
+}
+
+interface TigerSearchChangeActivityResponse {
+  continuationToken: string | null;
+  items: TigerSearchChangeActivityItem[];
+}
+
+interface TigerChangeActivityDetailEvent {
+  afterValue: JsonValue;
+  appid: number;
+  beforeValue: JsonValue;
+  changeType: string;
+  context: Record<string, JsonValue | undefined> | null;
+  eventId: string;
+  occurredAt: string;
+  source: string;
+}
+
+interface TigerChangeActivityDetailNews {
+  appid: number;
+  appName: string;
+  appType: string | null;
+  feedLabel: string | null;
+  feedName: string | null;
+  firstSeenAt: string | null;
+  gid: string;
+  publishedAt: string | null;
+  title: string | null;
+  url: string | null;
+}
+
+interface TigerChangeActivityDetailItem {
+  activity: TigerSearchChangeActivityItem;
+  events: TigerChangeActivityDetailEvent[];
+  impact: Record<string, JsonValue | undefined> | null;
+  relatedNews: TigerChangeActivityDetailNews[];
+}
+
+interface TigerChangeActivityDetailResponse {
+  item: TigerChangeActivityDetailItem | null;
+}
 
 export class ChangeFeedUnavailableError extends Error {
   constructor(message: string) {
@@ -119,6 +195,131 @@ export class ChangeFeedQueryError extends Error {
     super(message);
     this.name = 'ChangeFeedQueryError';
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function postChangeFeedQueryApi<T>(
+  path: string,
+  body: unknown,
+  options?: { timeoutMs?: number }
+): Promise<{
+  data?: T;
+  errorCode?: string | null;
+  ok: boolean;
+  reason?: string | null;
+}> {
+  const { baseUrl, reason } = resolveQueryApiBaseUrl();
+  if (!baseUrl) {
+    return {
+      errorCode: 'QUERY_API_BASE_URL_MISSING',
+      ok: false,
+      reason,
+    };
+  }
+
+  const headers: HeadersInit = {
+    'content-type': 'application/json',
+  };
+  const bearerToken = process.env.QUERY_API_BEARER_TOKEN?.trim();
+  if (bearerToken) {
+    headers.authorization = `Bearer ${bearerToken}`;
+  }
+
+  try {
+    const response = await fetch(new URL(path, baseUrl), {
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      headers,
+      method: 'POST',
+      signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      return {
+        errorCode: isRecord(payload) && typeof payload.code === 'string' ? payload.code : null,
+        ok: false,
+        reason:
+          isRecord(payload) && typeof payload.error === 'string'
+            ? payload.error
+            : `HTTP ${response.status}`,
+      };
+    }
+
+    return {
+      data: payload as T,
+      ok: true,
+    };
+  } catch (error) {
+    return {
+      errorCode: null,
+      ok: false,
+      reason: error instanceof Error ? error.message : 'Unknown query-api error',
+    };
+  }
+}
+
+function shouldUseTigerChangeFeedReads(): boolean {
+  const target =
+    process.env.CHANGE_INTEL_READ_TARGET?.trim().toLowerCase() ??
+    process.env.CHANGE_FEED_READ_TARGET?.trim().toLowerCase();
+  return target === 'tiger';
+}
+
+function shouldUseStrictTigerChangeFeedReads(): boolean {
+  const value =
+    process.env.CHANGE_INTEL_READ_STRICT ?? process.env.CHANGE_FEED_READ_STRICT;
+  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
+}
+
+function normalizeTigerAppType(value: string | null): AppType | null {
+  return value && APP_TYPE_SET.has(value as AppType) ? (value as AppType) : null;
+}
+
+function normalizeTigerSource(value: string): ChangeFeedSource {
+  return SOURCE_SET.has(value as ChangeFeedSource) ? (value as ChangeFeedSource) : 'storefront';
+}
+
+function normalizeTigerStoryKind(value: string): ChangeActivityStoryKind {
+  switch (value) {
+    case 'announcement':
+    case 'commercial-move':
+    case 'store-refresh':
+      return value;
+    case 'launch-prep':
+      return 'release-prep';
+    case 'taxonomy-shift':
+      return 'positioning-shift';
+    case 'update-tease':
+    case 'change-roundup':
+    default:
+      return 'general-update';
+  }
+}
+
+function mapTigerActivityItem(item: TigerSearchChangeActivityItem): ChangeActivityRow {
+  return {
+    activityId: item.activityId,
+    activityKind: item.activityKind,
+    storyKind: normalizeTigerStoryKind(item.storyKind),
+    appid: item.appid,
+    appName: item.name,
+    appType: normalizeTigerAppType(item.appType),
+    isReleased: item.isReleased,
+    releaseDate: item.releaseDate,
+    occurredAt: item.occurredAt,
+    headline: item.headline,
+    summary: item.summary,
+    facts: item.facts,
+    highlightLabels: item.highlightLabels,
+    signalFamilies: toSafeSignalFamilies(item.signalFamilies),
+    hasBeforeAfter: item.hasBeforeAfter,
+    relatedAnnouncementCount: item.relatedAnnouncementCount,
+    externalUrl: item.externalUrl,
+  };
 }
 
 interface ParsedBurstId {
@@ -1164,6 +1365,45 @@ async function fetchComposedChangeFeedActivityFallback(
   };
 }
 
+async function fetchTigerChangeFeedActivityResponse(
+  params: ChangeFeedActivityParams
+): Promise<ChangeFeedActivityResponse> {
+  const sort = normalizeChatActivitySort(params);
+  const result = await postChangeFeedQueryApi<TigerSearchChangeActivityResponse>(
+    '/v1/contracts/search-change-activity',
+    {
+      allHistory: params.historyScope === 'all' && Boolean(params.appIds?.length),
+      appids: params.appIds ?? [],
+      appTypes: params.appTypes ?? [],
+      continuationToken: params.cursor,
+      days: params.days,
+      excludeActivityIds: params.excludeActivityIds ?? [],
+      limit: params.limit,
+      mode: params.mode,
+      query: params.search,
+      signalFamilies: params.signalFamilies ?? [],
+      sort,
+      view: params.view,
+    },
+    { timeoutMs: CHANGE_FEED_QUERY_API_TIMEOUT_MS }
+  );
+
+  if (!result.ok || !result.data) {
+    throw new ChangeFeedQueryError(
+      `Tiger Change Feed activity query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+    );
+  }
+
+  return {
+    items: (result.data.items ?? []).map(mapTigerActivityItem),
+    nextCursor: result.data.continuationToken,
+    meta: buildActivityMeta({
+      ...params,
+      sort,
+    }),
+  };
+}
+
 export async function fetchChangeFeedActivityResponse(
   params: ChangeFeedActivityParams
 ): Promise<ChangeFeedActivityResponse> {
@@ -1179,27 +1419,40 @@ export async function fetchChangeFeedActivityResponse(
 
   let response: ChangeFeedActivityResponse;
 
-  try {
-    const sort = normalizeChatActivitySort(params);
-    const data = await executeChangeFeedRpc<RawChangeActivityRow[]>(
-      'get_change_feed_activity',
-      buildChangeFeedActivityRpcArgs(params, sort)
-    );
+  if (shouldUseTigerChangeFeedReads()) {
+    try {
+      response = await fetchTigerChangeFeedActivityResponse(params);
+    } catch (error) {
+      if (shouldUseStrictTigerChangeFeedReads()) {
+        throw error;
+      }
 
-    response = {
-      items: (data ?? []).map(mapChangeActivityRow),
-      nextCursor: buildActivityNextCursor(data ?? [], params.limit),
-      meta: buildActivityMeta({
-        ...params,
-        sort,
-      }),
-    };
-  } catch (error) {
-    if (!(error instanceof ChangeFeedUnavailableError)) {
-      throw error;
+      console.warn('Tiger Change Feed activity query failed; falling back to Supabase.', error);
+      response = await fetchComposedChangeFeedActivityFallback(params);
     }
+  } else {
+    try {
+      const sort = normalizeChatActivitySort(params);
+      const data = await executeChangeFeedRpc<RawChangeActivityRow[]>(
+        'get_change_feed_activity',
+        buildChangeFeedActivityRpcArgs(params, sort)
+      );
 
-    response = await fetchComposedChangeFeedActivityFallback(params);
+      response = {
+        items: (data ?? []).map(mapChangeActivityRow),
+        nextCursor: buildActivityNextCursor(data ?? [], params.limit),
+        meta: buildActivityMeta({
+          ...params,
+          sort,
+        }),
+      };
+    } catch (error) {
+      if (!(error instanceof ChangeFeedUnavailableError)) {
+        throw error;
+      }
+
+      response = await fetchComposedChangeFeedActivityFallback(params);
+    }
   }
 
   if (isDefaultRequest) {
@@ -1385,9 +1638,111 @@ export async function fetchChangeFeedBurstDetail(
   };
 }
 
+function mapTigerDetailEvent(event: TigerChangeActivityDetailEvent): ChangeDetailEvent {
+  const parsedEventId = Number.parseInt(event.eventId, 10);
+
+  return {
+    eventId: Number.isFinite(parsedEventId) ? parsedEventId : 0,
+    appid: event.appid,
+    source: normalizeTigerSource(event.source),
+    changeType: event.changeType,
+    occurredAt: event.occurredAt,
+    beforeValue: event.beforeValue,
+    afterValue: event.afterValue,
+    context: event.context ?? {},
+  };
+}
+
+function mapTigerDetailNews(row: TigerChangeActivityDetailNews): ChangeNewsRow {
+  return {
+    gid: row.gid,
+    appid: row.appid,
+    appName: row.appName,
+    appType: normalizeTigerAppType(row.appType),
+    publishedAt: row.publishedAt,
+    firstSeenAt: row.firstSeenAt,
+    title: row.title,
+    feedLabel: row.feedLabel,
+    feedName: row.feedName,
+    url: row.url,
+  };
+}
+
+async function fetchTigerChangeActivityDetail(
+  activityId: string
+): Promise<ChangeActivityDetail | null> {
+  const result = await postChangeFeedQueryApi<TigerChangeActivityDetailResponse>(
+    '/v1/contracts/get-change-activity-detail',
+    { activityId },
+    { timeoutMs: CHANGE_FEED_QUERY_API_TIMEOUT_MS }
+  );
+
+  if (!result.ok || !result.data) {
+    throw new ChangeFeedQueryError(
+      `Tiger Change Feed activity detail query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+    );
+  }
+
+  const item = result.data.item;
+  if (!item) {
+    return null;
+  }
+
+  const activityRow = mapTigerActivityItem(item.activity);
+  const events = item.events.map(mapTigerDetailEvent).sort((left, right) => {
+    return left.occurredAt.localeCompare(right.occurredAt) || left.eventId - right.eventId;
+  });
+  const relatedNews = item.relatedNews.map(mapTigerDetailNews);
+  const sourceSet = uniqueSortedStrings(events.map((event) => event.source)) as ChangeFeedSource[];
+  const headlineChangeTypes = uniqueSortedStrings(events.map((event) => event.changeType)).slice(0, 3);
+  const burstDetail: ChangeBurstDetail = {
+    burstId: item.activity.activityId,
+    appid: activityRow.appid,
+    appName: activityRow.appName,
+    appType: activityRow.appType,
+    isReleased: activityRow.isReleased,
+    releaseDate: activityRow.releaseDate,
+    effectiveAt: activityRow.occurredAt,
+    burstStartedAt: events[0]?.occurredAt ?? activityRow.occurredAt,
+    burstEndedAt: activityRow.occurredAt,
+    eventCount: events.length,
+    sourceSet,
+    headlineChangeTypes,
+    changeTypeCount: new Set(events.map((event) => event.changeType)).size,
+    hasRelatedNews: relatedNews.length > 0,
+    relatedNewsCount: relatedNews.length,
+    events,
+    relatedNews,
+    impact: null,
+  };
+  const detail = buildChangeActivityDetail(burstDetail);
+
+  return {
+    ...detail,
+    ...activityRow,
+    rawEvents: detail.rawEvents,
+    diffs: detail.diffs,
+    relatedAnnouncements: detail.relatedAnnouncements,
+    aftermath: detail.aftermath,
+    body: null,
+  };
+}
+
 export async function fetchChangeFeedActivityDetail(
   activityId: string
 ): Promise<ChangeActivityDetail | null> {
+  if (shouldUseTigerChangeFeedReads()) {
+    try {
+      return await fetchTigerChangeActivityDetail(activityId);
+    } catch (error) {
+      if (shouldUseStrictTigerChangeFeedReads()) {
+        throw error;
+      }
+
+      console.warn('Tiger Change Feed activity detail query failed; falling back to Supabase.', error);
+    }
+  }
+
   const parsed = parseActivityId(activityId);
 
   if (!parsed) {

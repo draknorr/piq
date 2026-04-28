@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeAppType, sanitizeStorefrontPriceCents, upsertLatestStorefrontState } from './storefront-latest-state.js';
+import {
+  buildNormalizedStorefrontSnapshotUpsertArgs,
+  normalizeAppType,
+  sanitizeStorefrontPriceCents,
+  upsertLatestStorefrontState,
+} from './storefront-latest-state.js';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
+import type { NormalizedStorefrontSnapshot } from './types.js';
 
 function buildStorefrontApp(overrides: Partial<ParsedStorefrontApp> = {}): ParsedStorefrontApp {
   return {
@@ -36,6 +42,47 @@ function buildStorefrontApp(overrides: Partial<ParsedStorefrontApp> = {}): Parse
     website: null,
     packageIds: [],
     packageGroupSubs: [],
+    screenshots: [],
+    movies: [],
+    ...overrides,
+  };
+}
+
+function buildNormalizedSnapshot(
+  overrides: Partial<NormalizedStorefrontSnapshot> = {}
+): NormalizedStorefrontSnapshot {
+  return {
+    name: 'Snapshot Example',
+    type: 'game',
+    isFree: false,
+    isDelisted: false,
+    comingSoon: false,
+    releaseDate: '2026-03-31',
+    releaseDateText: 'Mar 31, 2026',
+    descriptions: {
+      short: null,
+      about: null,
+      detailed: null,
+    },
+    supportedLanguages: null,
+    developers: ['Snapshot Studio'],
+    publishers: ['Snapshot Publisher'],
+    price: {
+      currentCents: 1499,
+      discountPercent: 20,
+    },
+    categories: [],
+    genres: [],
+    platforms: { windows: true, mac: false, linux: false },
+    controllerSupport: null,
+    dlcAppids: [],
+    packageIds: [],
+    packageGroupSubs: [],
+    heroImages: {
+      header: null,
+      capsule: null,
+      background: null,
+    },
     screenshots: [],
     movies: [],
     ...overrides,
@@ -106,4 +153,40 @@ test('upsertLatestStorefrontState passes null price for unreasonable storefront 
   }
   const capturedCall = rpcCall as { fn: string; args: Record<string, unknown> };
   assert.equal(capturedCall.args.p_current_price_cents, null);
+});
+
+test('buildNormalizedStorefrontSnapshotUpsertArgs replays stored storefront snapshots through the RPC shape', () => {
+  const args = buildNormalizedStorefrontSnapshotUpsertArgs(
+    3308200,
+    buildNormalizedSnapshot({
+      categories: [
+        { id: 1, description: 'Multi-player' },
+        { id: 30, description: 'Workshop' },
+      ],
+      comingSoon: true,
+      dlcAppids: [111, 222],
+      price: {
+        currentCents: 90000,
+        discountPercent: 15,
+      },
+      releaseDateText: null,
+    })
+  );
+
+  assert.deepEqual(args, {
+    p_appid: 3308200,
+    p_name: 'Snapshot Example',
+    p_type: 'game',
+    p_is_free: false,
+    p_is_delisted: false,
+    p_release_date: '2026-03-31',
+    p_release_date_raw: '',
+    p_has_workshop: true,
+    p_current_price_cents: null,
+    p_current_discount_percent: 15,
+    p_is_released: false,
+    p_developers: ['Snapshot Studio'],
+    p_publishers: ['Snapshot Publisher'],
+    p_dlc_appids: [111, 222],
+  });
 });

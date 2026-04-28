@@ -11,6 +11,8 @@ import {
   type ContinueResultSetRequest,
   DataPlaneService,
   type ExplainChangesRequest,
+  type GetChangeActivityDetailRequest,
+  type GetChangeFeedStatusRequest,
   type GetEntityOverviewRequest,
   type GetRelatedEntitiesRequest,
   type GetRelatedEntitiesResponse,
@@ -85,6 +87,8 @@ interface QueryApiService {
   continueResultSet: DataPlaneService['continueResultSet'];
   explainChanges: DataPlaneService['explainChanges'];
   getEntityOverview: DataPlaneService['getEntityOverview'];
+  getChangeActivityDetail: DataPlaneService['getChangeActivityDetail'];
+  getChangeFeedStatus: DataPlaneService['getChangeFeedStatus'];
   getRelatedEntities: DataPlaneService['getRelatedEntities'];
   getUserContext: DataPlaneService['getUserContext'];
   getYoutubeGameCoverage: DataPlaneService['getYoutubeGameCoverage'];
@@ -434,6 +438,28 @@ export function createQueryApiRequestHandler(params: {
           action: 'searchChangeActivity',
           fallbackOperation: sourceFallback ? () => sourceFallback.searchChangeActivity(body) : null,
           primaryOperation: () => dataPlane.searchChangeActivity(body),
+        });
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-change-activity-detail') {
+        const body = await readJsonBody<GetChangeActivityDetailRequest>(request);
+        const result = await executeWithSourceFallback({
+          action: 'getChangeActivityDetail',
+          fallbackOperation: sourceFallback ? () => sourceFallback.getChangeActivityDetail(body) : null,
+          primaryOperation: () => dataPlane.getChangeActivityDetail(body),
+        });
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-change-feed-status') {
+        const body = await readJsonBody<GetChangeFeedStatusRequest>(request);
+        const result = await executeWithSourceFallback({
+          action: 'getChangeFeedStatus',
+          fallbackOperation: sourceFallback ? () => sourceFallback.getChangeFeedStatus(body) : null,
+          primaryOperation: () => dataPlane.getChangeFeedStatus(body),
         });
         sendJson(response, 200, result);
         return;
