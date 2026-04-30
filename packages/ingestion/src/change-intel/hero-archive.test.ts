@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TypedSupabaseClient } from '@publisheriq/database';
 import {
+  buildHeroAssetArchiveKey,
+  buildHeroAssetObjectPath,
   extractHeroAssets,
   HeroAssetArchiver,
   isRetryableHeroAssetStorageErrorMessage,
@@ -183,6 +185,26 @@ test('extractHeroAssets returns populated hero asset descriptors only', () => {
   assert.deepEqual(assets, [
     { kind: 'header', url: 'https://cdn.example.com/header.jpg' },
   ]);
+});
+
+test('buildHeroAssetArchiveKey uses the configured deterministic hero prefix', () => {
+  const originalPrefix = process.env.CHANGE_INTEL_HERO_ASSET_PREFIX;
+  process.env.CHANGE_INTEL_HERO_ASSET_PREFIX = 'production/change-intel/hero-asset/';
+
+  try {
+    const asset = { kind: 'header' as const, url: 'https://cdn.example.com/header.jpg' };
+    assert.equal(buildHeroAssetObjectPath(asset, 'abc123', 'jpg'), 'header/abc123.jpg');
+    assert.equal(
+      buildHeroAssetArchiveKey(asset, 'abc123', 'jpg'),
+      'production/change-intel/hero-asset/header/abc123.jpg'
+    );
+  } finally {
+    if (originalPrefix === undefined) {
+      delete process.env.CHANGE_INTEL_HERO_ASSET_PREFIX;
+    } else {
+      process.env.CHANGE_INTEL_HERO_ASSET_PREFIX = originalPrefix;
+    }
+  }
 });
 
 test('readImageMeta parses PNG dimensions from headers', () => {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthErrorResponse, requireAuthOrThrow } from '@/lib/auth-utils';
+import { postToQueryApi } from '@/lib/query-api-client';
 import { createServerClient } from '@/lib/supabase/server';
 import type { ChangeFeedStatus } from '@/app/(main)/changes/lib';
 
@@ -13,6 +14,16 @@ const CATCHING_UP_QUEUE_AGE_HOURS = 6;
 const DELAYED_QUEUE_AGE_HOURS = 24;
 const CATCHING_UP_EVENT_AGE_HOURS = 3;
 const DELAYED_EVENT_AGE_HOURS = 12;
+
+interface TigerChangeFeedStatusResponse {
+  latestNewsEventAt: string | null;
+  latestProjectionRefreshAt: string | null;
+  latestStorefrontEventAt: string | null;
+  oldestProjectionQueuedAt: string | null;
+  oldestQueuedAt: string | null;
+  projectionQueuedJobs: number;
+  queuedJobs: number;
+}
 
 let statusCache:
   | {
@@ -32,6 +43,43 @@ function getHoursSince(timestamp: string | null): number | null {
   }
 
   return (Date.now() - parsed) / (1000 * 60 * 60);
+}
+
+function shouldUseTigerChangeFeedReads(): boolean {
+  const target =
+    process.env.CHANGE_INTEL_READ_TARGET?.trim().toLowerCase() ??
+    process.env.CHANGE_FEED_READ_TARGET?.trim().toLowerCase();
+  return target === 'tiger';
+}
+
+function shouldUseStrictTigerChangeFeedReads(): boolean {
+  const value =
+    process.env.CHANGE_INTEL_READ_STRICT ?? process.env.CHANGE_FEED_READ_STRICT;
+  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
+}
+
+async function fetchTigerStatus(): Promise<ChangeFeedStatus> {
+  const result = await postToQueryApi<TigerChangeFeedStatusResponse>(
+    '/v1/contracts/get-change-feed-status',
+    {},
+    { timeoutMs: 10_000 }
+  );
+
+  if (!result.ok || !result.data) {
+    throw new Error(
+      `Tiger Change Feed status query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+    );
+  }
+
+  return determineState(
+    result.data.queuedJobs,
+    result.data.oldestQueuedAt,
+    result.data.latestStorefrontEventAt,
+    result.data.latestNewsEventAt,
+    result.data.projectionQueuedJobs,
+    result.data.oldestProjectionQueuedAt,
+    result.data.latestProjectionRefreshAt
+  );
 }
 
 function determineState(
@@ -148,6 +196,24 @@ export async function GET() {
 
     if (statusCache && Date.now() - statusCache.cachedAt < STATUS_CACHE_TTL_MS) {
       return NextResponse.json(statusCache.data);
+    }
+
+    if (shouldUseTigerChangeFeedReads()) {
+      try {
+        const status = await fetchTigerStatus();
+        statusCache = {
+          data: status,
+          cachedAt: Date.now(),
+        };
+        return NextResponse.json(status);
+      } catch (error) {
+        if (shouldUseStrictTigerChangeFeedReads()) {
+          console.error('Tiger Change Feed status query error:', error);
+          return NextResponse.json({ error: 'Failed to load Change Feed status' }, { status: 500 });
+        }
+
+        console.warn('Tiger Change Feed status query failed; falling back to Supabase.', error);
+      }
     }
 
     const supabase = await createServerClient();

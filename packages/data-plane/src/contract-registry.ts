@@ -115,6 +115,41 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
     ],
   },
   {
+    name: 'getChangeActivityDetail',
+    endpoint: '/v1/contracts/get-change-activity-detail',
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'events_app_change_events',
+      'docs_steam_news_items',
+      'docs_steam_news_search_projection',
+    ],
+    description:
+      'Return raw events and linked announcements for a single Steam change activity.',
+    naturalLanguageStrength: [
+      'drill into a change feed item',
+      'before and after Steam page details',
+      'linked announcements for a specific activity'
+    ],
+  },
+  {
+    name: 'getChangeFeedStatus',
+    endpoint: '/v1/contracts/get-change-feed-status',
+    status: 'ready',
+    requiredRelations: [
+      'events_app_change_events',
+      'events_change_activity_bursts',
+      'ops_app_capture_work_state',
+    ],
+    description:
+      'Return queue freshness and latest change-intel timestamps for the change feed runtime.',
+    naturalLanguageStrength: [
+      'change feed health',
+      'capture backlog freshness',
+      'latest storefront and news event timestamps'
+    ],
+  },
+  {
     name: 'discoverChangePatterns',
     endpoint: '/v1/contracts/discover-change-patterns',
     status: 'ready',

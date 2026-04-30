@@ -14,6 +14,7 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import src.database.operations as operations_module
 from src.database.change_intelligence import hash_normalized_snapshot, normalize_pics_snapshot
 from src.database.operations import PICSDatabase
 from src.extractors.common import Association, ExtractedPICSData, SteamDeckCompatibility
@@ -191,6 +192,40 @@ class FakeSupabaseWrapper:
         self.client = client
 
 
+class FakeTigerHistoryStore:
+    def __init__(self, latest_snapshots: Optional[Dict[int, Dict[str, Any]]] = None):
+        self.latest_snapshots = deepcopy(latest_snapshots or {})
+        self.inserted_snapshots: List[Dict[str, Any]] = []
+        self.inserted_events: List[Dict[str, Any]] = []
+        self.updated_snapshot_ids: List[int] = []
+        self.updated_observed_at: Optional[str] = None
+        self.next_id = 1000
+
+    def get_latest_snapshots(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
+        return {
+            appid: deepcopy(self.latest_snapshots[appid])
+            for appid in appids
+            if appid in self.latest_snapshots
+        }
+
+    def update_last_seen_snapshots(self, snapshot_ids: List[int], observed_at: str) -> None:
+        self.updated_snapshot_ids.extend(snapshot_ids)
+        self.updated_observed_at = observed_at
+
+    def insert_snapshots(self, snapshot_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        inserted = []
+        for row in snapshot_rows:
+            current = deepcopy(row)
+            current["id"] = self.next_id
+            self.next_id += 1
+            self.inserted_snapshots.append(current)
+            inserted.append({"appid": current["appid"], "id": current["id"]})
+        return inserted
+
+    def insert_change_events(self, event_rows: List[Dict[str, Any]]) -> None:
+        self.inserted_events.extend(deepcopy(event_rows))
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -216,6 +251,8 @@ def schema_cache_error() -> Exception:
 
 
 def create_history_database(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> PICSDatabase:
+    monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "supabase")
+    monkeypatch.setattr(operations_module.settings, "pics_latest_state_target", "supabase")
     monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
     monkeypatch.setattr(
         "src.database.operations.SupabaseClient.get_instance",
@@ -352,6 +389,78 @@ def test_capture_change_history_updates_last_seen_without_new_snapshot_when_hash
     assert len(fake_client.snapshot_updates) == 1
     assert fake_client.snapshot_updates[0]["id"] == 7
     assert fake_client.snapshot_updates[0]["last_seen_at"] != "2026-03-01T12:00:00"
+
+
+def test_capture_change_history_can_write_to_tiger_history_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous_snapshot = {
+        "id": 10,
+        "appid": 730,
+        "source": "pics",
+        "content_hash": "prior-hash",
+        "first_seen_at": "2026-03-01T12:00:00",
+        "snapshot_data": normalize_pics_snapshot(build_app(store_tags=[1], platforms=["windows"])),
+    }
+    fake_store = FakeTigerHistoryStore(latest_snapshots={730: previous_snapshot})
+    fake_client = FakeSupabaseClient()
+
+    monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "tiger")
+    monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
+    monkeypatch.setattr(PICSDatabase, "_create_tiger_change_history_store", lambda self: fake_store)
+    monkeypatch.setattr(
+        "src.database.operations.SupabaseClient.get_instance",
+        lambda: FakeSupabaseWrapper(fake_client),
+    )
+    database = PICSDatabase()
+
+    database._capture_change_history(
+        [build_app(store_tags=[2, 3], platforms=["windows", "linux"], current_build_id="222")],
+        trigger_reason="change_monitor",
+        trigger_cursor="456",
+    )
+
+    assert fake_store.inserted_snapshots
+    assert fake_store.inserted_snapshots[0]["previous_snapshot_id"] == 10
+    assert fake_store.inserted_events
+    assert all(event["source"] == "pics" for event in fake_store.inserted_events)
+    assert fake_client.calls == []
+
+
+def test_capture_change_history_updates_tiger_last_seen_for_unchanged_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = build_app()
+    normalized_snapshot = normalize_pics_snapshot(app)
+    fake_store = FakeTigerHistoryStore(
+        latest_snapshots={
+            730: {
+                "id": 7,
+                "appid": 730,
+                "content_hash": hash_normalized_snapshot(normalized_snapshot),
+                "first_seen_at": "2026-03-01T12:00:00",
+                "snapshot_data": normalized_snapshot,
+            }
+        }
+    )
+    fake_client = FakeSupabaseClient()
+
+    monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "tiger")
+    monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
+    monkeypatch.setattr(PICSDatabase, "_create_tiger_change_history_store", lambda self: fake_store)
+    monkeypatch.setattr(
+        "src.database.operations.SupabaseClient.get_instance",
+        lambda: FakeSupabaseWrapper(fake_client),
+    )
+    database = PICSDatabase()
+
+    database._capture_change_history([app], trigger_reason="bulk_sync", trigger_cursor=None)
+
+    assert fake_store.updated_snapshot_ids == [7]
+    assert fake_store.updated_observed_at is not None
+    assert fake_store.inserted_snapshots == []
+    assert fake_store.inserted_events == []
+    assert fake_client.calls == []
 
 
 def test_upsert_apps_batch_captures_history_before_latest_state_write(

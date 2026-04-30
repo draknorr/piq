@@ -1222,6 +1222,8 @@ test('searchChangeActivity narrows raw event queries by requested signal familie
   });
 
   assert.deepEqual(receivedParams, {
+    allHistory: false,
+    appids: [],
     appTypes: ['game'],
     changeTypes: [
       'description_rewrite',
@@ -1243,6 +1245,37 @@ test('searchChangeActivity narrows raw event queries by requested signal familie
   });
   assert.equal(result.items.length, 0);
   assert.equal(result.sufficientToAnswer, false);
+});
+
+test('searchChangeActivity passes app filters and all-history mode to raw event queries', async () => {
+  const service = createService();
+  let receivedParams: Record<string, unknown> | null = null;
+
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).querySearchChangeEventRows = async (params: Record<string, unknown>) => {
+    receivedParams = params;
+    return [];
+  };
+  (service as any).queryNewsRowsByGids = async () => [];
+
+  const result = await service.searchChangeActivity({
+    allHistory: true,
+    appids: [730, 730, -1, 440],
+    days: 30,
+    view: 'all-activity',
+  });
+
+  assert.deepEqual(receivedParams, {
+    allHistory: true,
+    appids: [730, 440],
+    appTypes: [],
+    changeTypes: [],
+    days: 30,
+    limit: 800,
+    query: null,
+  });
+  assert.deepEqual(result.interpretedFilters.appids, [730, 440]);
+  assert.equal(result.interpretedFilters.allHistory, true);
 });
 
 test('searchDocuments returns explicit ranking reasons and usable previews', async () => {
@@ -1945,6 +1978,8 @@ test('discoverChangePatterns narrows candidate activity reads to pattern-relevan
   });
 
   assert.deepEqual(receivedParams, {
+    allHistory: false,
+    appids: [],
     appTypes: ['game'],
     changeTypes: [
       'price_change',

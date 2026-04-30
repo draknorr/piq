@@ -8,8 +8,28 @@ class Settings(BaseSettings):
     """Application settings from environment variables."""
 
     # Database
-    supabase_url: str
-    supabase_service_key: str
+    supabase_url: Optional[str] = None
+    supabase_service_key: Optional[str] = None
+    tiger_primary_url: Optional[str] = None
+
+    # PICS change-history storage. This only controls app_source_snapshots and
+    # app_change_events writes for source='pics'; latest-state PICS writes still
+    # use Supabase in the current phase.
+    pics_change_history_target: str = "supabase"  # 'supabase' or 'tiger'
+    pics_change_history_tiger_url: Optional[str] = None
+
+    # PICS latest-state storage for apps, relationships, sync status, and the
+    # PICS cursor. Supabase remains the default until the Tiger bootstrap SQL is
+    # applied and the Railway service env is flipped.
+    pics_latest_state_target: str = "supabase"  # 'supabase' or 'tiger'
+    pics_latest_state_tiger_url: Optional[str] = None
+
+    # One-time PICS change-history backfill controls.
+    pics_change_history_backfill_batch_size: int = 500
+    pics_change_history_backfill_limit: Optional[int] = None
+    pics_change_history_backfill_min_id: int = 0
+    pics_change_history_backfill_dry_run: bool = True
+    pics_change_history_backfill_surfaces: str = "snapshots,events"
 
     # Steam (optional - for authenticated requests)
     steam_username: Optional[str] = None

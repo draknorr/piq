@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ApiError, logger } from '@publisheriq/shared';
 import type { TypedSupabaseClient } from '@publisheriq/database';
+import { createChangeIntelArchiveStore } from './archive-store.js';
 import { getArchiveEligibility, getLatestMediaVersion } from './repository.js';
+import { readChangeIntelRuntimeConfig } from './runtime-config.js';
+import { getTigerChangeIntelRepository } from './tiger-repository.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
 import { withRetry } from '../utils/retry.js';
 import type { HeroAssetDescriptor, NormalizedMediaVersion } from './types.js';
@@ -97,6 +100,28 @@ function getExtension(url: string, mimeType: string | null): string {
   if (mimeType === 'image/jpeg') return 'jpg';
   if (mimeType === 'image/webp') return 'webp';
   return 'bin';
+}
+
+function trimSlashes(value: string): string {
+  return value.replace(/^\/+|\/+$/g, '');
+}
+
+function getHeroAssetArchivePrefix(): string {
+  const explicitPrefix = process.env.CHANGE_INTEL_HERO_ASSET_PREFIX;
+  if (explicitPrefix?.trim()) {
+    return trimSlashes(explicitPrefix.trim());
+  }
+
+  const archivePrefix = process.env.CHANGE_INTEL_ARCHIVE_PREFIX ?? 'change-intel';
+  return `${trimSlashes(archivePrefix)}/hero-asset`;
+}
+
+export function buildHeroAssetObjectPath(asset: HeroAssetDescriptor, contentHash: string, extension: string): string {
+  return `${asset.kind}/${contentHash}.${extension}`;
+}
+
+export function buildHeroAssetArchiveKey(asset: HeroAssetDescriptor, contentHash: string, extension: string): string {
+  return `${getHeroAssetArchivePrefix()}/${buildHeroAssetObjectPath(asset, contentHash, extension)}`;
 }
 
 export async function getRemoteAssetContentHash(url: string): Promise<string | null> {
@@ -232,6 +257,15 @@ export class HeroAssetArchiver {
   }
 
   private async shouldArchive(appid: number): Promise<boolean> {
+    if (readChangeIntelRuntimeConfig().writeTarget === 'tiger') {
+      if (this.downloadedTodayBytes >= DAILY_DOWNLOAD_BUDGET_BYTES) {
+        log.warn('Hero asset archival daily budget reached', { appid, downloadedTodayBytes: this.downloadedTodayBytes });
+        return false;
+      }
+
+      return true;
+    }
+
     const eligible = await getArchiveEligibility(this.supabase, appid);
     if (!eligible) {
       return false;
@@ -308,6 +342,43 @@ export class HeroAssetArchiver {
     const meta = readImageMeta(buffer, contentType);
     const extension = getExtension(asset.url, meta.mimeType);
     const objectPath = `${asset.kind}/${sha256}.${extension}`;
+
+    if (readChangeIntelRuntimeConfig().writeTarget === 'tiger') {
+      const store = createChangeIntelArchiveStore();
+      if (!store) {
+        throw new Error(
+          'CHANGE_INTEL_ARCHIVE_TARGET=object_storage is required to archive hero assets to Tiger.'
+        );
+      }
+
+      const pointer = await store.write({
+        body: buffer,
+        contentHash: sha256,
+        contentType: meta.mimeType ?? 'application/octet-stream',
+        extension,
+        key: buildHeroAssetArchiveKey(asset, sha256, extension),
+        kind: 'hero-asset',
+      });
+
+      const now = new Date().toISOString();
+      await getTigerChangeIntelRepository().upsertHeroAssetVersion({
+        appid,
+        assetKind: asset.kind,
+        contentHash: sha256,
+        contentLength: buffer.byteLength,
+        firstSeenAt: now,
+        height: meta.height,
+        lastSeenAt: now,
+        mimeType: meta.mimeType,
+        objectBucket: pointer.bucket,
+        objectKey: pointer.key,
+        sourceUrl: asset.url,
+        width: meta.width,
+      });
+
+      this.downloadedTodayBytes += buffer.byteLength;
+      return;
+    }
 
     const storage = this.supabase.storage.from(HERO_BUCKET);
     await withRetry(

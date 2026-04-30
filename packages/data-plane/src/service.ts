@@ -27,6 +27,10 @@ import type {
   ExplainChangesMoment,
   ExplainChangesRequest,
   ExplainChangesResponse,
+  GetChangeActivityDetailRequest,
+  GetChangeActivityDetailResponse,
+  GetChangeFeedStatusRequest,
+  GetChangeFeedStatusResponse,
   GetEntityOverviewRequest,
   GetEntityOverviewResponse,
   GetRelatedEntitiesRequest,
@@ -311,6 +315,7 @@ interface SearchChangeEventRow extends QueryResultRow {
   before_value: unknown | null;
   change_type: string;
   context: unknown;
+  id: string;
   is_released: boolean | null;
   news_item_gid: string | null;
   occurred_at: string;
@@ -500,7 +505,16 @@ interface ChangePatternCandidateRow extends QueryResultRow {
   trend_30d_direction: string | null;
 }
 
+interface ChangeFeedStatusCountRow extends QueryResultRow {
+  count: string;
+}
+
+interface ChangeFeedStatusTimestampRow extends QueryResultRow {
+  value: string | null;
+}
+
 interface ChangeBurstDetailRow extends QueryResultRow {
+  activity_kind: 'announcement' | 'change';
   app_name: string;
   app_type: string | null;
   appid: number;
@@ -510,14 +524,27 @@ interface ChangeBurstDetailRow extends QueryResultRow {
   effective_at: string;
   events: Array<{
     after_value?: unknown | null;
+    appid?: number | null;
     before_value?: unknown | null;
     change_type?: string | null;
+    context?: unknown | null;
+    event_id?: string | null;
+    news_item_gid?: string | null;
     occurred_at?: string | null;
+    source?: string | null;
   }> | null;
   headline_change_types: string[] | null;
   impact: Record<string, unknown> | null;
   is_released: boolean | null;
   related_news: Array<{
+    appid?: number | null;
+    app_name?: string | null;
+    app_type?: string | null;
+    feedlabel?: string | null;
+    feedname?: string | null;
+    first_seen_at?: string | null;
+    gid?: string | null;
+    published_at?: string | null;
     title?: string | null;
     url?: string | null;
   }> | null;
@@ -770,6 +797,7 @@ const READINESS_GATE_CONTRACTS = new Set<
   'resolveEntities',
   'searchCatalog',
   'searchChangeActivity',
+  'getChangeActivityDetail',
   'discoverMomentum',
   'discoverChangePatterns',
   'getEntityOverview',
@@ -964,6 +992,16 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.app_change_events',
       table: 'app_change_events',
     },
+    events_change_activity_bursts: {
+      schema: 'public',
+      sql: 'public.change_activity_bursts',
+      table: 'change_activity_bursts',
+    },
+    ops_app_capture_work_state: {
+      schema: 'public',
+      sql: 'public.app_capture_work_state',
+      table: 'app_capture_work_state',
+    },
     franchises: { schema: 'public', sql: 'public.franchises', table: 'franchises' },
     publishers: { schema: 'public', sql: 'public.publishers', table: 'publishers' },
     docs_youtube_channels: {
@@ -1058,6 +1096,16 @@ const RELATION_LOCATIONS: Record<
       sql: 'events.app_change_events',
       table: 'app_change_events',
     },
+    events_change_activity_bursts: {
+      schema: 'events',
+      sql: 'events.change_activity_bursts',
+      table: 'change_activity_bursts',
+    },
+    ops_app_capture_work_state: {
+      schema: 'ops',
+      sql: 'ops.app_capture_work_state',
+      table: 'app_capture_work_state',
+    },
     franchises: { schema: 'legacy', sql: 'legacy.franchises', table: 'franchises' },
     publishers: { schema: 'legacy', sql: 'legacy.publishers', table: 'publishers' },
     docs_youtube_channels: {
@@ -1109,6 +1157,29 @@ function normalizeLimit(value: number | undefined, fallback: number, max: number
   }
 
   return Math.max(1, Math.min(max, Math.floor(value)));
+}
+
+function normalizePositiveIntegers(values: number[] | undefined, max = 25): number[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(values.filter((value): value is number => Number.isInteger(value) && value > 0))
+  ).slice(0, max);
+}
+
+function parseCountValue(value: string | number | null | undefined): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
 }
 
 function normalizeOffset(value: number | undefined): number {
@@ -3230,6 +3301,8 @@ export class DataPlaneService {
       MAX_CHANGE_ACTIVITY_LIMIT
     );
     const appTypes = this.normalizeExplainFilters(request.appTypes);
+    const appids = normalizePositiveIntegers(request.appids);
+    const allHistory = request.allHistory === true && appids.length > 0;
     const signalFamilies = normalizeChangeSignalFamilies(request.signalFamilies);
     const sort = request.sort ?? 'relevant';
     const view = request.view ?? 'overview';
@@ -3244,6 +3317,8 @@ export class DataPlaneService {
     );
 
     const rows = await this.querySearchChangeActivityRows({
+      allHistory,
+      appids,
       appTypes,
       days,
       query,
@@ -3280,6 +3355,8 @@ export class DataPlaneService {
           ? encodeContinuationToken({ offset: offset + limit })
           : null,
       interpretedFilters: {
+        allHistory,
+        appids,
         appTypes,
         days,
         mode,
@@ -3296,6 +3373,195 @@ export class DataPlaneService {
         this.relation('docs_steam_news_search_projection').sql,
       ]),
       sufficientToAnswer: items.length > 0,
+    };
+  }
+
+  async getChangeActivityDetail(
+    request: GetChangeActivityDetailRequest
+  ): Promise<GetChangeActivityDetailResponse> {
+    await this.assertContractRuntime('searchChangeActivity');
+
+    const activityId = request.activityId?.trim();
+    if (!activityId) {
+      throw new PublisherIQError(
+        'getChangeActivityDetail requires an activityId.',
+        'INVALID_CHANGE_ACTIVITY_DETAIL_INPUT'
+      );
+    }
+
+    const [detailRow, activityRows] = await Promise.all([
+      this.queryChangeBurstDetail(activityId),
+      this.querySearchChangeActivityRows({
+        activityId,
+        allHistory: false,
+        appids: [],
+        appTypes: [],
+        days: DEFAULT_CHANGE_ACTIVITY_DAYS,
+        query: null,
+        signalFamilies: [],
+        view: 'all-activity',
+      }),
+    ]);
+
+    const activityRow = activityRows[0] ?? null;
+    const activity = activityRow ? this.mapSearchChangeActivityItem(activityRow) : null;
+    const item =
+      detailRow && activity
+        ? {
+            activity,
+            events: (detailRow.events ?? []).map((event) => ({
+              afterValue: event.after_value ?? null,
+              appid: event.appid ?? detailRow.appid,
+              beforeValue: event.before_value ?? null,
+              changeType: event.change_type ?? 'unknown',
+              context:
+                event.context && typeof event.context === 'object' && !Array.isArray(event.context)
+                  ? (event.context as Record<string, unknown>)
+                  : null,
+              eventId: event.event_id ?? '',
+              newsItemGid: event.news_item_gid ?? null,
+              occurredAt: event.occurred_at
+                ? formatTimestamp(parseTimestamp(event.occurred_at))
+                : detailRow.effective_at,
+              source: event.source ?? 'unknown',
+            })),
+            impact: detailRow.impact,
+            relatedNews: (detailRow.related_news ?? [])
+              .filter((row) => typeof row.gid === 'string' && row.gid.length > 0)
+              .map((row) => ({
+                appid: row.appid ?? detailRow.appid,
+                appName: row.app_name ?? detailRow.app_name,
+                appType: row.app_type ?? detailRow.app_type,
+                feedLabel: row.feedlabel ?? null,
+                feedName: row.feedname ?? null,
+                firstSeenAt: row.first_seen_at
+                  ? formatTimestamp(parseTimestamp(row.first_seen_at))
+                  : null,
+                gid: row.gid!,
+                publishedAt: row.published_at
+                  ? formatTimestamp(parseTimestamp(row.published_at))
+                  : null,
+                title: row.title ?? null,
+                url: row.url ?? null,
+              })),
+          }
+        : null;
+
+    return {
+      item,
+      provenance: buildProvenance(this.config.source, [
+        this.relation('apps').sql,
+        this.relation('events_app_change_events').sql,
+        this.relation('docs_steam_news_items').sql,
+        this.relation('docs_steam_news_search_projection').sql,
+      ]),
+      sufficientToAnswer: item !== null,
+    };
+  }
+
+  async getChangeFeedStatus(
+    _request: GetChangeFeedStatusRequest = {}
+  ): Promise<GetChangeFeedStatusResponse> {
+    await this.assertContractRuntime('getChangeFeedStatus');
+
+    const workStateTable = this.relation('ops_app_capture_work_state').sql;
+    const activityBurstsTable = this.relation('events_change_activity_bursts').sql;
+    const eventsTable = this.relation('events_app_change_events').sql;
+
+    const [
+      queuedJobsResult,
+      oldestQueuedResult,
+      latestStorefrontResult,
+      latestNewsResult,
+      projectionQueuedJobsResult,
+      oldestProjectionQueuedResult,
+      latestProjectionRefreshResult,
+    ] = await Promise.all([
+      runQuery<ChangeFeedStatusCountRow>(
+        `
+          SELECT count(*)::text AS count
+          FROM ${workStateTable}
+          WHERE dirty_since IS NOT NULL
+            AND dead_lettered_at IS NULL
+            AND source::text = ANY($1::text[])
+        `,
+        [['storefront', 'news']],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusTimestampRow>(
+        `
+          SELECT min(dirty_since)::text AS value
+          FROM ${workStateTable}
+          WHERE dirty_since IS NOT NULL
+            AND dead_lettered_at IS NULL
+            AND source::text = ANY($1::text[])
+        `,
+        [['storefront', 'news']],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusTimestampRow>(
+        `
+          SELECT max(occurred_at)::text AS value
+          FROM ${eventsTable}
+          WHERE source::text = $1::text
+        `,
+        ['storefront'],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusTimestampRow>(
+        `
+          SELECT max(occurred_at)::text AS value
+          FROM ${eventsTable}
+          WHERE source::text = $1::text
+        `,
+        ['news'],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusCountRow>(
+        `
+          SELECT count(*)::text AS count
+          FROM ${workStateTable}
+          WHERE dirty_since IS NOT NULL
+            AND dead_lettered_at IS NULL
+            AND source::text = $1::text
+        `,
+        ['projection_refresh'],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusTimestampRow>(
+        `
+          SELECT min(dirty_since)::text AS value
+          FROM ${workStateTable}
+          WHERE dirty_since IS NOT NULL
+            AND dead_lettered_at IS NULL
+            AND source::text = $1::text
+        `,
+        ['projection_refresh'],
+        this.config
+      ),
+      runQuery<ChangeFeedStatusTimestampRow>(
+        `
+          SELECT max(updated_at)::text AS value
+          FROM ${activityBurstsTable}
+        `,
+        [],
+        this.config
+      ),
+    ]);
+
+    return {
+      latestNewsEventAt: latestNewsResult.rows[0]?.value ?? null,
+      latestProjectionRefreshAt: latestProjectionRefreshResult.rows[0]?.value ?? null,
+      latestStorefrontEventAt: latestStorefrontResult.rows[0]?.value ?? null,
+      oldestProjectionQueuedAt: oldestProjectionQueuedResult.rows[0]?.value ?? null,
+      oldestQueuedAt: oldestQueuedResult.rows[0]?.value ?? null,
+      projectionQueuedJobs: parseCountValue(projectionQueuedJobsResult.rows[0]?.count),
+      provenance: buildProvenance(this.config.source, [
+        workStateTable,
+        eventsTable,
+        activityBurstsTable,
+      ]),
+      queuedJobs: parseCountValue(queuedJobsResult.rows[0]?.count),
     };
   }
 
@@ -6666,6 +6932,7 @@ export class DataPlaneService {
   }
 
   private async querySearchChangeEventRows(params: {
+    allHistory?: boolean;
     appTypes: string[];
     changeTypes?: string[];
     days?: number;
@@ -6674,22 +6941,27 @@ export class DataPlaneService {
     startTime?: string;
     endTime?: string;
     appid?: number;
+    appids?: number[];
   }): Promise<SearchChangeEventRow[]> {
     const eventsTable = this.relation('events_app_change_events').sql;
     const appsTable = this.relation('apps').sql;
     const sqlParams: unknown[] = [];
     const conditions: string[] = [];
+    const appids = normalizePositiveIntegers(params.appids);
 
     if (params.appid != null) {
       sqlParams.push(params.appid);
       conditions.push(`e.appid = $${sqlParams.length}`);
+    } else if (appids.length > 0) {
+      sqlParams.push(appids);
+      conditions.push(`e.appid = ANY($${sqlParams.length}::int[])`);
     }
 
     if (params.startTime && params.endTime) {
       sqlParams.push(params.startTime);
       sqlParams.push(params.endTime);
       conditions.push(`e.occurred_at BETWEEN $${sqlParams.length - 1}::timestamptz AND $${sqlParams.length}::timestamptz`);
-    } else {
+    } else if (!(params.allHistory && (params.appid != null || appids.length > 0))) {
       sqlParams.push(Math.max(1, Math.trunc(params.days ?? DEFAULT_CHANGE_ACTIVITY_DAYS)));
       conditions.push(`e.occurred_at >= NOW() - ($${sqlParams.length}::int * INTERVAL '1 day')`);
     }
@@ -6722,6 +6994,7 @@ export class DataPlaneService {
     const result = await runQuery<SearchChangeEventRow>(
       `
         SELECT
+          e.id::text AS id,
           e.appid,
           a.name AS app_name,
           a.type::text AS app_type,
@@ -6846,6 +7119,8 @@ export class DataPlaneService {
 
   private async querySearchChangeActivityRows(params: {
     activityId?: string | null;
+    allHistory: boolean;
+    appids: number[];
     appTypes: string[];
     days: number;
     query: string | null;
@@ -6869,6 +7144,8 @@ export class DataPlaneService {
           startTime: formatTimestamp(parsedActivityId.windowStart),
         })
       : await this.querySearchChangeEventRows({
+          allHistory: params.allHistory,
+          appids: params.appids,
           appTypes: params.appTypes,
           changeTypes,
           days: params.days,
@@ -7035,6 +7312,7 @@ export class DataPlaneService {
     );
 
     return {
+      activity_kind: parsed.activityKind,
       app_name: app.app_name,
       app_type: app.app_type,
       appid: app.appid,
@@ -7044,14 +7322,27 @@ export class DataPlaneService {
       effective_at: formatTimestamp(parsed.windowEnd),
       events: events.map((event) => ({
         after_value: event.after_value,
+        appid: event.appid,
         before_value: event.before_value,
         change_type: event.change_type,
-        occurred_at: event.occurred_at,
+        context: event.context,
+        event_id: event.id,
+        news_item_gid: event.news_item_gid,
+        occurred_at: formatTimestamp(parseTimestamp(event.occurred_at)),
+        source: event.source,
       })),
       headline_change_types: [...new Set(events.map((event) => event.change_type))],
       impact: null,
       is_released: app.is_released,
       related_news: newsRows.map((row) => ({
+        appid: app.appid,
+        app_name: app.app_name,
+        app_type: app.app_type,
+        feedlabel: row.feedlabel,
+        feedname: row.feedname,
+        first_seen_at: row.first_seen_at,
+        gid: row.gid,
+        published_at: row.published_at,
         title: row.title,
         url: row.url,
       })),
@@ -7176,11 +7467,13 @@ export class DataPlaneService {
   }): Promise<ChangePatternCandidateRow[]> {
     const activityRows = (
       await this.querySearchChangeActivityRows({
-      appTypes: params.appTypes,
-      days: params.days,
-      query: params.query,
-      signalFamilies: this.signalFamiliesForChangePattern(params.pattern),
-      view: 'all-activity',
+        allHistory: false,
+        appids: [],
+        appTypes: params.appTypes,
+        days: params.days,
+        query: params.query,
+        signalFamilies: this.signalFamiliesForChangePattern(params.pattern),
+        view: 'all-activity',
       })
     ).map((row) => this.mapSearchChangeActivityItem(row));
 

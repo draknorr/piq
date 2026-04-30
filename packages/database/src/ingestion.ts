@@ -271,6 +271,13 @@ export class ClaimAppsTimeoutError extends Error {
 }
 
 function requireDatabaseUrl(): string {
+  if (
+    process.env.DATA_WRITE_TARGET?.trim().toLowerCase() === 'tiger' &&
+    process.env.TIGER_PRIMARY_URL
+  ) {
+    return process.env.TIGER_PRIMARY_URL;
+  }
+
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
@@ -334,12 +341,14 @@ function normalizeDate(value: Date | string | null | undefined): string | null {
 }
 
 function createIngestionPool(): Pool {
+  const tigerPrimary = process.env.DATA_WRITE_TARGET?.trim().toLowerCase() === 'tiger';
   const pool = new Pool({
     connectionString: requireDatabaseUrl(),
     max: DEFAULT_POOL_MAX,
     idleTimeoutMillis: DEFAULT_IDLE_TIMEOUT_MS,
     connectionTimeoutMillis: DEFAULT_CONNECTION_TIMEOUT_MS,
     allowExitOnIdle: true,
+    ...(tigerPrimary ? { options: '-c search_path=ops,legacy,metrics,events,docs,public' } : {}),
   });
 
   pool.on('error', (error: Error) => {

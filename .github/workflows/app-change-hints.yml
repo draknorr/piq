@@ -11,8 +11,9 @@ on:
         default: '1000'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_WRITE_TARGET: tiger
+  DATA_READ_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
   STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
 
 jobs:

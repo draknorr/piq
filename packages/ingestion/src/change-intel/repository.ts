@@ -2,9 +2,14 @@ import type { TypedSupabaseClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { hashNormalizedContent } from './hashing.js';
 import {
+  readChangeIntelRuntimeConfig,
+  shouldWriteTiger,
+} from './runtime-config.js';
+import {
   toComparableMediaVersion,
   toComparableStorefrontSnapshot,
 } from './storefront.js';
+import { getTigerChangeIntelRepository } from './tiger-repository.js';
 import type {
   AppCaptureSource,
   AppChangeEventDraft,
@@ -20,6 +25,59 @@ import type {
 const log = logger.child({ component: 'change-intel-repository' });
 const DEFAULT_SUPABASE_RETRY_ATTEMPTS = 3;
 const DEFAULT_SUPABASE_RETRY_DELAY_MS = 250;
+
+function shouldUseTigerReadAuthority(): boolean {
+  const config = readChangeIntelRuntimeConfig();
+  return config.readTarget === 'tiger' || config.writeTarget === 'tiger';
+}
+
+function shouldUseTigerWriteAuthority(): boolean {
+  return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
+}
+
+async function mirrorTigerWrite(operation: string, fn: () => Promise<void>): Promise<void> {
+  const config = readChangeIntelRuntimeConfig();
+  if (!shouldWriteTiger(config)) {
+    return;
+  }
+
+  try {
+    await fn();
+  } catch (error) {
+    if (config.writeTarget === 'tiger' || config.shadowStrict) {
+      throw error;
+    }
+
+    log.warn('Tiger shadow write failed', {
+      operation,
+      error,
+    });
+  }
+}
+
+async function mirrorTigerResult<T>(
+  operation: string,
+  fn: () => Promise<T>
+): Promise<T | null> {
+  const config = readChangeIntelRuntimeConfig();
+  if (!shouldWriteTiger(config)) {
+    return null;
+  }
+
+  try {
+    return await fn();
+  } catch (error) {
+    if (config.writeTarget === 'tiger' || config.shadowStrict) {
+      throw error;
+    }
+
+    log.warn('Tiger shadow write failed', {
+      operation,
+      error,
+    });
+    return null;
+  }
+}
 
 interface SupabaseLikeError {
   message?: string | null;
@@ -232,6 +290,16 @@ export async function writeStorefrontSnapshot(
   triggerCursor: string | null,
   observedAt = new Date().toISOString()
 ): Promise<VersionWriteResult> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().writeStorefrontSnapshot(
+      appid,
+      snapshot,
+      triggerReason,
+      triggerCursor,
+      observedAt
+    );
+  }
+
   const previousSnapshot = await getLatestStorefrontSnapshotRow(supabase, appid);
   const contentHash = hashNormalizedContent(toComparableStorefrontSnapshot(snapshot));
 
@@ -241,12 +309,28 @@ export async function writeStorefrontSnapshot(
       observed_at: observedAt,
     });
 
-    return {
+    const result = {
       inserted: false,
       currentId: String(previousSnapshot.id),
       previousId: String(previousSnapshot.id),
       currentHash: contentHash,
     };
+
+    await mirrorTigerWrite('writeStorefrontSnapshot.touch', async () => {
+      await getTigerChangeIntelRepository().writeStorefrontSnapshot(
+        appid,
+        snapshot,
+        triggerReason,
+        triggerCursor,
+        observedAt,
+        {
+          idOverride: result.currentId,
+          previousIdOverride: result.previousId,
+        }
+      );
+    });
+
+    return result;
   }
 
   const { data, error } = await getDb(supabase)
@@ -270,12 +354,28 @@ export async function writeStorefrontSnapshot(
     throw new Error(`Failed to insert storefront snapshot: ${error.message}`);
   }
 
-  return {
+  const result = {
     inserted: true,
     currentId: String(data.id),
     previousId: previousSnapshot ? String(previousSnapshot.id) : null,
     currentHash: contentHash,
   };
+
+  await mirrorTigerWrite('writeStorefrontSnapshot.insert', async () => {
+    await getTigerChangeIntelRepository().writeStorefrontSnapshot(
+      appid,
+      snapshot,
+      triggerReason,
+      triggerCursor,
+      observedAt,
+      {
+        idOverride: result.currentId,
+        previousIdOverride: result.previousId,
+      }
+    );
+  });
+
+  return result;
 }
 
 export async function writeMediaVersion(
@@ -285,6 +385,15 @@ export async function writeMediaVersion(
   mediaVersion: NormalizedMediaVersion,
   observedAt = new Date().toISOString()
 ): Promise<VersionWriteResult> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().writeMediaVersion(
+      appid,
+      storefrontSnapshotId,
+      mediaVersion,
+      observedAt
+    );
+  }
+
   const previousVersion = await getLatestMediaVersionRow(supabase, appid);
   const contentHash = hashNormalizedContent(toComparableMediaVersion(mediaVersion));
 
@@ -293,12 +402,27 @@ export async function writeMediaVersion(
       last_seen_at: observedAt,
     });
 
-    return {
+    const result = {
       inserted: false,
       currentId: String(previousVersion.id),
       previousId: String(previousVersion.id),
       currentHash: contentHash,
     };
+
+    await mirrorTigerWrite('writeMediaVersion.touch', async () => {
+      await getTigerChangeIntelRepository().writeMediaVersion(
+        appid,
+        storefrontSnapshotId,
+        mediaVersion,
+        observedAt,
+        {
+          idOverride: result.currentId,
+          previousIdOverride: result.previousId,
+        }
+      );
+    });
+
+    return result;
   }
 
   const { data, error } = await getDb(supabase)
@@ -321,12 +445,27 @@ export async function writeMediaVersion(
     throw new Error(`Failed to insert media version: ${error.message}`);
   }
 
-  return {
+  const result = {
     inserted: true,
     currentId: String(data.id),
     previousId: previousVersion ? String(previousVersion.id) : null,
     currentHash: contentHash,
   };
+
+  await mirrorTigerWrite('writeMediaVersion.insert', async () => {
+    await getTigerChangeIntelRepository().writeMediaVersion(
+      appid,
+      storefrontSnapshotId,
+      mediaVersion,
+      observedAt,
+      {
+        idOverride: result.currentId,
+        previousIdOverride: result.previousId,
+      }
+    );
+  });
+
+  return result;
 }
 
 export async function upsertNewsItem(
@@ -334,6 +473,11 @@ export async function upsertNewsItem(
   appid: number,
   newsVersion: NormalizedNewsVersion
 ): Promise<void> {
+  if (shouldUseTigerWriteAuthority()) {
+    await getTigerChangeIntelRepository().upsertNewsItem(appid, newsVersion);
+    return;
+  }
+
   const now = new Date().toISOString();
   const { error } = await getDb(supabase)
     .from('steam_news_items')
@@ -356,6 +500,10 @@ export async function upsertNewsItem(
   if (error) {
     throw new Error(`Failed to upsert steam_news_items: ${error.message}`);
   }
+
+  await mirrorTigerWrite('upsertNewsItem', async () => {
+    await getTigerChangeIntelRepository().upsertNewsItem(appid, newsVersion);
+  });
 }
 
 export async function writeNewsVersion(
@@ -363,6 +511,10 @@ export async function writeNewsVersion(
   newsVersion: NormalizedNewsVersion,
   observedAt = new Date().toISOString()
 ): Promise<VersionWriteResult> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().writeNewsVersion(newsVersion, observedAt);
+  }
+
   const previousVersion = await getLatestNewsVersionRow(supabase, newsVersion.gid);
   const contentHash = hashNormalizedContent(newsVersion);
 
@@ -371,12 +523,21 @@ export async function writeNewsVersion(
       last_seen_at: observedAt,
     });
 
-    return {
+    const result = {
       inserted: false,
       currentId: String(previousVersion.id),
       previousId: String(previousVersion.id),
       currentHash: contentHash,
     };
+
+    await mirrorTigerWrite('writeNewsVersion.touch', async () => {
+      await getTigerChangeIntelRepository().writeNewsVersion(newsVersion, observedAt, {
+        idOverride: result.currentId,
+        previousIdOverride: result.previousId,
+      });
+    });
+
+    return result;
   }
 
   const { data, error } = await getDb(supabase)
@@ -399,12 +560,21 @@ export async function writeNewsVersion(
     throw new Error(`Failed to insert steam_news_versions: ${error.message}`);
   }
 
-  return {
+  const result = {
     inserted: true,
     currentId: String(data.id),
     previousId: previousVersion ? String(previousVersion.id) : null,
     currentHash: contentHash,
   };
+
+  await mirrorTigerWrite('writeNewsVersion.insert', async () => {
+    await getTigerChangeIntelRepository().writeNewsVersion(newsVersion, observedAt, {
+      idOverride: result.currentId,
+      previousIdOverride: result.previousId,
+    });
+  });
+
+  return result;
 }
 
 export async function insertChangeEvents(
@@ -420,6 +590,11 @@ export async function insertChangeEvents(
   } = {}
 ): Promise<void> {
   if (events.length === 0) {
+    return;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    await getTigerChangeIntelRepository().insertChangeEvents(appid, events, options);
     return;
   }
 
@@ -442,6 +617,10 @@ export async function insertChangeEvents(
   if (error) {
     throw new Error(`Failed to insert app_change_events: ${error.message}`);
   }
+
+  await mirrorTigerWrite('insertChangeEvents', async () => {
+    await getTigerChangeIntelRepository().insertChangeEvents(appid, events, options);
+  });
 }
 
 export async function enqueueCaptureJobs(
@@ -457,6 +636,10 @@ export async function enqueueCaptureJobs(
 ): Promise<number> {
   if (jobs.length === 0) {
     return 0;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().enqueueCaptureJobs(jobs);
   }
 
   const { data, error } = await getDb(supabase).rpc('mark_app_capture_work_dirty', {
@@ -475,7 +658,12 @@ export async function enqueueCaptureJobs(
     throw new Error(`Failed to enqueue app capture jobs: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const inserted = Number(data ?? 0);
+  await mirrorTigerResult('enqueueCaptureJobs', async () =>
+    getTigerChangeIntelRepository().enqueueCaptureJobs(jobs)
+  );
+
+  return inserted;
 }
 
 export async function refreshChangeActivityBurstsForApp(
@@ -483,6 +671,10 @@ export async function refreshChangeActivityBurstsForApp(
   appid: number,
   lookbackDays = 180
 ): Promise<number> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().refreshChangeActivityBurstsForApp(appid, lookbackDays);
+  }
+
   const { data, error } = await runSupabaseOperation<number | null>(
     'refresh_change_activity_bursts_for_app',
     () =>
@@ -496,7 +688,12 @@ export async function refreshChangeActivityBurstsForApp(
     throw new Error(`Failed to refresh change_activity_bursts: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const refreshed = Number(data ?? 0);
+  await mirrorTigerResult('refreshChangeActivityBurstsForApp', async () =>
+    getTigerChangeIntelRepository().refreshChangeActivityBurstsForApp(appid, lookbackDays)
+  );
+
+  return refreshed;
 }
 
 export async function refreshChangePatternActivityDaysForApp(
@@ -504,6 +701,10 @@ export async function refreshChangePatternActivityDaysForApp(
   appid: number,
   lookbackDays = 180
 ): Promise<number> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().refreshChangePatternActivityDaysForApp(appid, lookbackDays);
+  }
+
   const { data, error } = await runSupabaseOperation<number | null>(
     'refresh_change_pattern_activity_days_for_app',
     () =>
@@ -517,7 +718,12 @@ export async function refreshChangePatternActivityDaysForApp(
     throw new Error(`Failed to refresh change_pattern_activity_days: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const refreshed = Number(data ?? 0);
+  await mirrorTigerResult('refreshChangePatternActivityDaysForApp', async () =>
+    getTigerChangeIntelRepository().refreshChangePatternActivityDaysForApp(appid, lookbackDays)
+  );
+
+  return refreshed;
 }
 
 export async function refreshChangePatternAppWindowsForApp(
@@ -525,6 +731,10 @@ export async function refreshChangePatternAppWindowsForApp(
   appid: number,
   lookbackDays = 180
 ): Promise<number> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().refreshChangePatternAppWindowsForApp(appid, lookbackDays);
+  }
+
   const { data, error } = await runSupabaseOperation<number | null>(
     'refresh_change_pattern_app_windows_for_app',
     () =>
@@ -538,13 +748,22 @@ export async function refreshChangePatternAppWindowsForApp(
     throw new Error(`Failed to refresh change_pattern_app_windows: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const refreshed = Number(data ?? 0);
+  await mirrorTigerResult('refreshChangePatternAppWindowsForApp', async () =>
+    getTigerChangeIntelRepository().refreshChangePatternAppWindowsForApp(appid, lookbackDays)
+  );
+
+  return refreshed;
 }
 
 export async function refreshSteamNewsLatestProjectionForApp(
   supabase: TypedSupabaseClient,
   appid: number
 ): Promise<number> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().refreshSteamNewsLatestProjectionForApp(appid);
+  }
+
   const { data, error } = await runSupabaseOperation<number | null>(
     'refresh_steam_news_latest_projection_for_app',
     () =>
@@ -557,13 +776,22 @@ export async function refreshSteamNewsLatestProjectionForApp(
     throw new Error(`Failed to refresh steam_news_latest_projection: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const refreshed = Number(data ?? 0);
+  await mirrorTigerResult('refreshSteamNewsLatestProjectionForApp', async () =>
+    getTigerChangeIntelRepository().refreshSteamNewsLatestProjectionForApp(appid)
+  );
+
+  return refreshed;
 }
 
 export async function refreshSteamNewsSearchProjectionForApp(
   supabase: TypedSupabaseClient,
   appid: number
 ): Promise<number> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().refreshSteamNewsSearchProjectionForApp(appid);
+  }
+
   const { data, error } = await runSupabaseOperation<number | null>(
     'refresh_steam_news_search_projection_for_app',
     () =>
@@ -576,7 +804,12 @@ export async function refreshSteamNewsSearchProjectionForApp(
     throw new Error(`Failed to refresh steam_news_search_projection: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const refreshed = Number(data ?? 0);
+  await mirrorTigerResult('refreshSteamNewsSearchProjectionForApp', async () =>
+    getTigerChangeIntelRepository().refreshSteamNewsSearchProjectionForApp(appid)
+  );
+
+  return refreshed;
 }
 
 export async function upsertSteamNewsSearchProjectionForGids(
@@ -588,6 +821,10 @@ export async function upsertSteamNewsSearchProjectionForGids(
   );
   if (normalizedGids.length === 0) {
     return 0;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().upsertSteamNewsSearchProjectionForGids(normalizedGids);
   }
 
   const { data, error } = await runSupabaseOperation<number | null>(
@@ -602,7 +839,12 @@ export async function upsertSteamNewsSearchProjectionForGids(
     throw new Error(`Failed to upsert steam_news_search_projection rows: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const upserted = Number(data ?? 0);
+  await mirrorTigerResult('upsertSteamNewsSearchProjectionForGids', async () =>
+    getTigerChangeIntelRepository().upsertSteamNewsSearchProjectionForGids(normalizedGids)
+  );
+
+  return upserted;
 }
 
 export async function deleteSteamNewsSearchProjectionForGids(
@@ -614,6 +856,10 @@ export async function deleteSteamNewsSearchProjectionForGids(
   );
   if (normalizedGids.length === 0) {
     return 0;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().deleteSteamNewsSearchProjectionForGids(normalizedGids);
   }
 
   const { data, error } = await runSupabaseOperation<number | null>(
@@ -628,7 +874,12 @@ export async function deleteSteamNewsSearchProjectionForGids(
     throw new Error(`Failed to delete steam_news_search_projection rows: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const deleted = Number(data ?? 0);
+  await mirrorTigerResult('deleteSteamNewsSearchProjectionForGids', async () =>
+    getTigerChangeIntelRepository().deleteSteamNewsSearchProjectionForGids(normalizedGids)
+  );
+
+  return deleted;
 }
 
 export async function listRecentChangeActivityAppIds(
@@ -662,6 +913,10 @@ export async function claimCaptureQueue(
   limit: number,
   workerId: string
 ): Promise<CaptureQueueJob[]> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().claimCaptureQueue(sources, limit, workerId);
+  }
+
   const { data, error } = await runSupabaseOperation<Array<Record<string, unknown>> | null>(
     'claim_app_capture_work',
     () =>
@@ -700,6 +955,11 @@ export async function completeCaptureQueueItems(
     return;
   }
 
+  if (shouldUseTigerWriteAuthority()) {
+    await getTigerChangeIntelRepository().completeCaptureQueueItems(jobIds, status, errorMessage);
+    return;
+  }
+
   const { error } = await runSupabaseOperation('complete_app_capture_work', () =>
     getDb(supabase).rpc('complete_app_capture_work', {
       p_ids: jobIds.map(Number),
@@ -712,6 +972,10 @@ export async function completeCaptureQueueItems(
   if (error) {
     throw new Error(`Failed to complete app capture work items: ${error.message}`);
   }
+
+  await mirrorTigerWrite('completeCaptureQueueItems', async () => {
+    await getTigerChangeIntelRepository().completeCaptureQueueItems(jobIds, status, errorMessage);
+  });
 }
 
 export async function requeueStaleCaptureClaims(
@@ -722,6 +986,10 @@ export async function requeueStaleCaptureClaims(
 ): Promise<number> {
   if (sources.length === 0) {
     return 0;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().requeueStaleCaptureClaims(sources, claimedBeforeIso, limit);
   }
 
   const boundedLimit = Math.max(1, Math.min(limit, 500));
@@ -739,7 +1007,12 @@ export async function requeueStaleCaptureClaims(
     throw new Error(`Failed to requeue stale app capture work items: ${error.message}`);
   }
 
-  return Number(data ?? 0);
+  const requeued = Number(data ?? 0);
+  await mirrorTigerResult('requeueStaleCaptureClaims', async () =>
+    getTigerChangeIntelRepository().requeueStaleCaptureClaims(sources, claimedBeforeIso, boundedLimit)
+  );
+
+  return requeued;
 }
 
 export async function seedDiscoveredApps(
@@ -779,6 +1052,11 @@ export async function updateSyncStatusFields(
   appid: number,
   values: Record<string, unknown>
 ): Promise<void> {
+  if (shouldUseTigerWriteAuthority()) {
+    await getTigerChangeIntelRepository().updateSyncStatusFields(appid, values);
+    return;
+  }
+
   const { error } = await runSupabaseOperation('upsert_sync_status', () =>
     getDb(supabase)
       .from('sync_status')
@@ -794,12 +1072,20 @@ export async function updateSyncStatusFields(
   if (error) {
     throw new Error(`Failed to update sync_status: ${error.message}`);
   }
+
+  await mirrorTigerWrite('updateSyncStatusFields', async () => {
+    await getTigerChangeIntelRepository().updateSyncStatusFields(appid, values);
+  });
 }
 
 export async function getLastNewsSyncAt(
   supabase: TypedSupabaseClient,
   appid: number
 ): Promise<string | null> {
+  if (shouldUseTigerReadAuthority()) {
+    return getTigerChangeIntelRepository().getLastNewsSyncAt(appid);
+  }
+
   const { data, error } = await runSupabaseOperation<{ last_news_sync: string | null } | null>(
     'select_last_news_sync',
     () =>
@@ -822,6 +1108,10 @@ export async function createSyncJobRecord(
   jobType: string,
   batchSize: number
 ): Promise<string | null> {
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().createSyncJobRecord(jobType, batchSize);
+  }
+
   const { data, error } = await runSupabaseOperation<{ id: string | number } | null>(
     'insert_sync_job',
     () =>
@@ -840,7 +1130,14 @@ export async function createSyncJobRecord(
     throw new Error(`Failed to create sync job: ${error.message}`);
   }
 
-  return data?.id ? String(data.id) : null;
+  const syncJobId = data?.id ? String(data.id) : null;
+  await mirrorTigerResult('createSyncJobRecord', async () =>
+    getTigerChangeIntelRepository().createSyncJobRecord(jobType, batchSize, {
+      idOverride: syncJobId,
+    })
+  );
+
+  return syncJobId;
 }
 
 export async function updateSyncJobRecord(
@@ -848,6 +1145,11 @@ export async function updateSyncJobRecord(
   id: string,
   values: Record<string, unknown>
 ): Promise<void> {
+  if (shouldUseTigerWriteAuthority()) {
+    await getTigerChangeIntelRepository().updateSyncJobRecord(id, values);
+    return;
+  }
+
   const { error } = await runSupabaseOperation('update_sync_job', () =>
     getDb(supabase)
       .from('sync_jobs')
@@ -858,6 +1160,10 @@ export async function updateSyncJobRecord(
   if (error) {
     throw new Error(`Failed to update sync job ${id}: ${error.message}`);
   }
+
+  await mirrorTigerWrite('updateSyncJobRecord', async () => {
+    await getTigerChangeIntelRepository().updateSyncJobRecord(id, values);
+  });
 }
 
 export async function abandonStaleChangeIntelSyncJobs(
@@ -868,6 +1174,14 @@ export async function abandonStaleChangeIntelSyncJobs(
 ): Promise<number> {
   if (jobTypes.length === 0) {
     return 0;
+  }
+
+  if (shouldUseTigerWriteAuthority()) {
+    return getTigerChangeIntelRepository().abandonStaleChangeIntelSyncJobs(
+      jobTypes,
+      startedBeforeIso,
+      errorMessage
+    );
   }
 
   const completedAt = new Date().toISOString();
@@ -891,13 +1205,26 @@ export async function abandonStaleChangeIntelSyncJobs(
     throw new Error(`Failed to abandon stale sync jobs: ${error.message}`);
   }
 
-  return data?.length ?? 0;
+  const abandoned = data?.length ?? 0;
+  await mirrorTigerResult('abandonStaleChangeIntelSyncJobs', async () =>
+    getTigerChangeIntelRepository().abandonStaleChangeIntelSyncJobs(
+      jobTypes,
+      startedBeforeIso,
+      errorMessage
+    )
+  );
+
+  return abandoned;
 }
 
 export async function getLatestMediaVersion(
   supabase: TypedSupabaseClient,
   appid: number
 ): Promise<NormalizedMediaVersion | null> {
+  if (shouldUseTigerReadAuthority()) {
+    return getTigerChangeIntelRepository().getLatestMediaVersion(appid);
+  }
+
   const row = await getLatestMediaVersionRow(supabase, appid);
   if (!row) {
     return null;
@@ -914,6 +1241,10 @@ export async function getLatestStorefrontSnapshot(
   supabase: TypedSupabaseClient,
   appid: number
 ): Promise<NormalizedStorefrontSnapshot | null> {
+  if (shouldUseTigerReadAuthority()) {
+    return getTigerChangeIntelRepository().getLatestStorefrontSnapshot(appid);
+  }
+
   const row = await getLatestStorefrontSnapshotRow(supabase, appid);
   return row ? castRecord<NormalizedStorefrontSnapshot>(row.snapshot_data) : null;
 }
@@ -922,6 +1253,10 @@ export async function getLatestNewsVersion(
   supabase: TypedSupabaseClient,
   gid: string
 ): Promise<NormalizedNewsVersion | null> {
+  if (shouldUseTigerReadAuthority()) {
+    return getTigerChangeIntelRepository().getLatestNewsVersion(gid);
+  }
+
   const row = await getLatestNewsVersionRow(supabase, gid);
   return row ? castRecord<NormalizedNewsVersion>(row.normalized_payload) : null;
 }
@@ -931,6 +1266,10 @@ export async function getLatestHeroAssetContentHash(
   appid: number,
   assetKind: HeroAssetKind
 ): Promise<string | null> {
+  if (shouldUseTigerReadAuthority()) {
+    return getTigerChangeIntelRepository().getLatestHeroAssetContentHash(appid, assetKind);
+  }
+
   const { data, error } = await getDb(supabase)
     .from('app_hero_asset_versions')
     .select('content_hash')

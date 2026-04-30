@@ -11,7 +11,13 @@ import { getServiceClient } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamAppChangeHints } from '../apis/steam-web.js';
 import { partitionHintRows, type ExistingHintStatusRow, type HintRow } from '../change-intel/hints.js';
-import { enqueueCaptureJobs } from '../change-intel/repository.js';
+import {
+  createSyncJobRecord,
+  enqueueCaptureJobs,
+  updateSyncJobRecord,
+} from '../change-intel/repository.js';
+import { readChangeIntelRuntimeConfig, shouldWriteTiger } from '../change-intel/runtime-config.js';
+import { getTigerChangeIntelRepository } from '../change-intel/tiger-repository.js';
 import { buildHintCursor } from '../workers-support/change-intel.js';
 import {
   isLaunchWindowRelease,
@@ -22,12 +28,95 @@ import {
 const log = logger.child({ worker: 'app-change-hints' });
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
+type OptionalSupabaseClient = SupabaseClient | null;
+
+function shouldUseTigerPrimary(): boolean {
+  return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
+}
 
 async function processHintBatch(
-  supabase: SupabaseClient,
+  supabase: OptionalSupabaseClient,
   batch: HintRow[]
 ): Promise<{ changed: number; enqueued: number; skipped: number; promoted: number }> {
   const appids = batch.map((row) => row.appid);
+  if (shouldUseTigerPrimary()) {
+    const tiger = getTigerChangeIntelRepository();
+    const hintRows = await tiger.listHintStatusRows(appids);
+    const knownAppids = new Set<number>(hintRows.map((row) => row.appid));
+
+    if (knownAppids.size === 0) {
+      return {
+        changed: 0,
+        enqueued: 0,
+        skipped: batch.length,
+        promoted: 0,
+      };
+    }
+
+    const existingByAppid = new Map<number, ExistingHintStatusRow>(
+      hintRows.map((row) => [
+        row.appid,
+        {
+          appid: row.appid,
+          steam_last_modified: row.steam_last_modified,
+          steam_price_change_number: row.steam_price_change_number,
+        },
+      ])
+    );
+    const priorityByAppid = new Map<number, number>(
+      hintRows.map((row) => [row.appid, row.priority_score ?? 0])
+    );
+    const knownAppMetaByAppid = new Map(
+      hintRows.map((row) => [
+        row.appid,
+        {
+          is_released: row.is_released,
+          release_date: row.release_date,
+          type: row.type,
+        },
+      ])
+    );
+
+    const partitioned = partitionHintRows(batch, knownAppids, existingByAppid);
+
+    await tiger.upsertHintStatusRows(
+      partitioned.knownRows.map((row) => ({
+        appid: row.appid,
+        steamLastModified: row.lastModified,
+        steamPriceChangeNumber: row.priceChangeNumber,
+      }))
+    );
+
+    const enqueued = await enqueueCaptureJobs(
+      {} as SupabaseClient,
+      partitioned.changedRows.map((row) => ({
+        appid: row.appid,
+        source: 'storefront',
+        triggerReason: 'steam_app_change_hint',
+        triggerCursor: buildHintCursor(row.lastModified, row.priceChangeNumber),
+        priority: 100,
+      }))
+    );
+
+    const promotions = buildReviewPromotions(
+      partitioned.changedRows,
+      knownAppMetaByAppid,
+      priorityByAppid
+    );
+    const promoted = await tiger.promoteReviewsSyncBatch(promotions);
+
+    return {
+      changed: partitioned.changedRows.length,
+      enqueued,
+      skipped: partitioned.skippedRows.length,
+      promoted,
+    };
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase service client is required when app-change-hints is not Tiger primary.');
+  }
+
   const db = supabase as any;
   const { data: knownApps, error: knownAppsError } = await db
     .from('apps')
@@ -103,6 +192,16 @@ async function processHintBatch(
     throw new Error(`Failed to upsert hint rows: ${updateError.message}`);
   }
 
+  if (shouldWriteTiger(readChangeIntelRuntimeConfig())) {
+    await getTigerChangeIntelRepository().upsertHintStatusRows(
+      partitioned.knownRows.map((row) => ({
+        appid: row.appid,
+        steamLastModified: row.lastModified,
+        steamPriceChangeNumber: row.priceChangeNumber,
+      }))
+    );
+  }
+
   const enqueued = await enqueueCaptureJobs(
     supabase,
     partitioned.changedRows.map((row) => ({
@@ -145,8 +244,10 @@ async function processHintBatch(
     }
   }
 
-  const promoted =
-    promotions.length > 0 ? await promoteReviewsSyncBatch(supabase, promotions) : 0;
+  const promoted = promotions.length > 0 ? await promoteReviewsSyncBatch(supabase, promotions) : 0;
+  if (promotions.length > 0 && shouldWriteTiger(readChangeIntelRuntimeConfig())) {
+    await getTigerChangeIntelRepository().promoteReviewsSyncBatch(promotions);
+  }
 
   return {
     changed: partitioned.changedRows.length,
@@ -156,22 +257,53 @@ async function processHintBatch(
   };
 }
 
+function buildReviewPromotions(
+  changedRows: HintRow[],
+  knownAppMetaByAppid: Map<
+    number,
+    { type: string | null; is_released: boolean | null; release_date: string | null }
+  >,
+  priorityByAppid: Map<number, number>
+): ReviewPromotion[] {
+  const promotions: ReviewPromotion[] = [];
+  for (const row of changedRows) {
+    const app = knownAppMetaByAppid.get(row.appid);
+    const priorityScore = priorityByAppid.get(row.appid) ?? 0;
+
+    if (!app || app.type !== 'game') {
+      continue;
+    }
+
+    if (isLaunchWindowRelease(app.is_released, app.release_date)) {
+      promotions.push({
+        appid: row.appid,
+        bucket: 'launch_critical',
+        score: 100,
+        reason: 'steam_change_hint_launch_window',
+        until: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+      });
+      continue;
+    }
+
+    if (priorityScore >= 50) {
+      promotions.push({
+        appid: row.appid,
+        bucket: 'change_critical',
+        score: 80,
+        reason: 'steam_change_hint_priority_game',
+        until: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+      });
+    }
+  }
+
+  return promotions;
+}
+
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
   const batchSize = parseInt(process.env.HINT_BATCH_SIZE || '1000', 10);
-  const supabase = getServiceClient();
-
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'change_hints',
-      github_run_id: githubRunId,
-      status: 'running',
-      batch_size: batchSize,
-    })
-    .select()
-    .single();
+  const supabase = shouldUseTigerPrimary() ? null : getServiceClient();
+  const jobId = await createSyncJobRecord(supabase ?? ({} as SupabaseClient), 'change_hints', batchSize);
 
   try {
     const hints = await fetchSteamAppChangeHints();
@@ -196,18 +328,15 @@ async function main(): Promise<void> {
       promoted += result.promoted;
     }
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: hints.length,
-          items_succeeded: changed,
-          items_created: enqueued,
-          items_skipped: skipped,
-        })
-        .eq('id', job.id);
+    if (jobId) {
+      await updateSyncJobRecord(supabase ?? ({} as SupabaseClient), jobId, {
+        completed_at: new Date().toISOString(),
+        items_created: enqueued,
+        items_processed: hints.length,
+        items_skipped: skipped,
+        items_succeeded: changed,
+        status: 'completed',
+      });
     }
 
     log.info('App change hints completed', {
@@ -219,16 +348,13 @@ async function main(): Promise<void> {
       durationSeconds: ((Date.now() - startTime) / 1000).toFixed(1),
     });
   } catch (error) {
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
-          items_skipped: 0,
-        })
-        .eq('id', job.id);
+    if (jobId) {
+      await updateSyncJobRecord(supabase ?? ({} as SupabaseClient), jobId, {
+        completed_at: new Date().toISOString(),
+        error_message: error instanceof Error ? error.message : String(error),
+        items_skipped: 0,
+        status: 'failed',
+      });
     }
 
     throw error;

@@ -21,7 +21,12 @@
     "app-change-hints": "tsx src/workers/app-change-hints-worker.ts",
     "change-intel-worker": "tsx src/workers/change-intel-worker.ts",
     "change-intel-backfill-projection": "tsx src/scripts/backfill-change-activity-projection.ts",
+    "change-intel-tiger-backfill-archives": "tsx src/scripts/backfill-change-intel-tiger-archives.ts",
+    "change-intel-tiger-backfill-bulk": "tsx src/scripts/backfill-change-intel-tiger-bulk.ts",
+    "change-intel-tiger-parity": "tsx src/scripts/change-intel-tiger-parity.ts",
+    "change-intel-copy-hero-assets-to-r2": "tsx src/scripts/copy-hero-assets-to-r2.ts",
     "repair-current-ccu-state": "tsx src/scripts/repair-current-ccu-state.ts",
+    "repair-storefront-authority": "tsx src/scripts/repair-storefront-authority.ts",
     "requeue-hero-asset-404-dead-letters": "tsx src/scripts/requeue-hero-asset-404-dead-letters.ts",
     "repair-dlc-discovered-apps": "tsx src/scripts/repair-dlc-discovered-apps.ts",
     "hydrate-storefront-apps": "tsx src/scripts/hydrate-storefront-apps.ts",
@@ -46,14 +51,17 @@
     "test:change-intel": "node --import tsx --test $(find src/change-intel -name '*.test.ts' -type f | sort)"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.958.0",
     "@publisheriq/database": "workspace:*",
     "@publisheriq/qdrant": "workspace:*",
     "@publisheriq/shared": "workspace:*",
     "openai": "^4.77.0",
-    "p-limit": "^6.1.0"
+    "p-limit": "^6.1.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.15.6",
     "eslint": "^9.39.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",

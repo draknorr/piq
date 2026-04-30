@@ -8,6 +8,7 @@ from typing import Optional
 from .config.settings import settings
 from .health.server import HealthServer
 from .workers.bulk_sync import BulkSyncWorker
+from .workers.change_history_backfill import ChangeHistoryBackfillWorker
 from .workers.change_monitor import ChangeMonitorWorker
 
 # Global worker reference for signal handling
@@ -88,6 +89,11 @@ def main():
         elif settings.mode == "change_monitor":
             current_worker = ChangeMonitorWorker(health_server=health_server)
             current_worker.run()
+
+        elif settings.mode == "backfill_change_history":
+            worker = ChangeHistoryBackfillWorker()
+            result = worker.run()
+            logger.info(f"Change-history backfill completed: {result}")
 
         else:
             logger.error(f"Unknown mode: {settings.mode}")

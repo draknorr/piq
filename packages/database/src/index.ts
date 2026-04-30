@@ -24,6 +24,15 @@ export {
   type RefreshMaterializedViewOptions,
 } from './ingestion.js';
 
+export {
+  getTigerPool,
+  requireTigerPrimaryUrl,
+  runTigerQuery,
+  shutdownTigerPool,
+  withTigerClient,
+  withTigerTransaction,
+} from './tiger.js';
+
 // Types
 export type { Database } from './types.js';
 
