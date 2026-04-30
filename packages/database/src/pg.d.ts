@@ -9,11 +9,13 @@ declare module 'pg' {
   }
 
   export interface PoolConfig {
+    application_name?: string;
     connectionString?: string;
     max?: number;
     idleTimeoutMillis?: number;
     connectionTimeoutMillis?: number;
     allowExitOnIdle?: boolean;
+    statement_timeout?: number;
   }
 
   export class PoolClient {
@@ -27,6 +29,7 @@ declare module 'pg' {
   export class Pool {
     constructor(config?: PoolConfig);
     connect(): Promise<PoolClient>;
+    end(): Promise<void>;
     on(event: 'error', listener: (error: Error) => void): this;
   }
 }

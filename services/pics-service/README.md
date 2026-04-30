@@ -10,7 +10,7 @@ The PICS service connects directly to Steam's Product Info Cache Server and now 
 - normalized PICS history capture for change intelligence
 
 During change monitoring, the service writes normalized snapshots and PICS diff events before the latest-state upserts that keep the `apps` table and relationship tables current.
-`PICS_CHANGE_HISTORY_TARGET=tiger` moves only that normalized history capture to Tiger/R2; latest-state PICS metadata writes remain on Supabase until a later migration.
+`PICS_CHANGE_HISTORY_TARGET=tiger` moves normalized history capture to Tiger/R2, and `PICS_LATEST_STATE_TARGET=tiger` moves PICS app, relationship, sync-status, and cursor writes to Tiger.
 
 ## Modes
 
@@ -61,10 +61,12 @@ MODE=change_monitor python -m src.main
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SUPABASE_URL` | required | Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | required | Supabase service role key |
-| `PICS_CHANGE_HISTORY_TARGET` | `supabase` | `supabase` or `tiger`; controls only PICS `app_source_snapshots` and `app_change_events` writes |
+| `SUPABASE_URL` | required for Supabase targets | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | required for Supabase targets | Supabase service role key |
+| `PICS_CHANGE_HISTORY_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS `app_source_snapshots` and `app_change_events` writes |
 | `PICS_CHANGE_HISTORY_TIGER_URL` | `TIGER_PRIMARY_URL` | Tiger Postgres URL for PICS change-history writes |
+| `PICS_LATEST_STATE_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS app, relationship, sync-status, and cursor writes |
+| `PICS_LATEST_STATE_TIGER_URL` | `TIGER_PRIMARY_URL` | Tiger Postgres URL for PICS latest-state writes |
 | `CHANGE_INTEL_ARCHIVE_TARGET` | `disabled` | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger` |
 | `CHANGE_INTEL_ARCHIVE_BUCKET` | required for Tiger | S3-compatible bucket for archived normalized PICS snapshots |
 | `CHANGE_INTEL_ARCHIVE_PREFIX` | `change-intel` | Object key prefix, e.g. `production/change-intel` |

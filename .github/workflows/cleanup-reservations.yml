@@ -8,11 +8,14 @@ on:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    env:
+      TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
     steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
       - name: Cleanup stale credit reservations
         run: |
-          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/rpc/cleanup_stale_reservations" \
-            -H "apikey: ${{ secrets.SUPABASE_SERVICE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{}'
+          set -euo pipefail
+          psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 \
+            -c "SELECT chat.cleanup_stale_reservations();"

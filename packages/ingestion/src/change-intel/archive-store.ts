@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
+import { stringifyJsonValue } from './json-sanitize.js';
 import { readChangeIntelRuntimeConfig } from './runtime-config.js';
 
 export type ChangeIntelArchiveKind =
@@ -14,6 +16,7 @@ export interface ArchivePayload {
   contentHash?: string;
   contentType: string;
   extension?: string;
+  key?: string;
   keyParts?: string[];
   kind: ChangeIntelArchiveKind;
 }
@@ -31,6 +34,9 @@ export interface ChangeIntelArchiveStore {
   write(payload: ArchivePayload): Promise<ArchivePointer>;
 }
 
+const DEFAULT_WRITE_ATTEMPTS = 3;
+const DEFAULT_WRITE_TIMEOUT_MS = 30_000;
+
 interface S3ArchiveConfig {
   accessKeyId?: string;
   bucket: string;
@@ -47,6 +53,16 @@ function toBuffer(body: Buffer | string): Buffer {
 
 function hashBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function sanitizeKeyPart(part: string): string {
@@ -130,22 +146,35 @@ export class S3ChangeIntelArchiveStore implements ChangeIntelArchiveStore {
   async write(payload: ArchivePayload): Promise<ArchivePointer> {
     const body = toBuffer(payload.body);
     const contentHash = payload.contentHash ?? hashBuffer(body);
-    const key = buildArchiveKey({
+    const key = payload.key?.trim() || buildArchiveKey({
       contentHash,
       extension: payload.extension,
       keyParts: payload.keyParts,
       kind: payload.kind,
       prefix: this.config.prefix,
     });
+    const attempts = readPositiveIntegerEnv('CHANGE_INTEL_ARCHIVE_WRITE_ATTEMPTS', DEFAULT_WRITE_ATTEMPTS);
+    const timeoutMs = readPositiveIntegerEnv('CHANGE_INTEL_ARCHIVE_WRITE_TIMEOUT_MS', DEFAULT_WRITE_TIMEOUT_MS);
 
-    await this.client.send(
-      new PutObjectCommand({
-        Body: body,
-        Bucket: this.config.bucket,
-        ContentType: payload.contentType,
-        Key: key,
-      })
-    );
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await this.client.send(
+          new PutObjectCommand({
+            Body: body,
+            Bucket: this.config.bucket,
+            ContentType: payload.contentType,
+            Key: key,
+          }),
+          { abortSignal: AbortSignal.timeout(timeoutMs) }
+        );
+        break;
+      } catch (error) {
+        if (attempt >= attempts) {
+          throw error;
+        }
+        await sleep(Math.min(500 * 2 ** (attempt - 1), 5_000));
+      }
+    }
 
     return {
       bucket: this.config.bucket,
@@ -176,7 +205,10 @@ export function createChangeIntelArchiveStore(
     return null;
   }
 
-  const bucket = env.CHANGE_INTEL_ARCHIVE_BUCKET ?? env.CHANGE_INTEL_ARCHIVE_S3_BUCKET;
+  const bucket =
+    env.CHANGE_INTEL_ARCHIVE_BUCKET ??
+    env.CHANGE_INTEL_ARCHIVE_S3_BUCKET ??
+    env.OBJECT_STORAGE_BUCKET;
   if (!bucket) {
     throw new Error(
       'CHANGE_INTEL_ARCHIVE_TARGET=object_storage requires CHANGE_INTEL_ARCHIVE_BUCKET.'
@@ -184,13 +216,19 @@ export function createChangeIntelArchiveStore(
   }
 
   return new S3ChangeIntelArchiveStore({
-    accessKeyId: env.CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID,
+    accessKeyId: env.CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID ?? env.OBJECT_STORAGE_ACCESS_KEY_ID,
     bucket,
-    endpoint: env.CHANGE_INTEL_ARCHIVE_ENDPOINT,
-    forcePathStyle: env.CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE !== 'false',
-    prefix: env.CHANGE_INTEL_ARCHIVE_PREFIX ?? 'change-intel',
-    region: env.CHANGE_INTEL_ARCHIVE_REGION ?? 'us-east-1',
-    secretAccessKey: env.CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY,
+    endpoint: env.CHANGE_INTEL_ARCHIVE_ENDPOINT ?? env.OBJECT_STORAGE_ENDPOINT,
+    forcePathStyle:
+      (env.CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE ?? env.OBJECT_STORAGE_FORCE_PATH_STYLE) !==
+      'false',
+    prefix:
+      env.CHANGE_INTEL_ARCHIVE_PREFIX ??
+      env.OBJECT_STORAGE_PREFIX ??
+      'change-intel',
+    region: env.CHANGE_INTEL_ARCHIVE_REGION ?? env.OBJECT_STORAGE_REGION ?? 'us-east-1',
+    secretAccessKey:
+      env.CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY ?? env.OBJECT_STORAGE_SECRET_ACCESS_KEY,
   });
 }
 
@@ -205,7 +243,7 @@ export async function archiveJsonPayload(params: {
     return null;
   }
 
-  const body = JSON.stringify(params.payload);
+  const body = stringifyJsonValue(params.payload);
   return store.write({
     body,
     contentType: 'application/json',

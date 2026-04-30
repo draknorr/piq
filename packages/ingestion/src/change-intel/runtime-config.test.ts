@@ -51,3 +51,17 @@ test('readChangeIntelRuntimeConfig falls back on invalid target values', () => {
   assert.equal(config.writeTarget, 'supabase');
   assert.equal(config.tigerDatabaseUrl, 'postgres://fallback.example/db');
 });
+
+test('readChangeIntelRuntimeConfig accepts platform-wide data writer aliases', () => {
+  const config = readChangeIntelRuntimeConfig({
+    DATA_READ_TARGET: 'tiger',
+    DATA_WRITE_TARGET: 'tiger',
+    OBJECT_STORAGE_TARGET: 'object_storage',
+    TIGER_PRIMARY_URL: 'postgres://primary.example/db',
+  });
+
+  assert.equal(config.archiveTarget, 'object_storage');
+  assert.equal(config.readTarget, 'tiger');
+  assert.equal(config.writeTarget, 'tiger');
+  assert.equal(config.tigerDatabaseUrl, 'postgres://primary.example/db');
+});

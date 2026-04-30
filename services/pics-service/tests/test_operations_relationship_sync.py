@@ -13,6 +13,7 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import src.database.operations as operations_module
 from src.database.operations import PICSDatabase
 from src.extractors.common import ExtractedPICSData
 
@@ -277,6 +278,8 @@ def rows_for_app(fake_client: FakeSupabaseClient, table_name: str, appid: int = 
 def relation_database(monkeypatch: pytest.MonkeyPatch) -> tuple[PICSDatabase, FakeSupabaseClient]:
     fake_client = FakeSupabaseClient()
 
+    monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "supabase")
+    monkeypatch.setattr(operations_module.settings, "pics_latest_state_target", "supabase")
     monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
     monkeypatch.setattr(
         "src.database.operations.SupabaseClient.get_instance",

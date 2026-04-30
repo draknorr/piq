@@ -36,19 +36,19 @@ export function readChangeIntelRuntimeConfig(
 ): ChangeIntelRuntimeConfig {
   return {
     archiveTarget: normalizeEnum(
-      env.CHANGE_INTEL_ARCHIVE_TARGET,
+      env.CHANGE_INTEL_ARCHIVE_TARGET ?? env.OBJECT_STORAGE_TARGET,
       ['disabled', 'object_storage'] as const,
       'disabled'
     ),
     readTarget: normalizeEnum(
-      env.CHANGE_INTEL_READ_TARGET,
+      env.CHANGE_INTEL_READ_TARGET ?? env.DATA_READ_TARGET,
       ['supabase', 'tiger'] as const,
       'supabase'
     ),
     shadowStrict: readBoolean(env.CHANGE_INTEL_SHADOW_STRICT, false),
     tigerDatabaseUrl: env.CHANGE_INTEL_TIGER_URL ?? env.TIGER_PRIMARY_URL ?? null,
     writeTarget: normalizeEnum(
-      env.CHANGE_INTEL_WRITE_TARGET,
+      env.CHANGE_INTEL_WRITE_TARGET ?? env.DATA_WRITE_TARGET,
       ['supabase', 'shadow', 'tiger'] as const,
       'supabase'
     ),

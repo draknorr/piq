@@ -252,6 +252,7 @@ def schema_cache_error() -> Exception:
 
 def create_history_database(monkeypatch: pytest.MonkeyPatch, fake_client: FakeSupabaseClient) -> PICSDatabase:
     monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "supabase")
+    monkeypatch.setattr(operations_module.settings, "pics_latest_state_target", "supabase")
     monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
     monkeypatch.setattr(
         "src.database.operations.SupabaseClient.get_instance",

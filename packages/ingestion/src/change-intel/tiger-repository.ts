@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { Pool, type QueryResultRow } from 'pg';
 
 import { archiveJsonPayload, createChangeIntelArchiveStore } from './archive-store.js';
 import { hashNormalizedContent } from './hashing.js';
+import { stringifyJsonValue } from './json-sanitize.js';
 import { readChangeIntelRuntimeConfig } from './runtime-config.js';
 import {
   toComparableMediaVersion,
@@ -64,6 +66,50 @@ interface CountRow extends QueryResultRow {
 
 interface IdRow extends QueryResultRow {
   id: number | string;
+}
+
+export interface TigerHintStatusRow {
+  appid: number;
+  is_released: boolean | null;
+  priority_score: number | null;
+  release_date: string | null;
+  steam_last_modified: number | null;
+  steam_price_change_number: number | null;
+  type: string | null;
+}
+
+export interface TigerReviewPromotion {
+  appid: number;
+  bucket: string;
+  reason: string;
+  score: number;
+  until: string;
+}
+
+interface HintStatusQueryRow extends QueryResultRow {
+  appid: number;
+  is_released: boolean | null;
+  priority_score: number | string | null;
+  release_date: Date | string | null;
+  steam_last_modified: number | string | null;
+  steam_price_change_number: number | string | null;
+  type: string | null;
+}
+
+interface HeroAssetVersionParams {
+  appid: number;
+  assetKind: HeroAssetKind;
+  contentHash: string;
+  contentLength: number;
+  firstSeenAt?: string;
+  height: number | null;
+  id?: string;
+  lastSeenAt?: string;
+  mimeType: string | null;
+  objectBucket: string;
+  objectKey: string;
+  sourceUrl: string;
+  width: number | null;
 }
 
 function readNumber(value: string | undefined, fallback: number): number {
@@ -218,6 +264,125 @@ const SYNC_JOB_FIELD_COLUMNS = new Map<string, string>([
 export class TigerChangeIntelRepository {
   constructor(private readonly pool: Pool) {}
 
+  async listHintStatusRows(appids: number[]): Promise<TigerHintStatusRow[]> {
+    const uniqueAppids = Array.from(new Set(appids.filter(Number.isFinite))).sort((left, right) => left - right);
+    if (uniqueAppids.length === 0) {
+      return [];
+    }
+
+    const { rows } = await this.pool.query<HintStatusQueryRow>(
+      `
+        SELECT
+          a.appid,
+          a.type,
+          a.is_released,
+          a.release_date,
+          s.steam_last_modified,
+          s.steam_price_change_number,
+          s.priority_score
+        FROM legacy.apps a
+        LEFT JOIN ops.sync_status s ON s.appid = a.appid
+        WHERE a.appid = ANY($1::integer[])
+      `,
+      [uniqueAppids]
+    );
+
+    return rows.map((row) => ({
+      appid: Number(row.appid),
+      is_released: row.is_released,
+      priority_score: toNullableNumber(row.priority_score),
+      release_date: row.release_date instanceof Date ? row.release_date.toISOString().slice(0, 10) : row.release_date,
+      steam_last_modified: toNullableNumber(row.steam_last_modified),
+      steam_price_change_number: toNullableNumber(row.steam_price_change_number),
+      type: row.type,
+    }));
+  }
+
+  async upsertHintStatusRows(
+    rows: Array<{
+      appid: number;
+      steamLastModified: number;
+      steamPriceChangeNumber: number;
+    }>
+  ): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+
+    await this.pool.query(
+      `
+        INSERT INTO ops.sync_status (
+          appid,
+          steam_last_modified,
+          steam_price_change_number,
+          updated_at
+        )
+        SELECT
+          appid,
+          steam_last_modified,
+          steam_price_change_number,
+          now()
+        FROM jsonb_to_recordset($1::jsonb) AS hint_rows (
+          appid integer,
+          steam_last_modified bigint,
+          steam_price_change_number bigint
+        )
+        ON CONFLICT (appid)
+        DO UPDATE SET
+          steam_last_modified = EXCLUDED.steam_last_modified,
+          steam_price_change_number = EXCLUDED.steam_price_change_number,
+          updated_at = now()
+      `,
+      [
+        JSON.stringify(
+          rows.map((row) => ({
+            appid: row.appid,
+            steam_last_modified: row.steamLastModified,
+            steam_price_change_number: row.steamPriceChangeNumber,
+          }))
+        ),
+      ]
+    );
+  }
+
+  async promoteReviewsSyncBatch(promotions: TigerReviewPromotion[]): Promise<number> {
+    if (promotions.length === 0) {
+      return 0;
+    }
+
+    await this.pool.query(
+      `
+        SELECT ops.promote_reviews_sync(
+          appid,
+          bucket,
+          score,
+          reason,
+          until_at
+        )
+        FROM jsonb_to_recordset($1::jsonb) AS promotion_rows (
+          appid integer,
+          bucket text,
+          score integer,
+          reason text,
+          until_at timestamptz
+        )
+      `,
+      [
+        JSON.stringify(
+          promotions.map((promotion) => ({
+            appid: promotion.appid,
+            bucket: promotion.bucket,
+            reason: promotion.reason,
+            score: promotion.score,
+            until_at: promotion.until,
+          }))
+        ),
+      ]
+    );
+
+    return promotions.length;
+  }
+
   async getLatestStorefrontSnapshot(appid: number): Promise<NormalizedStorefrontSnapshot | null> {
     const row = await this.getLatestStorefrontSnapshotMeta(appid);
     return row ? readArchivedJson<NormalizedStorefrontSnapshot>(row, 'storefront snapshot') : null;
@@ -303,7 +468,7 @@ export class TigerChangeIntelRepository {
       previousId,
       triggerReason,
       triggerCursor,
-      summarizeStorefrontSnapshot(snapshot),
+      stringifyJsonValue(summarizeStorefrontSnapshot(snapshot)),
       pointer?.bucket ?? null,
       pointer?.key ?? null,
       pointer?.contentHash ?? null,
@@ -375,9 +540,9 @@ export class TigerChangeIntelRepository {
       appid,
       storefrontSnapshotId,
       contentHash,
-      mediaVersion.heroImages,
-      mediaVersion.screenshots,
-      mediaVersion.movies,
+      stringifyJsonValue(mediaVersion.heroImages),
+      stringifyJsonValue(mediaVersion.screenshots),
+      stringifyJsonValue(mediaVersion.movies),
       previousId,
       observedAt,
     ];
@@ -577,7 +742,7 @@ export class TigerChangeIntelRepository {
           created_at timestamptz
         )
       `,
-      [JSON.stringify(rows)]
+      [stringifyJsonValue(rows)]
     );
   }
 
@@ -598,6 +763,50 @@ export class TigerChangeIntelRepository {
     );
 
     return rows[0]?.content_hash ?? null;
+  }
+
+  async upsertHeroAssetVersion(params: HeroAssetVersionParams): Promise<void> {
+    const now = new Date().toISOString();
+    await this.pool.query(
+      `
+        INSERT INTO docs.app_hero_asset_versions (
+          id, appid, asset_kind, source_url, object_bucket, object_key,
+          content_hash, mime_type, content_length, width, height,
+          first_seen_at, last_seen_at, created_at
+        )
+        VALUES (
+          $1::uuid, $2::int, $3::text, $4::text, $5::text, $6::text,
+          $7::text, $8::text, $9::int, $10::int, $11::int,
+          $12::timestamptz, $13::timestamptz, $14::timestamptz
+        )
+        ON CONFLICT (appid, asset_kind, content_hash)
+        DO UPDATE SET
+          source_url = EXCLUDED.source_url,
+          object_bucket = EXCLUDED.object_bucket,
+          object_key = EXCLUDED.object_key,
+          mime_type = EXCLUDED.mime_type,
+          content_length = EXCLUDED.content_length,
+          width = EXCLUDED.width,
+          height = EXCLUDED.height,
+          last_seen_at = EXCLUDED.last_seen_at
+      `,
+      [
+        params.id ?? randomUUID(),
+        params.appid,
+        params.assetKind,
+        params.sourceUrl,
+        params.objectBucket,
+        params.objectKey,
+        params.contentHash,
+        params.mimeType,
+        params.contentLength,
+        params.width,
+        params.height,
+        params.firstSeenAt ?? now,
+        params.lastSeenAt ?? now,
+        now,
+      ]
+    );
   }
 
   async enqueueCaptureJobs(
@@ -625,7 +834,7 @@ export class TigerChangeIntelRepository {
 
     const { rows } = await this.pool.query<CountRow>(
       'SELECT ops.mark_app_capture_work_dirty($1::jsonb, $2::integer) AS count',
-      [JSON.stringify(payload), this.getCaptureDirtyWindowHours()]
+      [stringifyJsonValue(payload), this.getCaptureDirtyWindowHours()]
     );
 
     return parseCount(rows[0]?.count);

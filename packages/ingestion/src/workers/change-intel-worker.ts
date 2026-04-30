@@ -26,6 +26,7 @@ import {
   updateSyncStatusFields,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
+import { readChangeIntelRuntimeConfig } from '../change-intel/runtime-config.js';
 import { upsertLatestStorefrontState } from '../change-intel/storefront-latest-state.js';
 import {
   archiveHeroAssetsForApp,
@@ -45,6 +46,14 @@ type SupabaseClient = ReturnType<typeof getServiceClient>;
 const DEFAULT_SOURCES = ['storefront', 'news', 'projection_refresh', 'hero_asset'] as const;
 
 type QueueSource = (typeof DEFAULT_SOURCES)[number];
+
+function shouldUseTigerPrimary(): boolean {
+  return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
+}
+
+function hasSupabaseServiceEnv(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+}
 
 function normalizeTriggerCursor(triggerCursor: string | null): string | null {
   return triggerCursor && triggerCursor.length > 0 ? triggerCursor : null;
@@ -288,7 +297,9 @@ async function main(): Promise<void> {
   const sources = (process.env.QUEUE_SOURCES?.split(',').map((value) => value.trim()).filter(Boolean) ?? [
     ...DEFAULT_SOURCES,
   ]) as QueueSource[];
-  const supabase = getServiceClient();
+  const supabase = shouldUseTigerPrimary() && !hasSupabaseServiceEnv()
+    ? ({} as SupabaseClient)
+    : getServiceClient();
   let idlePolls = 0;
   let lastStaleClaimSweepAt = 0;
   let catchupSeedBatches = 0;

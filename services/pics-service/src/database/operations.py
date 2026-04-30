@@ -3,7 +3,7 @@
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, TypeVar
 
 import httpx
 
@@ -16,6 +16,7 @@ from .change_intelligence import (
     normalize_pics_snapshot,
 )
 from .tiger_change_history import TigerPICSChangeHistoryStore
+from .tiger_latest_state import TigerPICSLatestStateStore
 from ..config.settings import settings
 from ..extractors.common import ExtractedPICSData, Association
 
@@ -227,19 +228,33 @@ class PICSDatabase:
     _tag_name_cache: Dict[int, str] = {}  # Class-level cache
 
     def __init__(self):
-        self._db = SupabaseClient.get_instance()
-        self._load_tag_names()
-        self._history_available = True
-        self._history_disabled_until: Optional[float] = None
         self._history_target = settings.pics_change_history_target.strip().lower()
         if self._history_target not in {"supabase", "tiger"}:
             raise ValueError("PICS_CHANGE_HISTORY_TARGET must be 'supabase' or 'tiger'")
+        self._latest_state_target = settings.pics_latest_state_target.strip().lower()
+        if self._latest_state_target not in {"supabase", "tiger"}:
+            raise ValueError("PICS_LATEST_STATE_TARGET must be 'supabase' or 'tiger'")
+
+        self._db = (
+            SupabaseClient.get_instance()
+            if self._history_target == "supabase" or self._latest_state_target == "supabase"
+            else None
+        )
+        self._load_tag_names()
+        self._history_available = True
+        self._history_disabled_until: Optional[float] = None
         self._tiger_history_store = (
             self._create_tiger_change_history_store() if self._history_target == "tiger" else None
+        )
+        self._tiger_latest_state_store = (
+            self._create_tiger_latest_state_store() if self._latest_state_target == "tiger" else None
         )
 
     def _create_tiger_change_history_store(self) -> TigerPICSChangeHistoryStore:
         return TigerPICSChangeHistoryStore.from_settings(settings)
+
+    def _create_tiger_latest_state_store(self) -> TigerPICSLatestStateStore:
+        return TigerPICSLatestStateStore.from_settings(settings)
 
     def _load_tag_names(self):
         """Load Steam tag names from API (cached at class level)."""
@@ -312,10 +327,13 @@ class PICSDatabase:
         apps_with_storefront_dates = self._get_apps_with_storefront_dates(appids_to_process)
         logger.info(f"{len(apps_with_storefront_dates)} apps have storefront release dates (will not overwrite)")
 
-        # Get apps that have been synced via storefront API (authoritative for is_free)
-        # PICS should only set is_free as a fallback when storefront hasn't synced yet
+        # Get apps that have been synced via storefront API (authoritative for storefront-owned booleans)
+        # PICS should only set is_free / is_released as fallbacks when storefront hasn't synced yet
         apps_with_storefront_sync = self._get_apps_with_storefront_sync(appids_to_process)
-        logger.info(f"{len(apps_with_storefront_sync)} apps have storefront sync (will not overwrite is_free)")
+        logger.info(
+            "%s apps have storefront sync (will not overwrite storefront-owned booleans)",
+            len(apps_with_storefront_sync),
+        )
 
         # Prepare app records
         app_records = []
@@ -344,13 +362,15 @@ class PICSDatabase:
         # Track successfully upserted appids
         successful_appids = set()
 
-        # Upsert apps in batches
+        # Upsert apps in batches. Each bulk upsert must use a homogeneous key set so
+        # storefront-owned columns omitted by some rows are never nulled by a mixed payload.
         for i in range(0, len(app_records), self.UPSERT_BATCH_SIZE):
             batch = app_records[i : i + self.UPSERT_BATCH_SIZE]
-            batch_successful_appids, batch_failures = self._upsert_app_records(batch)
-            stats["updated"] += len(batch_successful_appids)
-            stats["failed"] += batch_failures
-            successful_appids.update(batch_successful_appids)
+            for homogeneous_batch in self._group_app_records_by_keyset(batch):
+                batch_successful_appids, batch_failures = self._upsert_app_records(homogeneous_batch)
+                stats["updated"] += len(batch_successful_appids)
+                stats["failed"] += batch_failures
+                successful_appids.update(batch_successful_appids)
 
         # Process relationships only for successfully upserted apps
         successful_apps = [appid_to_app[appid] for appid in successful_appids if appid in appid_to_app]
@@ -362,6 +382,13 @@ class PICSDatabase:
         """Fetch existing non-null app names so PICS upserts can preserve them."""
         if not appids:
             return {}
+
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.get_existing_app_names(appids)
+            except Exception as e:
+                logger.error(f"Failed to fetch Tiger app names: {e}")
+                return {}
 
         names: Dict[int, str] = {}
         batch_size = 1000
@@ -390,6 +417,13 @@ class PICSDatabase:
         if not appids:
             return []
 
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.get_existing_appids(appids)
+            except Exception as e:
+                logger.error(f"Failed to check Tiger appids: {e}")
+                return []
+
         existing = []
         batch_size = 1000  # Supabase limit
 
@@ -417,6 +451,13 @@ class PICSDatabase:
         if not appids:
             return set()
 
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.get_apps_with_storefront_dates(appids)
+            except Exception as e:
+                logger.error(f"Failed to check Tiger storefront dates: {e}")
+                return set()
+
         has_raw_date: Set[int] = set()
         batch_size = 1000
 
@@ -439,11 +480,18 @@ class PICSDatabase:
     def _get_apps_with_storefront_sync(self, appids: List[int]) -> Set[int]:
         """Get appids that have been synced via storefront API.
 
-        The storefront API is authoritative for is_free. PICS should only
-        set is_free as a fallback when storefront hasn't synced the app yet.
+        The storefront API is authoritative for is_free and is_released.
+        PICS should only set these as fallbacks when storefront hasn't synced the app yet.
         """
         if not appids:
             return set()
+
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.get_apps_with_storefront_sync(appids)
+            except Exception as e:
+                logger.error(f"Failed to check Tiger storefront sync status: {e}")
+                return set()
 
         has_storefront_sync: Set[int] = set()
         batch_size = 1000
@@ -812,6 +860,34 @@ class PICSDatabase:
 
         batch_appids = {int(record["appid"]) for record in records}
 
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.upsert_app_records(records), 0
+            except Exception as e:
+                logger.error(f"Failed to upsert Tiger app batch: {e}")
+
+            if len(records) == 1:
+                return set(), 1
+
+            logger.warning(
+                "Retrying %s Tiger PICS app upserts individually after batch failure",
+                len(records),
+            )
+
+            successful_appids: Set[int] = set()
+            failed = 0
+
+            for record in records:
+                appid = int(record["appid"])
+                try:
+                    self._tiger_latest_state_store.upsert_app_records([record])
+                    successful_appids.add(appid)
+                except Exception as error:
+                    logger.error("Failed to upsert Tiger app %s after batch fallback: %s", appid, error)
+                    failed += 1
+
+            return successful_appids, failed
+
         try:
             self._db.client.table("apps").upsert(records, on_conflict="appid").execute()
             return batch_appids, 0
@@ -839,6 +915,29 @@ class PICSDatabase:
                 failed += 1
 
         return successful_appids, failed
+
+    def _group_app_records_by_keyset(
+        self,
+        records: List[Dict[str, Any]],
+    ) -> List[List[Dict[str, Any]]]:
+        """Partition records so every bulk upsert uses the same set of columns.
+
+        Mixed-key bulk upserts can null omitted fields on conflict because PostgREST
+        operates on the union of keys across the batch. Storefront-owned fields like
+        is_free, is_released, and release_date are intentionally omitted for some PICS
+        rows, so we must separate those records before bulk persistence.
+        """
+        grouped_records: Dict[FrozenSet[str], List[Dict[str, Any]]] = {}
+        ordered_keysets: List[FrozenSet[str]] = []
+
+        for record in records:
+            keyset = frozenset(record.keys())
+            if keyset not in grouped_records:
+                grouped_records[keyset] = []
+                ordered_keysets.append(keyset)
+            grouped_records[keyset].append(record)
+
+        return [grouped_records[keyset] for keyset in ordered_keysets]
 
     def _build_app_record(
         self,
@@ -956,23 +1055,28 @@ class PICSDatabase:
 
     def _upsert_steam_deck(self, appid: int, deck: "SteamDeckCompatibility"):
         """Upsert Steam Deck compatibility data."""
-        from ..extractors.common import SteamDeckCompatibility
-
         category_map = {0: "unknown", 1: "unsupported", 2: "playable", 3: "verified"}
+        record = {
+            "category": category_map.get(deck.category, "unknown"),
+            "test_timestamp": (
+                datetime.fromtimestamp(deck.test_timestamp).isoformat()
+                if deck.test_timestamp
+                else None
+            ),
+            "tested_build_id": deck.tested_build_id,
+            "tests": deck.tests,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
 
         try:
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.upsert_steam_deck(appid, record)
+                return
+
             self._db.client.table("app_steam_deck").upsert(
                 {
                     "appid": appid,
-                    "category": category_map.get(deck.category, "unknown"),
-                    "test_timestamp": (
-                        datetime.fromtimestamp(deck.test_timestamp).isoformat()
-                        if deck.test_timestamp
-                        else None
-                    ),
-                    "tested_build_id": deck.tested_build_id,
-                    "tests": deck.tests,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    **record,
                 },
                 on_conflict="appid",
             ).execute()
@@ -983,12 +1087,16 @@ class PICSDatabase:
         """Sync app categories."""
         try:
             enabled_cat_ids = sorted({cat_id for cat_id, enabled in (categories or {}).items() if enabled})
+            cat_records = [
+                {"category_id": cat_id, "name": CATEGORY_NAMES.get(cat_id, f"Category {cat_id}")}
+                for cat_id in enabled_cat_ids
+            ]
+
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.replace_categories(appid, cat_records, enabled_cat_ids)
+                return
 
             if enabled_cat_ids:
-                cat_records = [
-                    {"category_id": cat_id, "name": CATEGORY_NAMES.get(cat_id, f"Category {cat_id}")}
-                    for cat_id in enabled_cat_ids
-                ]
                 self._db.client.table("steam_categories").upsert(cat_records, on_conflict="category_id").execute()
 
             self._db.client.rpc(
@@ -1002,12 +1110,21 @@ class PICSDatabase:
         """Sync app genres."""
         try:
             desired_genres = list(dict.fromkeys(genre_id for genre_id in (genres or []) if genre_id is not None))
+            genre_records = [
+                {"genre_id": genre_id, "name": GENRE_NAMES.get(genre_id, f"Genre {genre_id}")}
+                for genre_id in desired_genres
+            ]
+
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.replace_genres(
+                    appid,
+                    genre_records,
+                    desired_genres,
+                    primary_genre,
+                )
+                return
 
             if desired_genres:
-                genre_records = [
-                    {"genre_id": genre_id, "name": GENRE_NAMES.get(genre_id, f"Genre {genre_id}")}
-                    for genre_id in desired_genres
-                ]
                 self._db.client.table("steam_genres").upsert(genre_records, on_conflict="genre_id").execute()
 
             self._db.client.rpc(
@@ -1032,6 +1149,14 @@ class PICSDatabase:
                     {"tag_id": tag_id, "name": self._get_tag_name(tag_id), "updated_at": now}
                     for tag_id in ordered_tag_ids
                 ]
+            else:
+                tag_records = []
+
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.replace_store_tags(appid, tag_records, ordered_tag_ids)
+                return
+
+            if ordered_tag_ids:
                 self._db.client.table("steam_tags").upsert(tag_records, on_conflict="tag_id").execute()
 
             self._db.client.rpc(
@@ -1044,6 +1169,10 @@ class PICSDatabase:
     def _upsert_franchise_link(self, appid: int, franchise_name: str):
         """Create/update franchise and link to app."""
         try:
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.upsert_franchise_link(appid, franchise_name)
+                return
+
             # Upsert franchise
             result = self._db.client.rpc("upsert_franchise", {"p_name": franchise_name}).execute()
             franchise_id = result.data
@@ -1072,6 +1201,14 @@ class PICSDatabase:
             return
 
         try:
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.sync_dlc_relationships(
+                    parent_appid,
+                    normalized_dlc_appids,
+                )
+                logger.info(f"Synced {len(normalized_dlc_appids)} DLC relationships for app {parent_appid}")
+                return
+
             self._db.client.rpc(
                 "seed_discovered_apps",
                 {
@@ -1101,6 +1238,10 @@ class PICSDatabase:
     def _update_sync_status(self, appid: int, trigger_cursor: Optional[str] = None):
         """Update sync status for an app."""
         try:
+            if self._tiger_latest_state_store is not None:
+                self._tiger_latest_state_store.update_sync_status([appid], trigger_cursor)
+                return
+
             self._db.client.table("sync_status").upsert(
                 {
                     "appid": appid,
@@ -1115,6 +1256,14 @@ class PICSDatabase:
     def _batch_update_sync_status(self, appids: List[int], trigger_cursor: Optional[str] = None):
         """Batch update sync status for multiple apps."""
         if not appids:
+            return
+
+        if self._tiger_latest_state_store is not None:
+            try:
+                self._tiger_latest_state_store.update_sync_status(appids, trigger_cursor)
+                logger.debug(f"Updated Tiger sync status for {len(appids)} apps")
+            except Exception as e:
+                logger.error(f"Failed to batch update Tiger sync status ({len(appids)} apps): {e}")
             return
 
         now = datetime.utcnow().isoformat()
@@ -1225,6 +1374,26 @@ class PICSDatabase:
         effective_limit = max(1, limit)
         effective_pool_size = max(effective_limit, min(max(candidate_pool_size, effective_limit), 1000))
 
+        if self._tiger_latest_state_store is not None:
+            try:
+                rows = self._tiger_latest_state_store.get_first_pass_candidates(effective_pool_size)
+            except Exception as e:
+                logger.error(f"Failed to fetch Tiger first-pass PICS candidates: {e}")
+                return []
+
+            selected = select_first_pass_app_ids(
+                rows,
+                limit=effective_limit,
+                recent_release_days=recent_release_days,
+                near_release_days=near_release_days,
+            )
+            logger.info(
+                "Selected %s prioritized first-pass PICS app IDs from %s Tiger candidates",
+                len(selected),
+                len(rows),
+            )
+            return selected
+
         try:
             result = (
                 self._db.client.table("sync_status")
@@ -1263,22 +1432,25 @@ class PICSDatabase:
 
         while True:
             try:
-                # Use cursor-based pagination (gt) instead of offset/range
-                # Supabase caps range() at 1000 rows regardless of what you specify
-                result = (
-                    self._db.client.table("sync_status")
-                    .select("appid")
-                    .is_("last_pics_sync", "null")
-                    .gt("appid", last_appid)
-                    .order("appid")
-                    .limit(page_size)
-                    .execute()
-                )
+                if self._tiger_latest_state_store is not None:
+                    appids = self._tiger_latest_state_store.get_unsynced_app_ids_after(last_appid, page_size)
+                else:
+                    # Use cursor-based pagination (gt) instead of offset/range
+                    # Supabase caps range() at 1000 rows regardless of what you specify
+                    result = (
+                        self._db.client.table("sync_status")
+                        .select("appid")
+                        .is_("last_pics_sync", "null")
+                        .gt("appid", last_appid)
+                        .order("appid")
+                        .limit(page_size)
+                        .execute()
+                    )
+                    appids = [r["appid"] for r in result.data]
 
-                if not result.data:
+                if not appids:
                     break
 
-                appids = [r["appid"] for r in result.data]
                 all_appids.extend(appids)
                 last_appid = appids[-1]  # Cursor for next page
                 logger.info(f"Fetched {len(appids)} unsynced app IDs (total: {len(all_appids)})")
@@ -1301,19 +1473,22 @@ class PICSDatabase:
 
         while True:
             try:
-                result = (
-                    self._db.client.table("apps")
-                    .select("appid")
-                    .gt("appid", last_appid)
-                    .order("appid")
-                    .limit(page_size)
-                    .execute()
-                )
+                if self._tiger_latest_state_store is not None:
+                    appids = self._tiger_latest_state_store.get_all_app_ids_after(last_appid, page_size)
+                else:
+                    result = (
+                        self._db.client.table("apps")
+                        .select("appid")
+                        .gt("appid", last_appid)
+                        .order("appid")
+                        .limit(page_size)
+                        .execute()
+                    )
+                    appids = [r["appid"] for r in result.data]
 
-                if not result.data:
+                if not appids:
                     break
 
-                appids = [r["appid"] for r in result.data]
                 all_appids.extend(appids)
                 last_appid = appids[-1]
 
@@ -1328,6 +1503,13 @@ class PICSDatabase:
 
     def get_last_change_number(self) -> int:
         """Get the last processed PICS change number."""
+        if self._tiger_latest_state_store is not None:
+            try:
+                return self._tiger_latest_state_store.get_last_change_number()
+            except Exception as e:
+                logger.warning(f"Could not get Tiger last change number: {e}")
+                return 0
+
         try:
             result = (
                 self._db.client.table("pics_sync_state")
@@ -1343,6 +1525,13 @@ class PICSDatabase:
 
     def set_last_change_number(self, change_number: int):
         """Update the last processed PICS change number."""
+        if self._tiger_latest_state_store is not None:
+            try:
+                self._tiger_latest_state_store.set_last_change_number(change_number)
+            except Exception as e:
+                logger.error(f"Failed to update Tiger change number: {e}")
+            return
+
         try:
             self._db.client.table("pics_sync_state").upsert(
                 {

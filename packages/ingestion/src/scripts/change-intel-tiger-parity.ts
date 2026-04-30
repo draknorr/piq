@@ -3,10 +3,11 @@ import { Pool } from 'pg';
 import { readChangeIntelRuntimeConfig } from '../change-intel/runtime-config.js';
 
 interface ParityCheck {
-  cutoffColumn: string;
+  cutoffColumn?: string;
   name: string;
   sourceRelation: string;
   targetRelation: string;
+  whereSql?: string;
 }
 
 interface ParityResult {
@@ -24,6 +25,7 @@ const CHECKS: ParityCheck[] = [
     name: 'app_change_events',
     sourceRelation: 'public.app_change_events',
     targetRelation: 'events.app_change_events',
+    whereSql: "source::text = ANY (ARRAY['storefront'::text, 'news'::text, 'media'::text])",
   },
   {
     cutoffColumn: 'first_seen_at',
@@ -48,12 +50,31 @@ const CHECKS: ParityCheck[] = [
     name: 'app_source_snapshots',
     sourceRelation: 'public.app_source_snapshots',
     targetRelation: 'docs.app_source_snapshots',
+    whereSql: "source::text = 'storefront'",
   },
   {
     cutoffColumn: 'first_seen_at',
     name: 'app_media_versions',
     sourceRelation: 'public.app_media_versions',
     targetRelation: 'docs.app_media_versions',
+  },
+  {
+    cutoffColumn: 'first_seen_at',
+    name: 'app_hero_asset_versions',
+    sourceRelation: 'public.app_hero_asset_versions',
+    targetRelation: 'docs.app_hero_asset_versions',
+  },
+  {
+    cutoffColumn: 'updated_at',
+    name: 'app_capture_work_state',
+    sourceRelation: 'public.app_capture_work_state',
+    targetRelation: 'ops.app_capture_work_state',
+    whereSql: "source::text = ANY (ARRAY['storefront'::text, 'news'::text, 'hero_asset'::text, 'projection_refresh'::text])",
+  },
+  {
+    name: 'change_intel_app_status',
+    sourceRelation: 'public.sync_status',
+    targetRelation: 'ops.change_intel_app_status',
   },
 ];
 
@@ -92,20 +113,54 @@ function assertSafeColumnName(value: string): void {
   }
 }
 
-async function countRows(pool: Pool, relation: string, cutoffColumn: string, cutoffIso: string): Promise<number> {
+async function countRows(pool: Pool, check: ParityCheck, cutoffIso: string): Promise<number> {
+  const { cutoffColumn, relation, whereSql } = {
+    cutoffColumn: check.cutoffColumn,
+    relation: check.sourceRelation,
+    whereSql: check.whereSql,
+  };
   assertSafeRelationName(relation);
-  assertSafeColumnName(cutoffColumn);
+  if (cutoffColumn) {
+    assertSafeColumnName(cutoffColumn);
+  }
+
+  const whereClauses: string[] = [];
+  const values: string[] = [];
+  if (cutoffColumn) {
+    values.push(cutoffIso);
+    whereClauses.push(`${cutoffColumn} >= $${values.length}::timestamptz`);
+  }
+  if (whereSql) {
+    whereClauses.push(`(${whereSql})`);
+  }
+  const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   const { rows } = await pool.query<{ count: string }>(
     `
       SELECT count(*)::text AS count
       FROM ${relation}
-      WHERE ${cutoffColumn} >= $1::timestamptz
+      ${where}
     `,
-    [cutoffIso]
+    values
   );
 
   return Number(rows[0]?.count ?? 0);
+}
+
+async function countRelationRows(
+  pool: Pool,
+  relation: string,
+  check: ParityCheck,
+  cutoffIso: string
+): Promise<number> {
+  return countRows(
+    pool,
+    {
+      ...check,
+      sourceRelation: relation,
+    },
+    cutoffIso
+  );
 }
 
 async function runCheck(
@@ -116,8 +171,8 @@ async function runCheck(
 ): Promise<ParityResult> {
   try {
     const [sourceCount, targetCount] = await Promise.all([
-      countRows(sourcePool, check.sourceRelation, check.cutoffColumn, cutoffIso),
-      countRows(targetPool, check.targetRelation, check.cutoffColumn, cutoffIso),
+      countRelationRows(sourcePool, check.sourceRelation, check, cutoffIso),
+      countRelationRows(targetPool, check.targetRelation, check, cutoffIso),
     ]);
 
     return {

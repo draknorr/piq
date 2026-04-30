@@ -43,6 +43,15 @@ test('createChangeIntelArchiveStore requires a bucket when object storage is ena
   );
 });
 
+test('createChangeIntelArchiveStore accepts platform object storage aliases', () => {
+  assert.ok(
+    createChangeIntelArchiveStore({
+      OBJECT_STORAGE_BUCKET: 'publisheriq-change-intel-archive',
+      OBJECT_STORAGE_TARGET: 'object_storage',
+    })
+  );
+});
+
 test('archiveJsonPayload writes stable JSON payloads through the configured store', async () => {
   const store = new MemoryArchiveStore();
 
