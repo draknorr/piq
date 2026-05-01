@@ -736,11 +736,11 @@ BEGIN
       LIMIT v_expired_seed_limit
     ),
     seed_appids AS (
-      SELECT appid FROM override_seed
+      SELECT override_seed.appid FROM override_seed
       UNION
-      SELECT appid FROM due_seed_unclaimed
+      SELECT due_seed_unclaimed.appid FROM due_seed_unclaimed
       UNION
-      SELECT appid FROM due_seed_expired
+      SELECT due_seed_expired.appid FROM due_seed_expired
     ),
     candidate_pool AS (
       SELECT

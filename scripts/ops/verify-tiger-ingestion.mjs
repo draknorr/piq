@@ -52,8 +52,12 @@ const WORKFLOW_SOURCES = [
     commands: [/app-change-hints/],
     envEquals: { DATA_READ_TARGET: "tiger", DATA_WRITE_TARGET: "tiger" },
     requiredEnv: ["TIGER_PRIMARY_URL"],
-    liveJobTypes: ["app-change-hints"],
-    evidence: ["ops.sync_jobs:app-change-hints", "ops.app_capture_work_state"],
+    liveJobTypes: [],
+    changeIntelJobTypes: ["change_hints"],
+    evidence: [
+      "ops.change_intel_sync_jobs:change_hints",
+      "ops.app_capture_work_state",
+    ],
   },
   {
     id: "steam-storefront",
@@ -69,7 +73,7 @@ const WORKFLOW_SOURCES = [
     requiredEnv: ["TIGER_PRIMARY_URL", "CHANGE_INTEL_ARCHIVE_BUCKET"],
     optionalGate: "ENABLE_TIGER_CATALOG_WRITERS",
     liveJobTypes: ["storefront"],
-    changeIntelJobTypes: ["storefront"],
+    changeIntelJobTypes: ["change-intel-storefront"],
     evidence: [
       "ops.sync_status.last_storefront_sync",
       "docs.app_source_snapshots:storefront",
@@ -89,8 +93,8 @@ const WORKFLOW_SOURCES = [
       QUEUE_SOURCES: "news",
     },
     requiredEnv: ["TIGER_PRIMARY_URL", "CHANGE_INTEL_ARCHIVE_BUCKET"],
-    liveJobTypes: ["change-intel"],
-    changeIntelJobTypes: ["news"],
+    liveJobTypes: [],
+    changeIntelJobTypes: ["change-intel-news"],
     evidence: [
       "ops.sync_status.last_news_sync",
       "docs.steam_news_versions",
@@ -120,7 +124,7 @@ const WORKFLOW_SOURCES = [
     envEquals: { DATA_WRITE_TARGET: "tiger" },
     requiredEnv: ["TIGER_PRIMARY_URL"],
     optionalGate: "ENABLE_TIGER_METRICS_WRITERS",
-    liveJobTypes: ["ccu-tiered", "ccu"],
+    liveJobTypes: ["ccu-tiered"],
     evidence: [
       "metrics.ccu_snapshots",
       "ops.ccu_tier_assignments.last_ccu_synced",
@@ -136,13 +140,7 @@ const WORKFLOW_SOURCES = [
     envEquals: { DATA_WRITE_TARGET: "tiger" },
     requiredEnv: ["TIGER_PRIMARY_URL"],
     optionalGate: "ENABLE_TIGER_METRICS_WRITERS",
-    liveJobTypes: [
-      "ccu-daily",
-      "ccu-daily-p0",
-      "ccu-daily-p1",
-      "ccu-daily-p2",
-      "ccu-daily-p3",
-    ],
+    liveJobTypes: ["ccu-daily-p0", "ccu-daily-p1", "ccu-daily-p2"],
     evidence: [
       "metrics.daily_metrics.ccu_peak",
       "legacy.latest_daily_metrics.ccu_peak",
@@ -614,6 +612,7 @@ const TABLE_FRESHNESS_CHECKS = [
     label: "Alert detection state",
     schema: "ops",
     table: "alert_detection_state",
+    optionalGate: "ENABLE_TIGER_ALERT_WORKER",
     timeColumns: ["updated_at", "last_alerted_at"],
   },
   {
@@ -1089,6 +1088,18 @@ function addCheck(checks, status, message, detail = undefined) {
   );
 }
 
+function isExplicitFalse(value) {
+  return ["0", "false", "no", "off"].includes(String(value).toLowerCase());
+}
+
+function isSourceLiveExpected(source) {
+  if (!source.optionalGate) {
+    return true;
+  }
+
+  return !isExplicitFalse(process.env[source.optionalGate]);
+}
+
 function analyzeWorkflowSource(source) {
   const text = readWorkflow(source.workflow);
   const checks = [];
@@ -1410,6 +1421,66 @@ function loadRailwayVariables(options) {
         {
           status: "warn",
           message: "Could not read Railway variables.",
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
+  }
+}
+
+function loadGithubGateVariables(options) {
+  if (!options.github) {
+    return {
+      status: "skip",
+      variables: null,
+      checks: [],
+    };
+  }
+
+  const gateNames = [
+    ...new Set(
+      WORKFLOW_SOURCES.map((source) => source.optionalGate).filter(Boolean),
+    ),
+  ];
+
+  try {
+    const stdout = execFileSync(
+      "gh",
+      ["variable", "list", "--json", "name,value"],
+      {
+        cwd: ROOT_DIR,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const variables = Object.fromEntries(
+      JSON.parse(stdout).map((variable) => [variable.name, variable.value]),
+    );
+
+    for (const name of gateNames) {
+      if (variables[name] !== undefined) {
+        process.env[name] = variables[name];
+      }
+    }
+
+    return {
+      status: "pass",
+      variables,
+      checks: [
+        {
+          status: "pass",
+          message: "Read GitHub repository variables for optional gates.",
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      status: "warn",
+      variables: null,
+      checks: [
+        {
+          status: "warn",
+          message: "Could not read GitHub repository variables.",
           detail: error instanceof Error ? error.message : String(error),
         },
       ],
@@ -1819,7 +1890,11 @@ async function collectSyncJobs(pool, columns, days) {
   }
 
   const expectedJobTypes = [
-    ...new Set(WORKFLOW_SOURCES.flatMap((source) => source.liveJobTypes ?? [])),
+    ...new Set(
+      WORKFLOW_SOURCES.filter(isSourceLiveExpected).flatMap(
+        (source) => source.liveJobTypes ?? [],
+      ),
+    ),
   ].filter(Boolean);
   const result = await pool.query(
     `
@@ -1902,7 +1977,9 @@ async function collectChangeIntelJobs(pool, columns, days) {
 
   const expectedJobTypes = [
     ...new Set(
-      WORKFLOW_SOURCES.flatMap((source) => source.changeIntelJobTypes ?? []),
+      WORKFLOW_SOURCES.filter(isSourceLiveExpected).flatMap(
+        (source) => source.changeIntelJobTypes ?? [],
+      ),
     ),
   ].filter(Boolean);
   const result = await pool.query(
@@ -2030,7 +2107,7 @@ async function collectTigerLiveEvidence(options) {
       await collectSyncStatusFreshness(pool, columns, options.days),
     );
 
-    for (const spec of TABLE_FRESHNESS_CHECKS) {
+    for (const spec of TABLE_FRESHNESS_CHECKS.filter(isSourceLiveExpected)) {
       evidence.push(
         await collectTableFreshness(pool, columns, spec, options.days),
       );
@@ -2513,8 +2590,15 @@ function collectStaticReport(railwayVariables) {
 
 async function collectReport(options, envLoads) {
   const railway = loadRailwayVariables(options);
+  const githubVariables = loadGithubGateVariables(options);
   const staticReport = collectStaticReport(railway?.variables ?? null);
-  const github = collectGithubRuns(options, staticReport.sources);
+  const githubRuns = collectGithubRuns(options, staticReport.sources);
+  const github = {
+    status: highestStatus([...githubVariables.checks, ...githubRuns.checks]),
+    checks: [...githubVariables.checks, ...githubRuns.checks],
+    runs: githubRuns.runs,
+    variables: githubVariables.variables,
+  };
   const tiger = await collectTigerLiveEvidence(options);
   const supabase = await collectSupabaseGuard(options);
   const supabaseBaseline = await collectSupabaseBaseline(options);
