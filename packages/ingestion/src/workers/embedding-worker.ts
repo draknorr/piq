@@ -120,6 +120,14 @@ type SupabaseClient = ReturnType<typeof getServiceClient>;
 type EmbeddingDbClient = SupabaseClient | null;
 type QdrantClient = ReturnType<typeof getQdrantClient>;
 
+function parseOptionalPositiveInt(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function updateSyncJob(
   jobId: string | null,
   supabase: EmbeddingDbClient,
@@ -278,6 +286,7 @@ async function processGameBatch(
   // Filter to games worth embedding
   const worthyGames = games.filter(isWorthEmbedding);
   stats.gamesSkipped += games.length - worthyGames.length;
+  stats.gamesProcessed += games.length;
 
   if (worthyGames.length === 0) {
     return;
@@ -324,7 +333,6 @@ async function processGameBatch(
   }
 
   stats.gamesEmbedded += worthyGames.length;
-  stats.gamesProcessed += games.length;
 }
 
 /**
@@ -427,11 +435,13 @@ async function processPublishers(
   supabase: EmbeddingDbClient,
   tiger: TigerWriter | null,
   qdrant: QdrantClient,
-  stats: SyncStats
+  stats: SyncStats,
+  maxBatches: number | null
 ): Promise<void> {
   log.info('Processing publishers for embedding');
 
   let hasMore = true;
+  let batchesProcessed = 0;
   while (hasMore) {
     const publishers = tiger
       ? await tiger.embeddings.listPublishersNeedingEmbedding(PUBLISHER_BATCH_SIZE)
@@ -462,6 +472,7 @@ async function processPublishers(
 
     // Process batch and generate embeddings
     await processPublisherBatch(data as PublisherEmbeddingData[], qdrant, stats);
+    batchesProcessed += 1;
 
     // Mark as embedded so they don't appear in next call
     const ids = (data as PublisherEmbeddingData[]).map((p) => p.id);
@@ -479,6 +490,10 @@ async function processPublishers(
 
     // Continue if we got a full batch (more might be available)
     hasMore = data.length === PUBLISHER_BATCH_SIZE;
+    if (maxBatches !== null && batchesProcessed >= maxBatches) {
+      log.info('Reached publisher embedding batch cap', { maxBatches });
+      hasMore = false;
+    }
   }
 
   log.info('Publishers embedding complete', { total: stats.publishersEmbedded });
@@ -583,11 +598,13 @@ async function processDevelopers(
   supabase: EmbeddingDbClient,
   tiger: TigerWriter | null,
   qdrant: QdrantClient,
-  stats: SyncStats
+  stats: SyncStats,
+  maxBatches: number | null
 ): Promise<void> {
   log.info('Processing developers for embedding');
 
   let hasMore = true;
+  let batchesProcessed = 0;
   while (hasMore) {
     const developers = tiger
       ? await tiger.embeddings.listDevelopersNeedingEmbedding(DEVELOPER_BATCH_SIZE)
@@ -618,6 +635,7 @@ async function processDevelopers(
 
     // Process batch and generate embeddings
     await processDeveloperBatch(data as DeveloperEmbeddingData[], qdrant, stats);
+    batchesProcessed += 1;
 
     // Mark as embedded so they don't appear in next call
     const ids = (data as DeveloperEmbeddingData[]).map((d) => d.id);
@@ -635,6 +653,10 @@ async function processDevelopers(
 
     // Continue if we got a full batch (more might be available)
     hasMore = data.length === DEVELOPER_BATCH_SIZE;
+    if (maxBatches !== null && batchesProcessed >= maxBatches) {
+      log.info('Reached developer embedding batch cap', { maxBatches });
+      hasMore = false;
+    }
   }
 
   log.info('Developers embedding complete', { total: stats.developersEmbedded });
@@ -685,11 +707,13 @@ async function main(): Promise<void> {
   const githubRunId = env.GITHUB_RUN_ID;
   const batchSize = parseInt(env.BATCH_SIZE || String(GAME_BATCH_SIZE), 10);
   const syncCollection = env.SYNC_COLLECTION || 'all'; // games, publishers, developers, all
+  const maxBatches = parseOptionalPositiveInt(env.MAX_BATCHES);
 
   log.info('Starting embedding sync', {
     githubRunId,
     batchSize,
     syncCollection,
+    maxBatches,
     writeTarget: tiger ? 'tiger' : 'supabase',
   });
 
@@ -745,6 +769,7 @@ async function main(): Promise<void> {
 
       // Fetch games in batches
       let hasMore = true;
+      let batchesProcessed = 0;
       while (hasMore) {
         const games = tiger ? await tiger.embeddings.listGameCandidates(batchSize) : null;
         const legacyResult = games
@@ -779,20 +804,25 @@ async function main(): Promise<void> {
           data as GameEmbeddingData[],
           stats
         );
+        batchesProcessed += 1;
 
         // Check if we got a full batch (more might be available)
         hasMore = data.length === batchSize;
+        if (maxBatches !== null && batchesProcessed >= maxBatches) {
+          log.info('Reached game embedding batch cap', { maxBatches });
+          hasMore = false;
+        }
       }
     }
 
     // Process publishers
     if (syncCollection === 'all' || syncCollection === 'publishers') {
-      await processPublishers(supabase, tiger, qdrant, stats);
+      await processPublishers(supabase, tiger, qdrant, stats, maxBatches);
     }
 
     // Process developers
     if (syncCollection === 'all' || syncCollection === 'developers') {
-      await processDevelopers(supabase, tiger, qdrant, stats);
+      await processDevelopers(supabase, tiger, qdrant, stats, maxBatches);
     }
 
     // Stop progress logging
