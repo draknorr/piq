@@ -14,6 +14,12 @@ interface GameOverrideRow {
   override_state: string;
 }
 
+interface SourceRelations {
+  apps: string;
+  syncStatus: string;
+  appTrends: string;
+}
+
 export interface RoutedGamePlan {
   appid: number;
   appName: string;
@@ -22,6 +28,26 @@ export interface RoutedGamePlan {
   sourceRefreshTier: string | null;
   queryTemplateId: string;
   allowSecondPage: boolean;
+}
+
+async function resolveSourceRelations(sourcePool: Pool): Promise<SourceRelations> {
+  const result = await sourcePool.query<{ has_tiger_legacy_apps: boolean }>(
+    "SELECT to_regclass('legacy.apps') IS NOT NULL AS has_tiger_legacy_apps"
+  );
+
+  if (result.rows[0]?.has_tiger_legacy_apps) {
+    return {
+      apps: 'legacy.apps',
+      syncStatus: 'ops.sync_status',
+      appTrends: 'metrics.app_trends',
+    };
+  }
+
+  return {
+    apps: 'apps',
+    syncStatus: 'sync_status',
+    appTrends: 'app_trends',
+  };
 }
 
 export async function fetchRoutedGameCandidates(
@@ -42,6 +68,8 @@ export async function fetchRoutedGameCandidates(
     values.push(params.allowlistAppids);
   }
 
+  const sourceRelations = await resolveSourceRelations(sourcePool);
+
   const rows = await sourcePool.query<{
     appid: number;
     name: string;
@@ -60,9 +88,9 @@ export async function fetchRoutedGameCandidates(
         a.release_date::text AS release_date,
         COALESCE(t.review_velocity_7d, 0) AS review_velocity_7d,
         ABS(COALESCE(t.trend_30d_change_pct, 0)) AS trend_change_30d_pct
-      FROM apps a
-      LEFT JOIN sync_status s ON s.appid = a.appid
-      LEFT JOIN app_trends t ON t.appid = a.appid
+      FROM ${sourceRelations.apps} a
+      LEFT JOIN ${sourceRelations.syncStatus} s ON s.appid = a.appid
+      LEFT JOIN ${sourceRelations.appTrends} t ON t.appid = a.appid
       WHERE a.type = 'game'
         AND COALESCE(a.is_delisted, FALSE) = FALSE
         ${allowlistClause}
