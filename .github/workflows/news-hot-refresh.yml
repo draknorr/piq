@@ -62,6 +62,7 @@ jobs:
           QUEUE_SOURCES: news
           CLAIM_LIMIT: ${{ github.event.inputs.claim_limit || '50' }}
           HOT_NEWS_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '150' }}
+          HOT_NEWS_MAX_SEED_BATCHES: '1'
           HOT_NEWS_ACTIVE_STALE_MINUTES: '30'
           HOT_NEWS_MODERATE_STALE_HOURS: '2'
           MAX_IDLE_POLLS: ${{ github.event.inputs.max_idle_polls || '3' }}
