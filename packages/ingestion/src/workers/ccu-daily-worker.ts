@@ -1,20 +1,23 @@
 /**
  * Daily CCU Sync Worker (Tier 3)
  *
- * Fetches concurrent player counts from Steam's official API for all games
- * that are NOT in Tier 1 or Tier 2 (the "long tail" of games).
- *
- * Supports partitioned parallel execution:
- * - Set PARTITION_COUNT and PARTITION_ID env vars to run multiple workers
- * - Each partition processes a different subset of Tier 3 games
+ * Fetches current player counts for long-tail Tier 3 games.
  *
  * Run with: pnpm --filter @publisheriq/ingestion ccu-daily-sync
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import { pathToFileURL } from 'node:url';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type DailyCcuPeakUpsert,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import {
   fetchSteamCCUBatchWithStatus,
+  type CCUBatchResultWithStatus,
   type CCUResultWithStatus,
 } from '../apis/steam-ccu.js';
 import {
@@ -25,21 +28,14 @@ import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cac
 import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-daily-sync' });
-
-// Default batch size per partition - 7000 games × 3 partitions = 21k/run
-// At 1 req/sec, 7000 games takes ~2 hours (well within 6h timeout)
 const DEFAULT_BATCH_SIZE = 7000;
-
-// Supabase/PostgREST default max rows per request
-const SUPABASE_PAGE_SIZE = 1000;
-
-// Skip duration for invalid appids (30 days)
 const SKIP_DURATION_DAYS = 30;
-
-// Graceful timeout: 5h 45m (leave 15m buffer before GitHub's 6h timeout)
 const GRACEFUL_TIMEOUT_MS = 5 * 60 * 60 * 1000 + 45 * 60 * 1000;
 
-interface SyncStats {
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type FetchSteamCcuBatch = typeof fetchSteamCCUBatchWithStatus;
+
+export interface DailyCcuSyncStats {
   appsProcessed: number;
   appsSucceeded: number;
   appsFailed: number;
@@ -47,198 +43,155 @@ interface SyncStats {
   appsInvalid: number;
 }
 
-/**
- * Get Tier 3 games for this partition, excluding skipped apps
- *
- * When partitioned (partitionCount > 1), uses modulo on row number to distribute
- * games evenly across partitions. Each partition gets a different 1/N slice.
- *
- * @returns Object with appids to poll and count of skipped apps
- */
-async function getTier3Games(
-  supabase: ReturnType<typeof getServiceClient>,
-  limit: number,
-  partitionCount: number = 1,
-  partitionId: number = 0,
-  useTierAssignments: boolean = true
+export interface DailyCcuSyncDependencies {
+  env?: NodeJS.ProcessEnv;
+  fetchSteamCCUBatchWithStatus?: FetchSteamCcuBatch;
+  getSupabase?: () => SupabaseClient;
+  getTiger?: () => TigerWriter;
+  refreshCcuQualityCache?: typeof refreshCcuQualityCacheSafely;
+}
+
+interface RunConfig {
+  batchLimit: number;
+  githubRunId: string | undefined;
+  isPartitioned: boolean;
+  partitionCount: number;
+  partitionId: number;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readRunConfig(env: NodeJS.ProcessEnv): RunConfig {
+  const partitionCount = parsePositiveInteger(env.PARTITION_COUNT, 1);
+  const partitionId = Math.max(0, Number.parseInt(env.PARTITION_ID || '0', 10) || 0);
+  return {
+    batchLimit: parsePositiveInteger(env.CCU_DAILY_LIMIT, DEFAULT_BATCH_SIZE),
+    githubRunId: env.GITHUB_RUN_ID,
+    isPartitioned: partitionCount > 1,
+    partitionCount,
+    partitionId,
+  };
+}
+
+function createStats(): DailyCcuSyncStats {
+  return {
+    appsProcessed: 0,
+    appsSucceeded: 0,
+    appsFailed: 0,
+    appsSkipped: 0,
+    appsInvalid: 0,
+  };
+}
+
+function extractValidCcuData(result: CCUBatchResultWithStatus): Map<number, number> {
+  const validCcuData = new Map<number, number>();
+  for (const [appid, ccuResult] of result.results) {
+    if (ccuResult.status === 'valid' && ccuResult.playerCount !== undefined) {
+      validCcuData.set(appid, ccuResult.playerCount);
+    }
+  }
+  return validCcuData;
+}
+
+function buildDailyCcuRows(
+  ccuData: Map<number, number>,
+  today: string
+): DailyCcuPeakUpsert[] {
+  return Array.from(ccuData.entries()).map(([appid, ccu]) => ({
+    appid,
+    metric_date: today,
+    ccu_peak: ccu,
+    ccu_source: 'steam_api',
+  }));
+}
+
+async function getLegacyTier3Games(
+  supabase: SupabaseClient,
+  config: RunConfig,
+  useTierAssignments: boolean
 ): Promise<{ appids: number[]; skippedCount: number }> {
   const now = new Date().toISOString();
-  const isPartitioned = partitionCount > 1;
-
   if (!useTierAssignments) {
     log.warn('Tier assignments are stale, bypassing assignment-based CCU selection');
   }
 
-  // Count how many are being skipped (apps with skip_until in the future)
-  const { count: skippedCount } = useTierAssignments
-    ? await (supabase as any)
-        .from('ccu_tier_assignments')
-        .select('*', { count: 'exact', head: true })
-        .eq('ccu_tier', 3)
-        .gt('ccu_skip_until', now)
-    : { count: 0 };
-
-  // Paginate through Tier 3 games, excluding skipped apps
-  // Note: We use client-side pagination instead of RPC because PostgREST
-  // limits RPC results to 1000 rows regardless of the function's LIMIT clause
-  // Cast to any because ccu_tier_assignments may not be in generated types yet
-  const allAppids: number[] = [];
-  let offset = 0;
-  let hasMore = true;
-  let rowIndex = 0;
-
   if (useTierAssignments) {
-    while (hasMore && allAppids.length < limit) {
-      const { data: pageData, error: pageError } = await (supabase as any)
-        .from('ccu_tier_assignments')
-        .select('appid')
-        .eq('ccu_tier', 3)
-        .or(`ccu_skip_until.is.null,ccu_skip_until.lt.${now}`)
-        .order('last_ccu_synced', { ascending: true, nullsFirst: true })
-        .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
-
-      if (pageError) {
-        throw new Error(`Failed to get Tier 3 games: ${pageError.message}`);
-      }
-
-      if (!pageData || pageData.length === 0) {
-        hasMore = false;
-      } else {
-        for (const row of pageData as { appid: number }[]) {
-          // For partitioned mode, only include rows where (rowIndex % partitionCount) == partitionId
-          if (!isPartitioned || rowIndex % partitionCount === partitionId) {
-            if (allAppids.length < limit) {
-              allAppids.push(row.appid);
-            }
-          }
-          rowIndex++;
-        }
-        offset += SUPABASE_PAGE_SIZE;
-        hasMore = pageData.length === SUPABASE_PAGE_SIZE;
-
-        if (offset % 10000 === 0) {
-          log.info('Fetching Tier 3 appids...', {
-            fetched: allAppids.length,
-            offset,
-            ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-          });
-        }
-      }
-    }
-  }
-
-  if (allAppids.length > 0) {
-    log.info('Using tier assignments for Tier 3 games', {
-      count: allAppids.length,
-      skipped: skippedCount ?? 0,
-      pages: Math.ceil(offset / SUPABASE_PAGE_SIZE),
-      ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-    });
-    return { appids: allAppids, skippedCount: skippedCount ?? 0 };
-  }
-
-  // Fallback: get all released games not in Tier 1 or 2 (also paginated)
-  log.info('No tier assignments found, falling back to direct query');
-
-  // Get Tier 1 and 2 appids to exclude (paginated)
-  const excludeSet = new Set<number>();
-  offset = 0;
-  hasMore = true;
-
-  while (hasMore) {
-    const { data: excludeData } = await (supabase as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
       .from('ccu_tier_assignments')
       .select('appid')
-      .in('ccu_tier', [1, 2])
-      .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
+      .eq('ccu_tier', 3)
+      .or(`ccu_skip_until.is.null,ccu_skip_until.lt.${now}`)
+      .order('last_ccu_synced', { ascending: true, nullsFirst: true })
+      .limit(config.batchLimit * config.partitionCount);
 
-    if (!excludeData || excludeData.length === 0) {
-      hasMore = false;
-    } else {
-      for (const row of excludeData as { appid: number }[]) {
-        excludeSet.add(row.appid);
-      }
-      offset += SUPABASE_PAGE_SIZE;
-      hasMore = excludeData.length === SUPABASE_PAGE_SIZE;
+    if (error) {
+      throw new Error(`Failed to get Tier 3 games: ${error.message}`);
+    }
+
+    const allAppids: number[] = (data ?? []).map((row: { appid: number }) => row.appid);
+    const appids = allAppids
+      .filter((_, index) => !config.isPartitioned || index % config.partitionCount === config.partitionId)
+      .slice(0, config.batchLimit);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count } = await (supabase as any)
+      .from('ccu_tier_assignments')
+      .select('*', { count: 'exact', head: true })
+      .eq('ccu_tier', 3)
+      .gt('ccu_skip_until', now);
+
+    if (appids.length > 0) {
+      return { appids, skippedCount: count ?? 0 };
     }
   }
 
-  // Get all released games (paginated)
-  const tier3: number[] = [];
-  offset = 0;
-  hasMore = true;
-  rowIndex = 0;
+  const { data, error } = await supabase
+    .from('apps')
+    .select('appid')
+    .eq('type', 'game')
+    .eq('is_released', true)
+    .eq('is_delisted', false)
+    .limit(config.batchLimit * config.partitionCount);
 
-  while (hasMore && tier3.length < limit) {
-    const { data: gameData, error: gameError } = await supabase
-      .from('apps')
-      .select('appid')
-      .eq('type', 'game')
-      .eq('is_released', true)
-      .eq('is_delisted', false)
-      .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
-
-    if (gameError) {
-      throw new Error(`Failed to get games: ${gameError.message}`);
-    }
-
-    if (!gameData || gameData.length === 0) {
-      hasMore = false;
-    } else {
-      for (const g of gameData) {
-        if (!excludeSet.has(g.appid)) {
-          // Apply partitioning to fallback path too
-          if (!isPartitioned || rowIndex % partitionCount === partitionId) {
-            if (tier3.length < limit) {
-              tier3.push(g.appid);
-            }
-          }
-          rowIndex++;
-        }
-      }
-      offset += SUPABASE_PAGE_SIZE;
-      hasMore = gameData.length === SUPABASE_PAGE_SIZE;
-    }
+  if (error) {
+    throw new Error(`Failed to get fallback Tier 3 games: ${error.message}`);
   }
 
-  log.info('Got Tier 3 games via fallback', {
-    count: tier3.length,
-    excluded: excludeSet.size,
-    ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-  });
-  return { appids: tier3, skippedCount: 0 };
+  const appids = (data ?? [])
+    .map((row) => row.appid)
+    .filter((_, index) => !config.isPartitioned || index % config.partitionCount === config.partitionId)
+    .slice(0, config.batchLimit);
+  return { appids, skippedCount: 0 };
 }
 
-/**
- * Upsert CCU data to daily_metrics
- */
-async function upsertDailyMetrics(
-  supabase: ReturnType<typeof getServiceClient>,
+async function upsertLegacyDailyPeaks(
+  supabase: SupabaseClient,
   ccuData: Map<number, number>,
   today: string
 ): Promise<{ succeeded: number; failed: number }> {
   let succeeded = 0;
   let failed = 0;
-
   const entries = Array.from(ccuData.entries());
-  const batchSize = 100;
 
-  for (let i = 0; i < entries.length; i += batchSize) {
-    const batch = entries.slice(i, i + batchSize);
+  for (let i = 0; i < entries.length; i += 100) {
+    const batch = entries.slice(i, i + 100);
     const appids = batch.map(([appid]) => appid);
-
-    // Get existing CCU values for today
     const { data: existing } = await supabase
       .from('daily_metrics')
       .select('appid, ccu_peak')
       .in('appid', appids)
       .eq('metric_date', today);
-
-    const existingMap = new Map(existing?.map((e) => [e.appid, e.ccu_peak ?? 0]) ?? []);
-
-    // Filter to only include records where new CCU is higher or doesn't exist
+    const existingMap = new Map(existing?.map((row) => [row.appid, row.ccu_peak ?? 0]) ?? []);
     const toUpsert = batch
-      .filter(([appid, newCCU]) => newCCU >= (existingMap.get(appid) ?? 0))
+      .filter(([appid, ccu]) => ccu >= (existingMap.get(appid) ?? 0))
       .map(([appid, ccu]) => ({
         appid,
         metric_date: today,
@@ -267,11 +220,8 @@ async function upsertDailyMetrics(
   return { succeeded, failed };
 }
 
-/**
- * Insert snapshots for Tier 3 games (for consistency)
- */
-async function insertTier3Snapshots(
-  supabase: ReturnType<typeof getServiceClient>,
+async function insertLegacyTier3Snapshots(
+  supabase: SupabaseClient,
   ccuData: Map<number, number>
 ): Promise<void> {
   const snapshots = Array.from(ccuData.entries()).map(([appid, playerCount]) => ({
@@ -280,73 +230,88 @@ async function insertTier3Snapshots(
     ccu_tier: 3,
   }));
 
-  if (snapshots.length === 0) return;
-
-  // Insert in batches
-  // Cast to any because ccu_snapshots may not be in generated types yet
-  const batchSize = 500;
-  for (let i = 0; i < snapshots.length; i += batchSize) {
-    const batch = snapshots.slice(i, i + batchSize);
+  for (let i = 0; i < snapshots.length; i += 500) {
+    const batch = snapshots.slice(i, i + 500);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any).from('ccu_snapshots').insert(batch);
-
     if (error) {
       log.warn('Failed to insert Tier 3 snapshots batch', { error, batchStart: i });
-      // Don't fail the job for snapshot errors - daily_metrics is the primary store for Tier 3
     }
   }
 }
 
-/**
- * Update CCU fetch status tracking in tier assignments
- *
- * - Valid results: clear skip_until, set status to 'valid'
- * - Invalid results (result:42): set skip_until to 30 days from now, set status to 'invalid'
- * - Error results: no changes (transient failures, will retry next run)
- */
-async function updateSkipTracking(
-  supabase: ReturnType<typeof getServiceClient>,
-  results: Map<number, CCUResultWithStatus>
-): Promise<{ validUpdated: number; invalidUpdated: number }> {
+async function persistValidation(
+  supabase: SupabaseClient,
+  results: Map<number, CCUResultWithStatus>,
+  tiger?: TigerWriter
+): Promise<void> {
   const skipUntil = new Date();
   skipUntil.setDate(skipUntil.getDate() + SKIP_DURATION_DAYS);
-  const skipUntilStr = skipUntil.toISOString();
-  const syncTime = new Date().toISOString();
   const persisted = await persistOfficialCcuValidationResults(
     supabase,
     results,
-    syncTime,
-    skipUntilStr
+    new Date().toISOString(),
+    skipUntil.toISOString(),
+    tiger
   );
-
-  const validUpdated =
-    persisted.confirmedPositive + persisted.confirmedZero + persisted.suspectZero;
-  const invalidUpdated = persisted.invalid;
-
   log.info('Updated skip tracking', {
-    validUpdated,
-    invalidUpdated,
-    erroredUpdated: persisted.error,
-    suspectZeroUpdated: persisted.suspectZero,
-    skipUntil: skipUntilStr,
+    ...persisted,
+    skipUntil: skipUntil.toISOString(),
   });
-
-  return { validUpdated, invalidUpdated };
 }
 
-async function main(): Promise<void> {
+async function runDailyFetch(params: {
+  appids: number[];
+  config: RunConfig;
+  env?: NodeJS.ProcessEnv;
+  fetchBatch: FetchSteamCcuBatch;
+  shouldStop: () => boolean;
+  startTime: number;
+  supabaseForGuardrails: SupabaseClient;
+  tiger?: TigerWriter;
+}): Promise<CCUBatchResultWithStatus> {
+  const suspiciousZeroAppids = await getSuspiciousZeroAppids(
+    params.supabaseForGuardrails,
+    params.appids,
+    { env: params.env, tiger: params.tiger }
+  );
+  return params.fetchBatch(
+    params.appids,
+    (processed, total) => {
+      if (processed % 1000 === 0) {
+        const elapsed = (Date.now() - params.startTime) / 1000 / 60;
+        const rate = processed / Math.max(elapsed, 0.01);
+        const remaining = (total - processed) / Math.max(rate, 0.01);
+        log.info('Daily CCU fetch progress', {
+          processed,
+          total,
+          elapsedMinutes: elapsed.toFixed(1),
+          estimatedRemainingMinutes: remaining.toFixed(1),
+          ...(params.config.isPartitioned && {
+            partition: `${params.config.partitionId}/${params.config.partitionCount}`,
+          }),
+        });
+      }
+    },
+    params.shouldStop,
+    { suspiciousZeroAppids }
+  );
+}
+
+export async function runTigerCcuDailySync(
+  dependencies: DailyCcuSyncDependencies = {}
+): Promise<DailyCcuSyncStats> {
+  const env = dependencies.env ?? process.env;
+  const tiger = dependencies.getTiger?.() ?? getTigerWriter(env);
+  const fetchBatch = dependencies.fetchSteamCCUBatchWithStatus ?? fetchSteamCCUBatchWithStatus;
+  const refreshCcuQualityCache =
+    dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
+  const config = readRunConfig(env);
+  const stats = createStats();
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchLimit = parseInt(process.env.CCU_DAILY_LIMIT || String(DEFAULT_BATCH_SIZE), 10);
-
-  // Partition support for parallel workers
-  const partitionCount = parseInt(process.env.PARTITION_COUNT || '1', 10);
-  const partitionId = parseInt(process.env.PARTITION_ID || '0', 10);
-  const isPartitioned = partitionCount > 1;
-
-  // Graceful shutdown flag
+  const supabasePlaceholder = {} as SupabaseClient;
   let isShuttingDown = false;
 
-  // Set up graceful timeout (5h 45m) to save progress before GitHub cancels at 6h
   const timeoutId = setTimeout(() => {
     log.info('Approaching timeout limit, initiating graceful shutdown', {
       elapsedMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(1),
@@ -354,61 +319,178 @@ async function main(): Promise<void> {
     isShuttingDown = true;
   }, GRACEFUL_TIMEOUT_MS);
 
-  // Handle SIGTERM from GitHub Actions cancellation
   process.on('SIGTERM', () => {
     log.info('Received SIGTERM, initiating graceful shutdown');
     isShuttingDown = true;
   });
 
-  const supabase = getServiceClient();
-  const tierAssignmentsStale = await isTierAssignmentsStale(supabase);
+  const tierAssignmentsStale = await isTierAssignmentsStale(
+    supabasePlaceholder,
+    undefined,
+    { env, tiger }
+  );
 
-  log.info('Starting daily CCU sync (Tier 3)', {
-    githubRunId,
-    batchLimit,
+  log.info('Starting Tiger daily CCU sync (Tier 3)', {
+    githubRunId: config.githubRunId,
+    batchLimit: config.batchLimit,
     tierAssignmentsStale,
-    ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
+    ...(config.isPartitioned && { partition: `${config.partitionId}/${config.partitionCount}` }),
   });
 
-  // Create sync job record
+  const jobId = await tiger.ops.createSyncJob({
+    jobType: config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily',
+    githubRunId: config.githubRunId,
+    batchSize: config.batchLimit,
+  });
+
+  try {
+    const candidateResult = tierAssignmentsStale
+      ? {
+          appids: await tiger.metrics.listFallbackTier3CcuAppids({
+            limit: config.batchLimit,
+            partitionCount: config.partitionCount,
+            partitionId: config.partitionId,
+          }),
+          skippedCount: 0,
+        }
+      : await tiger.metrics.listTier3CcuAppids({
+          limit: config.batchLimit,
+          nowIso: new Date().toISOString(),
+          partitionCount: config.partitionCount,
+          partitionId: config.partitionId,
+        });
+
+    stats.appsSkipped = candidateResult.skippedCount;
+
+    if (candidateResult.appids.length === 0) {
+      clearTimeout(timeoutId);
+      log.info('No Tier 3 games found for Tiger daily CCU sync');
+      if (jobId) {
+        await tiger.ops.updateSyncJob(jobId, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          items_processed: 0,
+          items_succeeded: 0,
+          items_failed: 0,
+        });
+      }
+      return stats;
+    }
+
+    const result = await runDailyFetch({
+      appids: candidateResult.appids,
+      config,
+      env,
+      fetchBatch,
+      shouldStop: () => isShuttingDown,
+      startTime,
+      supabaseForGuardrails: supabasePlaceholder,
+      tiger,
+    });
+    stats.appsProcessed = result.results.size;
+    stats.appsInvalid = result.invalidCount;
+
+    const validCcuData = extractValidCcuData(result);
+    await tiger.metrics.upsertDailyCcuPeaks(
+      buildDailyCcuRows(validCcuData, new Date().toISOString().split('T')[0])
+    );
+    await persistValidation(supabasePlaceholder, result.results, tiger);
+    await tiger.metrics.insertCcuSnapshots(
+      Array.from(validCcuData.entries()).map(([appid, playerCount]) => ({
+        appid,
+        player_count: playerCount,
+        ccu_tier: 3,
+      }))
+    );
+
+    stats.appsSucceeded = validCcuData.size;
+    stats.appsFailed = result.errorCount;
+    clearTimeout(timeoutId);
+
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsSucceeded,
+        items_failed: stats.appsFailed,
+      });
+    }
+
+    await refreshCcuQualityCache(
+      config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily'
+    );
+
+    const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
+    log.info('Tiger daily CCU sync completed', {
+      ...stats,
+      durationMinutes: duration,
+      gracefulShutdown: isShuttingDown,
+    });
+    return stats;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    log.error('Tiger daily CCU sync failed', { error });
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: error instanceof Error ? error.message : String(error),
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsSucceeded,
+        items_failed: stats.appsFailed,
+      });
+    }
+    throw error;
+  }
+}
+
+export async function runLegacySupabaseCcuDailySync(
+  dependencies: DailyCcuSyncDependencies = {}
+): Promise<DailyCcuSyncStats> {
+  const env = dependencies.env ?? process.env;
+  const supabase = dependencies.getSupabase?.() ?? getServiceClient();
+  const fetchBatch = dependencies.fetchSteamCCUBatchWithStatus ?? fetchSteamCCUBatchWithStatus;
+  const refreshCcuQualityCache =
+    dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
+  const config = readRunConfig(env);
+  const stats = createStats();
+  const startTime = Date.now();
+  let isShuttingDown = false;
+
+  const timeoutId = setTimeout(() => {
+    log.info('Approaching timeout limit, initiating graceful shutdown');
+    isShuttingDown = true;
+  }, GRACEFUL_TIMEOUT_MS);
+
+  const tierAssignmentsStale = await isTierAssignmentsStale(supabase);
+  log.info('Starting legacy Supabase daily CCU sync (Tier 3)', {
+    githubRunId: config.githubRunId,
+    batchLimit: config.batchLimit,
+    tierAssignmentsStale,
+  });
+
   const { data: job } = await supabase
     .from('sync_jobs')
     .insert({
-      job_type: isPartitioned ? `ccu-daily-p${partitionId}` : 'ccu-daily',
-      github_run_id: githubRunId,
+      job_type: config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily',
+      github_run_id: config.githubRunId,
       status: 'running',
-      batch_size: batchLimit,
+      batch_size: config.batchLimit,
     })
     .select()
     .single();
 
-  const stats: SyncStats = {
-    appsProcessed: 0,
-    appsSucceeded: 0,
-    appsFailed: 0,
-    appsSkipped: 0,
-    appsInvalid: 0,
-  };
-
   try {
-    // Get Tier 3 games for this partition (excluding skipped invalid apps)
-    const { appids, skippedCount } = await getTier3Games(
+    const { appids, skippedCount } = await getLegacyTier3Games(
       supabase,
-      batchLimit,
-      partitionCount,
-      partitionId,
+      config,
       !tierAssignmentsStale
     );
     stats.appsSkipped = skippedCount;
 
     if (appids.length === 0) {
-      log.info('No Tier 3 games found for daily sync', {
-        skipped: skippedCount,
-        ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-      });
-
       clearTimeout(timeoutId);
-
       if (job) {
         await supabase
           .from('sync_jobs')
@@ -421,86 +503,32 @@ async function main(): Promise<void> {
           })
           .eq('id', job.id);
       }
-      return;
+      return stats;
     }
 
-    log.info('Found Tier 3 games for daily sync', {
-      count: appids.length,
-      skipped: skippedCount,
-      ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-    });
-
-    // Fetch CCU from Steam API with status tracking and shutdown check
-    const suspiciousZeroAppids = await getSuspiciousZeroAppids(supabase, appids);
-    const result = await fetchSteamCCUBatchWithStatus(
+    const result = await runDailyFetch({
       appids,
-      (processed, total) => {
-        if (processed % 1000 === 0) {
-          const elapsed = (Date.now() - startTime) / 1000 / 60;
-          const rate = processed / elapsed;
-          const remaining = (total - processed) / rate;
-          log.info('Daily CCU fetch progress', {
-            processed,
-            total,
-            elapsedMinutes: elapsed.toFixed(1),
-            estimatedRemainingMinutes: remaining.toFixed(1),
-            ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-          });
-        }
-      },
-      () => isShuttingDown,
-      { suspiciousZeroAppids }
-    );
-
-    // Update stats based on actual processing
+      config,
+      fetchBatch,
+      shouldStop: () => isShuttingDown,
+      startTime,
+      supabaseForGuardrails: supabase,
+    });
     stats.appsProcessed = result.results.size;
     stats.appsInvalid = result.invalidCount;
-
-    // Extract valid CCU data for metrics/snapshots
-    const validCcuData = new Map<number, number>();
-    for (const [appid, r] of result.results) {
-      if (r.status === 'valid' && r.playerCount !== undefined) {
-        validCcuData.set(appid, r.playerCount);
-      }
-    }
-
-    // Upsert to daily_metrics (only valid results)
-    const today = new Date().toISOString().split('T')[0];
-    const { succeeded, failed } = await upsertDailyMetrics(supabase, validCcuData, today);
+    const validCcuData = extractValidCcuData(result);
+    const { succeeded, failed } = await upsertLegacyDailyPeaks(
+      supabase,
+      validCcuData,
+      new Date().toISOString().split('T')[0]
+    );
+    await persistValidation(supabase, result.results);
+    await insertLegacyTier3Snapshots(supabase, validCcuData);
 
     stats.appsSucceeded = succeeded;
     stats.appsFailed = failed + result.errorCount;
-
-    // Update skip tracking (mark invalid appids to skip for 30 days)
-    await updateSkipTracking(supabase, result.results);
-
-    // Insert snapshots for valid Tier 3 games
-    await insertTier3Snapshots(supabase, validCcuData);
-
-    // Clear the timeout since we're done
     clearTimeout(timeoutId);
 
-    // Log some interesting stats
-    const ccuValues = Array.from(validCcuData.values());
-    if (ccuValues.length > 0) {
-      const maxCCU = Math.max(...ccuValues);
-      const avgCCU = Math.round(ccuValues.reduce((a, b) => a + b, 0) / ccuValues.length);
-      const gamesWithPlayers = ccuValues.filter((c) => c > 0).length;
-      const gamesWithZero = ccuValues.filter((c) => c === 0).length;
-
-      log.info('Daily CCU statistics', {
-        gamesWithData: validCcuData.size,
-        gamesWithPlayers,
-        gamesWithZero,
-        maxCCU,
-        avgCCU,
-        invalidAppids: result.invalidCount,
-        erroredAppids: result.errorCount,
-        ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
-      });
-    }
-
-    // Update sync job
     if (job) {
       await supabase
         .from('sync_jobs')
@@ -514,21 +542,20 @@ async function main(): Promise<void> {
         .eq('id', job.id);
     }
 
-    await refreshCcuQualityCacheSafely(
-      isPartitioned ? `ccu-daily-p${partitionId}` : 'ccu-daily'
+    await refreshCcuQualityCache(
+      config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily'
     );
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
-    log.info('Daily CCU sync completed', {
+    log.info('Legacy Supabase daily CCU sync completed', {
       ...stats,
       durationMinutes: duration,
       gracefulShutdown: isShuttingDown,
-      ...(isPartitioned && { partition: `${partitionId}/${partitionCount}` }),
     });
+    return stats;
   } catch (error) {
     clearTimeout(timeoutId);
     log.error('Daily CCU sync failed', { error });
-
     if (job) {
       await supabase
         .from('sync_jobs')
@@ -542,9 +569,28 @@ async function main(): Promise<void> {
         })
         .eq('id', job.id);
     }
-
-    process.exit(1);
+    throw error;
   }
 }
 
-main();
+export async function runCcuDailySync(
+  dependencies: DailyCcuSyncDependencies = {}
+): Promise<DailyCcuSyncStats> {
+  const env = dependencies.env ?? process.env;
+  return readDataWriteTarget(env) === 'tiger'
+    ? runTigerCcuDailySync(dependencies)
+    : runLegacySupabaseCcuDailySync(dependencies);
+}
+
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectRun) {
+  runCcuDailySync().catch((error) => {
+    log.error('Daily CCU sync failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  });
+}

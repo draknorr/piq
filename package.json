@@ -25,6 +25,8 @@
     "youtube:sync-refresh": "pnpm --filter @publisheriq/youtube sync-refresh",
     "youtube:rollup-daily": "pnpm --filter @publisheriq/youtube rollup-daily",
     "youtube:mirror-preview": "pnpm --filter @publisheriq/youtube mirror-preview",
+    "supabase:writer-audit": "node scripts/ops/audit-supabase-writers.mjs",
+    "tiger:ingestion-verify": "node scripts/ops/verify-tiger-ingestion.mjs",
     "chat-evals:tiger-primary-expanded": "node scripts/chat-evals/run-tiger-primary-expanded.mjs",
     "chat-evals:tiger-shadow-expanded": "node scripts/chat-evals/run-tiger-shadow-expanded.mjs",
     "chat-evals:full-blended-endpoint": "node scripts/chat-evals/run-full-blended-endpoint.mjs",

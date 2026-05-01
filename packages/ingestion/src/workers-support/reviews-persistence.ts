@@ -1,4 +1,9 @@
-import type { TypedSupabaseClient } from '@publisheriq/database';
+import {
+  getTigerWriter,
+  readDataWriteTarget,
+  type TigerWriter,
+  type TypedSupabaseClient,
+} from '@publisheriq/database';
 import type { ReviewSummary } from '../apis/reviews.js';
 
 export interface PreviousReviewSyncData {
@@ -11,11 +16,18 @@ export interface PreviousReviewSyncData {
 
 interface PersistReviewSummaryParams {
   appid: number;
+  env?: NodeJS.ProcessEnv;
   previous: PreviousReviewSyncData | undefined;
   summary: ReviewSummary;
-  supabase: TypedSupabaseClient;
+  supabase?: TypedSupabaseClient | null;
+  tiger?: TigerWriter;
   today: string;
   velocityTier?: string | null;
+}
+
+interface ReviewPersistenceOptions {
+  env?: NodeJS.ProcessEnv;
+  tiger?: TigerWriter;
 }
 
 // The generated DB types lag the review-claim columns used by workers.
@@ -24,6 +36,20 @@ interface PersistReviewSummaryParams {
 function getDb(supabase: TypedSupabaseClient): any {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return supabase as any;
+}
+
+function requireSupabase(
+  supabase: TypedSupabaseClient | null | undefined
+): TypedSupabaseClient {
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy review persistence');
+  }
+
+  return supabase;
+}
+
+function shouldUseTiger(options: ReviewPersistenceOptions = {}): boolean {
+  return readDataWriteTarget(options.env) === 'tiger';
 }
 
 export function getIntervalHoursForVelocityTier(velocityTier: string | null | undefined): number {
@@ -50,9 +76,14 @@ export function normalizeIntervalHours(value: number | null | undefined): number
 }
 
 export async function loadPreviousReviewSyncData(
-  supabase: TypedSupabaseClient,
-  appIds: number[]
+  supabase: TypedSupabaseClient | null | undefined,
+  appIds: number[],
+  options: ReviewPersistenceOptions = {}
 ): Promise<{ previousSyncData: Map<number, PreviousReviewSyncData>; neverSyncedSet: Set<number> }> {
+  if (shouldUseTiger(options)) {
+    return (options.tiger ?? getTigerWriter(options.env)).reviews.loadPreviousSyncData(appIds);
+  }
+
   if (appIds.length === 0) {
     return {
       neverSyncedSet: new Set<number>(),
@@ -60,7 +91,8 @@ export async function loadPreviousReviewSyncData(
     };
   }
 
-  const { data: syncStatuses, error: syncError } = await getDb(supabase)
+  const legacySupabase = requireSupabase(supabase);
+  const { data: syncStatuses, error: syncError } = await getDb(legacySupabase)
     .from('sync_status')
     .select(
       'appid, last_reviews_sync, last_known_total_reviews, consecutive_errors, reviews_interval_hours'
@@ -71,7 +103,7 @@ export async function loadPreviousReviewSyncData(
     throw new Error(`Failed to load sync status rows: ${syncError.message}`);
   }
 
-  const { data: previousMetrics, error: metricsError } = await getDb(supabase)
+  const { data: previousMetrics, error: metricsError } = await getDb(legacySupabase)
     .from('daily_metrics')
     .select('appid, total_reviews, positive_reviews')
     .in('appid', appIds)
@@ -119,9 +151,11 @@ export async function loadPreviousReviewSyncData(
 
 export async function persistReviewSummary({
   appid,
+  env,
   previous,
   summary,
   supabase,
+  tiger,
   today,
   velocityTier,
 }: PersistReviewSummaryParams): Promise<{
@@ -131,6 +165,16 @@ export async function persistReviewSummary({
   positiveAdded: number;
   reviewsAdded: number;
 }> {
+  if (shouldUseTiger({ env, tiger })) {
+    return (tiger ?? getTigerWriter(env)).reviews.persistReviewSummary({
+      appid,
+      previous,
+      summary,
+      today,
+      velocityTier,
+    });
+  }
+
   const previousTotal = previous?.totalReviews ?? 0;
   const previousPositive = previous?.positiveReviews ?? 0;
   const lastSyncTime = previous?.lastSync;
@@ -147,8 +191,9 @@ export async function persistReviewSummary({
     previous?.intervalHours ?? getIntervalHoursForVelocityTier(velocityTier);
   const nextSync = new Date(Date.now() + intervalHours * 60 * 60 * 1000);
   const nowIso = new Date().toISOString();
+  const legacySupabase = requireSupabase(supabase);
 
-  const { error: deltaError } = await getDb(supabase).from('review_deltas').upsert(
+  const { error: deltaError } = await getDb(legacySupabase).from('review_deltas').upsert(
     {
       appid,
       delta_date: today,
@@ -169,7 +214,7 @@ export async function persistReviewSummary({
     throw new Error(`Failed to upsert review_deltas row: ${deltaError.message}`);
   }
 
-  const { error: metricsError } = await getDb(supabase).from('daily_metrics').upsert(
+  const { error: metricsError } = await getDb(legacySupabase).from('daily_metrics').upsert(
     {
       appid,
       metric_date: today,
@@ -207,7 +252,7 @@ export async function persistReviewSummary({
     syncUpdate.last_activity_at = nowIso;
   }
 
-  const { error: syncError } = await getDb(supabase)
+  const { error: syncError } = await getDb(legacySupabase)
     .from('sync_status')
     .update(syncUpdate)
     .eq('appid', appid);

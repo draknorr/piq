@@ -4,25 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       bootstrap_lookback_days:
-        description: 'Historical window to backfill before steady-state sync starts'
+        description: "Historical window to backfill before steady-state sync starts"
         required: false
-        default: '30'
+        default: "30"
       discovery_limit:
-        description: 'Maximum number of games to process during bootstrap'
+        description: "Maximum number of games to process during bootstrap"
         required: false
-        default: '100'
+        default: "100"
       refresh_limit:
-        description: 'Maximum number of matched videos to refresh during bootstrap'
+        description: "Maximum number of matched videos to refresh during bootstrap"
         required: false
-        default: '1000'
+        default: "1000"
 
 concurrency:
   group: youtube-production-bootstrap
   cancel-in-progress: false
 
 env:
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+  YOUTUBE_SOURCE_DATABASE_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
   YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
   YOUTUBE_WRITE_TARGET: production
   YOUTUBE_BOOTSTRAP_LOOKBACK_DAYS: ${{ github.event.inputs.bootstrap_lookback_days || '30' }}
@@ -41,8 +41,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

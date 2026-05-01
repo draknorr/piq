@@ -3,18 +3,24 @@ name: CCU Tiered Sync (Tier 1+2)
 on:
   schedule:
     # Run hourly at :00
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
   workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max number of tier 1/2 games to sync for a Tiger smoke run; leave blank for default"
+        required: false
+        default: "50"
 
 env:
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # ~1500 games at 1 req/sec = ~25 min + buffer
+    timeout-minutes: 45 # ~1500 games at 1 req/sec = ~25 min + buffer
 
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +29,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -36,3 +42,4 @@ jobs:
         run: pnpm --filter @publisheriq/ingestion ccu-tiered-sync
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          CCU_LIMIT: ${{ github.event.inputs.limit || '' }}

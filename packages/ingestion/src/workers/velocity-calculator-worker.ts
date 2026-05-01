@@ -7,7 +7,13 @@
  * Run with: pnpm --filter @publisheriq/ingestion calculate-velocity
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import {
   getReviewVelocityTierDistribution,
   refreshReviewVelocityStats,
@@ -21,6 +27,30 @@ const DEFAULT_BATCH_SIZE = 1000;
 const DEFAULT_EMPTY_BATCH_EXIT_THRESHOLD = 2;
 const DEFAULT_IDLE_BATCH_DELAY_MS = 2000;
 const DEFAULT_DUPLICATE_GUARD_WINDOW_HOURS = 2;
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type VelocityDbClient = SupabaseClient | null;
+
+async function updateSyncJob(
+  jobId: string | null,
+  supabase: VelocityDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) {
+    return;
+  }
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy velocity sync job updates');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
+}
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -70,18 +100,21 @@ function sleep(ms: number): Promise<void> {
 
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.VELOCITY_BATCH_SIZE || `${DEFAULT_BATCH_SIZE}`, 10);
+  const env = process.env;
+  const useTiger = readDataWriteTarget(env) === 'tiger';
+  const tiger = useTiger ? getTigerWriter(env) : null;
+  const githubRunId = env.GITHUB_RUN_ID;
+  const batchSize = parseInt(env.VELOCITY_BATCH_SIZE || `${DEFAULT_BATCH_SIZE}`, 10);
   const emptyBatchExitThreshold = parseInt(
-    process.env.VELOCITY_EMPTY_BATCH_EXIT_THRESHOLD || `${DEFAULT_EMPTY_BATCH_EXIT_THRESHOLD}`,
+    env.VELOCITY_EMPTY_BATCH_EXIT_THRESHOLD || `${DEFAULT_EMPTY_BATCH_EXIT_THRESHOLD}`,
     10
   );
   const idleBatchDelayMs = parseInt(
-    process.env.VELOCITY_IDLE_BATCH_DELAY_MS || `${DEFAULT_IDLE_BATCH_DELAY_MS}`,
+    env.VELOCITY_IDLE_BATCH_DELAY_MS || `${DEFAULT_IDLE_BATCH_DELAY_MS}`,
     10
   );
   const duplicateGuardWindowHours = parseInt(
-    process.env.VELOCITY_DUPLICATE_GUARD_WINDOW_HOURS ||
+    env.VELOCITY_DUPLICATE_GUARD_WINDOW_HOURS ||
       `${DEFAULT_DUPLICATE_GUARD_WINDOW_HOURS}`,
     10
   );
@@ -92,17 +125,23 @@ async function main(): Promise<void> {
     emptyBatchExitThreshold,
   });
 
-  const supabase = getServiceClient();
+  const supabase: VelocityDbClient = tiger ? null : getServiceClient();
 
   const duplicateGuardSince = new Date(
     Date.now() - duplicateGuardWindowHours * 60 * 60 * 1000
   ).toISOString();
-  const { count: runningVelocityJobs, error: runningVelocityJobsError } = await supabase
-    .from('sync_jobs')
-    .select('*', { count: 'exact', head: true })
-    .eq('job_type', 'velocity-calc')
-    .eq('status', 'running')
-    .gte('started_at', duplicateGuardSince);
+  const legacyRunningJobsResult = tiger
+    ? null
+    : await supabase!
+        .from('sync_jobs')
+        .select('*', { count: 'exact', head: true })
+        .eq('job_type', 'velocity-calc')
+        .eq('status', 'running')
+        .gte('started_at', duplicateGuardSince);
+  const runningVelocityJobs = tiger
+    ? await tiger.ops.countRunningSyncJobs('velocity-calc', duplicateGuardSince)
+    : legacyRunningJobsResult?.count;
+  const runningVelocityJobsError = legacyRunningJobsResult?.error ?? null;
 
   if (runningVelocityJobsError) {
     throw new Error(
@@ -119,16 +158,22 @@ async function main(): Promise<void> {
   }
 
   // Create sync job record
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'velocity-calc',
-      github_run_id: githubRunId,
-      status: 'running',
-      batch_size: batchSize,
-    })
-    .select()
-    .single();
+  const jobId = tiger
+    ? await tiger.ops.createSyncJob({
+        jobType: 'velocity-calc',
+        githubRunId,
+        batchSize,
+      })
+    : (await supabase!
+        .from('sync_jobs')
+        .insert({
+          job_type: 'velocity-calc',
+          github_run_id: githubRunId,
+          status: 'running',
+          batch_size: batchSize,
+        })
+        .select()
+        .single()).data?.id ?? null;
 
   try {
     // 1. Refresh the materialized view
@@ -202,18 +247,13 @@ async function main(): Promise<void> {
     log.info('Velocity tier distribution', { ...tierDistribution });
 
     // Update job as completed
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: updatedCount,
-          items_succeeded: updatedCount,
-          items_failed: 0,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: updatedCount,
+      items_succeeded: updatedCount,
+      items_failed: 0,
+    });
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     log.info('Velocity calculation completed', {
@@ -225,16 +265,11 @@ async function main(): Promise<void> {
     const errorMessage = formatUnknownError(error);
     log.error('Velocity calculation failed', { error: errorMessage });
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: errorMessage,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+    });
 
     process.exit(1);
   }

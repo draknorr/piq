@@ -4,14 +4,25 @@ on:
   schedule:
     - cron: '15 0 * * *' # 12:15 AM UTC daily
   workflow_dispatch:
+    inputs:
+      max_apps:
+        description: 'Limit apps for a Tiger smoke run; leave blank for full sync'
+        required: false
+        default: '1000'
+      batch_size:
+        description: 'Number of apps to write per Tiger batch'
+        required: false
+        default: '500'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
   STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_CATALOG_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -35,3 +46,5 @@ jobs:
         run: pnpm --filter @publisheriq/ingestion applist-sync
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          APPLIST_BATCH_SIZE: ${{ github.event.inputs.batch_size || '500' }}
+          APPLIST_MAX_APPS: ${{ github.event.inputs.max_apps || '' }}

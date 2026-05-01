@@ -1,8 +1,6 @@
 name: Tiger Production Sync
 
 on:
-  schedule:
-    - cron: "45 7 * * *"
   workflow_dispatch:
     inputs:
       metrics_lookback_days:

@@ -13,13 +13,22 @@
     "./ingestion": {
       "import": "./dist/ingestion.js",
       "types": "./dist/ingestion.d.ts"
+    },
+    "./tiger-writer": {
+      "import": "./dist/tiger-writer.js",
+      "types": "./dist/tiger-writer.d.ts"
+    },
+    "./write-target": {
+      "import": "./dist/write-target.js",
+      "types": "./dist/write-target.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/ingestion.ts --format esm --dts",
-    "dev": "tsup src/index.ts src/ingestion.ts --format esm --dts --watch",
+    "build": "tsup src/index.ts src/ingestion.ts src/tiger-writer.ts src/write-target.ts --format esm --dts",
+    "dev": "tsup src/index.ts src/ingestion.ts src/tiger-writer.ts src/write-target.ts --format esm --dts --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint src/",
+    "test": "node --import tsx --test $(find src -name '*.test.ts' -type f | sort)",
     "generate-types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > src/types.ts"
   },
   "dependencies": {
@@ -32,6 +41,7 @@
     "eslint": "^9.39.2",
     "supabase": "^1.225.3",
     "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

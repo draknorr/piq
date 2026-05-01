@@ -12,6 +12,8 @@ env:
 
 jobs:
   cleanup:
+    # Legacy Supabase writer disabled during Tiger-primary cutover.
+    if: ${{ vars.ENABLE_LEGACY_SUPABASE_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

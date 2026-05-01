@@ -6,8 +6,11 @@ import {
   sanitizeStorefrontPriceCents,
   upsertLatestStorefrontState,
 } from './storefront-latest-state.js';
+import type { StorefrontAppUpsertArgs, TypedSupabaseClient } from '@publisheriq/database';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
 import type { NormalizedStorefrontSnapshot } from './types.js';
+
+type StorefrontWriterArg = NonNullable<Parameters<typeof upsertLatestStorefrontState>[3]>;
 
 function buildStorefrontApp(overrides: Partial<ParsedStorefrontApp> = {}): ParsedStorefrontApp {
   return {
@@ -101,58 +104,61 @@ test('sanitizeStorefrontPriceCents drops unreasonable storefront prices', () => 
   assert.equal(sanitizeStorefrontPriceCents(1999), 1999);
 });
 
-test('upsertLatestStorefrontState sends null release_date when parsing failed', async () => {
-  let rpcCall: { fn: string; args: Record<string, unknown> } | null = null;
-  const supabase = {
-    rpc(fn: string, args: Record<string, unknown>) {
-      rpcCall = { fn, args };
-      return Promise.resolve({ error: null });
+test('upsertLatestStorefrontState sends null release_date to Tiger when parsing failed', async () => {
+  let upsertArgs: Record<string, unknown> | null = null;
+  const supabase = {} as TypedSupabaseClient;
+  const tiger: StorefrontWriterArg = {
+    catalog: {
+      upsertStorefrontApp(args: StorefrontAppUpsertArgs) {
+        upsertArgs = args as unknown as Record<string, unknown>;
+        return Promise.resolve();
+      },
     },
   };
 
-  await upsertLatestStorefrontState(supabase as any, 36150, buildStorefrontApp({
+  await upsertLatestStorefrontState(supabase, 36150, buildStorefrontApp({
     releaseDate: null,
     releaseDateRaw: '',
-  }));
+  }), tiger);
 
-  assert.deepEqual(rpcCall, {
-    fn: 'upsert_storefront_app',
-    args: {
-      p_appid: 36150,
-      p_name: 'Example',
-      p_type: 'game',
-      p_is_free: false,
-      p_is_delisted: false,
-      p_release_date: null,
-      p_release_date_raw: '',
-      p_has_workshop: false,
-      p_current_price_cents: 1999,
-      p_current_discount_percent: 0,
-      p_is_released: true,
-      p_developers: ['Studio'],
-      p_publishers: ['Publisher'],
-    },
+  assert.deepEqual(upsertArgs, {
+    p_appid: 36150,
+    p_name: 'Example',
+    p_type: 'game',
+    p_is_free: false,
+    p_is_delisted: false,
+    p_release_date: null,
+    p_release_date_raw: '',
+    p_has_workshop: false,
+    p_current_price_cents: 1999,
+    p_current_discount_percent: 0,
+    p_is_released: true,
+    p_developers: ['Studio'],
+    p_publishers: ['Publisher'],
   });
 });
 
 test('upsertLatestStorefrontState passes null price for unreasonable storefront values', async () => {
-  let rpcCall: { fn: string; args: Record<string, unknown> } | null = null;
-  const supabase = {
-    rpc(fn: string, args: Record<string, unknown>) {
-      rpcCall = { fn, args };
-      return Promise.resolve({ error: null });
+  let upsertArgs: Record<string, unknown> | null = null;
+  const supabase = {} as TypedSupabaseClient;
+  const tiger: StorefrontWriterArg = {
+    catalog: {
+      upsertStorefrontApp(args: StorefrontAppUpsertArgs) {
+        upsertArgs = args as unknown as Record<string, unknown>;
+        return Promise.resolve();
+      },
     },
   };
 
-  await upsertLatestStorefrontState(supabase as any, 36150, buildStorefrontApp({
+  await upsertLatestStorefrontState(supabase, 36150, buildStorefrontApp({
     priceCents: 90000,
-  }));
+  }), tiger);
 
-  if (!rpcCall) {
-    throw new Error('Expected upsert_storefront_app RPC to be called');
+  if (!upsertArgs) {
+    throw new Error('Expected Tiger storefront upsert to be called');
   }
-  const capturedCall = rpcCall as { fn: string; args: Record<string, unknown> };
-  assert.equal(capturedCall.args.p_current_price_cents, null);
+  const capturedArgs = upsertArgs as Record<string, unknown>;
+  assert.equal(capturedArgs.p_current_price_cents, null);
 });
 
 test('buildNormalizedStorefrontSnapshotUpsertArgs replays stored storefront snapshots through the RPC shape', () => {

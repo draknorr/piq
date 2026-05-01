@@ -7,56 +7,189 @@
  * Run with: pnpm --filter @publisheriq/ingestion storefront-sync
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import { pathToFileURL } from 'node:url';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type StorefrontSyncStatus,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger, BATCH_SIZES } from '@publisheriq/shared';
 import pLimit from 'p-limit';
-import { fetchStorefrontAppDetails } from '../apis/storefront.js';
+import {
+  fetchStorefrontAppDetails,
+  type StorefrontResult,
+} from '../apis/storefront.js';
 import { upsertLatestStorefrontState } from '../change-intel/storefront-latest-state.js';
 import { captureStorefrontState } from '../workers-support/change-intel.js';
 
 const log = logger.child({ worker: 'storefront-sync' });
 
-// Graceful timeout: 38 minutes (7 min buffer before 45 min hard timeout)
 const GRACEFUL_TIMEOUT_MS = 38 * 60 * 1000;
-
-// Process this many apps concurrently
-// Rate limiter handles API throttling, this controls DB operation parallelism
 const CONCURRENCY = 8;
 
-interface SyncStats {
+export interface SyncStats {
   appsProcessed: number;
-  appsCreated: number;  // First-time enrichment
-  appsUpdated: number;  // Refresh of existing data
-  appsSkipped: number;  // Steam returned no data (private/removed/age-gated)
-  appsFailed: number;   // Actual API errors
+  appsCreated: number;
+  appsUpdated: number;
+  appsSkipped: number;
+  appsFailed: number;
+}
+
+export interface StorefrontSyncOptions {
+  env?: NodeJS.ProcessEnv;
+  fetchStorefrontAppDetails?: (appid: number) => Promise<StorefrontResult>;
+  getSupabase?: () => SupabaseClient;
+  getTiger?: () => TigerWriter;
 }
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
+interface LegacyAppsUpdateClient {
+  from(table: 'apps'): {
+    update(values: {
+      catalog_seed_state: string;
+      updated_at: string;
+    }): {
+      eq(column: string, value: string | number): {
+        eq(column: string, value: string | number): Promise<{
+          error: { message?: string | null } | null;
+        }>;
+      };
+    };
+  };
+}
 
-/**
- * Process a single app - fetch details and update database
- */
-async function processApp(
-  appid: number,
-  supabase: SupabaseClient,
-  neverSyncedSet: Set<number>,
-  stats: SyncStats
-): Promise<void> {
-  // Increment processed count synchronously (before any await) to avoid race conditions
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readRunConfig(env: NodeJS.ProcessEnv): {
+  batchSize: number;
+  githubRunId: string | undefined;
+  isPartitioned: boolean;
+  partitionCount: number;
+  partitionId: number;
+} {
+  const partitionCount = parsePositiveInteger(env.PARTITION_COUNT, 1);
+  const partitionId = Math.max(0, Number.parseInt(env.PARTITION_ID || '0', 10) || 0);
+
+  return {
+    batchSize: parsePositiveInteger(
+      env.BATCH_SIZE,
+      BATCH_SIZES.STOREFRONT_BATCH
+    ),
+    githubRunId: env.GITHUB_RUN_ID,
+    isPartitioned: partitionCount > 1,
+    partitionCount,
+    partitionId,
+  };
+}
+
+function buildNeverSyncedSet(
+  appIds: number[],
+  syncStatuses: StorefrontSyncStatus[]
+): Set<number> {
+  const statusByAppid = new Map(
+    syncStatuses.map((status) => [status.appid, status.lastStorefrontSync])
+  );
+
+  return new Set(
+    appIds.filter((appid) => !statusByAppid.has(appid) || statusByAppid.get(appid) === null)
+  );
+}
+
+function createTigerSupabasePlaceholder(): SupabaseClient {
+  return {} as SupabaseClient;
+}
+
+function getLegacyAppsUpdateClient(supabase: SupabaseClient): LegacyAppsUpdateClient {
+  return supabase as unknown as LegacyAppsUpdateClient;
+}
+
+export async function processTigerStorefrontApp(params: {
+  appid: number;
+  fetchDetails: (appid: number) => Promise<StorefrontResult>;
+  neverSyncedSet: Set<number>;
+  stats: SyncStats;
+  tiger: TigerWriter;
+}): Promise<void> {
+  const { appid, fetchDetails, neverSyncedSet, stats, tiger } = params;
   stats.appsProcessed++;
   const observedAt = new Date().toISOString();
 
   try {
-    const result = await fetchStorefrontAppDetails(appid);
+    const result = await fetchDetails(appid);
 
-    // Steam returned no data - app is private, removed, or age-gated.
-    // If this was a relation-discovered stub, mark it inaccessible so it does
-    // not look like a healthy catalog row while remaining traceable.
+    if (result.status === 'no_data') {
+      log.debug('No storefront data for app (private/removed)', { appid });
+      stats.appsSkipped++;
+      await tiger.catalog.markStorefrontInaccessible(appid, observedAt);
+      return;
+    }
+
+    if (result.status === 'error') {
+      log.error('API error fetching storefront data', { appid, error: result.error });
+      stats.appsFailed++;
+      await tiger.syncStatus.updateFields(appid, {
+        last_error_source: 'storefront',
+        last_error_message: result.error,
+        last_error_at: observedAt,
+      });
+      return;
+    }
+
+    const supabasePlaceholder = createTigerSupabasePlaceholder();
+    await captureStorefrontState(supabasePlaceholder, appid, result.data, {
+      triggerReason: 'storefront_safety_sweep',
+      triggerCursor: null,
+    });
+    await upsertLatestStorefrontState(supabasePlaceholder, appid, result.data, tiger);
+
+    if (neverSyncedSet.has(appid)) {
+      stats.appsCreated++;
+    } else {
+      stats.appsUpdated++;
+    }
+    log.debug('Synced app in Tiger', {
+      appid,
+      name: result.data.name,
+      firstTime: neverSyncedSet.has(appid),
+    });
+  } catch (error) {
+    log.error('Error processing app in Tiger', { appid, error });
+    stats.appsFailed++;
+    await tiger.syncStatus.updateFields(appid, {
+      last_error_source: 'storefront',
+      last_error_message: error instanceof Error ? error.message : String(error),
+      last_error_at: observedAt,
+    });
+  }
+}
+
+async function processLegacyStorefrontApp(
+  appid: number,
+  supabase: SupabaseClient,
+  neverSyncedSet: Set<number>,
+  stats: SyncStats,
+  fetchDetails: (appid: number) => Promise<StorefrontResult>
+): Promise<void> {
+  stats.appsProcessed++;
+  const observedAt = new Date().toISOString();
+
+  try {
+    const result = await fetchDetails(appid);
+
     if (result.status === 'no_data') {
       log.debug('No storefront data for app (private/removed)', { appid });
       stats.appsSkipped++;
 
-      await (supabase as any)
+      await getLegacyAppsUpdateClient(supabase)
         .from('apps')
         .update({
           catalog_seed_state: 'inaccessible',
@@ -76,7 +209,6 @@ async function processApp(
       return;
     }
 
-    // Actual API error - keep as retryable
     if (result.status === 'error') {
       log.error('API error fetching storefront data', { appid, error: result.error });
       stats.appsFailed++;
@@ -93,27 +225,22 @@ async function processApp(
       return;
     }
 
-    // Success - we have data
-    const details = result.data;
-
-    await captureStorefrontState(supabase, appid, details, {
+    await captureStorefrontState(supabase, appid, result.data, {
       triggerReason: 'storefront_safety_sweep',
       triggerCursor: null,
     });
-    await upsertLatestStorefrontState(supabase, appid, details);
+    await upsertLatestStorefrontState(supabase, appid, result.data);
 
-    // Track as first-time enrichment or refresh (synchronous to avoid race)
     if (neverSyncedSet.has(appid)) {
       stats.appsCreated++;
     } else {
       stats.appsUpdated++;
     }
-    log.debug('Synced app', { appid, name: details.name, firstTime: neverSyncedSet.has(appid) });
+    log.debug('Synced app', { appid, name: result.data.name, firstTime: neverSyncedSet.has(appid) });
   } catch (error) {
     log.error('Error processing app', { appid, error });
     stats.appsFailed++;
 
-    // Update sync status with error
     await supabase
       .from('sync_status')
       .update({
@@ -125,15 +252,16 @@ async function processApp(
   }
 }
 
-async function main(): Promise<void> {
+export async function runTigerStorefrontSync(
+  options: StorefrontSyncOptions = {}
+): Promise<SyncStats> {
+  const env = options.env ?? process.env;
+  const config = readRunConfig(env);
+  const tiger = options.getTiger?.() ?? getTigerWriter(env);
+  const fetchDetails = options.fetchStorefrontAppDetails ?? fetchStorefrontAppDetails;
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.BATCH_SIZE || String(BATCH_SIZES.STOREFRONT_BATCH), 10);
-
-  // Graceful shutdown flag
   let isShuttingDown = false;
 
-  // Set up graceful timeout to save progress before GitHub Actions hard timeout
   const timeoutId = setTimeout(() => {
     log.info('Approaching timeout limit, initiating graceful shutdown', {
       elapsedMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(1),
@@ -141,33 +269,193 @@ async function main(): Promise<void> {
     isShuttingDown = true;
   }, GRACEFUL_TIMEOUT_MS);
 
-  // Handle SIGTERM from GitHub Actions cancellation
   process.on('SIGTERM', () => {
     log.info('Received SIGTERM, initiating graceful shutdown');
     isShuttingDown = true;
   });
 
-  // Partitioning support for parallel initial sync
-  const partitionCount = parseInt(process.env.PARTITION_COUNT || '1', 10);
-  const partitionId = parseInt(process.env.PARTITION_ID || '0', 10);
-  const isPartitioned = partitionCount > 1;
-
-  log.info('Starting Storefront sync', {
-    githubRunId,
-    batchSize,
-    ...(isPartitioned && { partitionCount, partitionId }),
+  log.info('Starting Tiger Storefront sync', {
+    githubRunId: config.githubRunId,
+    batchSize: config.batchSize,
+    ...(config.isPartitioned && {
+      partitionCount: config.partitionCount,
+      partitionId: config.partitionId,
+    }),
   });
 
-  const supabase = getServiceClient();
+  const jobId = await tiger.ops.createSyncJob({
+    jobType: 'storefront',
+    githubRunId: config.githubRunId,
+    batchSize: config.batchSize,
+  });
 
-  // Create sync job record
+  const stats: SyncStats = {
+    appsProcessed: 0,
+    appsCreated: 0,
+    appsUpdated: 0,
+    appsSkipped: 0,
+    appsFailed: 0,
+  };
+
+  try {
+    const appsToSync = await tiger.catalog.listAppsForSync({
+      source: 'storefront',
+      limit: config.batchSize,
+      ...(config.isPartitioned
+        ? {
+            partitionCount: config.partitionCount,
+            partitionId: config.partitionId,
+          }
+        : {}),
+    });
+
+    if (appsToSync.length === 0) {
+      log.info('No apps due for storefront sync');
+      clearTimeout(timeoutId);
+      if (jobId) {
+        await tiger.ops.updateSyncJob(jobId, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          items_processed: 0,
+          items_succeeded: 0,
+          items_failed: 0,
+          items_created: 0,
+          items_updated: 0,
+        });
+      }
+      return stats;
+    }
+
+    log.info('Found apps to sync in Tiger', { count: appsToSync.length });
+
+    const appIds = appsToSync.map((app) => app.appid);
+    const syncStatuses = await tiger.catalog.listStorefrontSyncStatuses(appIds);
+    const neverSyncedSet = buildNeverSyncedSet(appIds, syncStatuses);
+
+    log.info('First-time vs refresh breakdown', {
+      firstTime: neverSyncedSet.size,
+      refresh: appsToSync.length - neverSyncedSet.size,
+    });
+
+    const limit = pLimit(CONCURRENCY);
+    const progressInterval = setInterval(() => {
+      log.info('Sync progress', { ...stats, isShuttingDown });
+    }, 10000);
+    const pendingPromises: Promise<void>[] = [];
+    let stoppedEarly = false;
+
+    try {
+      for (const { appid } of appsToSync) {
+        if (isShuttingDown) {
+          log.info('Graceful shutdown, stopping new app processing', {
+            processed: stats.appsProcessed,
+            remaining: appsToSync.length - stats.appsProcessed,
+          });
+          stoppedEarly = true;
+          break;
+        }
+        pendingPromises.push(
+          limit(() =>
+            processTigerStorefrontApp({
+              appid,
+              fetchDetails,
+              neverSyncedSet,
+              stats,
+              tiger,
+            })
+          )
+        );
+      }
+
+      await Promise.all(pendingPromises);
+    } finally {
+      clearInterval(progressInterval);
+    }
+
+    clearTimeout(timeoutId);
+
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsCreated + stats.appsUpdated,
+        items_skipped: stats.appsSkipped,
+        items_failed: stats.appsFailed,
+        items_created: stats.appsCreated,
+        items_updated: stats.appsUpdated,
+        metadata: stoppedEarly ? { gracefulShutdown: true } : undefined,
+      });
+    }
+
+    const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
+    log.info('Tiger Storefront sync completed', {
+      ...stats,
+      durationMinutes: duration,
+      gracefulShutdown: stoppedEarly,
+    });
+
+    return stats;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    log.error('Tiger Storefront sync failed', { error });
+
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: error instanceof Error ? error.message : String(error),
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsCreated + stats.appsUpdated,
+        items_skipped: stats.appsSkipped,
+        items_failed: stats.appsFailed,
+        items_created: stats.appsCreated,
+        items_updated: stats.appsUpdated,
+      });
+    }
+
+    throw error;
+  }
+}
+
+export async function runLegacySupabaseStorefrontSync(
+  options: StorefrontSyncOptions = {}
+): Promise<SyncStats> {
+  const env = options.env ?? process.env;
+  const config = readRunConfig(env);
+  const supabase = options.getSupabase?.() ?? getServiceClient();
+  const fetchDetails = options.fetchStorefrontAppDetails ?? fetchStorefrontAppDetails;
+  const startTime = Date.now();
+  let isShuttingDown = false;
+
+  const timeoutId = setTimeout(() => {
+    log.info('Approaching timeout limit, initiating graceful shutdown', {
+      elapsedMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(1),
+    });
+    isShuttingDown = true;
+  }, GRACEFUL_TIMEOUT_MS);
+
+  process.on('SIGTERM', () => {
+    log.info('Received SIGTERM, initiating graceful shutdown');
+    isShuttingDown = true;
+  });
+
+  log.info('Starting legacy Supabase Storefront sync', {
+    githubRunId: config.githubRunId,
+    batchSize: config.batchSize,
+    ...(config.isPartitioned && {
+      partitionCount: config.partitionCount,
+      partitionId: config.partitionId,
+    }),
+  });
+
   const { data: job, error: jobError } = await supabase
     .from('sync_jobs')
     .insert({
       job_type: 'storefront',
-      github_run_id: githubRunId,
+      github_run_id: config.githubRunId,
       status: 'running',
-      batch_size: batchSize,
+      batch_size: config.batchSize,
     })
     .select()
     .single();
@@ -185,18 +473,16 @@ async function main(): Promise<void> {
   };
 
   try {
-    // Get apps due for sync using the database function
-    // Use partitioned function for parallel initial sync, regular function otherwise
-    const { data: appsToSync, error: fetchError } = isPartitioned
+    const { data: appsToSync, error: fetchError } = config.isPartitioned
       ? await supabase.rpc('get_apps_for_sync_partitioned', {
           p_source: 'storefront',
-          p_limit: batchSize,
-          p_partition_count: partitionCount,
-          p_partition_id: partitionId,
+          p_limit: config.batchSize,
+          p_partition_count: config.partitionCount,
+          p_partition_id: config.partitionId,
         })
       : await supabase.rpc('get_apps_for_sync', {
           p_source: 'storefront',
-          p_limit: batchSize,
+          p_limit: config.batchSize,
         });
 
     if (fetchError) {
@@ -208,7 +494,6 @@ async function main(): Promise<void> {
 
       clearTimeout(timeoutId);
 
-      // Mark job as completed with 0 items
       if (job) {
         await supabase
           .from('sync_jobs')
@@ -223,23 +508,21 @@ async function main(): Promise<void> {
           })
           .eq('id', job.id);
       }
-      return;
+      return stats;
     }
 
     log.info('Found apps to sync', { count: appsToSync.length });
 
-    // Fetch sync status to determine which are first-time vs refresh
-    const appIds = appsToSync.map((a: { appid: number }) => a.appid);
+    const appIds = appsToSync.map((app) => app.appid);
     const { data: syncStatuses } = await supabase
       .from('sync_status')
       .select('appid, last_storefront_sync')
       .in('appid', appIds);
 
-    // Build set of apps that have never been synced (first-time enrichment)
     const neverSyncedSet = new Set(
       (syncStatuses || [])
-        .filter((s) => s.last_storefront_sync === null)
-        .map((s) => s.appid)
+        .filter((status) => status.last_storefront_sync === null)
+        .map((status) => status.appid)
     );
 
     log.info('First-time vs refresh breakdown', {
@@ -247,16 +530,10 @@ async function main(): Promise<void> {
       refresh: appsToSync.length - neverSyncedSet.size,
     });
 
-    // Process apps with controlled concurrency
-    // Rate limiter handles API throttling, p-limit controls parallelism
     const limit = pLimit(CONCURRENCY);
-
-    // Log progress every 10 seconds
     const progressInterval = setInterval(() => {
       log.info('Sync progress', { ...stats, isShuttingDown });
     }, 10000);
-
-    // Track processing with early termination support
     const pendingPromises: Promise<void>[] = [];
     let stoppedEarly = false;
 
@@ -270,19 +547,20 @@ async function main(): Promise<void> {
           stoppedEarly = true;
           break;
         }
-        pendingPromises.push(limit(() => processApp(appid, supabase, neverSyncedSet, stats)));
+        pendingPromises.push(
+          limit(() =>
+            processLegacyStorefrontApp(appid, supabase, neverSyncedSet, stats, fetchDetails)
+          )
+        );
       }
 
-      // Wait for all queued work to complete
       await Promise.all(pendingPromises);
     } finally {
       clearInterval(progressInterval);
     }
 
-    // Clear the timeout since we're done
     clearTimeout(timeoutId);
 
-    // Update sync job as completed
     if (job) {
       await supabase
         .from('sync_jobs')
@@ -301,11 +579,13 @@ async function main(): Promise<void> {
     }
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
-    log.info('Storefront sync completed', {
+    log.info('Legacy Supabase Storefront sync completed', {
       ...stats,
       durationMinutes: duration,
       gracefulShutdown: stoppedEarly,
     });
+
+    return stats;
   } catch (error) {
     clearTimeout(timeoutId);
     log.error('Storefront sync failed', { error });
@@ -327,8 +607,28 @@ async function main(): Promise<void> {
         .eq('id', job.id);
     }
 
-    process.exit(1);
+    throw error;
   }
 }
 
-main();
+export async function runStorefrontSync(
+  options: StorefrontSyncOptions = {}
+): Promise<SyncStats> {
+  const env = options.env ?? process.env;
+  return readDataWriteTarget(env) === 'tiger'
+    ? runTigerStorefrontSync(options)
+    : runLegacySupabaseStorefrontSync(options);
+}
+
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectRun) {
+  runStorefrontSync().catch((error) => {
+    log.error('Storefront sync failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  });
+}

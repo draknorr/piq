@@ -15,14 +15,16 @@ on:
         default: 'all'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
   QDRANT_URL: ${{ secrets.QDRANT_URL }}
   QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_EMBEDDING_WRITER == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60  # Reduced from 120 with optimizations
 

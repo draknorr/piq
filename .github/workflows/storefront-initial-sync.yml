@@ -7,14 +7,26 @@ on:
       batch_size:
         description: 'Number of apps per partition to process'
         required: false
-        default: '5000'
+        default: '500'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID: ${{ secrets.CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID }}
+  CHANGE_INTEL_ARCHIVE_BUCKET: publisheriq-change-intel-archive
+  CHANGE_INTEL_ARCHIVE_ENDPOINT: ${{ secrets.CHANGE_INTEL_ARCHIVE_ENDPOINT }}
+  CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE: "true"
+  CHANGE_INTEL_ARCHIVE_PREFIX: production/change-intel
+  CHANGE_INTEL_ARCHIVE_REGION: auto
+  CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY: ${{ secrets.CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY }}
+  CHANGE_INTEL_ARCHIVE_TARGET: object_storage
+  CHANGE_INTEL_READ_TARGET: tiger
+  CHANGE_INTEL_WRITE_TARGET: tiger
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_CATALOG_WRITERS == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +56,6 @@ jobs:
         run: pnpm --filter @publisheriq/ingestion storefront-sync
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size || '5000' }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '500' }}
           PARTITION_COUNT: 5
           PARTITION_ID: ${{ matrix.partition }}

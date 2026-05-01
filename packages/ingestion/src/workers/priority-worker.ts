@@ -7,10 +7,27 @@
  * Run with: pnpm --filter @publisheriq/ingestion calculate-priority
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type PriorityInput,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger, PRIORITY_THRESHOLDS, BATCH_SIZES } from '@publisheriq/shared';
 
 const log = logger.child({ worker: 'priority-sync' });
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type PriorityDbClient = SupabaseClient | null;
+type PrioritySyncStatusUpsert = {
+  appid: number;
+  next_sync_after: string;
+  priority_calculated_at: string;
+  priority_score: number;
+  refresh_tier: RefreshTier;
+  sync_interval_hours: number;
+};
 
 interface AppForPriority {
   appid: number;
@@ -25,6 +42,28 @@ interface AppForPriority {
   // Release state from apps table - used to detect fresh releases
   is_released: boolean;
   release_date: string | null;
+}
+
+async function updateSyncJob(
+  jobId: string | null,
+  supabase: PriorityDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) {
+    return;
+  }
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy priority sync job updates');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
 }
 
 function calculatePriorityScore(app: AppForPriority): number {
@@ -133,32 +172,42 @@ function calculateRefreshTier(priority: number): RefreshTier {
 
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.BATCH_SIZE || String(BATCH_SIZES.PRIORITY_BATCH), 10);
+  const env = process.env;
+  const useTiger = readDataWriteTarget(env) === 'tiger';
+  const tiger = useTiger ? getTigerWriter(env) : null;
+  const githubRunId = env.GITHUB_RUN_ID;
+  const batchSize = parseInt(env.BATCH_SIZE || String(BATCH_SIZES.PRIORITY_BATCH), 10);
 
   log.info('Starting Priority calculation', { githubRunId, batchSize });
 
-  const supabase = getServiceClient();
-
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'priority',
-      github_run_id: githubRunId,
-      status: 'running',
-      batch_size: batchSize,
-    })
-    .select()
-    .single();
+  const supabase: PriorityDbClient = tiger ? null : getServiceClient();
+  const jobId = tiger
+    ? await tiger.ops.createSyncJob({
+        jobType: 'priority',
+        githubRunId,
+        batchSize,
+      })
+    : (await supabase!
+        .from('sync_jobs')
+        .insert({
+          job_type: 'priority',
+          github_run_id: githubRunId,
+          status: 'running',
+          batch_size: batchSize,
+        })
+        .select()
+        .single()).data?.id ?? null;
 
   let processed = 0;
   let updated = 0;
 
   try {
     // Get count of apps to process
-    const { count } = await supabase
-      .from('sync_status')
-      .select('*', { count: 'exact', head: true });
+    const count = tiger
+      ? await tiger.metrics.countPriorityInputs()
+      : (await supabase!
+          .from('sync_status')
+          .select('*', { count: 'exact', head: true })).count;
 
     const totalApps = count ?? 0;
     log.info('Found apps to calculate priority', { count: totalApps });
@@ -167,11 +216,17 @@ async function main(): Promise<void> {
     let offset = 0;
 
     while (offset < totalApps) {
+      const priorityInputs: PriorityInput[] | null = tiger
+        ? await tiger.metrics.listPriorityInputs(offset, batchSize)
+        : null;
+
       // Get batch of app IDs with sync timestamps
-      const { data: syncStatusBatch } = await supabase
-        .from('sync_status')
-        .select('appid, last_reviews_sync, last_steamspy_sync')
-        .range(offset, offset + batchSize - 1);
+      const { data: syncStatusBatch } = priorityInputs
+        ? { data: priorityInputs }
+        : await supabase!
+            .from('sync_status')
+            .select('appid, last_reviews_sync, last_steamspy_sync')
+            .range(offset, offset + batchSize - 1);
 
       if (!syncStatusBatch || syncStatusBatch.length === 0) {
         break;
@@ -191,24 +246,28 @@ async function main(): Promise<void> {
         });
       }
 
-      // Get latest metrics for these apps
-      const { data: metricsData } = await supabase
-        .from('daily_metrics')
-        .select('appid, ccu_peak, total_reviews')
-        .in('appid', appids)
-        .order('metric_date', { ascending: false });
+      // Get latest metrics, trends, and release state for these apps.
+      const { data: metricsData } = priorityInputs
+        ? { data: priorityInputs }
+        : await supabase!
+            .from('daily_metrics')
+            .select('appid, ccu_peak, total_reviews')
+            .in('appid', appids)
+            .order('metric_date', { ascending: false });
 
-      // Get trends for these apps
-      const { data: trendsData } = await supabase
-        .from('app_trends')
-        .select('appid, review_velocity_7d, review_velocity_30d, trend_30d_change_pct')
-        .in('appid', appids);
+      const { data: trendsData } = priorityInputs
+        ? { data: priorityInputs }
+        : await supabase!
+            .from('app_trends')
+            .select('appid, review_velocity_7d, review_velocity_30d, trend_30d_change_pct')
+            .in('appid', appids);
 
-      // Get release state from apps table (for fresh release detection)
-      const { data: appsData } = await supabase
-        .from('apps')
-        .select('appid, is_released, release_date')
-        .in('appid', appids);
+      const { data: appsData } = priorityInputs
+        ? { data: priorityInputs }
+        : await supabase!
+            .from('apps')
+            .select('appid, is_released, release_date')
+            .in('appid', appids);
 
       // Build lookup maps
       const metricsMap = new Map<number, { ccu_peak: number | null; total_reviews: number | null }>();
@@ -245,14 +304,7 @@ async function main(): Promise<void> {
       }
 
       // Calculate priorities
-      const updates: Array<{
-        appid: number;
-        priority_score: number;
-        sync_interval_hours: number;
-        refresh_tier: RefreshTier;
-        priority_calculated_at: string;
-        next_sync_after: string;
-      }> = [];
+      const updates: PrioritySyncStatusUpsert[] = [];
 
       for (const appid of appids) {
         processed++;
@@ -298,17 +350,13 @@ async function main(): Promise<void> {
       }
 
       // Bulk upsert all updates at once (much faster than individual updates)
-      const { error } = await supabase.from('sync_status').upsert(
-        updates.map((u) => ({
-          appid: u.appid,
-          priority_score: u.priority_score,
-          sync_interval_hours: u.sync_interval_hours,
-          refresh_tier: u.refresh_tier,
-          priority_calculated_at: u.priority_calculated_at,
-          next_sync_after: u.next_sync_after,
-        })),
-        { onConflict: 'appid' }
-      );
+      const error = tiger
+        ? null
+        : (await supabase!.from('sync_status').upsert(updates, { onConflict: 'appid' })).error;
+
+      if (tiger) {
+        await tiger.syncStatus.upsertRows(updates);
+      }
 
       if (!error) {
         updated += updates.length;
@@ -326,34 +374,24 @@ async function main(): Promise<void> {
       });
     }
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: processed,
-          items_succeeded: updated,
-          items_failed: processed - updated,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: processed,
+      items_succeeded: updated,
+      items_failed: processed - updated,
+    });
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
     log.info('Priority calculation completed', { processed, updated, durationMinutes: duration });
   } catch (error) {
     log.error('Priority calculation failed', { error });
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: error instanceof Error ? error.message : String(error),
+    });
 
     process.exit(1);
   }

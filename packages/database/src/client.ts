@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './types.js';
+import { assertSupabaseServiceClientAllowed } from './write-target.js';
 
 export type TypedSupabaseClient = SupabaseClient<Database>;
 
@@ -8,6 +9,8 @@ export type TypedSupabaseClient = SupabaseClient<Database>;
  * Uses the service role key for full database access
  */
 export function createServiceClient(): TypedSupabaseClient {
+  assertSupabaseServiceClientAllowed('@publisheriq/database createServiceClient');
+
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 

@@ -9,19 +9,20 @@ on:
       batch_size:
         description: 'Number of apps to process'
         required: false
-        default: '2500'
+        default: '100'
 
 concurrency:
   group: reviews-sync
   cancel-in-progress: false
 
 env:
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
 

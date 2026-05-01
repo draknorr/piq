@@ -1,4 +1,9 @@
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 
 const TIER_ASSIGNMENT_STALE_HOURS = 24;
@@ -11,6 +16,10 @@ const SUSPICIOUS_ZERO_RPC = 'get_suspicious_zero_appids';
 type ServiceClient = ReturnType<typeof getServiceClient>;
 type QueryError = { message?: string } | null;
 type QueryResponse<T> = { data: T[] | null; error: QueryError };
+interface CcuGuardrailOptions {
+  env?: NodeJS.ProcessEnv;
+  tiger?: TigerWriter;
+}
 
 const log = logger.child({ component: 'ccu-guardrails' });
 
@@ -215,9 +224,16 @@ async function getSuspiciousZeroAppidsViaFallback(
 
 export async function isTierAssignmentsStale(
   supabase: ServiceClient,
-  staleAfterHours: number = TIER_ASSIGNMENT_STALE_HOURS
+  staleAfterHours: number = TIER_ASSIGNMENT_STALE_HOURS,
+  options: CcuGuardrailOptions = {}
 ): Promise<boolean> {
   const staleCutoff = new Date(Date.now() - staleAfterHours * 60 * 60 * 1000).toISOString();
+
+  if (readDataWriteTarget(options.env) === 'tiger') {
+    return (options.tiger ?? getTigerWriter(options.env)).metrics.isCcuTierAssignmentsStale(
+      staleCutoff
+    );
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
@@ -240,12 +256,27 @@ export async function isTierAssignmentsStale(
 
 export async function getSuspiciousZeroAppids(
   supabase: ServiceClient,
-  appids: number[]
+  appids: number[],
+  options: CcuGuardrailOptions = {}
 ): Promise<Set<number>> {
   const uniqueAppids = Array.from(new Set(appids));
 
   if (uniqueAppids.length === 0) {
     return new Set<number>();
+  }
+
+  if (readDataWriteTarget(options.env) === 'tiger') {
+    try {
+      return await (options.tiger ?? getTigerWriter(options.env)).metrics.listSuspiciousZeroAppids(
+        uniqueAppids
+      );
+    } catch (error) {
+      log.warn('Tiger suspicious zero lookup failed; continuing without guardrail results', {
+        appids: uniqueAppids.length,
+        error: describeError(error),
+      });
+      return new Set<number>();
+    }
   }
 
   const suspiciousViaRpc = await getSuspiciousZeroAppidsViaRpc(supabase, uniqueAppids);

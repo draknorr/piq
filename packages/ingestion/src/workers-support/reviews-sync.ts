@@ -1,5 +1,5 @@
+import { getTigerWriter, readDataWriteTarget, type TypedSupabaseClient } from '@publisheriq/database';
 import pLimit from 'p-limit';
-import type { TypedSupabaseClient } from '@publisheriq/database';
 
 export type ReviewPromotionBucket =
   | 'launch_critical'
@@ -18,8 +18,27 @@ export interface ReviewPromotion {
 
 const DEFAULT_PROMOTION_CONCURRENCY = 8;
 
-function getDb(supabase: TypedSupabaseClient): any {
-  return supabase as any;
+function shouldUseTigerReviews(): boolean {
+  return readDataWriteTarget() === 'tiger';
+}
+
+interface ReviewPromotionRpcClient {
+  rpc(
+    fn: 'promote_reviews_sync',
+    args: {
+      p_appid: number;
+      p_bucket: ReviewPromotionBucket;
+      p_score: number;
+      p_reason: string;
+      p_until: string;
+    }
+  ): Promise<{ error: { message?: string | null } | null }>;
+}
+
+function getReviewPromotionRpcClient(
+  supabase: TypedSupabaseClient
+): ReviewPromotionRpcClient {
+  return supabase as unknown as ReviewPromotionRpcClient;
 }
 
 function getBucketPriority(bucket: ReviewPromotionBucket): number {
@@ -63,7 +82,12 @@ export async function promoteReviewsSync(
   supabase: TypedSupabaseClient,
   promotion: ReviewPromotion
 ): Promise<void> {
-  const { error } = await getDb(supabase).rpc('promote_reviews_sync', {
+  if (shouldUseTigerReviews()) {
+    await getTigerWriter().reviews.promoteReviewsSyncBatch([promotion]);
+    return;
+  }
+
+  const { error } = await getReviewPromotionRpcClient(supabase).rpc('promote_reviews_sync', {
     p_appid: promotion.appid,
     p_bucket: promotion.bucket,
     p_score: promotion.score,
@@ -112,8 +136,11 @@ export async function promoteReviewsSyncBatch(
     return 0;
   }
 
-  const limit = pLimit(Math.max(1, concurrency));
+  if (shouldUseTigerReviews()) {
+    return getTigerWriter().reviews.promoteReviewsSyncBatch(deduped);
+  }
 
+  const limit = pLimit(Math.max(1, concurrency));
   await Promise.all(
     deduped.map((promotion) => limit(() => promoteReviewsSync(supabase, promotion)))
   );

@@ -9,14 +9,26 @@ on:
       batch_size:
         description: 'Number of apps to process per partition'
         required: false
-        default: '800'
+        default: '50'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID: ${{ secrets.CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID }}
+  CHANGE_INTEL_ARCHIVE_BUCKET: publisheriq-change-intel-archive
+  CHANGE_INTEL_ARCHIVE_ENDPOINT: ${{ secrets.CHANGE_INTEL_ARCHIVE_ENDPOINT }}
+  CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE: "true"
+  CHANGE_INTEL_ARCHIVE_PREFIX: production/change-intel
+  CHANGE_INTEL_ARCHIVE_REGION: auto
+  CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY: ${{ secrets.CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY }}
+  CHANGE_INTEL_ARCHIVE_TARGET: object_storage
+  CHANGE_INTEL_READ_TARGET: tiger
+  CHANGE_INTEL_WRITE_TARGET: tiger
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_CATALOG_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:

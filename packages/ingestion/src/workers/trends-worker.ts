@@ -6,7 +6,13 @@
  * Run with: pnpm --filter @publisheriq/ingestion calculate-trends
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger, BATCH_SIZES } from '@publisheriq/shared';
 
 const log = logger.child({ worker: 'trends-sync' });
@@ -29,6 +35,32 @@ interface TrendResult {
   previous_positive_ratio: number;
   review_velocity_7d: number;
   review_velocity_30d: number;
+}
+
+type AppTrendRow = TrendResult & { updated_at: string };
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type TrendsDbClient = SupabaseClient | null;
+
+async function updateSyncJob(
+  jobId: string | null,
+  supabase: TrendsDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) {
+    return;
+  }
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy trends sync job updates');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
 }
 
 function formatUnknownError(error: unknown): string {
@@ -60,7 +92,7 @@ function formatUnknownError(error: unknown): string {
 }
 
 async function fetchHistogramAppidPage(
-  supabase: ReturnType<typeof getServiceClient>,
+  supabase: SupabaseClient,
   lastAppid: number
 ): Promise<{ appids: number[]; nextCursor: number; hasMore: boolean; rowsFetched: number }> {
   const { data: appidRows, error: appidError } = await supabase
@@ -202,23 +234,32 @@ function calculateTrendForApp(histogram: HistogramEntry[]): Omit<TrendResult, 'a
 
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.BATCH_SIZE || String(BATCH_SIZES.TRENDS_BATCH), 10);
+  const env = process.env;
+  const useTiger = readDataWriteTarget(env) === 'tiger';
+  const tiger = useTiger ? getTigerWriter(env) : null;
+  const githubRunId = env.GITHUB_RUN_ID;
+  const batchSize = parseInt(env.BATCH_SIZE || String(BATCH_SIZES.TRENDS_BATCH), 10);
 
   log.info('Starting Trends calculation', { githubRunId, batchSize });
 
-  const supabase = getServiceClient();
-
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'trends',
-      github_run_id: githubRunId,
-      status: 'running',
-      batch_size: batchSize,
-    })
-    .select()
-    .single();
+  const supabase: TrendsDbClient = tiger ? null : getServiceClient();
+  const jobId = tiger
+    ? await tiger.ops.createSyncJob({
+        jobType: 'trends',
+        githubRunId,
+        batchSize,
+      })
+    : (await supabase!
+        .from('sync_jobs')
+        .insert({
+          job_type: 'trends',
+          github_run_id: githubRunId,
+          status: 'running',
+          batch_size: batchSize,
+        })
+        .select()
+        .single()
+      ).data?.id ?? null;
 
   let processed = 0;
   let succeeded = 0;
@@ -237,7 +278,9 @@ async function main(): Promise<void> {
 
     while (hasMoreAppids || pendingAppids.length > 0) {
       while (hasMoreAppids && pendingAppids.length < batchSize) {
-        const page = await fetchHistogramAppidPage(supabase, appidCursor);
+        const page = tiger
+          ? await tiger.metrics.listReviewHistogramAppidPage(appidCursor, APPID_PAGE_SIZE)
+          : await fetchHistogramAppidPage(supabase!, appidCursor);
 
         if (page.appids.length === 0) {
           hasMoreAppids = false;
@@ -270,11 +313,13 @@ async function main(): Promise<void> {
       batchIndex++;
 
       // Fetch histogram data for batch
-      const { data: histogramData } = await supabase
-        .from('review_histogram')
-        .select('appid, month_start, recommendations_up, recommendations_down')
-        .in('appid', batch)
-        .order('month_start', { ascending: false });
+      const histogramData = tiger
+        ? await tiger.metrics.listReviewHistogramEntries(batch)
+        : (await supabase!
+            .from('review_histogram')
+            .select('appid, month_start, recommendations_up, recommendations_down')
+            .in('appid', batch)
+            .order('month_start', { ascending: false })).data;
 
       if (!histogramData) continue;
 
@@ -307,19 +352,25 @@ async function main(): Promise<void> {
 
       // Upsert trends
       if (trendsToUpsert.length > 0) {
-        const { error } = await supabase.from('app_trends').upsert(
-          trendsToUpsert.map((t) => ({
-            ...t,
-            updated_at: new Date().toISOString(),
-          })),
-          { onConflict: 'appid' }
-        );
+        const trendRows: AppTrendRow[] = trendsToUpsert.map((t) => ({
+          ...t,
+          updated_at: new Date().toISOString(),
+        }));
 
-        if (error) {
-          log.error('Failed to upsert trends', {
-            error: formatUnknownError(error),
-            batchIndex,
-          });
+        if (tiger) {
+          await tiger.metrics.upsertAppTrends(trendRows);
+        } else {
+          const { error } = await supabase!.from('app_trends').upsert(
+            trendRows,
+            { onConflict: 'appid' }
+          );
+
+          if (error) {
+            log.error('Failed to upsert trends', {
+              error: formatUnknownError(error),
+              batchIndex,
+            });
+          }
         }
       }
 
@@ -341,33 +392,23 @@ async function main(): Promise<void> {
       log.info('No apps with histogram data');
 
       // Mark job as completed with 0 items
-      if (job) {
-        await supabase
-          .from('sync_jobs')
-          .update({
-            status: 'completed',
-            completed_at: new Date().toISOString(),
-            items_processed: 0,
-            items_succeeded: 0,
-            items_failed: 0,
-          })
-          .eq('id', job.id);
-      }
+      await updateSyncJob(jobId, supabase, tiger, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        items_processed: 0,
+        items_succeeded: 0,
+        items_failed: 0,
+      });
       return;
     }
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: processed,
-          items_succeeded: succeeded,
-          items_failed: failed,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: processed,
+      items_succeeded: succeeded,
+      items_failed: failed,
+    });
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
     log.info('Trends calculation completed', { processed, succeeded, failed, durationMinutes: duration });
@@ -375,16 +416,11 @@ async function main(): Promise<void> {
     const errorMessage = formatUnknownError(error);
     log.error('Trends calculation failed', { error: errorMessage });
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: errorMessage,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+    });
 
     process.exit(1);
   }

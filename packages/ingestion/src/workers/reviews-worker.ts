@@ -9,7 +9,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import {
   ClaimAppsTimeoutError,
   acquireApiRateToken as acquireSharedApiRateToken,
@@ -44,6 +50,7 @@ const DEFAULT_UNKNOWN_LIMIT = 1;
 const DEFAULT_CLAIM_TIMEOUT_RETRIES = 3;
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
+type ReviewDbClient = SupabaseClient | null;
 
 interface SyncStats {
   appsProcessed: number;
@@ -155,22 +162,46 @@ async function waitForReviewRateToken(
 }
 
 async function loadPreviousSyncData(
-  supabase: SupabaseClient,
-  appIds: number[]
+  supabase: ReviewDbClient,
+  appIds: number[],
+  env: NodeJS.ProcessEnv,
+  tiger: TigerWriter | null
 ): Promise<{ previousSyncData: Map<number, PreviousReviewSyncData>; neverSyncedSet: Set<number> }> {
-  return loadPreviousReviewSyncData(supabase, appIds);
+  return loadPreviousReviewSyncData(supabase, appIds, {
+    env,
+    tiger: tiger ?? undefined,
+  });
 }
 
 async function markAppFailure(
   appid: number,
-  supabase: SupabaseClient,
+  supabase: ReviewDbClient,
   previous: PreviousReviewSyncData | undefined,
-  errorMessage: string
+  errorMessage: string,
+  tiger: TigerWriter | null
 ): Promise<void> {
   const nextErrorCount = (previous?.consecutiveErrors ?? 0) + 1;
   const nextRetryAt = new Date(
     Date.now() + calculateFailureBackoffMinutes(nextErrorCount) * 60 * 1000
   ).toISOString();
+
+  if (tiger) {
+    await tiger.syncStatus.updateFields(appid, {
+      consecutive_errors: nextErrorCount,
+      last_error_source: 'reviews',
+      last_error_message: errorMessage,
+      last_error_at: new Date().toISOString(),
+      next_reviews_sync: nextRetryAt,
+      reviews_claimed_by: null,
+      reviews_claimed_at: null,
+      reviews_claim_expires_at: null,
+    });
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy reviews failure persistence');
+  }
 
   const { error } = await getDb(supabase)
     .from('sync_status')
@@ -196,12 +227,14 @@ async function markAppFailure(
 
 async function processApp(
   app: ClaimedReviewApp,
-  supabase: SupabaseClient,
+  supabase: ReviewDbClient,
   workerId: string,
   today: string,
   previousSyncData: Map<number, PreviousReviewSyncData>,
   neverSyncedSet: Set<number>,
-  stats: SyncStats
+  stats: SyncStats,
+  env: NodeJS.ProcessEnv,
+  tiger: TigerWriter | null
 ): Promise<void> {
   const appid = app.appid;
   stats.appsProcessed += 1;
@@ -217,9 +250,11 @@ async function processApp(
     const previous = previousSyncData.get(appid);
     await persistReviewSummary({
       appid,
+      env,
       previous,
       summary,
       supabase,
+      tiger: tiger ?? undefined,
       today,
       velocityTier: app.velocity_tier,
     });
@@ -238,50 +273,75 @@ async function processApp(
     });
 
     stats.appsFailed += 1;
-    await markAppFailure(appid, supabase, previousSyncData.get(appid), errorMessage);
+    await markAppFailure(appid, supabase, previousSyncData.get(appid), errorMessage, tiger);
   }
+}
+
+async function updateSyncJob(
+  jobId: string | null,
+  supabase: ReviewDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) {
+    return;
+  }
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy reviews sync job updates');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
 }
 
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const workerId = process.env.WORKER_ID || `reviews-${randomUUID()}`;
+  const env = process.env;
+  const useTiger = readDataWriteTarget(env) === 'tiger';
+  const tiger = useTiger ? getTigerWriter(env) : null;
+  const githubRunId = env.GITHUB_RUN_ID;
+  const workerId = env.WORKER_ID || `reviews-${randomUUID()}`;
   const maxAppsToProcess = parseInt(
-    process.env.BATCH_SIZE || String(BATCH_SIZES.REVIEWS_BATCH),
+    env.BATCH_SIZE || String(BATCH_SIZES.REVIEWS_BATCH),
     10
   );
   const claimBatchSize = parseInt(
-    process.env.CLAIM_BATCH_SIZE || `${DEFAULT_CLAIM_BATCH_SIZE}`,
+    env.CLAIM_BATCH_SIZE || `${DEFAULT_CLAIM_BATCH_SIZE}`,
     10
   );
   const claimTtlMinutes = parseInt(
-    process.env.CLAIM_TTL_MINUTES || `${DEFAULT_CLAIM_TTL_MINUTES}`,
+    env.CLAIM_TTL_MINUTES || `${DEFAULT_CLAIM_TTL_MINUTES}`,
     10
   );
   const maxRuntimeMinutes = parseInt(
-    process.env.MAX_RUNTIME_MINUTES || `${DEFAULT_MAX_RUNTIME_MINUTES}`,
+    env.MAX_RUNTIME_MINUTES || `${DEFAULT_MAX_RUNTIME_MINUTES}`,
     10
   );
-  const launchLimit = parseInt(process.env.REVIEWS_LAUNCH_LIMIT || `${DEFAULT_LAUNCH_LIMIT}`, 10);
-  const changeLimit = parseInt(process.env.REVIEWS_CHANGE_LIMIT || `${DEFAULT_CHANGE_LIMIT}`, 10);
-  const activeLimit = parseInt(process.env.REVIEWS_ACTIVE_LIMIT || `${DEFAULT_ACTIVE_LIMIT}`, 10);
+  const launchLimit = parseInt(env.REVIEWS_LAUNCH_LIMIT || `${DEFAULT_LAUNCH_LIMIT}`, 10);
+  const changeLimit = parseInt(env.REVIEWS_CHANGE_LIMIT || `${DEFAULT_CHANGE_LIMIT}`, 10);
+  const activeLimit = parseInt(env.REVIEWS_ACTIVE_LIMIT || `${DEFAULT_ACTIVE_LIMIT}`, 10);
   const backfillLimit = parseInt(
-    process.env.REVIEWS_BACKFILL_LIMIT || `${DEFAULT_BACKFILL_LIMIT}`,
+    env.REVIEWS_BACKFILL_LIMIT || `${DEFAULT_BACKFILL_LIMIT}`,
     10
   );
   const unknownLimit = parseInt(
-    process.env.REVIEWS_UNKNOWN_LIMIT || `${DEFAULT_UNKNOWN_LIMIT}`,
+    env.REVIEWS_UNKNOWN_LIMIT || `${DEFAULT_UNKNOWN_LIMIT}`,
     10
   );
   const claimTimeoutRetries = parseInt(
-    process.env.CLAIM_TIMEOUT_RETRIES || `${DEFAULT_CLAIM_TIMEOUT_RETRIES}`,
+    env.CLAIM_TIMEOUT_RETRIES || `${DEFAULT_CLAIM_TIMEOUT_RETRIES}`,
     10
   );
   const emptyClaimExitThreshold = parseInt(
-    process.env.EMPTY_CLAIM_EXIT_THRESHOLD || `${DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD}`,
+    env.EMPTY_CLAIM_EXIT_THRESHOLD || `${DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD}`,
     10
   );
-  const idleDelayMs = parseInt(process.env.IDLE_DELAY_MS || `${DEFAULT_IDLE_DELAY_MS}`, 10);
+  const idleDelayMs = parseInt(env.IDLE_DELAY_MS || `${DEFAULT_IDLE_DELAY_MS}`, 10);
   const deadline = startTime + maxRuntimeMinutes * 60 * 1000;
 
   log.info('Starting Reviews sync', {
@@ -300,18 +360,24 @@ async function main(): Promise<void> {
     maxRuntimeMinutes,
   });
 
-  const supabase = getServiceClient();
-
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'reviews',
-      github_run_id: githubRunId,
-      status: 'running',
-      batch_size: maxAppsToProcess,
-    })
-    .select()
-    .single();
+  const supabase: ReviewDbClient = tiger ? null : getServiceClient();
+  const jobId = tiger
+    ? await tiger.ops.createSyncJob({
+        jobType: 'reviews',
+        githubRunId,
+        batchSize: maxAppsToProcess,
+      })
+    : (await supabase!
+        .from('sync_jobs')
+        .insert({
+          job_type: 'reviews',
+          github_run_id: githubRunId,
+          status: 'running',
+          batch_size: maxAppsToProcess,
+        })
+        .select()
+        .single()
+      ).data?.id ?? null;
 
   const stats: SyncStats = {
     appsProcessed: 0,
@@ -429,7 +495,12 @@ async function main(): Promise<void> {
 
       const today = new Date().toISOString().split('T')[0];
       const appIds = claimedApps.map((app) => app.appid);
-      const { previousSyncData, neverSyncedSet } = await loadPreviousSyncData(supabase, appIds);
+      const { previousSyncData, neverSyncedSet } = await loadPreviousSyncData(
+        supabase,
+        appIds,
+        env,
+        tiger
+      );
 
       log.info('Claimed batch sync breakdown', {
         firstTime: neverSyncedSet.size,
@@ -447,7 +518,9 @@ async function main(): Promise<void> {
               today,
               previousSyncData,
               neverSyncedSet,
-              stats
+              stats,
+              env,
+              tiger
             )
           )
         )
@@ -457,20 +530,15 @@ async function main(): Promise<void> {
       activeClaimedAppids = [];
     }
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: stats.appsProcessed,
-          items_succeeded: stats.appsCreated + stats.appsUpdated,
-          items_failed: stats.appsFailed,
-          items_created: stats.appsCreated,
-          items_updated: stats.appsUpdated,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: stats.appsProcessed,
+      items_succeeded: stats.appsCreated + stats.appsUpdated,
+      items_failed: stats.appsFailed,
+      items_created: stats.appsCreated,
+      items_updated: stats.appsUpdated,
+    });
 
     log.info('Reviews sync completed', {
       ...stats,
@@ -487,21 +555,16 @@ async function main(): Promise<void> {
 
     await releaseReviewClaims(activeClaimedAppids, workerId);
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: errorMessage,
-          items_processed: stats.appsProcessed,
-          items_succeeded: stats.appsCreated + stats.appsUpdated,
-          items_failed: stats.appsFailed,
-          items_created: stats.appsCreated,
-          items_updated: stats.appsUpdated,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+      items_processed: stats.appsProcessed,
+      items_succeeded: stats.appsCreated + stats.appsUpdated,
+      items_failed: stats.appsFailed,
+      items_created: stats.appsCreated,
+      items_updated: stats.appsUpdated,
+    });
 
     process.exit(1);
   } finally {

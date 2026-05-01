@@ -8,14 +8,16 @@ on:
       max_pages:
         description: 'Maximum pages to fetch (0 = all)'
         required: false
-        default: '0'
+        default: '1'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -40,4 +42,4 @@ jobs:
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           MAX_PAGES: ${{ github.event.inputs.max_pages || '0' }}
-          SUPPLEMENTARY_LIMIT: '100'
+          SUPPLEMENTARY_LIMIT: '0'

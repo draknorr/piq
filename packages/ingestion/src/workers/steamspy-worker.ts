@@ -10,7 +10,16 @@
  * Run with: pnpm --filter @publisheriq/ingestion steamspy-sync
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import { pathToFileURL } from 'node:url';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type CatalogAppUpsert,
+  type DailyMetricUpsert,
+  type SyncStatusUpsert,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import {
   fetchAllSteamSpyApps,
@@ -43,12 +52,21 @@ interface NormalizedSteamSpyPrice {
   isFree: boolean;
 }
 
-interface SyncStats {
+export interface SteamSpySyncStats {
   appsProcessed: number;
   errors: number;
 }
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
+type FetchAllSteamSpyApps = typeof fetchAllSteamSpyApps;
+
+export interface SteamSpySyncDependencies {
+  env?: NodeJS.ProcessEnv;
+  fetchAllSteamSpyApps?: FetchAllSteamSpyApps;
+  getSupabase?: () => ServiceClient;
+  getTiger?: () => TigerWriter;
+  refreshCcuQualityCache?: typeof refreshCcuQualityCacheSafely;
+}
 
 function stringifyUnknownError(error: unknown): string {
   try {
@@ -169,8 +187,8 @@ function normalizeSteamSpyPrice(price: string, discount: string): NormalizedStea
   };
 }
 
-function getMaxPages(): number {
-  const rawMaxPages = process.env.MAX_PAGES ?? process.env.PAGES_LIMIT ?? '0';
+function getMaxPages(env: NodeJS.ProcessEnv = process.env): number {
+  const rawMaxPages = env.MAX_PAGES ?? env.PAGES_LIMIT ?? '0';
   const parsedMaxPages = Number.parseInt(rawMaxPages, 10);
 
   if (Number.isNaN(parsedMaxPages)) {
@@ -180,10 +198,82 @@ function getMaxPages(): number {
   return parsedMaxPages;
 }
 
-async function processBatch(
+export async function processTigerSteamSpyBatch(
+  tiger: TigerWriter,
+  apps: SteamSpyAppSummary[],
+  stats: SteamSpySyncStats
+): Promise<void> {
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date().toISOString();
+
+  const appsToUpsertWithPrice: CatalogAppUpsert[] = [];
+  const appsToUpsertWithoutPrice: CatalogAppUpsert[] = [];
+  const syncStatusToUpsert: SyncStatusUpsert[] = apps.map((app) => ({
+    appid: app.appid,
+    last_steamspy_sync: now,
+    is_syncable: true,
+    steamspy_available: true,
+  }));
+
+  const metricsToUpsert: DailyMetricUpsert[] = apps.map((app) => {
+    const normalizedPrice = normalizeSteamSpyPrice(app.price, app.discount);
+    const owners = parseOwnerEstimate(app.owners);
+    const appBase = {
+      appid: app.appid,
+      name: app.name,
+    };
+
+    if (normalizedPrice.isAppPriceValid && normalizedPrice.priceCents !== null) {
+      appsToUpsertWithPrice.push({
+        ...appBase,
+        is_free: normalizedPrice.isFree,
+        current_price_cents: normalizedPrice.priceCents,
+        current_discount_percent: normalizedPrice.discountPercent,
+      });
+    } else {
+      appsToUpsertWithoutPrice.push(appBase);
+    }
+
+    return {
+      appid: app.appid,
+      metric_date: today,
+      owners_min: owners.min,
+      owners_max: owners.max,
+      ccu_peak: app.ccu,
+      ccu_source: 'steamspy',
+      average_playtime_forever: app.average_forever,
+      average_playtime_2weeks: app.average_2weeks,
+      price_cents: normalizedPrice.priceCents,
+      discount_percent: normalizedPrice.discountPercent,
+    };
+  });
+
+  try {
+    for (const rows of [appsToUpsertWithPrice, appsToUpsertWithoutPrice]) {
+      if (rows.length > 0) {
+        await tiger.catalog.upsertApps(rows);
+      }
+    }
+
+    await Promise.all([
+      tiger.syncStatus.upsertRows(syncStatusToUpsert),
+      tiger.metrics.upsertDailyMetrics(metricsToUpsert),
+    ]);
+
+    stats.appsProcessed += apps.length;
+  } catch (error) {
+    log.error('Tiger SteamSpy batch failed', {
+      error: error instanceof Error ? error.message : String(error),
+      batchSize: apps.length,
+    });
+    stats.errors += apps.length;
+  }
+}
+
+async function processLegacyBatch(
   supabase: ReturnType<typeof getServiceClient>,
   apps: SteamSpyAppSummary[],
-  stats: SyncStats
+  stats: SteamSpySyncStats
 ): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
@@ -519,14 +609,100 @@ async function markUnavailableSteamSpyApps(supabase: ServiceClient): Promise<num
   return totalMarked;
 }
 
-async function main(): Promise<void> {
+export async function runTigerSteamSpySync(
+  dependencies: SteamSpySyncDependencies = {}
+): Promise<SteamSpySyncStats> {
+  const env = dependencies.env ?? process.env;
+  const fetchApps = dependencies.fetchAllSteamSpyApps ?? fetchAllSteamSpyApps;
+  const refreshCcuQualityCache =
+    dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
+  const tiger = dependencies.getTiger?.() ?? getTigerWriter(env);
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const maxPages = getMaxPages();
+  const maxPages = getMaxPages(env);
 
-  log.info('Starting SteamSpy sync', { githubRunId, maxPages: maxPages || 'all' });
+  log.info('Starting Tiger SteamSpy sync', {
+    githubRunId: env.GITHUB_RUN_ID,
+    maxPages: maxPages || 'all',
+  });
 
-  const supabase = getServiceClient();
+  const jobId = await tiger.ops.createSyncJob({
+    jobType: 'steamspy',
+    githubRunId: env.GITHUB_RUN_ID,
+  });
+
+  const stats: SteamSpySyncStats = {
+    appsProcessed: 0,
+    errors: 0,
+  };
+
+  try {
+    await fetchApps(maxPages, async (apps, page) => {
+      log.info('Processing Tiger SteamSpy page', { page, appsCount: apps.length });
+      await processTigerSteamSpyBatch(tiger, apps, stats);
+      log.info('Completed Tiger SteamSpy page', {
+        page,
+        processed: stats.appsProcessed,
+        errors: stats.errors,
+      });
+    });
+
+    if (maxPages === 0) {
+      log.info('Skipping SteamSpy availability backfill and supplementary fetches in Tiger mode');
+    }
+
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsProcessed,
+        items_failed: stats.errors,
+      });
+    }
+
+    if (stats.appsProcessed > 0) {
+      await refreshCcuQualityCache('steamspy');
+    }
+
+    const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
+    log.info('Tiger SteamSpy sync completed', {
+      durationMinutes: duration,
+      appsProcessed: stats.appsProcessed,
+      errors: stats.errors,
+    });
+    return stats;
+  } catch (error) {
+    const errorMessage = formatUnknownError(error);
+    log.error('Tiger SteamSpy sync failed', { error: serializeUnknownError(error) });
+
+    if (jobId) {
+      await tiger.ops.updateSyncJob(jobId, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: errorMessage,
+        items_processed: stats.appsProcessed,
+        items_succeeded: stats.appsProcessed,
+        items_failed: stats.errors,
+      });
+    }
+
+    throw error;
+  }
+}
+
+export async function runLegacySupabaseSteamSpySync(
+  dependencies: SteamSpySyncDependencies = {}
+): Promise<SteamSpySyncStats> {
+  const env = dependencies.env ?? process.env;
+  const fetchApps = dependencies.fetchAllSteamSpyApps ?? fetchAllSteamSpyApps;
+  const refreshCcuQualityCache =
+    dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
+  const supabase = dependencies.getSupabase?.() ?? getServiceClient();
+  const startTime = Date.now();
+  const githubRunId = env.GITHUB_RUN_ID;
+  const maxPages = getMaxPages(env);
+
+  log.info('Starting legacy Supabase SteamSpy sync', { githubRunId, maxPages: maxPages || 'all' });
 
   // Create sync job record
   const { data: job, error: jobError } = await supabase
@@ -543,15 +719,15 @@ async function main(): Promise<void> {
     log.error('Failed to create sync job record', { error: jobError });
   }
 
-  const stats: SyncStats = {
+  const stats: SteamSpySyncStats = {
     appsProcessed: 0,
     errors: 0,
   };
 
   try {
-    await fetchAllSteamSpyApps(maxPages, async (apps, page) => {
+    await fetchApps(maxPages, async (apps, page) => {
       log.info('Processing SteamSpy page', { page, appsCount: apps.length });
-      await processBatch(supabase, apps, stats);
+      await processLegacyBatch(supabase, apps, stats);
       log.info('Completed SteamSpy page', {
         page,
         processed: stats.appsProcessed,
@@ -565,7 +741,7 @@ async function main(): Promise<void> {
       log.info('Marked apps as not in SteamSpy catalog', { count: unavailableCount });
 
       // Supplementary individual fetches for popular apps not in pagination
-      const supplementaryLimit = parseInt(process.env.SUPPLEMENTARY_LIMIT || '100', 10);
+      const supplementaryLimit = parseInt(env.SUPPLEMENTARY_LIMIT || '100', 10);
       if (supplementaryLimit > 0) {
         log.info('Starting supplementary SteamSpy fetches', { limit: supplementaryLimit });
         const supplementaryStats = await processSupplementaryFetches(supabase, supplementaryLimit);
@@ -592,7 +768,7 @@ async function main(): Promise<void> {
     }
 
     if (stats.appsProcessed > 0) {
-      await refreshCcuQualityCacheSafely('steamspy');
+      await refreshCcuQualityCache('steamspy');
     }
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -601,6 +777,7 @@ async function main(): Promise<void> {
       appsProcessed: stats.appsProcessed,
       errors: stats.errors,
     });
+    return stats;
   } catch (error) {
     const serializedError = serializeUnknownError(error);
     const errorMessage = formatUnknownError(error);
@@ -624,8 +801,28 @@ async function main(): Promise<void> {
         .eq('id', job.id);
     }
 
-    process.exit(1);
+    throw error;
   }
 }
 
-main();
+export async function runSteamSpySync(
+  dependencies: SteamSpySyncDependencies = {}
+): Promise<SteamSpySyncStats> {
+  const env = dependencies.env ?? process.env;
+  return readDataWriteTarget(env) === 'tiger'
+    ? runTigerSteamSpySync(dependencies)
+    : runLegacySupabaseSteamSpySync(dependencies);
+}
+
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectRun) {
+  runSteamSpySync().catch((error) => {
+    log.error('SteamSpy sync failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  });
+}

@@ -7,7 +7,13 @@
  * Run with: pnpm --filter @publisheriq/ingestion embedding-sync
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import {
   getQdrantClient,
@@ -108,6 +114,32 @@ interface SyncStats {
   publishersEmbedded: number;
   developersEmbedded: number;
   tokensUsed: number;
+}
+
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type EmbeddingDbClient = SupabaseClient | null;
+type QdrantClient = ReturnType<typeof getQdrantClient>;
+
+async function updateSyncJob(
+  jobId: string | null,
+  supabase: EmbeddingDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) {
+    return;
+  }
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy embedding sync job updates');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
 }
 
 /**
@@ -237,8 +269,9 @@ function buildGamePayload(game: GameEmbeddingData, embeddingHash: string): GameP
  * Process a batch of games
  */
 async function processGameBatch(
-  supabase: ReturnType<typeof getServiceClient>,
-  qdrant: ReturnType<typeof getQdrantClient>,
+  supabase: EmbeddingDbClient,
+  tiger: TigerWriter | null,
+  qdrant: QdrantClient,
   games: GameEmbeddingData[],
   stats: SyncStats
 ): Promise<void> {
@@ -279,10 +312,16 @@ async function processGameBatch(
 
   // Mark as embedded in Supabase
   const appids = worthyGames.map((g) => g.appid);
-  await supabase.rpc('mark_apps_embedded', {
-    p_appids: appids,
-    p_hashes: hashes,
-  });
+  if (tiger) {
+    await tiger.embeddings.markGamesEmbedded(appids, hashes, new Date().toISOString());
+  } else if (supabase) {
+    await supabase.rpc('mark_apps_embedded', {
+      p_appids: appids,
+      p_hashes: hashes,
+    });
+  } else {
+    throw new Error('No database client available for embedding status updates');
+  }
 
   stats.gamesEmbedded += worthyGames.length;
   stats.gamesProcessed += games.length;
@@ -293,7 +332,7 @@ async function processGameBatch(
  */
 async function processPublisherBatch(
   publishers: PublisherEmbeddingData[],
-  qdrant: ReturnType<typeof getQdrantClient>,
+  qdrant: QdrantClient,
   stats: SyncStats
 ): Promise<void> {
   // Build portfolio texts
@@ -385,50 +424,61 @@ async function processPublisherBatch(
  * Loops until no more publishers need embedding
  */
 async function processPublishers(
-  supabase: ReturnType<typeof getServiceClient>,
-  qdrant: ReturnType<typeof getQdrantClient>,
+  supabase: EmbeddingDbClient,
+  tiger: TigerWriter | null,
+  qdrant: QdrantClient,
   stats: SyncStats
 ): Promise<void> {
   log.info('Processing publishers for embedding');
 
   let hasMore = true;
   while (hasMore) {
-    // Use NEW function that filters by embedding status
-    const { data: publishers, error } = await supabase.rpc('get_publishers_needing_embedding', {
-      p_limit: PUBLISHER_BATCH_SIZE,
-    });
+    const publishers = tiger
+      ? await tiger.embeddings.listPublishersNeedingEmbedding(PUBLISHER_BATCH_SIZE)
+      : null;
+    const legacyResult = publishers
+      ? null
+      : await supabase!.rpc('get_publishers_needing_embedding', {
+          p_limit: PUBLISHER_BATCH_SIZE,
+        });
+    const data = publishers ?? legacyResult?.data ?? null;
+    const error = legacyResult?.error ?? null;
 
     if (error) {
       log.error('Failed to fetch publishers', { error });
       break;
     }
 
-    if (!publishers || publishers.length === 0) {
+    if (!data || data.length === 0) {
       log.info('No more publishers to embed');
       hasMore = false;
       break;
     }
 
     log.info('Processing publisher batch', {
-      count: publishers.length,
+      count: data.length,
       totalEmbedded: stats.publishersEmbedded,
     });
 
     // Process batch and generate embeddings
-    await processPublisherBatch(publishers as PublisherEmbeddingData[], qdrant, stats);
+    await processPublisherBatch(data as PublisherEmbeddingData[], qdrant, stats);
 
     // Mark as embedded so they don't appear in next call
-    const ids = (publishers as PublisherEmbeddingData[]).map((p) => p.id);
-    const hashes = (publishers as PublisherEmbeddingData[]).map((p) =>
+    const ids = (data as PublisherEmbeddingData[]).map((p) => p.id);
+    const hashes = (data as PublisherEmbeddingData[]).map((p) =>
       hashEmbeddingText(buildPublisherPortfolioText(p))
     );
-    await supabase.rpc('mark_publishers_embedded', {
-      p_ids: ids,
-      p_hashes: hashes,
-    });
+    if (tiger) {
+      await tiger.embeddings.markPublishersEmbedded(ids, hashes, new Date().toISOString());
+    } else {
+      await supabase!.rpc('mark_publishers_embedded', {
+        p_ids: ids,
+        p_hashes: hashes,
+      });
+    }
 
     // Continue if we got a full batch (more might be available)
-    hasMore = publishers.length === PUBLISHER_BATCH_SIZE;
+    hasMore = data.length === PUBLISHER_BATCH_SIZE;
   }
 
   log.info('Publishers embedding complete', { total: stats.publishersEmbedded });
@@ -439,7 +489,7 @@ async function processPublishers(
  */
 async function processDeveloperBatch(
   developers: DeveloperEmbeddingData[],
-  qdrant: ReturnType<typeof getQdrantClient>,
+  qdrant: QdrantClient,
   stats: SyncStats
 ): Promise<void> {
   // Build portfolio texts
@@ -530,50 +580,61 @@ async function processDeveloperBatch(
  * Loops until no more developers need embedding
  */
 async function processDevelopers(
-  supabase: ReturnType<typeof getServiceClient>,
-  qdrant: ReturnType<typeof getQdrantClient>,
+  supabase: EmbeddingDbClient,
+  tiger: TigerWriter | null,
+  qdrant: QdrantClient,
   stats: SyncStats
 ): Promise<void> {
   log.info('Processing developers for embedding');
 
   let hasMore = true;
   while (hasMore) {
-    // Use NEW function that filters by embedding status
-    const { data: developers, error } = await supabase.rpc('get_developers_needing_embedding', {
-      p_limit: DEVELOPER_BATCH_SIZE,
-    });
+    const developers = tiger
+      ? await tiger.embeddings.listDevelopersNeedingEmbedding(DEVELOPER_BATCH_SIZE)
+      : null;
+    const legacyResult = developers
+      ? null
+      : await supabase!.rpc('get_developers_needing_embedding', {
+          p_limit: DEVELOPER_BATCH_SIZE,
+        });
+    const data = developers ?? legacyResult?.data ?? null;
+    const error = legacyResult?.error ?? null;
 
     if (error) {
       log.error('Failed to fetch developers', { error });
       break;
     }
 
-    if (!developers || developers.length === 0) {
+    if (!data || data.length === 0) {
       log.info('No more developers to embed');
       hasMore = false;
       break;
     }
 
     log.info('Processing developer batch', {
-      count: developers.length,
+      count: data.length,
       totalEmbedded: stats.developersEmbedded,
     });
 
     // Process batch and generate embeddings
-    await processDeveloperBatch(developers as DeveloperEmbeddingData[], qdrant, stats);
+    await processDeveloperBatch(data as DeveloperEmbeddingData[], qdrant, stats);
 
     // Mark as embedded so they don't appear in next call
-    const ids = (developers as DeveloperEmbeddingData[]).map((d) => d.id);
-    const hashes = (developers as DeveloperEmbeddingData[]).map((d) =>
+    const ids = (data as DeveloperEmbeddingData[]).map((d) => d.id);
+    const hashes = (data as DeveloperEmbeddingData[]).map((d) =>
       hashEmbeddingText(buildDeveloperPortfolioText(d))
     );
-    await supabase.rpc('mark_developers_embedded', {
-      p_ids: ids,
-      p_hashes: hashes,
-    });
+    if (tiger) {
+      await tiger.embeddings.markDevelopersEmbedded(ids, hashes, new Date().toISOString());
+    } else {
+      await supabase!.rpc('mark_developers_embedded', {
+        p_ids: ids,
+        p_hashes: hashes,
+      });
+    }
 
     // Continue if we got a full batch (more might be available)
-    hasMore = developers.length === DEVELOPER_BATCH_SIZE;
+    hasMore = data.length === DEVELOPER_BATCH_SIZE;
   }
 
   log.info('Developers embedding complete', { total: stats.developersEmbedded });
@@ -618,25 +679,43 @@ async function verifyQdrantCollections(
  */
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const githubRunId = process.env.GITHUB_RUN_ID;
-  const batchSize = parseInt(process.env.BATCH_SIZE || String(GAME_BATCH_SIZE), 10);
-  const syncCollection = process.env.SYNC_COLLECTION || 'all'; // games, publishers, developers, all
+  const env = process.env;
+  const useTiger = readDataWriteTarget(env) === 'tiger';
+  const tiger = useTiger ? getTigerWriter(env) : null;
+  const githubRunId = env.GITHUB_RUN_ID;
+  const batchSize = parseInt(env.BATCH_SIZE || String(GAME_BATCH_SIZE), 10);
+  const syncCollection = env.SYNC_COLLECTION || 'all'; // games, publishers, developers, all
 
-  log.info('Starting embedding sync', { githubRunId, batchSize, syncCollection });
+  log.info('Starting embedding sync', {
+    githubRunId,
+    batchSize,
+    syncCollection,
+    writeTarget: tiger ? 'tiger' : 'supabase',
+  });
 
-  const supabase = getServiceClient();
+  const supabase: EmbeddingDbClient = tiger ? null : getServiceClient();
   const qdrant = getQdrantClient();
 
   // Create sync job record
-  const { data: job, error: jobError } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'embedding',
-      github_run_id: githubRunId,
-      status: 'running',
-    })
-    .select()
-    .single();
+  const legacyJobResult = tiger
+    ? null
+    : await supabase!
+        .from('sync_jobs')
+        .insert({
+          job_type: 'embedding',
+          github_run_id: githubRunId,
+          status: 'running',
+        })
+        .select()
+        .single();
+  const jobId = tiger
+    ? await tiger.ops.createSyncJob({
+        jobType: 'embedding',
+        githubRunId,
+        batchSize,
+      })
+    : legacyJobResult?.data?.id ?? null;
+  const jobError = legacyJobResult?.error ?? null;
 
   if (jobError) {
     log.error('Failed to create sync job record', { error: jobError });
@@ -667,42 +746,53 @@ async function main(): Promise<void> {
       // Fetch games in batches
       let hasMore = true;
       while (hasMore) {
-        const { data: games, error } = await supabase.rpc('get_apps_for_embedding', {
-          p_limit: batchSize,
-        });
+        const games = tiger ? await tiger.embeddings.listGameCandidates(batchSize) : null;
+        const legacyResult = games
+          ? null
+          : await supabase!.rpc('get_apps_for_embedding', {
+              p_limit: batchSize,
+            });
+        const data = games ?? legacyResult?.data ?? null;
+        const error = legacyResult?.error ?? null;
 
         if (error) {
           log.error('Failed to fetch games', { error });
           break;
         }
 
-        if (!games || games.length === 0) {
+        if (!data || data.length === 0) {
           log.info('No more games to embed');
           hasMore = false;
           break;
         }
 
         log.info('Processing game batch', {
-          count: games.length,
+          count: data.length,
           processed: stats.gamesProcessed,
           embedded: stats.gamesEmbedded,
         });
 
-        await processGameBatch(supabase, qdrant, games as GameEmbeddingData[], stats);
+        await processGameBatch(
+          supabase,
+          tiger,
+          qdrant,
+          data as GameEmbeddingData[],
+          stats
+        );
 
         // Check if we got a full batch (more might be available)
-        hasMore = games.length === batchSize;
+        hasMore = data.length === batchSize;
       }
     }
 
     // Process publishers
     if (syncCollection === 'all' || syncCollection === 'publishers') {
-      await processPublishers(supabase, qdrant, stats);
+      await processPublishers(supabase, tiger, qdrant, stats);
     }
 
     // Process developers
     if (syncCollection === 'all' || syncCollection === 'developers') {
-      await processDevelopers(supabase, qdrant, stats);
+      await processDevelopers(supabase, tiger, qdrant, stats);
     }
 
     // Stop progress logging
@@ -712,19 +802,14 @@ async function main(): Promise<void> {
     await verifyQdrantCollections(qdrant);
 
     // Update sync job as completed
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: stats.gamesProcessed + stats.publishersEmbedded + stats.developersEmbedded,
-          items_succeeded: stats.gamesEmbedded + stats.publishersEmbedded + stats.developersEmbedded,
-          items_failed: stats.gamesFailed,
-          items_skipped: stats.gamesSkipped,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: stats.gamesProcessed + stats.publishersEmbedded + stats.developersEmbedded,
+      items_succeeded: stats.gamesEmbedded + stats.publishersEmbedded + stats.developersEmbedded,
+      items_failed: stats.gamesFailed,
+      items_skipped: stats.gamesSkipped,
+    });
 
     const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
     log.info('Embedding sync completed', {
@@ -742,20 +827,15 @@ async function main(): Promise<void> {
     });
 
     // Update sync job as failed
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
-          items_processed: stats.gamesProcessed,
-          items_succeeded: stats.gamesEmbedded,
-          items_failed: stats.gamesFailed,
-          items_skipped: stats.gamesSkipped,
-        })
-        .eq('id', job.id);
-    }
+    await updateSyncJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: error instanceof Error ? error.message : String(error),
+      items_processed: stats.gamesProcessed,
+      items_succeeded: stats.gamesEmbedded,
+      items_failed: stats.gamesFailed,
+      items_skipped: stats.gamesSkipped,
+    });
 
     process.exit(1);
   }

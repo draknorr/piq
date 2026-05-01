@@ -16,14 +16,16 @@ on:
       limit:
         description: 'Max number of games to sync per partition'
         required: false
-        default: '7000'
+        default: '500'
 
 env:
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
 
 jobs:
   sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours = ~21k games at 1 req/sec per partition
     strategy:

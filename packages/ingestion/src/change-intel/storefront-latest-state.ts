@@ -1,4 +1,9 @@
-import type { Database, TypedSupabaseClient } from '@publisheriq/database';
+import {
+  getTigerWriter,
+  readDataWriteTarget,
+  type Database,
+  type TypedSupabaseClient,
+} from '@publisheriq/database';
 import { APP_TYPES, logger, STEAM_CATEGORY_WORKSHOP, type AppType } from '@publisheriq/shared';
 import type { ParsedStorefrontApp } from '../apis/storefront.js';
 import type { NormalizedStorefrontSnapshot } from './types.js';
@@ -6,6 +11,9 @@ import type { NormalizedStorefrontSnapshot } from './types.js';
 const VALID_APP_TYPES = new Set<string>(APP_TYPES);
 const MAX_REASONABLE_PRICE_CENTS = 50_000;
 const log = logger.child({ component: 'storefront-latest-state' });
+type StorefrontTigerWriter = {
+  catalog: Pick<ReturnType<typeof getTigerWriter>['catalog'], 'upsertStorefrontApp'>;
+};
 
 export interface StorefrontUpsertArgs {
   p_appid: number;
@@ -68,8 +76,14 @@ function hasWorkshopCategory(snapshot: NormalizedStorefrontSnapshot): boolean {
 
 async function executeStorefrontUpsert(
   supabase: TypedSupabaseClient,
-  args: StorefrontUpsertArgs
+  args: StorefrontUpsertArgs,
+  tiger?: StorefrontTigerWriter
 ): Promise<void> {
+  if (tiger || readDataWriteTarget() === 'tiger') {
+    await (tiger ?? getTigerWriter()).catalog.upsertStorefrontApp(args);
+    return;
+  }
+
   const { error } = await supabase.rpc(
     'upsert_storefront_app',
     args as unknown as Database['public']['Functions']['upsert_storefront_app']['Args']
@@ -128,18 +142,21 @@ export function buildNormalizedStorefrontSnapshotUpsertArgs(
 export async function upsertLatestStorefrontState(
   supabase: TypedSupabaseClient,
   appid: number,
-  details: ParsedStorefrontApp
+  details: ParsedStorefrontApp,
+  tiger?: StorefrontTigerWriter
 ): Promise<void> {
-  await executeStorefrontUpsert(supabase, buildStorefrontUpsertArgs(appid, details));
+  await executeStorefrontUpsert(supabase, buildStorefrontUpsertArgs(appid, details), tiger);
 }
 
 export async function upsertNormalizedStorefrontSnapshotState(
   supabase: TypedSupabaseClient,
   appid: number,
-  snapshot: NormalizedStorefrontSnapshot
+  snapshot: NormalizedStorefrontSnapshot,
+  tiger?: StorefrontTigerWriter
 ): Promise<void> {
   await executeStorefrontUpsert(
     supabase,
-    buildNormalizedStorefrontSnapshotUpsertArgs(appid, snapshot)
+    buildNormalizedStorefrontSnapshotUpsertArgs(appid, snapshot),
+    tiger
   );
 }
