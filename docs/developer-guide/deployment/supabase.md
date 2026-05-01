@@ -2,6 +2,8 @@
 
 This guide covers setting up the Supabase side of PublisherIQ.
 
+Current state: Supabase is retained for auth/session/reference data, legacy reads, and product surfaces not yet proven Tiger-backed. Accepted incoming ingestion and product-data writer paths are Tiger/R2-primary where their runtime sets `DATA_WRITE_TARGET=tiger`, `CHANGE_INTEL_WRITE_TARGET=tiger`, `PICS_CHANGE_HISTORY_TARGET=tiger`, or `PICS_LATEST_STATE_TARGET=tiger`.
+
 ## Prerequisites
 
 - Supabase account ([supabase.com](https://supabase.com))
@@ -101,6 +103,8 @@ supabase/migrations/
 | `sync_status` | Per-app sync tracking |
 | `sync_jobs` | Job execution history |
 
+Some sync/status concepts now also exist on Tiger for accepted writer paths. Treat Supabase sync tables as retained legacy/reference unless the specific product surface still reads them directly.
+
 ### PICS Tables
 
 | Table | Purpose |
@@ -115,18 +119,56 @@ supabase/migrations/
 | `app_franchises` | App-franchise relationships |
 | `app_steam_deck` | Steam Deck compatibility |
 
+PICS latest-state tables can be written to Tiger when the Railway PICS service uses `PICS_LATEST_STATE_TARGET=tiger`. Supabase PICS tables remain relevant for legacy reads, fallback, and deployments that have not flipped the PICS target.
+
 See [Database Schema](../architecture/database-schema.md) for full details.
 
 ## Scope
 
 Supabase remains responsible for:
 
-- write authority for the live product database
 - auth and session state
-- operational/control-plane tables
+- service-role auth/reference operations that are explicitly marked with `SUPABASE_SERVICE_CLIENT_PURPOSE`
+- source/reference reads for Tiger bootstrap, parity, preview mirror, and legacy validation
 - page and admin reads that still execute directly against Supabase RPCs and materialized views
+- legacy product surfaces that have not been proven Tiger-backed
 
-TigerData owns the contract-serving query plane documented in [Tiger Chat Production](./tiger-chat-production.md) and [Query API](../../../apps/query-api/README.md).
+TigerData owns the accepted contract-serving query plane and Tiger/R2 owns accepted incoming ingestion/product-data writes documented in [Tiger Chat Production](./tiger-chat-production.md), [GitHub Actions Configuration](./github-actions.md), and [Query API](../../../apps/query-api/README.md).
+
+Do not describe Supabase as the universal live product write authority anymore. It remains required, but it is now a retained control/reference/legacy system for many paths.
+
+## Writer Gates And Credentials
+
+Tiger writer paths should not carry Supabase service-role credentials unless they are doing an approved non-product-write operation.
+
+Approved Supabase service-client purposes:
+
+| Purpose | Use |
+| ------- | --- |
+| `auth` | Auth/session/invite work |
+| `legacy-read` | Legacy read surfaces that still query Supabase |
+| `migration` | Approved migration/manual data movement |
+| `parity` | Compare source and target state |
+| `reference` | Read-only source/reference use |
+
+Set `SUPABASE_SERVICE_CLIENT_PURPOSE` only for those approved cases. Do not use it to bypass Tiger writer cutover.
+
+Repository-level scheduled writer gates:
+
+| Gate | Target |
+| ---- | ------ |
+| `ENABLE_TIGER_CATALOG_WRITERS` | App list, storefront, and catalog/change-intel writers |
+| `ENABLE_TIGER_METRICS_WRITERS` | Reviews, price, SteamSpy, CCU, trend, velocity, interpolation, and priority writers |
+| `ENABLE_TIGER_EMBEDDING_WRITER` | Embedding sync status writer |
+| `ENABLE_LEGACY_SUPABASE_WRITERS` | Explicit legacy Supabase write workflows only |
+
+Before enabling a Tiger writer gate, run a manual smoke with the smallest available input cap and run:
+
+```bash
+node scripts/ops/audit-supabase-writers.mjs --fail-on-supabase-writers
+```
+
+For embeddings, use GitHub Actions `embedding-sync.yml` with `max_batches=1` first.
 
 ## RPC Functions
 
@@ -185,6 +227,8 @@ Supabase provides automatic daily backups (Pro plan and above).
 -- Export specific tables
 pg_dump --table=apps --table=publishers ...
 ```
+
+For Tiger/R2-primary paths, a Supabase backup alone is not a full recovery point. Preserve Tiger backups, workflow manifests, and R2 object storage retention for change-intel and PICS archived payloads.
 
 ### Point-in-Time Recovery
 

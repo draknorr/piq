@@ -1,14 +1,15 @@
 # Sync Pipeline
 
-This document describes how PublisherIQ moves data from external sources into Supabase and then into TigerData-backed contract reads.
+This document describes how PublisherIQ moves data from external sources into the accepted Tiger/R2 and retained Supabase paths that feed TigerData-backed contract reads.
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 1, 2026
 
 ## Pipeline Summary
 
-PublisherIQ currently has two data-plane layers:
+PublisherIQ currently has three data-plane roles:
 
-- **Supabase write/control plane** for ingestion, latest-state storage, queues, projections, auth, and page-facing RPCs
+- **TigerData + R2 product-data plane** for accepted/tested incoming ingestion and product-data writer paths
+- **Supabase control/legacy plane** for auth, sessions, reference data, retained/default ingestion paths, queues, projections, and page-facing RPCs not proven Tiger-backed
 - **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, change/news, and YouTube contracts
 
 That means the pipeline is now:
@@ -16,8 +17,9 @@ That means the pipeline is now:
 ```text
 source APIs
   -> workers / PICS service
-  -> Supabase
-  -> Tiger bootstrap/backfill/refresh workflows
+  -> TigerData + R2 for accepted writer paths
+  -> Supabase for retained/default paths
+  -> Tiger bootstrap/backfill/refresh workflows where Supabase remains the source
   -> YouTube routing / discovery / refresh / rollup workflows
   -> query-api
   -> contract-backed reads
@@ -25,7 +27,7 @@ source APIs
 
 ## Scheduled Warehouse Syncs
 
-The TypeScript workers in `packages/ingestion` handle the regular Supabase warehouse pipeline:
+The TypeScript workers in `packages/ingestion` handle regular ingestion/product-data jobs. Accepted writer paths can target TigerData/R2; retained or legacy paths still use Supabase:
 
 | Command | Purpose |
 |---------|---------|
@@ -44,7 +46,7 @@ The TypeScript workers in `packages/ingestion` handle the regular Supabase wareh
 | `change-intel-backfill-projection` | Seed projection refresh jobs for change-intel backfills |
 | `repair-storefront-authority` | Repair missing storefront-authority fields before downstream refreshes |
 
-These workers write to Supabase. They do not write directly to TigerData in the normal application runtime.
+Do not describe these workers as Supabase-only. Tiger writer surfaces exist for accepted product-data paths, while Supabase remains the target for retained/default worker flows and page-facing projections that have not been cut over.
 
 ## YouTube Collector Pipeline
 
@@ -60,7 +62,7 @@ This collector reads the source database for routing state and writes the YouTub
 
 ## Change-Intelligence Runtime
 
-Change intelligence still runs primarily on Supabase-backed storage and projections.
+Change intelligence is split: accepted incoming product-data writes can use Tiger/R2, while the `/changes` page and some projections still rely on Supabase-backed read surfaces.
 
 ### 1. Hint Seeding
 
@@ -81,9 +83,11 @@ It captures data, writes snapshots and versions, refreshes change/news projectio
 
 `services/pics-service` runs in `bulk_sync`, `first_pass`, or `change_monitor` mode. `first_pass` pulls prioritized unsynced apps before the usual latest-state upserts, while the change monitor writes normalized PICS snapshots and PICS diff events inline.
 
+Do not overclaim latest-state cutover: PICS latest-state still defaults to Supabase unless `PICS_LATEST_STATE_TARGET=tiger` and the Tiger URL are present in the running Railway environment. PICS change history can write to Tiger/R2 when `PICS_CHANGE_HISTORY_TARGET=tiger` and object-storage archive settings are configured. App runtime writes should only be called Tiger-backed when that specific path has been tested.
+
 ## TigerData Bootstrap and Refresh Flow
 
-TigerData is populated from Supabase rather than from the raw source APIs directly.
+TigerData is populated by accepted primary writer paths and by Supabase-to-Tiger bootstrap/backfill/refresh workflows for retained or historical slices. Do not treat every raw source API flow as direct-to-Tiger unless the writer path is enabled and verified.
 
 ### Bootstrap phases
 
@@ -116,7 +120,7 @@ They do not manage the YouTube collector, which has its own `youtube-production-
 - projection refresh jobs update `change_activity_bursts`, `change_pattern_activity_days`, `change_pattern_app_windows`, and `steam_news_search_projection`
 - `app_capture_work_state` keeps one live row per app/source pair and coalesces repeated dirty signals
 - PICS history capture retries transient/schema-cache failures
-- repeated PICS history failures trigger a short cooldown for historical writes while latest-state upserts continue
+- repeated PICS history failures trigger a short cooldown for historical writes while latest-state upserts continue on their configured target
 
 ## Serving Split After Sync
 
@@ -131,8 +135,9 @@ After data lands:
 - Storefront is authoritative for parsed `release_date` and `is_free`
 - PICS is enrichment/fallback data
 - projection refresh is a derived read surface only and never the source of truth for Storefront values
-- Supabase remains the current write authority
-- TigerData is a contract-serving read target, not the write authority
+- TigerData/R2 is primary for accepted/tested incoming ingestion and product-data writer paths
+- Supabase remains authoritative for auth/session/control data, reference data, legacy surfaces, and product surfaces not proven Tiger-backed
+- TigerData is a contract-serving read target and accepted product-data write target, not a universal replacement for Supabase
 - YouTube coverage data is written directly to TigerData by `@publisheriq/youtube`; Supabase only holds the source-side routing and operational state that the collector reads
 
 ## Useful Runtime Knobs

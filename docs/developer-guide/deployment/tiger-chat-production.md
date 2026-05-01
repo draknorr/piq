@@ -1,14 +1,16 @@
 # Tiger Chat Production Deployment
 
-This guide covers the production rollout for the Tiger/query-api contract runtime while the rest of
-the site continues to run on the current Supabase and Cube paths.
+This guide covers the production rollout for the Tiger/query-api contract runtime and the accepted Tiger/R2 ingestion writer paths. Supabase and Cube still exist for retained auth/session/reference/legacy surfaces and product pages not proven Tiger-backed.
 
 Target topology:
 
 - Vercel Preview -> Railway Preview `query-api` -> Tiger Preview database
 - Vercel Production -> Railway Production `query-api` -> Tiger Production database
-- Supabase remains the write authority
 - TigerData powers the contract-serving query plane used by `/chat`, similarity, momentum, change-intel, and YouTube coverage routes
+- Tiger/R2 is primary for accepted incoming ingestion/product-data writer paths that set Tiger write targets
+- Supabase remains retained for auth/session/reference/legacy data and product surfaces not yet cut over
+
+Do not treat this as a full Supabase exit. The cutover boundary is per writer/read surface.
 
 ## 1. Provision The Tiger Databases
 
@@ -76,6 +78,40 @@ Performance note:
   `public.steam_news_search_projection` includes
   `idx_steam_news_search_projection_sort_time_gid`
 
+## 3.5. Enable Incoming Tiger/R2 Writers
+
+Accepted incoming ingestion/product-data writers should use Tiger and R2 directly instead of writing fresh product data back to Supabase.
+
+Core runtime variables:
+
+| Variable | Use |
+| -------- | --- |
+| `DATA_READ_TARGET=tiger` | Read worker scheduling/state from Tiger when supported |
+| `DATA_WRITE_TARGET=tiger` | Write catalog/metric/product-derived state to Tiger |
+| `CHANGE_INTEL_READ_TARGET=tiger` | Read change-intel queue/state from Tiger |
+| `CHANGE_INTEL_WRITE_TARGET=tiger` | Write storefront/news/change-intel rows to Tiger |
+| `TIGER_PRIMARY_URL` | Target Tiger Postgres URL |
+| `CHANGE_INTEL_ARCHIVE_TARGET=object_storage` | Store raw/normalized payload archives in R2/S3 |
+| `CHANGE_INTEL_ARCHIVE_BUCKET` | R2/S3 archive bucket |
+| `CHANGE_INTEL_ARCHIVE_PREFIX` | Prefix such as `production/change-intel` |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | R2/S3 endpoint |
+| `CHANGE_INTEL_ARCHIVE_REGION` | R2 commonly uses `auto` |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | R2/S3 access key |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | R2/S3 secret key |
+| `CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE=true` | R2 path-style setting |
+
+Scheduled writer gates in GitHub Actions:
+
+| Gate | Enables |
+| ---- | ------- |
+| `ENABLE_TIGER_CATALOG_WRITERS=true` | App list, storefront, catalog/change-intel writer schedules |
+| `ENABLE_TIGER_METRICS_WRITERS=true` | Reviews, price, SteamSpy, CCU, trends, velocity, interpolation, priority schedules |
+| `ENABLE_TIGER_EMBEDDING_WRITER=true` | Embedding sync schedule |
+
+Use manual dispatch first. For embeddings, set `max_batches=1` on `embedding-sync.yml` as the smoke test before enabling `ENABLE_TIGER_EMBEDDING_WRITER`.
+
+Legacy Supabase writer schedules are intentionally gated separately with `ENABLE_LEGACY_SUPABASE_WRITERS=true`; keep this off except for an approved legacy operation.
+
 ## 4. Deploy Railway Query API
 
 Create two Railway services from this repo using `apps/query-api/Dockerfile`:
@@ -129,6 +165,12 @@ Important:
 - the admin app now refuses to silently fall back to `127.0.0.1:4318` on
   deployed Vercel environments
 
+Supabase-facing product surfaces:
+
+- keep `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for auth/session and client-side Supabase surfaces
+- keep server-side Supabase service-role credentials only for approved auth/reference/legacy server paths
+- set `SUPABASE_SERVICE_CLIENT_PURPOSE=auth`, `legacy-read`, `reference`, `migration`, or `parity` when a server process legitimately needs a Supabase service client while Tiger writer targets are enabled
+
 ## 6. Enable Scheduled Tiger Refresh
 
 GitHub Actions now includes:
@@ -141,6 +183,15 @@ Required repository secrets:
 - `DATABASE_URL`
 - `TIGER_PRODUCTION_URL`
 - `TIGER_PREVIEW_URL`
+
+Additional secrets for accepted Tiger/R2 ingestion paths:
+
+- `CHANGE_INTEL_ARCHIVE_ENDPOINT`
+- `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`
+- `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY`
+- `QDRANT_URL`
+- `QDRANT_API_KEY`
+- `OPENAI_API_KEY`
 
 Production sync:
 
@@ -188,6 +239,14 @@ Fast preview validation:
 
 Use preview first, then production.
 
+Writer checks:
+
+- `applist-sync.yml` manual dispatch with a small `max_apps`
+- `storefront-sync.yml` manual dispatch with a small `batch_size`
+- `embedding-sync.yml` manual dispatch with `max_batches=1`
+- `node scripts/ops/audit-supabase-writers.mjs --fail-on-supabase-writers`
+- R2 archive inventory for `production/change-intel`
+
 Contract checks:
 
 - authenticated `GET /v1/contracts`
@@ -217,3 +276,5 @@ Expected outcome:
 - Preview and Production each call their own Railway service
 - production chat works without legacy fallback
 - YouTube prompts render `youtube_game_activity` cards with inline pagination when the gate is enabled
+- incoming accepted catalog, metric, embedding-status, storefront/news, and change-intel writes land in Tiger/R2
+- Supabase remains present for auth/session/reference/legacy surfaces and is not considered fully retired

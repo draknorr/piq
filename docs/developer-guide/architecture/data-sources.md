@@ -2,7 +2,7 @@
 
 PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived metadata, then serves those inputs through two different data planes.
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 1, 2026
 
 ## Source Hierarchy
 
@@ -20,28 +20,27 @@ PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived
 
 ## Where Those Sources Land
 
+### TigerData + R2
+
+TigerData and R2 are primary for accepted and tested incoming ingestion/product-data paths:
+
+- product-data writer surfaces that have been cut over
+- archived normalized snapshots and evidence payloads where object storage is configured
+- YouTube coverage, channel, match, and rollup tables written by `@publisheriq/youtube`
+- hot contract-serving slices for chat/search/discovery
+
 ### Supabase
 
-Supabase remains the first landing zone for:
+Supabase remains the retained target/source for:
 
-- latest-state app/catalog updates
-- operational queue state
-- change-intel projections
-- page-serving RPCs and views
-- auth and user state
+- auth and user/session state
+- credits, logs, and user-control data
+- reference data and operational state not proven Tiger-backed
+- legacy warehouse surfaces and compatibility reads
+- page-serving RPCs and views for `/apps`, `/companies`, `/changes`, and `/admin`
+- retained/default ingestion paths where Tiger/R2 has not been enabled and verified
 
-### TigerData
-
-TigerData receives selected hot read slices from Supabase for:
-
-- chat/search/discovery contracts
-- semantic retrieval
-- momentum and ranking contracts
-- change/news document contracts
-- user-context contract reads
-- YouTube coverage, channel, and rollup tables written by `@publisheriq/youtube`
-
-TigerData is therefore a **serving target**, not the first ingestion target.
+TigerData is therefore both the contract-serving target and the primary product-data target for accepted cutover paths, but it is not a blanket replacement for Supabase.
 
 ## Authority Rules
 
@@ -68,6 +67,8 @@ PICS is enrichment and fallback data for:
 - PICS-side history and diff events
 
 PICS does not override authoritative Storefront values for `release_date` or `is_free`.
+
+PICS latest-state writes support a Tiger target, but the service defaults to Supabase unless `PICS_LATEST_STATE_TARGET=tiger` and the Tiger URL are present in the running Railway environment. PICS change-history writes can use Tiger/R2 when `PICS_CHANGE_HISTORY_TARGET=tiger` and archive settings are configured. Do not infer deployed Railway behavior or app runtime writes from repository support alone.
 
 ### Internal projections
 

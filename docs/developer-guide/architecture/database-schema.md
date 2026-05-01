@@ -2,9 +2,9 @@
 
 > This document is optimized for LLM text-to-SQL generation. Use exact column names, types, and SQL patterns shown below.
 
-**Databases**: Supabase Postgres + TigerData (Timescale)
+**Databases / Storage**: Supabase Postgres + TigerData (Timescale) + R2
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 1, 2026
 
 **Semantic Layer**: Cube.js still provides compatibility analytics queries over Supabase-backed models. TigerData now serves the contract-backed chat/query plane, including YouTube coverage, through `apps/query-api`.
 
@@ -12,14 +12,15 @@
 
 ## Current Database Topology
 
-PublisherIQ now operates with two database roles:
+PublisherIQ now operates with these database/storage roles:
 
 | Plane | System | Current Role |
 |------|--------|--------------|
-| Write / control plane | Supabase Postgres | source ingestion, queues, auth, operational state, product RPCs, page reads |
+| Product data plane | TigerData (Timescale) + R2 | accepted/tested incoming ingestion and product-data writer paths, archived payloads, and contract-backed reads |
+| Control / legacy plane | Supabase Postgres | auth, sessions, user/control data, reference data, retained/default ingestion paths, legacy warehouse surfaces, product RPCs and page reads not proven Tiger-backed |
 | Contract read plane | TigerData (Timescale) | contract-backed chat/search/discovery reads served through `query-api` |
 
-This is not a full migration off Supabase. Supabase remains the write authority today.
+This is not a full migration off Supabase. Tiger/R2 is primary only for accepted and tested product-data paths; Supabase remains authoritative for retained control, reference, legacy, and product surfaces that are not proven Tiger-backed.
 
 ## TigerData Schema Overview
 
@@ -59,9 +60,9 @@ For the exact live contract list and ownership, see:
 
 The remainder of this document focuses on the Supabase schema detail, because:
 
-- Supabase is still the write authority
-- Supabase still serves most product-page reads
 - generated database types in `@publisheriq/database` come from the Supabase schema
+- Supabase still serves most product-page reads
+- retained/default paths and legacy surfaces still depend on this schema
 
 TigerData schema detail currently lives primarily in:
 
@@ -80,6 +81,8 @@ TigerData schema detail currently lives primarily in:
 | contract-backed chat/search/discovery | TigerData |
 | contract-backed YouTube coverage | TigerData |
 | Cube compatibility analytics | Supabase-backed Cube models |
+
+PICS note: Tiger schema and service code support PICS latest-state writes, but the runtime default is Supabase unless `PICS_LATEST_STATE_TARGET=tiger` and a Tiger URL are configured in Railway. PICS change-history Tiger/R2 writes also require object-storage archive configuration. Do not use this schema document to claim app runtime writes are Tiger-backed unless the specific path has been tested.
 
 ### TigerData YouTube Relations
 

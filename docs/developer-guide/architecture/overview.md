@@ -6,15 +6,16 @@ PublisherIQ is a Steam analytics platform with three main product surfaces:
 - a Change Feed for recent storefront, media, PICS, and news activity
 - an AI chat interface over curated catalog, momentum, semantic, and change-intelligence contracts
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 1, 2026
 
 ## High-Level Stack
 
 | Layer | Technology | Current Role |
 |-------|------------|--------------|
 | Frontend | Next.js 15 + React 19 | Signed-in dashboard and public entry surfaces |
-| Write / Control Plane | Supabase Postgres | warehouse tables, queues, auth, RPCs, admin stats, product-page reads |
+| Write / Control Plane | Supabase Postgres | auth, sessions, user/control data, reference data, legacy warehouse surfaces, and product reads not proven Tiger-backed |
 | Semantic Layer | Cube.js | legacy and compatibility analytics reads that still have not moved to Tiger-backed contracts |
+| Product Data Plane | TigerData + R2 | accepted/tested incoming ingestion and product-data writer paths, archived evidence payloads, and contract-serving slices |
 | Contract Read Plane | `apps/query-api` + `packages/data-plane` | TigerData-backed typed contracts for chat, semantic retrieval, momentum, change search, news search, YouTube coverage, and continuation |
 | TS Workers | `@publisheriq/ingestion` + `@publisheriq/youtube` | scheduled syncs, queue workers, change-intel maintenance, and YouTube collector jobs |
 | Python Service | `services/pics-service` | PICS ingestion, latest-state enrichment, and PICS history capture |
@@ -23,7 +24,8 @@ PublisherIQ is a Steam analytics platform with three main product surfaces:
 
 PublisherIQ currently runs as a **split data plane**, not a single-database application:
 
-- **Supabase** is still the authoritative write target for source ingestion, auth, operational state, product RPCs, and most page reads.
+- **TigerData + R2** are primary for accepted and tested incoming ingestion/product-data paths that have been cut over.
+- **Supabase** is retained for auth/session data, user/control state, reference data, legacy reads, product RPCs, and page reads that are not proven Tiger-backed.
 - **TigerData (Timescale)** is the read-optimized target for contract-backed chat and search/discovery paths, served only through `query-api`.
 - **Cube.js** still exists for compatibility and legacy analytics reads while those prompt families and page-level data flows continue to be migrated.
 
@@ -53,9 +55,12 @@ Steam APIs / Steam News / SteamSpy / PICS
         ↓
 TypeScript workers + PICS service + @publisheriq/youtube
         ↓
+TigerData + R2
+  - accepted product-data writer paths
+  - archived normalized/evidence payloads where configured
 Supabase
-  - source ingestion landing
-  - warehouse tables
+  - retained/default source paths
+  - legacy warehouse tables
   - queues and operational state
   - auth, credits, and chat logs
   - page-facing RPCs and projections
@@ -82,15 +87,17 @@ The dashboard in `apps/admin` owns:
 - admin pages for users, waitlist, usage, and system health
 - internal APIs for chat, alerts, pins, and Change Feed
 
-### Supabase Write / Control Plane
+### Supabase Retained Control And Legacy Plane
 
-Supabase currently stores:
+Supabase remains online for retained control-plane, reference, and legacy data:
 
-- warehouse tables and materialized views
-- `sync_status`, queue state, and worker control data
-- auth/session state, user profiles, credits, pins, and alerts
-- change-intel projections and `/changes` read surfaces
-- cached admin stats and chat logs
+- auth/session state and retained account records
+- historical warehouse/reference tables and materialized views
+- legacy product read surfaces and admin/debugging data not proven Tiger-backed
+- app runtime data such as credits, chat logs, pins, and alerts unless a route is explicitly documented as Tiger-backed
+- parity/reference data used to compare Tiger/R2 cutover behavior
+
+Do not add new incoming product or ingestion writes to Supabase. Accepted/tested ingestion paths write to TigerData and R2 directly, while unproven legacy surfaces stay read-only or retained until separately migrated.
 
 ### TigerData Contract Read Plane
 
@@ -132,12 +139,15 @@ The current change-intelligence system has four cooperating layers:
 
 The `/changes` page still reads Supabase SQL functions and internal APIs on top of those stored events and projections. The contract-backed chat path reads the TigerData change/news slice instead.
 
+PICS caveat: latest-state writes support a Tiger target, but the service defaults to Supabase unless `PICS_LATEST_STATE_TARGET=tiger` and the Tiger URL are set in the running Railway environment. Code support and local tests do not by themselves prove the deployed Railway service or app runtime is writing latest-state rows to Tiger.
+
 ## Source-of-Truth Rules
 
 - **Storefront** is authoritative for parsed `release_date`, pricing, and `is_free`.
 - **PICS** is enrichment and fallback for tags, genres, categories, Deck, release state, relationships, and historical PICS change capture.
-- **Supabase** is the current write authority for operational data and most page-serving data.
-- **TigerData** is the current contract-serving read plane, not the write authority.
+- **TigerData + R2** are primary for accepted/tested incoming ingestion and product-data paths that have been cut over.
+- **Supabase** remains authoritative for auth/session/control data, reference data, legacy surfaces, and product surfaces not proven Tiger-backed.
+- **TigerData** is the current contract-serving read plane and accepted product-data target, not a universal replacement for Supabase.
 - **Cube** is a compatibility analytics layer over Supabase-backed data, not the primary chat contract system.
 - **@publisheriq/youtube** writes YouTube coverage and rollup state directly into TigerData for the chat contract plane; it is not part of the Supabase ingestion path.
 

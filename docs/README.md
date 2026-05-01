@@ -6,10 +6,10 @@ PublisherIQ documentation is organized by audience and aligned with the current 
 
 ## Current-State Anchors
 
-These docs describe the live April 2026 operating model and should be treated as canonical:
+These docs describe the live May 2026 operating model and should be treated as canonical:
 
 - **[System Overview](developer-guide/architecture/overview.md)** - high-level architecture and load sharing
-- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current Supabase/TigerData/Cube split and operational flow
+- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current Supabase/TigerData/R2/Cube split and operational flow
 - **[Query API README](../apps/query-api/README.md)** - live contract service, environments, and contract ownership
 - **[YouTube Collector README](../packages/youtube/README.md)** - current Steam-scoped YouTube ingestion and rollup surface
 - **[Tiger Chat Production](developer-guide/deployment/tiger-chat-production.md)** - preview/production deployment and refresh topology
@@ -36,12 +36,12 @@ Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are
 
 ## Latest Release
 
-**[v2.12 - YouTube Coverage, Tiger Recovery, and Price Reliability](releases/v2.12-youtube-tiger-price-refresh.md)** (April 13, 2026)
+**[v2.13 - Tiger Primary Ingestion](releases/v2.13-tiger-primary-ingestion.md)** (May 1, 2026)
 
 Highlights:
-- `/chat` now supports public per-game YouTube coverage across latest uploads, creator coverage, top videos, growth, content mix, and cadence
-- Tiger preview/production workflows now document the current retry, fallback, watermark, and fast-preview-classification behavior
-- pricing and repair docs now reflect storefront-first effective pricing and the storefront-authority repair tooling
+- Tiger/R2 are primary for accepted incoming ingestion and product-data paths
+- Supabase is retained for auth/session/reference/legacy/product surfaces not proven Tiger-backed; no new product/ingestion writes should be added there
+- PR #8/#9/#10 landed the Tiger change-intel startup fix, review claim fix, and embedding candidate repair, with successful embedding smoke runs on commit `7be82955`
 
 ---
 
@@ -141,6 +141,7 @@ Highlights:
 
 ## Previous Releases
 
+- **[v2.12 - YouTube Coverage, Tiger Recovery, and Price Reliability](releases/v2.12-youtube-tiger-price-refresh.md)** - per-game YouTube chat coverage and Tiger recovery/pricing docs
 - **[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** - contract-first Tiger/query-api cutover baseline
 - **[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** - recent-news and ops baseline before the broader contract cutover doc refresh
 - **[v2.9 - Change Feed, Auth Hardening, and Change Intelligence](releases/v2.9-change-feed-auth-intelligence.md)** - Change Feed, auth, and change-intel baseline

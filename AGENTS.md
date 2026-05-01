@@ -9,8 +9,10 @@
 
 ## Project Structure & Module Organization
 - `apps/admin/`: Next.js 15 dashboard (App Router UI).
+- `apps/query-api/`: TigerData-backed HTTP contract boundary for chat/search/data-plane reads.
 - `packages/`: shared libraries.
   - `packages/database/`: Supabase client + generated types.
+  - `packages/data-plane/`: TigerData contract service, bootstrap SQL, and repair scripts.
   - `packages/ingestion/`: Steam API clients + workers.
   - `packages/qdrant/`: Qdrant client + collection schemas.
   - `packages/shared/`: utilities/logger.
@@ -30,10 +32,18 @@ Use pnpm + Turbo:
 - `pnpm format`: Prettier format for `*.ts`, `*.tsx`, `*.md`.
 
 ## Environment Variables
-- Root `.env`: ingestion/sync workers + Supabase service credentials + `DATABASE_URL`.
+- Root `.env`: ingestion/sync workers + Tiger/Supabase connection strings, R2 archive settings, and service credentials.
 - `apps/admin/.env.local`: dashboard auth + Supabase + chat/Cube/Qdrant config.
 - `services/pics-service/.env`: Python PICS service config (Railway).
 - `packages/cube/.env`: Cube.js config (Fly.io).
+
+## Current Data-Plane Split
+- TigerData/Timescale plus R2 are primary for accepted incoming ingestion/product-data paths.
+- Do not add new product/ingestion writes to Supabase.
+- Supabase remains for auth/session, reference data, legacy compatibility, and product surfaces not proven Tiger-backed.
+- Current accepted evidence includes PR #8 (Tiger change-intel/R2 startup), PR #9 (Tiger review claim verification), and PR #10 (Tiger embedding candidates plus capped smoke support).
+- Embedding smoke evidence: manual `embedding-sync.yml` runs `25205576035`, `25205646372`, `25205710827`, and `25205779668` succeeded on commit `7be82955` on May 1, 2026 UTC.
+- Do not overclaim PICS, Railway service deployment/env cleanup, or full dashboard runtime cutover without separate verification.
 
 ## Coding Style & Naming Conventions
 - TypeScript strict mode; prefer `const`, explicit return types.
@@ -49,6 +59,7 @@ No dedicated test runner is documented. Validate changes with:
 - `pnpm check-types` and `pnpm lint`.
 - Manual verification: `pnpm --filter @publisheriq/admin dev`.
 - Worker spot checks (example): `BATCH_SIZE=10 pnpm --filter @publisheriq/ingestion storefront-sync` (see `packages/ingestion/package.json` for available workers).
+- Tiger ingestion verification when touching writer paths: `pnpm tiger:ingestion-verify` or `node scripts/ops/verify-tiger-ingestion.mjs` with the appropriate env files.
 
 ## Commit & Pull Request Guidelines
 - Commit messages follow concise, imperative summaries (e.g., “Fix /apps page performance”).
@@ -58,6 +69,7 @@ No dedicated test runner is documented. Validate changes with:
 ## Data & Migration Notes
 - Migrations live in `supabase/migrations/` and use `YYYYMMDDHHMMSS_description.sql`.
 - Never apply migrations automatically. Follow the database safety rules below.
+- Tiger bootstrap SQL lives in `packages/data-plane/sql/tiger-bootstrap/`; applying it is a database write and requires explicit approval.
 - After schema changes, regenerate database types:
   - `pnpm --filter @publisheriq/database generate-types` (requires `SUPABASE_PROJECT_ID`), or
   - `supabase gen types typescript --linked > packages/database/src/types.ts`

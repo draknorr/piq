@@ -1,6 +1,6 @@
 # CLAUDE.md - PublisherIQ
 
-> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData-backed query-api. Last updated: April 13, 2026.
+> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData/R2-backed ingestion and query-api surfaces. Last updated: May 1, 2026.
 
 ## When Uncertain, Ask
 
@@ -77,6 +77,7 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 - Running `trends-calculate` or `priority-calculate` (correct: `calculate-trends`, `update-priorities`)
 - Assuming `/apps` is Tiger-backed today (it is still Supabase/RPC-backed)
 - Forgetting that YouTube chat coverage depends on the `getYoutubeGameCoverage` contract and `CHAT_TIGER_YOUTUBE_ENABLED`
+- Writing new product/ingestion data to Supabase. Accepted incoming ingestion/product-data paths are Tiger/R2-primary; Supabase is retained only for auth/session/reference/legacy/product surfaces not proven Tiger-backed.
 - Creating tests (no test framework configured; use `pnpm build` + `pnpm check-types`)
 
 ---
@@ -85,19 +86,28 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 
 Do not describe PublisherIQ as a single Postgres app anymore.
 
-- **Supabase** is still the write authority and control plane.
-- **TigerData / Timescale** is the contract-serving read plane behind `apps/query-api`.
+- **TigerData / Timescale** is primary for accepted incoming ingestion and product-data writes, and is the contract-serving read plane behind `apps/query-api`.
+- **Cloudflare R2** is the primary object archive for accepted change-intel/product payloads that are stored outside relational Tiger tables.
+- **Supabase** remains for auth/session, reference data, legacy compatibility, and product surfaces not yet proven Tiger-backed. Do not add new product/ingestion writes to Supabase.
 - **Cube.js** remains for compatibility and legacy analytics reads that have not yet moved to typed Tiger-backed contracts.
 
 Current high-level ownership:
 
-| Surface | Primary Read Path |
-|---------|-------------------|
+| Surface | Primary Path |
+|---------|--------------|
+| accepted Steam ingestion/product-data writes | TigerData; R2 for archived payload bodies/assets |
 | `/chat` supported contract families | `apps/query-api` -> TigerData |
 | `/chat` per-game YouTube coverage | `apps/query-api` -> TigerData |
-| auth, credits, chat logs | Supabase |
-| `/apps`, `/companies`, `/changes`, `/admin` | Supabase RPCs/tables/views |
+| auth, sessions, credits, chat logs | Supabase |
+| `/apps`, `/companies`, `/changes`, `/admin` product surfaces not proven Tiger-backed | Supabase RPCs/tables/views |
 | legacy analytics compatibility | Cube.js over Supabase |
+
+Recent accepted state:
+- PR #8 fixed Tiger-primary change-intel worker startup and routed storefront inaccessible/no-data updates through Tiger when `CHANGE_INTEL_WRITE_TARGET=tiger`.
+- PR #9 fixed the Tiger review claim RPC and updated ingestion verification to use actual Tiger job names and GitHub gate variables.
+- PR #10 fixed Tiger embedding candidate selection and added capped manual embedding smoke runs.
+- Embedding smoke evidence: GitHub Actions `embedding-sync.yml` manual runs `25205576035`, `25205646372`, `25205710827`, and `25205779668` all completed successfully on commit `7be82955` on May 1, 2026 UTC.
+- This is not a claim that PICS, Railway service deployment, or every runtime surface has fully cut over.
 
 ---
 
@@ -142,6 +152,7 @@ Each page has its **own** filter system (NOT shared):
 - Chat LLM files: `apps/admin/src/lib/llm/` (tools, system prompt, providers, entity links)
 - Tiger chat routing and YouTube prompt handling live in `apps/admin/src/lib/chat/tiger-shadow.ts`
 - Direct-to-Tiger YouTube ingestion lives in `packages/youtube/`
+- Tiger/R2 ingestion writer code lives primarily in `packages/database/src/tiger-writer.ts`, `packages/ingestion/src/workers/`, and `packages/ingestion/src/change-intel/`
 - When modifying cubes, always update `cube-system-prompt.ts` too
 - Change Feed SQL read surfaces are created by:
   - `20260315114500_add_change_feed_read_surfaces.sql`
@@ -182,7 +193,8 @@ For full schema details (tables, views, enums, RPC functions, column schemas), s
 | PICS Service | Railway |
 | Cube.js | Fly.io |
 | YouTube sync | GitHub Actions + TigerData |
-| Supabase Write / Control Plane | Supabase |
+| Accepted ingestion/product-data writes | Tiger / Timescale + R2 |
+| Supabase Auth / Session / Reference / Legacy Plane | Supabase |
 | Tiger Contract Read Plane | Tiger / Timescale |
 
 Environment variables: see `.env.example` files in `apps/admin/`, `packages/cube/`, `services/pics-service/`, and root `.env`.
