@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { getServiceClient } from '@publisheriq/database';
+import { getServiceClient, getTigerWriter } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchStorefrontAppDetails } from '../apis/storefront.js';
 import {
@@ -51,10 +51,6 @@ function shouldUseTigerPrimary(): boolean {
   return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
 }
 
-function hasSupabaseServiceEnv(): boolean {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
-}
-
 function normalizeTriggerCursor(triggerCursor: string | null): string | null {
   return triggerCursor && triggerCursor.length > 0 ? triggerCursor : null;
 }
@@ -91,28 +87,41 @@ function extractProjectionDeletedGids(payload: Record<string, unknown>): string[
   );
 }
 
+async function markStorefrontInaccessible(
+  supabase: SupabaseClient,
+  appid: number,
+  observedAt: string
+): Promise<void> {
+  if (shouldUseTigerPrimary()) {
+    await getTigerWriter().catalog.markStorefrontInaccessible(appid, observedAt);
+    return;
+  }
+
+  await (supabase as any)
+    .from('apps')
+    .update({
+      catalog_seed_state: 'inaccessible',
+      updated_at: observedAt,
+    })
+    .eq('appid', appid)
+    .eq('catalog_seed_state', 'stub');
+
+  await (supabase as any).from('sync_status').upsert(
+    {
+      appid,
+      storefront_accessible: false,
+      last_storefront_sync: observedAt,
+    },
+    { onConflict: 'appid' }
+  );
+}
+
 async function processStorefrontJob(supabase: SupabaseClient, appid: number, triggerCursor: string | null): Promise<void> {
   const result = await fetchStorefrontAppDetails(appid);
   const observedAt = new Date().toISOString();
 
   if (result.status === 'no_data') {
-    await (supabase as any)
-      .from('apps')
-      .update({
-        catalog_seed_state: 'inaccessible',
-        updated_at: observedAt,
-      })
-      .eq('appid', appid)
-      .eq('catalog_seed_state', 'stub');
-
-    await (supabase as any).from('sync_status').upsert(
-      {
-        appid,
-        storefront_accessible: false,
-        last_storefront_sync: observedAt,
-      },
-      { onConflict: 'appid' }
-    );
+    await markStorefrontInaccessible(supabase, appid, observedAt);
     return;
   }
 
@@ -298,9 +307,7 @@ async function main(): Promise<void> {
   const sources = (process.env.QUEUE_SOURCES?.split(',').map((value) => value.trim()).filter(Boolean) ?? [
     ...DEFAULT_SOURCES,
   ]) as QueueSource[];
-  const supabase = shouldUseTigerPrimary() && !hasSupabaseServiceEnv()
-    ? ({} as SupabaseClient)
-    : getServiceClient();
+  const supabase = shouldUseTigerPrimary() ? ({} as SupabaseClient) : getServiceClient();
   let idlePolls = 0;
   let lastStaleClaimSweepAt = 0;
   let catchupSeedBatches = 0;
