@@ -30,6 +30,7 @@ export type TigerPrimaryRoute =
   | 'fallback_to_legacy'
   | 'error';
 export type TigerShadowContractName =
+  | 'continueResultSet'
   | 'resolveEntities'
   | 'getEntityOverview'
   | 'discoverMomentum'

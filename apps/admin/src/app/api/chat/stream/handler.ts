@@ -2159,14 +2159,24 @@ export async function handleChatStreamRequest(
                   renderMode: 'deterministic',
                   route: 'primary_success',
                 }),
-                attempts: [{
-                  contractName: contractResponse.data.sourceContract,
-                  httpStatus: 200,
-                  resultCount: nextResultSet.returnedIds.length,
-                  status: 'success',
-                  sufficientToAnswer: true,
-                  timingMs: Math.round(executionMs),
-                }],
+                attempts: [
+                  {
+                    contractName: 'continueResultSet',
+                    httpStatus: 200,
+                    resultCount: nextResultSet.returnedIds.length,
+                    status: 'success',
+                    sufficientToAnswer: true,
+                    timingMs: Math.round(executionMs),
+                  },
+                  {
+                    contractName: contractResponse.data.sourceContract,
+                    httpStatus: 200,
+                    resultCount: nextResultSet.returnedIds.length,
+                    status: 'success',
+                    sufficientToAnswer: true,
+                    timingMs: Math.round(executionMs),
+                  },
+                ],
                 matchedIntent: continuationMatchedIntent,
                 renderMode: continuationAnswerBrief && renderedContinuationText !== continuationAnswerBrief.fallbackMarkdown
                   ? 'hybrid_narrator'

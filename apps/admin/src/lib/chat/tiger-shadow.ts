@@ -1318,6 +1318,15 @@ function normalizeSelectionKind(value: string): SessionSelectionEntityKind | nul
     : null;
 }
 
+function normalizeEntityResolutionQuery(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.replace(/\bsoftwere\b/gi, 'Software');
+}
+
 function scoreResolvedEntity(params: {
   entity: ResolvedCompareEntity;
   expectedEntityKind: SessionSelectionEntityKind | null;
@@ -1635,6 +1644,40 @@ function joinTigerHumanList(values: string[]): string {
   return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
 }
 
+function formatIsoDateOnly(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function inferPromptWindowLabel(prompt: string | null | undefined): string | null {
+  const text = prompt ?? '';
+  const now = new Date();
+  const end = formatIsoDateOnly(now);
+  const startDate = new Date(now);
+
+  if (/\bthis week\b|\bpast week\b|\blast 7 days?\b/i.test(text)) {
+    startDate.setUTCDate(startDate.getUTCDate() - 7);
+    return `${formatIsoDateOnly(startDate)} to ${end}`;
+  }
+
+  if (/\btoday\b/i.test(text)) {
+    return end;
+  }
+
+  if (/\bthis month\b|\blast 30 days?\b|\bpast 30 days?\b/i.test(text)) {
+    startDate.setUTCDate(startDate.getUTCDate() - 30);
+    return `${formatIsoDateOnly(startDate)} to ${end}`;
+  }
+
+  return null;
+}
+
+function extractSimilaritySeedFromPrompt(prompt: string): string | null {
+  const match =
+    prompt.match(/\b(?:games?|titles?)\s+like\s+(.+?)(?:\s+(?:that|with|under|over|from|are|breaking|trending)\b|[?!.]|$)/i)
+    ?? prompt.match(/\bsimilar\s+to\s+(.+?)(?:\s+(?:that|with|under|over|from|are|breaking|trending)\b|[?!.]|$)/i);
+  return normalizeEntityQuery(match?.[1] ?? null);
+}
+
 function buildTigerPrimaryNoResultText(params: {
   attempts: TigerShadowAttempt[];
   entityQuery?: string | null;
@@ -1723,7 +1766,10 @@ function buildTigerPrimaryNoResultText(params: {
   }
 
   if (params.matchedIntent === 'momentum_discovery') {
-    return 'I could not find enough qualifying titles to produce a stable momentum screen for this exact scope in the current structured snapshot.';
+    const entityLabel = extractSimilaritySeedFromPrompt(params.prompt ?? '');
+    const windowLabel = inferPromptWindowLabel(params.prompt) ?? 'the current structured snapshot';
+    const seedPrefix = entityLabel ? ` for ${entityLabel}` : '';
+    return `I could not find enough qualifying titles${seedPrefix} to produce a stable momentum screen for this exact scope in ${windowLabel}.`;
   }
 
   if (params.matchedIntent === 'semantic_search') {
@@ -1746,9 +1792,13 @@ function buildTigerPrimaryNoResultText(params: {
       params.entityQuery?.trim()
       || extractEntityQueryFromPrompt(params.prompt ?? '')
       || 'that title';
-    const windowLabel = hasExplicitPromptTimeWindow(params.prompt ?? '')
-      ? 'the requested time window'
-      : 'the recent change window';
+    const windowLabel =
+      inferPromptWindowLabel(params.prompt)
+      ?? (
+        hasExplicitPromptTimeWindow(params.prompt ?? '')
+          ? 'the requested time window'
+          : 'the recent change window'
+      );
     return `I could not find enough Steam change evidence for ${entityLabel} in ${windowLabel}.`;
   }
 
@@ -6182,6 +6232,7 @@ async function resolveSelectionSlotAttempt(params: {
     };
   }
 
+  const resolutionQuery = normalizeEntityResolutionQuery(params.query) ?? params.query;
   const startedAt = performance.now();
   const response = await postToQueryApi<ResolveEntitiesResponse>('/v1/contracts/resolve-entities', {
     entityKinds: params.entityKinds?.length
@@ -6191,7 +6242,7 @@ async function resolveSelectionSlotAttempt(params: {
         : ['game', 'publisher', 'developer'],
     includeMetrics: false,
     limit: params.strictResolver ? 25 : 6,
-    query: params.query,
+    query: resolutionQuery,
     resolutionMode: params.strictResolver
       ? 'chat_strict'
       : (params.resolutionPreference ? 'autocomplete' : 'default'),
@@ -6232,6 +6283,11 @@ async function resolveSelectionSlotAttempt(params: {
     query: params.query,
     resolutionPreference: params.resolutionPreference ?? null,
   });
+  const topCandidate = candidates[0] ?? null;
+  const exactSingleCandidate =
+    candidates.length === 1
+    && topCandidate?.matchQuality === 'exact'
+    && topCandidate.displayNameNormalized === normalizeForLooseMatch(params.query);
   const localRequiresClarification = needsClarificationForRankedCandidates({
     candidates,
     query: params.query,
@@ -6239,7 +6295,7 @@ async function resolveSelectionSlotAttempt(params: {
   });
   const resolverRequestedClarification = response.data?.ambiguity?.requiresClarification ?? false;
   const requiresClarification = params.strictResolver
-    ? (resolverRequestedClarification || localRequiresClarification)
+    ? (!exactSingleCandidate && (resolverRequestedClarification || localRequiresClarification))
     : (
       localRequiresClarification
       || (
@@ -9323,6 +9379,7 @@ async function runRelatedEntitiesPrimary(params: {
   selectionState?: SessionChatSelectionState | null;
 }): Promise<{
   attempts: TigerShadowAttempt[];
+  clarificationText?: string | null;
   request: GetRelatedEntitiesRequest | null;
   response: GetRelatedEntitiesResponse | null;
   selectionState: SessionChatSelectionState | null;
@@ -9338,6 +9395,9 @@ async function runRelatedEntitiesPrimary(params: {
     );
     return {
       attempts,
+      clarificationText: selectionStateRequiresClarification(builtRequest.selectionState)
+        ? renderSelectionClarification(builtRequest.selectionState!)
+        : null,
       request: null,
       response: null,
       selectionState: builtRequest.selectionState,
