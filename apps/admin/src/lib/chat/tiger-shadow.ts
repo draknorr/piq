@@ -84,6 +84,8 @@ const MOMENTUM_PROMPT_PATTERN =
   /\b(?:most players(?: right now)?|highest ccu|most concurrent players?|most played(?: right now)?|trending(?: up)?|trending down|gaining momentum|gaining traction|hot right now|breaking out|accelerating|declining|review momentum|reviews? surging|trending up in reviews|improving sentiment|worsening sentiment|reviews? slipping|reviews? improving|reviews? slowing down)\b/i;
 const MOMENTUM_PLAYER_PROMPT_PATTERN =
   /\b(?:most players(?: right now)?|highest ccu|most concurrent players?|most played(?: right now)?)\b/i;
+const MONTHLY_PLAYTIME_PROMPT_PATTERN =
+  /\b(?:monthly|last month|this month|january|february|march|april|may|june|july|august|september|october|november|december)\b[\s\S]*\b(?:playtime|played hours|hours played|estimated hours|estimated playtime)\b|\b(?:playtime|played hours|hours played|estimated hours|estimated playtime)\b[\s\S]*\b(?:monthly|last month|this month|january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
 const MOMENTUM_TRENDING_PROMPT_PATTERN =
   /\b(?:trending(?: up)?|gaining momentum|gaining traction|hot right now)\b/i;
 const MOMENTUM_BREAKOUT_PROMPT_PATTERN = /\bbreaking out\b/i;
@@ -1860,6 +1862,10 @@ function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerSha
 }
 
 function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | null {
+  if (MONTHLY_PLAYTIME_PROMPT_PATTERN.test(prompt)) {
+    return null;
+  }
+
   if (inferYoutubeGameActivityIntent(prompt)) {
     return 'youtube_game_activity';
   }
@@ -10309,8 +10315,11 @@ export async function runTigerPrimaryEvaluation(params: {
     sessionContext: params.sessionContext,
   });
   const interpretationEntity = getPrimaryInterpretationEntityHint(params.interpretation);
+  const shouldUseLegacyMonthlyPlaytimeCompat = MONTHLY_PLAYTIME_PROMPT_PATTERN.test(params.prompt);
   const interpretationIntent =
-    params.interpretation?.intent && isTigerPrimaryRenderableIntent(params.interpretation.intent)
+    !shouldUseLegacyMonthlyPlaytimeCompat
+    && params.interpretation?.intent
+    && isTigerPrimaryRenderableIntent(params.interpretation.intent)
       ? params.interpretation.intent
       : null;
   const interpretedIntent =
@@ -10325,7 +10334,9 @@ export async function runTigerPrimaryEvaluation(params: {
     prompt: params.prompt,
     selectionState: priorSelectionState,
   });
-  const matchedIntent = followUpContext?.matchedIntent
+  const matchedIntent = shouldUseLegacyMonthlyPlaytimeCompat
+    ? null
+    : followUpContext?.matchedIntent
     ?? explicitYoutubeIntent
     ?? selectionBoundIntent
     ?? interpretedIntent

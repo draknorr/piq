@@ -833,6 +833,25 @@ test('query_analytics uses Tiger monthly playtime contract for monthly game rank
   assert.ok(provenance?.dataSources.includes('query_api:queryMonthlyPlaytime'));
 });
 
+test('Tiger primary leaves monthly playtime prompts for the query_analytics compatibility path', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedFetch(t, async (url) => {
+    throw new Error(`Unexpected Tiger primary query-api call: ${url.pathname}`);
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'What were the top games by playtime in April 2026?',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.enabled, true);
+  assert.equal(result.info.matchedIntent, null);
+  assert.equal(result.info.route, 'unmatched');
+  assert.equal(result.renderedText, null);
+});
+
 test('Tiger primary routes marketing-push prompts through Tiger change discovery', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
