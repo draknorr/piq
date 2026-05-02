@@ -156,6 +156,7 @@ type TigerRenderContractName =
   | 'getEntityOverview'
   | 'getRelatedEntities'
   | 'getYoutubeGameCoverage'
+  | 'queryMonthlyPlaytime'
   | 'rankEntities'
   | 'searchCatalog'
   | 'semanticSearch'

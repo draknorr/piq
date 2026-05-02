@@ -10,6 +10,7 @@ export type TigerShadowMatchedIntent =
   | 'entity_compare'
   | 'metric_history'
   | 'momentum_discovery'
+  | 'monthly_playtime'
   | 'news_search'
   | 'relation_lookup'
   | 'semantic_search'
@@ -41,6 +42,7 @@ export type TigerShadowContractName =
   | 'explainChanges'
   | 'getRelatedEntities'
   | 'getUserContext'
+  | 'queryMonthlyPlaytime'
   | 'semanticSearch'
   | 'traceMetricHistory'
   | 'getYoutubeGameCoverage';

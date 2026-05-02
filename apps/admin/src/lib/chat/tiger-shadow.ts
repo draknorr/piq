@@ -931,6 +931,32 @@ interface TraceMetricHistoryShadowRequest {
   startDate: string;
 }
 
+interface QueryMonthlyPlaytimeRequest {
+  entityKind: 'game' | 'publisher';
+  endMonth?: string | null;
+  limit?: number;
+  startMonth?: string | null;
+}
+
+interface QueryMonthlyPlaytimeResponse {
+  endMonth: string;
+  entityKind: 'game' | 'publisher';
+  items: Array<{
+    entityId: number;
+    entityKind: 'game' | 'publisher';
+    estimatedMonthlyHours: number | string | null;
+    gameCount?: number | null;
+    month: string;
+    monthNum: number;
+    monthlyCcuSum?: number | string | null;
+    name: string;
+    rank: number;
+    year: number;
+  }>;
+  startMonth: string;
+  sufficientToAnswer: boolean;
+}
+
 interface CatalogShadowBuildResult {
   request: SearchCatalogShadowRequest | null;
   reason?: string;
@@ -960,6 +986,7 @@ interface TigerPrimaryEvaluationResult {
       | 'getEntityOverview'
       | 'getRelatedEntities'
       | 'getYoutubeGameCoverage'
+      | 'queryMonthlyPlaytime'
       | 'rankEntities'
       | 'searchCatalog'
       | 'traceMetricHistory'
@@ -1863,7 +1890,7 @@ function inferMatchedIntent(prompt: string, toolCalls: ChatToolCall[]): TigerSha
 
 function inferPrimaryMatchedIntent(prompt: string): TigerPrimaryMatchedIntent | null {
   if (MONTHLY_PLAYTIME_PROMPT_PATTERN.test(prompt)) {
-    return null;
+    return 'monthly_playtime';
   }
 
   if (inferYoutubeGameActivityIntent(prompt)) {
@@ -5741,7 +5768,7 @@ function inferRankingMetric(
   if (entityKind !== 'game' && /\b(?:most games|has the most games|game count|catalog size|released the most|releasing the most|most releases|most titles|most games this year)\b/.test(normalized)) {
     return 'game_count';
   }
-  if (/\bmost reviews\b|\bby reviews\b/.test(normalized)) {
+  if (/\bmost reviews\b|\bby reviews\b|\btotal reviews\b/.test(normalized)) {
     return 'total_reviews';
   }
   if (/\breview score\b|\bhighest-rated\b|\bbest rated\b|\bbest reviews\b|\bbest-reviewed\b/.test(normalized)) {
@@ -5852,6 +5879,58 @@ function buildClosestMatchRankingRequest(
       fallbackMode: 'closest_match',
       originalAggregateFilters: aggregateFilters,
     },
+  };
+}
+
+const MONTH_NAME_TO_INDEX: Record<string, number> = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+};
+
+function formatUtcMonth(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function parseMonthlyPlaytimeWindow(prompt: string): { endMonth: string; startMonth: string } {
+  const now = new Date();
+  const normalized = prompt.toLowerCase();
+  const explicitMonth = normalized.match(
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b/
+  );
+
+  if (explicitMonth) {
+    const monthIndex = MONTH_NAME_TO_INDEX[explicitMonth[1] ?? ''] ?? 0;
+    const year = Number(explicitMonth[2]);
+    const month = formatUtcMonth(new Date(Date.UTC(year, monthIndex, 1)));
+    return { endMonth: month, startMonth: month };
+  }
+
+  if (/\bthis month\b/.test(normalized)) {
+    const month = formatUtcMonth(startOfUtcMonth(now));
+    return { endMonth: month, startMonth: month };
+  }
+
+  const lastMonth = startOfUtcMonth(now);
+  lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1);
+  const month = formatUtcMonth(lastMonth);
+  return { endMonth: month, startMonth: month };
+}
+
+function buildMonthlyPlaytimeRequest(prompt: string): QueryMonthlyPlaytimeRequest {
+  return {
+    entityKind: /\bpublishers?\b/i.test(prompt) ? 'publisher' : 'game',
+    limit: extractRequestedTopCount(prompt, 10),
+    ...parseMonthlyPlaytimeWindow(prompt),
   };
 }
 
@@ -9473,6 +9552,51 @@ async function runRankEntitiesPrimary(params: {
   };
 }
 
+async function runMonthlyPlaytimePrimary(prompt: string): Promise<{
+  attempts: TigerShadowAttempt[];
+  request: QueryMonthlyPlaytimeRequest;
+  response: QueryMonthlyPlaytimeResponse | null;
+}> {
+  const request = buildMonthlyPlaytimeRequest(prompt);
+  const startedAt = performance.now();
+  const response = await postToQueryApi<QueryMonthlyPlaytimeResponse>(
+    '/v1/contracts/query-monthly-playtime',
+    request,
+    { timeoutMs: readPrimaryTimeoutMs() }
+  );
+  const timingMs = Math.round(performance.now() - startedAt);
+
+  if (!response.ok) {
+    return {
+      attempts: [{
+        contractName: 'queryMonthlyPlaytime',
+        errorCode: response.errorCode,
+        httpStatus: response.httpStatus,
+        reason: response.reason,
+        status: 'error',
+        timingMs,
+      }],
+      request,
+      response: null,
+    };
+  }
+
+  const resultCount = response.data?.items?.length ?? 0;
+  const sufficientToAnswer = response.data?.sufficientToAnswer ?? resultCount > 0;
+  return {
+    attempts: [{
+      contractName: 'queryMonthlyPlaytime',
+      httpStatus: response.httpStatus,
+      resultCount,
+      status: 'success',
+      sufficientToAnswer,
+      timingMs,
+    }],
+    request,
+    response: resultCount > 0 && sufficientToAnswer ? response.data ?? null : null,
+  };
+}
+
 async function runCompareEntitiesPrimary(params: {
   prompt: string;
   requestOverride?: CompareEntitiesShadowRequest | null;
@@ -10315,10 +10439,8 @@ export async function runTigerPrimaryEvaluation(params: {
     sessionContext: params.sessionContext,
   });
   const interpretationEntity = getPrimaryInterpretationEntityHint(params.interpretation);
-  const shouldUseLegacyMonthlyPlaytimeCompat = MONTHLY_PLAYTIME_PROMPT_PATTERN.test(params.prompt);
   const interpretationIntent =
-    !shouldUseLegacyMonthlyPlaytimeCompat
-    && params.interpretation?.intent
+    params.interpretation?.intent
     && isTigerPrimaryRenderableIntent(params.interpretation.intent)
       ? params.interpretation.intent
       : null;
@@ -10334,9 +10456,11 @@ export async function runTigerPrimaryEvaluation(params: {
     prompt: params.prompt,
     selectionState: priorSelectionState,
   });
-  const matchedIntent = shouldUseLegacyMonthlyPlaytimeCompat
-    ? null
-    : followUpContext?.matchedIntent
+  const explicitMonthlyPlaytimeIntent = MONTHLY_PLAYTIME_PROMPT_PATTERN.test(params.prompt)
+    ? 'monthly_playtime'
+    : null;
+  const matchedIntent = followUpContext?.matchedIntent
+    ?? explicitMonthlyPlaytimeIntent
     ?? explicitYoutubeIntent
     ?? selectionBoundIntent
     ?? interpretedIntent
@@ -10488,6 +10612,8 @@ export async function runTigerPrimaryEvaluation(params: {
                 ? (followUpContext.requestOverride as RankEntitiesShadowRequest | null | undefined)
                 : null,
           })
+        : matchedIntent === 'monthly_playtime'
+          ? await runMonthlyPlaytimePrimary(params.prompt)
         : matchedIntent === 'entity_compare'
           ? await runCompareEntitiesPrimary({
             prompt: params.prompt,
@@ -10789,6 +10915,12 @@ export async function runTigerPrimaryEvaluation(params: {
                 request: outcome.request as unknown as Record<string, unknown>,
                 response: outcome.response,
               }
+          : matchedIntent === 'monthly_playtime' && 'request' in outcome && outcome.request
+            ? {
+                contractName: 'queryMonthlyPlaytime',
+                request: outcome.request as unknown as Record<string, unknown>,
+                response: outcome.response,
+              }
           : matchedIntent === 'catalog_search' && 'request' in outcome && outcome.request
         ? {
             contractName: 'searchCatalog',
@@ -10853,6 +10985,8 @@ export async function runTigerPrimaryEvaluation(params: {
             ? 'getRelatedEntities'
             : matchedIntent === 'entity_ranking'
             ? 'rankEntities'
+          : matchedIntent === 'monthly_playtime'
+            ? 'queryMonthlyPlaytime'
           : matchedIntent === 'entity_compare'
             ? 'compareEntities'
           : matchedIntent === 'momentum_discovery'

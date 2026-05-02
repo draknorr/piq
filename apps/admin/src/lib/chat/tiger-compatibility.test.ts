@@ -833,10 +833,36 @@ test('query_analytics uses Tiger monthly playtime contract for monthly game rank
   assert.ok(provenance?.dataSources.includes('query_api:queryMonthlyPlaytime'));
 });
 
-test('Tiger primary leaves monthly playtime prompts for the query_analytics compatibility path', async (t) => {
+test('Tiger primary routes monthly playtime prompts through Tiger monthly aggregates', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
-  setScopedFetch(t, async (url) => {
-    throw new Error(`Unexpected Tiger primary query-api call: ${url.pathname}`);
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/query-monthly-playtime');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.entityKind, 'game');
+    assert.equal(body.startMonth, '2026-04-01');
+    assert.equal(body.endMonth, '2026-04-01');
+
+    return jsonResponse({
+      endMonth: '2026-04-01',
+      entityKind: 'game',
+      items: [
+        {
+          entityId: 730,
+          entityKind: 'game',
+          estimatedMonthlyHours: 144977576,
+          month: '2026-04-01',
+          monthNum: 4,
+          monthlyCcuSum: 41906267,
+          name: 'Counter-Strike 2',
+          rank: 1,
+          year: 2026,
+        },
+      ],
+      startMonth: '2026-04-01',
+      sufficientToAnswer: true,
+    });
   });
 
   const result = await runTigerPrimaryEvaluation({
@@ -847,9 +873,10 @@ test('Tiger primary leaves monthly playtime prompts for the query_analytics comp
   });
 
   assert.equal(result.info.enabled, true);
-  assert.equal(result.info.matchedIntent, null);
-  assert.equal(result.info.route, 'unmatched');
-  assert.equal(result.renderedText, null);
+  assert.equal(result.info.matchedIntent, 'monthly_playtime');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'queryMonthlyPlaytime');
+  assert.match(result.renderedText ?? '', /Counter-Strike 2/);
 });
 
 test('Tiger primary routes marketing-push prompts through Tiger change discovery', async (t) => {

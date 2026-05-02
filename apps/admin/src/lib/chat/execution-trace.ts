@@ -372,6 +372,17 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'Explicit single-game YouTube coverage now runs through the system-owned query-api contract.',
     recommendedTigerContracts: ['getYoutubeGameCoverage'],
   },
+  queryMonthlyPlaytime: {
+    backendKinds: ['tiger_query_api'],
+    dataSources: [
+      'query_api:queryMonthlyPlaytime',
+      'relation:metrics.monthly_game_metrics',
+      'relation:metrics.monthly_publisher_metrics',
+    ],
+    migrationDisposition: 'already_tiger',
+    migrationNotes: 'Monthly playtime rankings now run through bounded Tiger monthly aggregates.',
+    recommendedTigerContracts: ['queryMonthlyPlaytime'],
+  },
   rankEntities: {
     backendKinds: ['tiger_query_api'],
     dataSources: ['query_api:rankEntities', ...SHARED_CATALOG_RELATIONS],

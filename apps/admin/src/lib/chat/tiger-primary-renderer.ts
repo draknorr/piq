@@ -11,6 +11,7 @@ type TigerPrimaryRenderableIntent =
   | 'entity_ranking'
   | 'metric_history'
   | 'momentum_discovery'
+  | 'monthly_playtime'
   | 'news_search'
   | 'relation_lookup'
   | 'semantic_search'
@@ -235,6 +236,26 @@ interface TigerPrimaryTraceMetricHistoryResponse {
   };
   series: TigerPrimaryTraceMetricHistorySeries[];
   startDate: string;
+}
+
+interface TigerPrimaryMonthlyPlaytimeItem {
+  entityId: number;
+  entityKind: 'game' | 'publisher';
+  estimatedMonthlyHours: number | string | null;
+  gameCount?: number | null;
+  month: string;
+  monthNum: number;
+  monthlyCcuSum?: number | string | null;
+  name: string;
+  rank: number;
+  year: number;
+}
+
+interface TigerPrimaryMonthlyPlaytimeResponse {
+  endMonth: string;
+  entityKind: 'game' | 'publisher';
+  items: TigerPrimaryMonthlyPlaytimeItem[];
+  startMonth: string;
 }
 
 interface TigerPrimaryDiscoverMomentumItem {
@@ -472,7 +493,7 @@ interface TigerPrimaryExplainChangesResponse {
   };
 }
 
-function formatNumber(value: number | null | undefined): string {
+function formatNumber(value: unknown): string {
   const numericValue = coerceNumber(value);
   if (numericValue == null) {
     return 'n/a';
@@ -1913,6 +1934,54 @@ function renderExplainChanges(response: TigerPrimaryExplainChangesResponse): str
   ].join('\n');
 }
 
+function formatMonthLabel(value: string): string {
+  const date = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    timeZone: 'UTC',
+    year: 'numeric',
+  });
+}
+
+function renderMonthlyPlaytime(response: TigerPrimaryMonthlyPlaytimeResponse): string {
+  const entityLabel = response.entityKind === 'publisher' ? 'publishers' : 'games';
+  const monthLabel =
+    response.startMonth === response.endMonth
+      ? formatMonthLabel(response.startMonth)
+      : `${formatMonthLabel(response.startMonth)} to ${formatMonthLabel(response.endMonth)}`;
+  const rows = response.items.slice(0, 10).map((item) => {
+    const name = response.entityKind === 'game'
+      ? `[${item.name}](game:${item.entityId})`
+      : item.name;
+    const base = [
+      item.rank,
+      name,
+      formatNumber(item.estimatedMonthlyHours),
+    ];
+    if (response.entityKind === 'publisher') {
+      base.push(formatNumber(item.gameCount));
+    } else {
+      base.push(formatNumber(item.monthlyCcuSum));
+    }
+    return `| ${base.join(' | ')} |`;
+  });
+  const finalColumn = response.entityKind === 'publisher' ? 'Games' : 'Monthly CCU Sum';
+
+  return [
+    `Here are the top ${entityLabel} by estimated played hours for **${monthLabel}**.`,
+    '',
+    `| Rank | ${response.entityKind === 'publisher' ? 'Publisher' : 'Game'} | Estimated Played Hours | ${finalColumn} |`,
+    '| --- | --- | ---: | ---: |',
+    ...rows,
+    '',
+    '*Estimated played hours are modeled from concurrent-player data; Steam does not publish actual total played hours.*',
+  ].join('\n');
+}
+
 export function renderTigerPrimaryResult(params: {
   matchedIntent: TigerPrimaryRenderableIntent;
   momentumPromptFamily?: SessionMomentumPromptFamily | null;
@@ -1955,6 +2024,10 @@ export function renderTigerPrimaryResult(params: {
       scopeAdjustedForSparseResults: params.scopeAdjustedForSparseResults,
       response: params.response as TigerPrimaryDiscoverMomentumResponse,
     });
+  }
+
+  if (params.matchedIntent === 'monthly_playtime') {
+    return renderMonthlyPlaytime(params.response as TigerPrimaryMonthlyPlaytimeResponse);
   }
 
   if (params.matchedIntent === 'news_search') {

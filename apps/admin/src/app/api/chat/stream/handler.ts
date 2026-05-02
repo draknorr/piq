@@ -662,6 +662,7 @@ function buildTigerSyntheticToolCall(params: {
     | 'discoverMomentum'
     | 'getEntityOverview'
     | 'getRelatedEntities'
+    | 'queryMonthlyPlaytime'
     | 'rankEntities'
     | 'searchCatalog'
     | 'semanticSearch';
@@ -1855,6 +1856,7 @@ export async function handleChatStreamRequest(
             const syntheticToolCall =
               contractResult.contractName === 'traceMetricHistory'
               || contractResult.contractName === 'getYoutubeGameCoverage'
+              || contractResult.contractName === 'queryMonthlyPlaytime'
                 ? null
                 : buildTigerSyntheticToolCall({
                     contractName: contractResult.contractName,
