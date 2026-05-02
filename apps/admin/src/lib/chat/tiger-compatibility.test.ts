@@ -2269,6 +2269,55 @@ test('Tiger primary keeps better-review similarity prompts on Tiger semanticSear
   assert.match(result.renderedText ?? '', /Dead Cells/);
 });
 
+test('Tiger primary preserves semantic max-review ceilings from prompt text', async (t) => {
+  setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/semantic-search');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.mode, 'similarity');
+    assert.equal(body.referenceQuery, 'Hollow Knight');
+    assert.equal(body.filters?.max_reviews, 10000);
+
+    return jsonResponse({
+      mode: 'semantic',
+      reference: {
+        id: 367520,
+        name: 'Hollow Knight',
+        type: 'game',
+      },
+      results: [
+        {
+          id: 1296830,
+          matchReasons: ['Metroidvania and action-platformer fit.'],
+          name: 'Warm Snow',
+          review_percentage: 94,
+          score: 0.82,
+          total_reviews: 9540,
+          type: 'game',
+        },
+      ],
+      sufficient_to_answer: true,
+      success: true,
+      total_found: 1,
+    });
+  });
+
+  const result = await runTigerPrimaryEvaluation({
+    isEvalRequest: true,
+    prompt: 'Games similar to Hollow Knight with fewer than 10K reviews',
+    sessionContext: null,
+    userId: 'user-1',
+  });
+
+  assert.equal(result.info.matchedIntent, 'semantic_search');
+  assert.equal(result.info.route, 'primary_success');
+  assert.equal(result.contractResult?.contractName, 'semanticSearch');
+  assert.match(result.renderedText ?? '', /Warm Snow/);
+});
+
 test('Tiger primary routes on-sale discovery prompts through Tiger catalog search', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');

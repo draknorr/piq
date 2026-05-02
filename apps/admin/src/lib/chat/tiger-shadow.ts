@@ -883,6 +883,8 @@ interface SemanticSearchShadowRequest {
   entityKind: 'developer' | 'game' | 'publisher';
   filters?: {
     is_free?: boolean;
+    max_reviews?: number;
+    min_reviews?: number;
     review_comparison?: 'any' | 'better_only' | 'similar_or_better';
     max_price_cents?: number;
     platforms?: Array<'windows' | 'macos' | 'linux'>;
@@ -3351,6 +3353,14 @@ function extractMomentumMinReviews(prompt: string): number | undefined {
   return parsed != null ? parsed : undefined;
 }
 
+function extractMomentumMaxReviews(prompt: string): number | undefined {
+  const match = prompt.match(
+    /\b(?:under|below|less than|fewer than|max(?:imum)?(?: of)?|up to)\s+([\d,.]+[kmb]?)\s+reviews?\b/i
+  );
+  const parsed = parseCountToken(match?.[1] ?? null);
+  return parsed != null ? parsed : undefined;
+}
+
 function extractMomentumMinCcu(prompt: string): number | undefined {
   const match = prompt.match(
     /\b(?:at least|min(?:imum)?(?: of)?|over|more than)\s+([\d,.]+[kmb]?)\s+(?:ccu|concurrent players?|players?\s+right\s+now)\b/i
@@ -5016,6 +5026,16 @@ function extractSemanticFilters(prompt: string): SemanticSearchShadowRequest['fi
     filters.is_free = true;
   }
 
+  const minReviews = extractMomentumMinReviews(prompt);
+  if (minReviews != null) {
+    filters.min_reviews = minReviews;
+  }
+
+  const maxReviews = extractMomentumMaxReviews(prompt);
+  if (maxReviews != null) {
+    filters.max_reviews = maxReviews;
+  }
+
   const tags = extractMomentumTags(prompt);
   if (tags && tags.length > 0) {
     filters.tags = tags;
@@ -5049,6 +5069,9 @@ function countSemanticPromptFilters(
     count += 1;
   }
   if (typeof filters.is_free === 'boolean') {
+    count += 1;
+  }
+  if (typeof filters.min_reviews === 'number' || typeof filters.max_reviews === 'number') {
     count += 1;
   }
   if (filters.tags?.length) {

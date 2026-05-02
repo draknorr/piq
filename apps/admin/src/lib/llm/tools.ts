@@ -108,6 +108,10 @@ Use the 'type' field to determine link format: [name](game:{id}), [name](/publis
               type: 'number',
               description: 'Minimum number of reviews',
             },
+            max_reviews: {
+              type: 'number',
+              description: 'Maximum number of reviews',
+            },
             release_year: {
               type: 'object',
               properties: {

@@ -11,9 +11,11 @@ primary_region = 'sjc'
 
 [env]
   CUBEJS_CACHE_AND_QUEUE_DRIVER = 'memory'
-  CUBEJS_DEV_MODE = 'true'
+  CUBEJS_DB_APPLICATION_NAME = 'publisheriq-cube'
+  CUBEJS_DEV_MODE = 'false'
   CUBEJS_LOG_LEVEL = 'info'
   CUBEJS_PRE_AGGREGATIONS_SCHEMA = 'cube_pre_aggs'
+  CUBEJS_SCHEDULED_REFRESH_TIMER_SECONDS = '300'
   CUBEJS_TELEMETRY = 'false'
   NODE_ENV = 'production'
 

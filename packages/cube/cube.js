@@ -3,6 +3,11 @@
 
 const jwt = require('jsonwebtoken');
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 /** @type {import('@cubejs-backend/server-core').CreateOptions} */
 module.exports = {
   // Database connection
@@ -18,14 +23,15 @@ module.exports = {
       user: process.env.CUBEJS_DB_USER,
       password: process.env.CUBEJS_DB_PASS,
       ssl: { rejectUnauthorized: false },
+      application_name: process.env.CUBEJS_DB_APPLICATION_NAME || 'publisheriq-cube',
     });
   },
 
   // In-memory caching (no Redis needed for low volume)
-  cacheAndQueueDriver: 'memory',
+  cacheAndQueueDriver: process.env.CUBEJS_CACHE_AND_QUEUE_DRIVER || 'memory',
 
   // Pre-aggregations stored in source database
-  preAggregationsSchema: 'cube_pre_aggs',
+  preAggregationsSchema: process.env.CUBEJS_PRE_AGGREGATIONS_SCHEMA || 'cube_pre_aggs',
 
   // JWT Authentication
   checkAuth: (req, auth) => {
@@ -41,7 +47,7 @@ module.exports = {
   },
 
   // Enable scheduled refresh to keep pre-aggregations fresh
-  scheduledRefreshTimer: 60, // Check every 60 seconds
+  scheduledRefreshTimer: parsePositiveInt(process.env.CUBEJS_SCHEDULED_REFRESH_TIMER_SECONDS, 300),
 
   // Allow Playground in development
   devServer: process.env.CUBEJS_DEV_MODE === 'true',
