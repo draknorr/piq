@@ -200,6 +200,7 @@ async function main(): Promise<void> {
 
   let processed = 0;
   let updated = 0;
+  let lastAppid = 0;
 
   try {
     // Get count of apps to process
@@ -212,12 +213,13 @@ async function main(): Promise<void> {
     const totalApps = count ?? 0;
     log.info('Found apps to calculate priority', { count: totalApps });
 
-    // Process in batches using offset pagination
+    // Tiger uses keyset pagination so deep catalog scans stay below statement timeout.
+    // The legacy Supabase path keeps its existing offset pagination.
     let offset = 0;
 
     while (offset < totalApps) {
       const priorityInputs: PriorityInput[] | null = tiger
-        ? await tiger.metrics.listPriorityInputs(offset, batchSize)
+        ? await tiger.metrics.listPriorityInputsAfter(lastAppid, batchSize)
         : null;
 
       // Get batch of app IDs with sync timestamps
@@ -233,6 +235,9 @@ async function main(): Promise<void> {
       }
 
       const appids = syncStatusBatch.map((s) => s.appid);
+      if (tiger) {
+        lastAppid = appids[appids.length - 1] ?? lastAppid;
+      }
 
       // Build sync status lookup map
       const syncStatusMap = new Map<
@@ -364,12 +369,20 @@ async function main(): Promise<void> {
         log.error('Batch upsert failed', { error, batchSize: updates.length });
       }
 
-      offset += batchSize;
+      offset = tiger ? processed : offset + batchSize;
+
+      await updateSyncJob(jobId, supabase, tiger, {
+        items_processed: processed,
+        items_succeeded: updated,
+        items_failed: processed - updated,
+        ...(tiger ? { metadata: { last_appid: lastAppid } } : {}),
+      });
 
       log.info('Priority batch progress', {
         processed,
         updated,
         offset,
+        lastAppid: tiger ? lastAppid : undefined,
         total: totalApps,
       });
     }
@@ -391,6 +404,10 @@ async function main(): Promise<void> {
       status: 'failed',
       completed_at: new Date().toISOString(),
       error_message: error instanceof Error ? error.message : String(error),
+      items_processed: processed,
+      items_succeeded: updated,
+      items_failed: processed - updated,
+      ...(tiger ? { metadata: { last_appid: lastAppid } } : {}),
     });
 
     process.exit(1);

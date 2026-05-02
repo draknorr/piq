@@ -472,6 +472,47 @@ test('metrics.listPriorityInputs returns joined priority calculation inputs', as
   assert.deepEqual(pool.calls[0]?.values, [50, 100]);
 });
 
+test('metrics.listPriorityInputsAfter uses keyset pagination and latest metrics table', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        appid: 10,
+        ccu_peak: '123',
+        is_released: true,
+        last_reviews_sync: new Date('2026-04-29T00:00:00.000Z'),
+        last_steamspy_sync: null,
+        release_date: '2026-04-01T00:00:00.000Z',
+        review_velocity_30d: '3.5',
+        review_velocity_7d: '7.25',
+        total_reviews: '999',
+        trend_30d_change_pct: '-2.5',
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const rows = await writer.metrics.listPriorityInputsAfter(5000, 100);
+
+  assert.deepEqual(rows, [
+    {
+      appid: 10,
+      ccu_peak: 123,
+      is_released: true,
+      last_reviews_sync: '2026-04-29T00:00:00.000Z',
+      last_steamspy_sync: null,
+      release_date: '2026-04-01',
+      review_velocity_30d: 3.5,
+      review_velocity_7d: 7.25,
+      total_reviews: 999,
+      trend_30d_change_pct: -2.5,
+    },
+  ]);
+  assert.match(pool.calls[0]?.sql ?? '', /WHERE appid > \$1/);
+  assert.match(pool.calls[0]?.sql ?? '', /LEFT JOIN legacy\.latest_daily_metrics ldm/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /metrics\.daily_metrics/);
+  assert.deepEqual(pool.calls[0]?.values, [5000, 100]);
+});
+
 test('embeddings.listGameCandidates reads full embedding rows from Tiger RPC', async () => {
   const pool = new CapturingPool([
     result([
