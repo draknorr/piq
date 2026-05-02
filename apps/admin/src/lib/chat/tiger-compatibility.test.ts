@@ -4246,7 +4246,7 @@ test('Tiger primary prefers company candidates over fuzzy game matches for organ
       assert.equal(body.resolutionPreference, 'company');
       assert.deepEqual(body.entityKinds, ['publisher', 'developer', 'game']);
 
-      if (body.query === 'FromSoftwere') {
+      if (body.query === 'FromSoftware') {
         return jsonResponse({
           ambiguity: {
             requiresClarification: false,

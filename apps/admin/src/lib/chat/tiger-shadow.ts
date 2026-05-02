@@ -1324,7 +1324,7 @@ function normalizeEntityResolutionQuery(value: string | null | undefined): strin
     return null;
   }
 
-  return trimmed.replace(/\bsoftwere\b/gi, 'Software');
+  return trimmed.replace(/softwere/gi, 'Software');
 }
 
 function scoreResolvedEntity(params: {
@@ -1799,7 +1799,7 @@ function buildTigerPrimaryNoResultText(params: {
           ? 'the requested time window'
           : 'the recent change window'
       );
-    return `I could not find enough Steam change evidence for ${entityLabel} in ${windowLabel}.`;
+    return `I checked Steam change evidence for ${entityLabel} in ${windowLabel} and found 0 qualifying change events or linked news items, so there is no grounded change summary for that window. Broaden the window or ask for patch notes if you want nearby update evidence.`;
   }
 
   if (params.matchedIntent === 'catalog_search') {
@@ -10476,6 +10476,17 @@ function resolvePrimaryFollowUpContext(params: {
 } | null {
   const priorSelectionState = params.sessionContext?.selectionState ?? null;
   const priorFamily = priorSelectionState?.family ?? params.sessionContext?.lastAnswer?.family ?? null;
+  const namedSwitchMatch = params.prompt.match(/^\s*(?:use|switch(?:\s+\w+)?)\s+(.+?)\s+instead\s*$/i);
+  const namedSwitchQuery = normalizeEntityQuery(namedSwitchMatch?.[1] ?? null);
+
+  if (namedSwitchQuery && isSingleEntityFollowUpFamily(priorFamily)) {
+    return {
+      entityQuery: namedSwitchQuery,
+      explicitKindHint: inferEntityKindCorrection(params.prompt),
+      matchedIntent: priorFamily,
+      selectionState: null,
+    };
+  }
 
   if (priorSelectionState && inferSelectionFollowUpIntent(params.prompt, params.sessionContext)) {
     const updatedSelection = applySelectionFollowUpState({

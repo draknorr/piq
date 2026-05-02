@@ -543,7 +543,6 @@ function buildTigerResultSet(params: {
   timestamp?: string;
 }): SessionChatResultSet | null {
   const { family, result, sourceArgs, sourceContract, sourceTool = sourceContract, timestamp = new Date().toISOString() } = params;
-  const requestedLimit = getNumber(sourceArgs.limit);
   const shownIds =
     sourceContract === 'discoverMomentum'
       ? ((result as TigerDiscoverMomentumResult).items ?? [])
@@ -576,9 +575,7 @@ function buildTigerResultSet(params: {
     totalFound: null,
     continuable:
       sourceContract === 'discoverMomentum'
-        ? requestedLimit == null
-          ? shownIds.length > 0
-          : shownIds.length >= Math.max(1, requestedLimit)
+        ? shownIds.length > 0
         : sourceContract === 'searchCatalog'
         ? (result as TigerSearchCatalogResult).continuationToken != null
         : ((result as TigerSemanticSearchResult).continuation_token ?? null) != null,
