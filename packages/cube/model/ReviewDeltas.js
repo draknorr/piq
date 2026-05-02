@@ -166,7 +166,9 @@ cube('ReviewDeltas', {
       granularity: 'day',
       partitionGranularity: 'month',
       refreshKey: {
-        every: '6 hours',
+        every: '1 hour',
+        incremental: true,
+        updateWindow: '30 days',
       },
     },
     // Weekly aggregate for dashboard
@@ -175,7 +177,9 @@ cube('ReviewDeltas', {
       timeDimension: deltaDate,
       granularity: 'week',
       refreshKey: {
-        every: '24 hours',
+        every: '6 hours',
+        incremental: true,
+        updateWindow: '90 days',
       },
     },
   },
