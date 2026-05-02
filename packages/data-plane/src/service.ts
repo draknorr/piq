@@ -41,6 +41,8 @@ import type {
   GetYoutubeGameCoverageResponse,
   MatchQuality,
   QueryProvenance,
+  QueryMonthlyPlaytimeRequest,
+  QueryMonthlyPlaytimeResponse,
   RankEntitiesRequest,
   RankEntitiesResponse,
   RankMetric,
@@ -207,6 +209,17 @@ interface RankRow extends QueryResultRow {
   release_year?: number | null;
   review_score: number | null;
   total_reviews: number | null;
+}
+
+interface MonthlyPlaytimeRow extends QueryResultRow {
+  entity_id: number;
+  estimated_monthly_hours: number | null;
+  game_count?: number | null;
+  month: string;
+  month_num: number;
+  monthly_ccu_sum?: number | null;
+  name: string;
+  year: number;
 }
 
 interface CoreEntityRow extends QueryResultRow {
@@ -767,6 +780,8 @@ const MAX_ENTITY_GAMES_LIMIT = 25;
 const MAX_RELATED_LIMIT = 25;
 const MAX_MOMENTUM_LIMIT = 20;
 const MAX_RANK_LIMIT = 25;
+const DEFAULT_MONTHLY_PLAYTIME_LIMIT = 10;
+const MAX_MONTHLY_PLAYTIME_LIMIT = 25;
 const MAX_CONTINUE_LIMIT = 20;
 const MAX_CHANGE_ACTIVITY_DAYS = 180;
 const MAX_CHANGE_ACTIVITY_LIMIT = 25;
@@ -802,6 +817,7 @@ const READINESS_GATE_CONTRACTS = new Set<
   'discoverChangePatterns',
   'getEntityOverview',
   'rankEntities',
+  'queryMonthlyPlaytime',
   'semanticSearch',
   'compareEntities',
   'continueResultSet',
@@ -962,6 +978,16 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.daily_metrics',
       table: 'daily_metrics',
     },
+    metrics_monthly_game_metrics: {
+      schema: 'public',
+      sql: 'public.monthly_game_metrics',
+      table: 'monthly_game_metrics',
+    },
+    metrics_monthly_publisher_metrics: {
+      schema: 'public',
+      sql: 'public.monthly_publisher_metrics',
+      table: 'monthly_publisher_metrics',
+    },
     core_entities: {
       schema: 'public',
       sql: 'public.core_entities',
@@ -1065,6 +1091,16 @@ const RELATION_LOCATIONS: Record<
       schema: 'metrics',
       sql: 'metrics.daily_metrics',
       table: 'daily_metrics',
+    },
+    metrics_monthly_game_metrics: {
+      schema: 'metrics',
+      sql: 'metrics.monthly_game_metrics',
+      table: 'monthly_game_metrics',
+    },
+    metrics_monthly_publisher_metrics: {
+      schema: 'metrics',
+      sql: 'metrics.monthly_publisher_metrics',
+      table: 'monthly_publisher_metrics',
     },
     core_entities: {
       schema: 'core',
@@ -2953,6 +2989,57 @@ export class DataPlaneService {
               this.relation('latest_daily_metrics').sql,
             ]
       ),
+      sufficientToAnswer: rows.length > 0,
+    };
+  }
+
+  async queryMonthlyPlaytime(
+    request: QueryMonthlyPlaytimeRequest
+  ): Promise<QueryMonthlyPlaytimeResponse> {
+    await this.assertContractRuntime('queryMonthlyPlaytime');
+
+    if (request.entityKind !== 'game' && request.entityKind !== 'publisher') {
+      throw new PublisherIQError(
+        'queryMonthlyPlaytime supports only game and publisher entity kinds.',
+        'INVALID_MONTHLY_PLAYTIME_ENTITY_KIND',
+        { entityKind: request.entityKind }
+      );
+    }
+
+    const limit = normalizeLimit(
+      request.limit,
+      DEFAULT_MONTHLY_PLAYTIME_LIMIT,
+      MAX_MONTHLY_PLAYTIME_LIMIT
+    );
+    const { endMonth, startMonth } = this.normalizeMonthlyPlaytimeWindow(
+      request.startMonth ?? null,
+      request.endMonth ?? null
+    );
+    const rows = await this.queryMonthlyPlaytimeRows(request, startMonth, endMonth, limit);
+
+    return {
+      endMonth,
+      entityKind: request.entityKind,
+      items: rows.map((row, index) => ({
+        entityId: row.entity_id,
+        entityKind: request.entityKind,
+        estimatedMonthlyHours: row.estimated_monthly_hours,
+        gameCount: row.game_count ?? null,
+        month: row.month,
+        monthNum: row.month_num,
+        monthlyCcuSum: row.monthly_ccu_sum ?? null,
+        name: row.name,
+        rank: index + 1,
+        year: row.year,
+      })),
+      provenance: buildProvenance(this.config.source, [
+        this.relation(
+          request.entityKind === 'game'
+            ? 'metrics_monthly_game_metrics'
+            : 'metrics_monthly_publisher_metrics'
+        ).sql,
+      ]),
+      startMonth,
       sufficientToAnswer: rows.length > 0,
     };
   }
@@ -9585,6 +9672,106 @@ export class DataPlaneService {
     `;
 
     const result = await runQuery<RankRow>(sql, params, this.config);
+    return result.rows;
+  }
+
+  private normalizeMonthlyPlaytimeWindow(
+    requestedStartMonth: string | null,
+    requestedEndMonth: string | null
+  ): { endMonth: string; startMonth: string } {
+    const endMonth = this.normalizeMonthStart(
+      requestedEndMonth,
+      () => this.defaultLastCompleteMonth()
+    );
+    const startMonth = this.normalizeMonthStart(requestedStartMonth, () => endMonth);
+
+    if (Date.parse(startMonth) > Date.parse(endMonth)) {
+      throw new PublisherIQError(
+        'queryMonthlyPlaytime requires startMonth to be before or equal to endMonth.',
+        'INVALID_MONTHLY_PLAYTIME_WINDOW',
+        { endMonth, startMonth }
+      );
+    }
+
+    return { endMonth, startMonth };
+  }
+
+  private normalizeMonthStart(value: string | null, fallback: () => string): string {
+    const raw = value?.trim();
+    if (!raw) {
+      return fallback();
+    }
+
+    const monthMatch = raw.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+    if (!monthMatch) {
+      throw new PublisherIQError(
+        'queryMonthlyPlaytime months must be formatted as YYYY-MM or YYYY-MM-DD.',
+        'INVALID_MONTHLY_PLAYTIME_MONTH',
+        { value }
+      );
+    }
+
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new PublisherIQError(
+        'queryMonthlyPlaytime received an invalid month.',
+        'INVALID_MONTHLY_PLAYTIME_MONTH',
+        { value }
+      );
+    }
+
+    return `${year}-${String(month).padStart(2, '0')}-01`;
+  }
+
+  private defaultLastCompleteMonth(): string {
+    const now = new Date();
+    const lastComplete = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    return `${lastComplete.getUTCFullYear()}-${String(lastComplete.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  }
+
+  private async queryMonthlyPlaytimeRows(
+    request: QueryMonthlyPlaytimeRequest,
+    startMonth: string,
+    endMonth: string,
+    limit: number
+  ): Promise<MonthlyPlaytimeRow[]> {
+    const isPublisher = request.entityKind === 'publisher';
+    const table = this.relation(
+      isPublisher ? 'metrics_monthly_publisher_metrics' : 'metrics_monthly_game_metrics'
+    ).sql;
+    const idColumn = isPublisher ? 'publisher_id' : 'appid';
+    const nameColumn = isPublisher ? 'publisher_name' : 'game_name';
+    const params: unknown[] = [startMonth, endMonth];
+    const conditions = ['month >= $1::date', 'month <= $2::date'];
+
+    if (request.entityIds?.length) {
+      params.push(request.entityIds);
+      conditions.push(`${idColumn} = ANY($${params.length}::int[])`);
+    }
+
+    params.push(limit);
+
+    const result = await runQuery<MonthlyPlaytimeRow>(
+      `
+        SELECT
+          ${idColumn} AS entity_id,
+          ${nameColumn} AS name,
+          month::text,
+          year,
+          month_num,
+          ${isPublisher ? 'NULL::bigint' : 'monthly_ccu_sum'} AS monthly_ccu_sum,
+          ${isPublisher ? 'game_count' : 'NULL::bigint'} AS game_count,
+          estimated_monthly_hours
+        FROM ${table}
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY estimated_monthly_hours DESC NULLS LAST, name ASC, month DESC
+        LIMIT $${params.length}
+      `,
+      params,
+      this.config
+    );
+
     return result.rows;
   }
 

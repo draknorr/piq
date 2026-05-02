@@ -87,7 +87,7 @@ Do not describe PublisherIQ as a single Postgres app anymore.
 
 - **Supabase** is still the write authority and control plane.
 - **TigerData / Timescale** is the contract-serving read plane behind `apps/query-api`.
-- **Cube.js** remains for compatibility and legacy analytics reads that have not yet moved to typed Tiger-backed contracts.
+- **Legacy `query_analytics` compatibility** is Tiger-backed through `apps/query-api`; Cube.js is no longer the production `/chat` analytics read path.
 
 Current high-level ownership:
 
@@ -97,7 +97,7 @@ Current high-level ownership:
 | `/chat` per-game YouTube coverage | `apps/query-api` -> TigerData |
 | auth, credits, chat logs | Supabase |
 | `/apps`, `/companies`, `/changes`, `/admin` | Supabase RPCs/tables/views |
-| legacy analytics compatibility | Cube.js over Supabase |
+| legacy analytics compatibility | `apps/query-api` -> TigerData |
 
 ---
 

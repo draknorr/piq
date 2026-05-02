@@ -186,6 +186,22 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
     naturalLanguageStrength: ['top/best/fastest questions', 'ranking follow-ups'],
   },
   {
+    name: 'queryMonthlyPlaytime',
+    endpoint: '/v1/contracts/query-monthly-playtime',
+    status: 'ready',
+    requiredRelations: [
+      'metrics_monthly_game_metrics',
+      'metrics_monthly_publisher_metrics',
+    ],
+    description:
+      'Rank games or publishers by estimated monthly played hours for a bounded month window.',
+    naturalLanguageStrength: [
+      'top games by playtime last month',
+      'monthly estimated hours rankings',
+      'publisher playtime by month'
+    ],
+  },
+  {
     name: 'compareEntities',
     endpoint: '/v1/contracts/compare-entities',
     status: 'ready',
