@@ -192,7 +192,7 @@ cube('DailyMetrics', {
       refreshKey: {
         every: '24 hours',
         incremental: true,
-        updateWindow: '12 months',
+        updateWindow: '52 weeks',
       },
     },
   },
