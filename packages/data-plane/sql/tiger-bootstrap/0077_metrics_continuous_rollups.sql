@@ -62,7 +62,7 @@ WITH NO DATA;
 CREATE INDEX IF NOT EXISTS idx_metrics_daily_month_rollup_bucket
   ON metrics.daily_metrics_month_rollup (bucket DESC);
 
-CALL add_continuous_aggregate_policy(
+SELECT add_continuous_aggregate_policy(
   'metrics.daily_metrics_app_day_rollup',
   start_offset => INTERVAL '180 days',
   end_offset => INTERVAL '1 hour',
@@ -70,7 +70,7 @@ CALL add_continuous_aggregate_policy(
   if_not_exists => true
 );
 
-CALL add_continuous_aggregate_policy(
+SELECT add_continuous_aggregate_policy(
   'metrics.daily_metrics_week_rollup',
   start_offset => INTERVAL '1 year',
   end_offset => INTERVAL '1 hour',
@@ -78,7 +78,7 @@ CALL add_continuous_aggregate_policy(
   if_not_exists => true
 );
 
-CALL add_continuous_aggregate_policy(
+SELECT add_continuous_aggregate_policy(
   'metrics.daily_metrics_month_rollup',
   start_offset => INTERVAL '3 years',
   end_offset => INTERVAL '1 hour',
@@ -86,11 +86,11 @@ CALL add_continuous_aggregate_policy(
   if_not_exists => true
 );
 
-COMMENT ON MATERIALIZED VIEW metrics.daily_metrics_app_day_rollup IS
+COMMENT ON VIEW metrics.daily_metrics_app_day_rollup IS
   'Tiger continuous aggregate for per-app daily metrics used by Cube-compatible analytical reads.';
-COMMENT ON MATERIALIZED VIEW metrics.daily_metrics_week_rollup IS
+COMMENT ON VIEW metrics.daily_metrics_week_rollup IS
   'Tiger continuous aggregate for weekly platform metrics used by Cube-compatible analytical reads.';
-COMMENT ON MATERIALIZED VIEW metrics.daily_metrics_month_rollup IS
+COMMENT ON VIEW metrics.daily_metrics_month_rollup IS
   'Tiger continuous aggregate for monthly platform metrics used by Cube-compatible analytical reads.';
 
 -- Suggested off-peak backfill commands after apply:
