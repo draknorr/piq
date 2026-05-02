@@ -2395,10 +2395,11 @@ export async function handleChatStreamRequest(
           }
         }
 
-        const tigerOwnsFallbackPath =
-          tigerPrimaryResult?.enabled === true && !readTigerLegacyFallbackEnabled();
-
-        if (tigerOwnsFallbackPath && debugStats.totalChars === 0) {
+        if (
+          tigerPrimaryResult?.enabled === true
+          && !readTigerLegacyFallbackEnabled()
+          && debugStats.totalChars === 0
+        ) {
           const tigerOnlyReply = buildTigerOnlyFallbackReply({
             tigerPrimary: tigerPrimaryResult,
           });
