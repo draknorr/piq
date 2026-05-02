@@ -89,7 +89,7 @@ Do not describe PublisherIQ as a single Postgres app anymore.
 - **TigerData / Timescale** is primary for accepted incoming ingestion and product-data writes, and is the contract-serving read plane behind `apps/query-api`.
 - **Cloudflare R2** is the primary object archive for accepted change-intel/product payloads that are stored outside relational Tiger tables.
 - **Supabase** remains for auth/session, reference data, legacy compatibility, and product surfaces not yet proven Tiger-backed. Do not add new product/ingestion writes to Supabase.
-- **Cube.js** remains for compatibility and legacy analytics reads that have not yet moved to typed Tiger-backed contracts.
+- **Legacy `query_analytics` compatibility** is Tiger-backed through `apps/query-api`; Cube.js is no longer the production `/chat` analytics read path.
 
 Current high-level ownership:
 
@@ -100,7 +100,7 @@ Current high-level ownership:
 | `/chat` per-game YouTube coverage | `apps/query-api` -> TigerData |
 | auth, sessions, credits, chat logs | Supabase |
 | `/apps`, `/companies`, `/changes`, `/admin` product surfaces not proven Tiger-backed | Supabase RPCs/tables/views |
-| legacy analytics compatibility | Cube.js over Supabase |
+| legacy analytics compatibility | `apps/query-api` -> TigerData |
 
 Recent accepted state:
 - PR #8 fixed Tiger-primary change-intel worker startup and routed storefront inaccessible/no-data updates through Tiger when `CHANGE_INTEL_WRITE_TARGET=tiger`.

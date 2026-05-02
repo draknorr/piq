@@ -781,6 +781,58 @@ test('query_analytics uses Tiger rank-entities for company window ranking prompt
   assert.ok(provenance?.dataSources.includes('query_api:rankEntities'));
 });
 
+test('query_analytics uses Tiger monthly playtime contract for monthly game rankings', async (t) => {
+  setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');
+  setScopedFetch(t, async (url, init) => {
+    assert.equal(url.pathname, '/v1/contracts/query-monthly-playtime');
+    assert.ok(init?.body);
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.entityKind, 'game');
+    assert.equal(body.startMonth, '2025-12-01');
+    assert.equal(body.endMonth, '2025-12-01');
+
+    return jsonResponse({
+      items: [
+        {
+          entityId: 730,
+          estimatedMonthlyHours: 123456,
+          month: '2025-12-01',
+          monthNum: 12,
+          monthlyCcuSum: 987654,
+          name: 'Counter-Strike 2',
+          year: 2025,
+        },
+      ],
+    });
+  });
+
+  const result = await tryTigerQueryAnalyticsCompat({
+    cube: 'MonthlyGameMetrics',
+    dimensions: [
+      'MonthlyGameMetrics.appid',
+      'MonthlyGameMetrics.gameName',
+      'MonthlyGameMetrics.estimatedMonthlyHours',
+    ],
+    filters: [
+      { member: 'MonthlyGameMetrics.year', operator: 'equals', values: [2025] },
+      { member: 'MonthlyGameMetrics.monthNum', operator: 'equals', values: [12] },
+    ],
+    limit: 10,
+    order: {
+      'MonthlyGameMetrics.estimatedMonthlyHours': 'desc',
+    },
+  });
+
+  const provenance = result ? extractToolExecutionProvenance(result) : null;
+
+  assert.ok(result);
+  assert.equal(result?.success, true);
+  assert.equal(result?.data[0]?.appid, 730);
+  assert.equal(result?.data[0]?.gameName, 'Counter-Strike 2');
+  assert.equal(result?.data[0]?.estimatedMonthlyHours, 123456);
+  assert.ok(provenance?.dataSources.includes('query_api:queryMonthlyPlaytime'));
+});
+
 test('Tiger primary routes marketing-push prompts through Tiger change discovery', async (t) => {
   setScopedEnv(t, 'CHAT_TIGER_PRIMARY_MODE', 'all');
   setScopedEnv(t, 'QUERY_API_BASE_URL', 'http://query-api.test');

@@ -51,8 +51,6 @@ Navigate to **Settings > Environment Variables** and add:
 |----------|-------|-------------|
 | `SUPABASE_URL` | `https://xxx.supabase.co` | All |
 | `SUPABASE_SERVICE_KEY` | `eyJ...` | All |
-| `CUBE_API_URL` | `https://publisheriq-cube.fly.dev/cubejs-api/v1` | All |
-| `CUBE_API_SECRET` | Your Cube.js JWT secret | All |
 | `QUERY_API_BASE_URL` | `https://publisheriq-production.up.railway.app` | All |
 | `QUERY_API_BEARER_TOKEN` | Shared bearer token for query-api | All |
 | `CHAT_TIGER_PRIMARY_MODE` | `all` | All |

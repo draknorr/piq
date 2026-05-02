@@ -59,12 +59,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 - OpenAI: GPT-4o Mini (`gpt-4o-mini`)
 - Anthropic: Claude 3.5 Haiku (`claude-3-5-haiku-20241022`) when `LLM_PROVIDER=anthropic`
 
-### Cube.js Semantic Layer
+### Legacy Analytics Compatibility
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `CUBE_API_URL` | Yes | Cube.js API endpoint (e.g., `https://your-app.fly.dev/cubejs-api/v1`) |
-| `CUBE_API_SECRET` | Yes | Secret for JWT token signing |
+Legacy `query_analytics` chat requests route through the Tiger Query API. New local and deployed environments do not need Cube.js API variables for chat analytics.
 
 ### Tiger Query API / TigerData Data Plane
 
@@ -179,8 +176,6 @@ For dashboard deployment, add these in Vercel project settings:
 | `SUPABASE_SERVICE_KEY` | Your service role key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `LLM_PROVIDER` | `openai` |
-| `CUBE_API_URL` | Cube.js API endpoint |
-| `CUBE_API_SECRET` | Cube.js JWT secret |
 | `QUERY_API_BASE_URL` | Tiger query-api endpoint |
 | `QUERY_API_BEARER_TOKEN` | Tiger query-api bearer token |
 | `CHAT_TIGER_PRIMARY_MODE` | `all` for Tiger-first chat |
@@ -218,10 +213,6 @@ STEAM_API_KEY=ABCD1234EFGH5678
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 
-# Cube.js (semantic layer)
-CUBE_API_URL=https://publisheriq-cube.fly.dev/cubejs-api/v1
-CUBE_API_SECRET=your-cube-api-secret
-
 # Tiger query-api / query contracts
 QUERY_API_BASE_URL=http://127.0.0.1:4318
 QUERY_API_BEARER_TOKEN=your-query-api-bearer-token
@@ -242,10 +233,6 @@ SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 # LLM (for chat)
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-
-# Cube.js (semantic layer)
-CUBE_API_URL=https://publisheriq-cube.fly.dev/cubejs-api/v1
-CUBE_API_SECRET=your-cube-api-secret
 
 # Tiger query-api / TigerData data plane
 TIGER_PRIMARY_URL=postgres://tsdbadmin:password@host:5432/tsdb?sslmode=require

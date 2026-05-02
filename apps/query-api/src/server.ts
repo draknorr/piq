@@ -20,6 +20,7 @@ import {
   type GetYoutubeGameCoverageRequest,
   loadQueryApiConfig,
   loadSourceBaselineConfig,
+  type QueryMonthlyPlaytimeRequest,
   type RankEntitiesRequest,
   type ResolveEntitiesRequest,
   type SearchCatalogRequest,
@@ -93,6 +94,7 @@ interface QueryApiService {
   getUserContext: DataPlaneService['getUserContext'];
   getYoutubeGameCoverage: DataPlaneService['getYoutubeGameCoverage'];
   healthCheck: DataPlaneService['healthCheck'];
+  queryMonthlyPlaytime: DataPlaneService['queryMonthlyPlaytime'];
   rankEntities: DataPlaneService['rankEntities'];
   readinessCheck: DataPlaneService['readinessCheck'];
   resolveEntities: DataPlaneService['resolveEntities'];
@@ -482,6 +484,17 @@ export function createQueryApiRequestHandler(params: {
           action: 'rankEntities',
           fallbackOperation: sourceFallback ? () => sourceFallback.rankEntities(body) : null,
           primaryOperation: () => dataPlane.rankEntities(body),
+        });
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/query-monthly-playtime') {
+        const body = await readJsonBody<QueryMonthlyPlaytimeRequest>(request);
+        const result = await executeWithSourceFallback({
+          action: 'queryMonthlyPlaytime',
+          fallbackOperation: sourceFallback ? () => sourceFallback.queryMonthlyPlaytime(body) : null,
+          primaryOperation: () => dataPlane.queryMonthlyPlaytime(body),
         });
         sendJson(response, 200, result);
         return;

@@ -133,6 +133,7 @@ export type RankMetric =
   | 'ccu_peak'
   | 'review_score'
   | 'game_count';
+export type MonthlyPlaytimeEntityKind = 'game' | 'publisher';
 export type TraceMetric =
   | 'owners_midpoint'
   | 'ccu_peak'
@@ -204,6 +205,8 @@ export type DataPlaneRelationKey =
   | 'user_pin_alert_settings'
   | 'latest_daily_metrics'
   | 'metrics_daily_metrics'
+  | 'metrics_monthly_game_metrics'
+  | 'metrics_monthly_publisher_metrics'
   | 'core_entities'
   | 'events_app_change_events'
   | 'events_change_activity_bursts'
@@ -491,6 +494,36 @@ export interface RankEntitiesResponse {
   items: RankedEntity[];
   metric: RankMetric;
   provenance: QueryProvenance;
+  sufficientToAnswer: boolean;
+}
+
+export interface QueryMonthlyPlaytimeRequest {
+  entityKind: MonthlyPlaytimeEntityKind;
+  entityIds?: number[];
+  endMonth?: string | null;
+  limit?: number;
+  startMonth?: string | null;
+}
+
+export interface MonthlyPlaytimeItem {
+  entityId: number;
+  entityKind: MonthlyPlaytimeEntityKind;
+  estimatedMonthlyHours: number | null;
+  gameCount?: number | null;
+  month: string;
+  monthNum: number;
+  monthlyCcuSum?: number | null;
+  name: string;
+  rank: number;
+  year: number;
+}
+
+export interface QueryMonthlyPlaytimeResponse {
+  endMonth: string;
+  entityKind: MonthlyPlaytimeEntityKind;
+  items: MonthlyPlaytimeItem[];
+  provenance: QueryProvenance;
+  startMonth: string;
   sufficientToAnswer: boolean;
 }
 
@@ -1320,6 +1353,7 @@ export interface QueryContractDescriptor {
     | 'discoverMomentum'
     | 'discoverChangePatterns'
     | 'rankEntities'
+    | 'queryMonthlyPlaytime'
     | 'compareEntities'
     | 'traceMetricHistory'
     | 'explainChanges'

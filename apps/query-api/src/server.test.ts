@@ -24,6 +24,7 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
       source: 'tiger',
       tables: [],
     }),
+    queryMonthlyPlaytime: async () => ({ ok: true }),
     rankEntities: async () => ({ ok: true }),
     readinessCheck: async () => ({
       blockedContracts: [],
@@ -581,6 +582,64 @@ test('query-api routes discover-momentum requests to the data-plane service', as
       });
       const payload = await response.json() as { rankingLabel: string };
       assert.equal(payload.rankingLabel, 'Peak CCU');
+    }
+  );
+});
+
+test('query-api routes monthly playtime requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      queryMonthlyPlaytime: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          endMonth: '2025-12-01',
+          entityKind: 'game',
+          items: [
+            {
+              entityId: 730,
+              entityKind: 'game',
+              estimatedMonthlyHours: 123456,
+              month: '2025-12-01',
+              monthNum: 12,
+              name: 'Counter-Strike 2',
+              rank: 1,
+              year: 2025,
+            },
+          ],
+          provenance: {
+            capturedAt: '2026-04-02T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['metrics.monthly_game_metrics'],
+          },
+          startMonth: '2025-12-01',
+          sufficientToAnswer: true,
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/query-monthly-playtime`, {
+        body: JSON.stringify({
+          endMonth: '2025-12-01',
+          entityKind: 'game',
+          limit: 10,
+          startMonth: '2025-12-01',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {
+        endMonth: '2025-12-01',
+        entityKind: 'game',
+        limit: 10,
+        startMonth: '2025-12-01',
+      });
+      const payload = await response.json() as { items: Array<{ name: string }> };
+      assert.equal(payload.items[0]?.name, 'Counter-Strike 2');
     }
   );
 });

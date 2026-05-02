@@ -126,6 +126,29 @@ interface RankEntitiesResponse {
   }>;
 }
 
+interface QueryMonthlyPlaytimeResponse {
+  items?: Array<{
+    entityId: number;
+    estimatedMonthlyHours: number | null;
+    gameCount?: number | null;
+    month: string;
+    monthNum: number;
+    monthlyCcuSum?: number | null;
+    name: string;
+    year: number;
+  }>;
+}
+
+interface TraceMetricHistoryResponse {
+  series?: Array<{
+    metric: string;
+    points: Array<{
+      date: string;
+      value: number | null;
+    }>;
+  }>;
+}
+
 const TIGER_QUERY_ANALYTICS_SEARCH_CATALOG_PROVENANCE: ChatExecutionProvenanceOverride = {
   backendKinds: ['tiger_query_api'],
   dataSources: [
@@ -181,6 +204,58 @@ const TIGER_QUERY_ANALYTICS_RANK_ENTITIES_PROVENANCE: ChatExecutionProvenanceOve
   recommendedTigerContracts: ['rankEntities'],
 };
 
+const TIGER_QUERY_ANALYTICS_MONTHLY_PLAYTIME_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:queryMonthlyPlaytime',
+    'relation:metrics.monthly_game_metrics',
+    'relation:metrics.monthly_publisher_metrics',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'Monthly playtime query_analytics requests execute through bounded Tiger monthly aggregates instead of Cube.',
+  recommendedTigerContracts: ['queryMonthlyPlaytime'],
+};
+
+const TIGER_QUERY_ANALYTICS_TRACE_HISTORY_PROVENANCE: ChatExecutionProvenanceOverride = {
+  backendKinds: ['tiger_query_api'],
+  dataSources: [
+    'query_api:traceMetricHistory',
+    'relation:metrics.daily_metrics',
+  ],
+  migrationDisposition: 'already_tiger',
+  migrationNotes:
+    'Daily metrics query_analytics requests execute through bounded Tiger metric history contracts instead of Cube.',
+  recommendedTigerContracts: ['traceMetricHistory'],
+};
+
+const DISCOVERY_TO_GAME_CATALOG_FIELDS = new Set([
+  'appid',
+  'name',
+  'isFree',
+  'priceCents',
+  'priceDollars',
+  'discountPercent',
+  'releaseDate',
+  'releaseYear',
+  'platforms',
+  'ownersMidpoint',
+  'ccuPeak',
+  'totalReviews',
+  'reviewPercentage',
+]);
+
+const DISCOVERY_TO_GAME_CATALOG_SEGMENTS = new Set([
+  'released',
+  'free',
+  'paid',
+  'onSale',
+  'highlyRated',
+  'veryPositive',
+  'overwhelminglyPositive',
+  'popular',
+]);
+
 function dimensionFieldName(dimension: string): string {
   return dimension.includes('.') ? dimension.split('.').pop() ?? dimension : dimension;
 }
@@ -222,6 +297,58 @@ function getSingleNumericFilterValue(
 
 function hasSegment(segments: string[] | undefined, segment: string): boolean {
   return segments?.includes(segment) ?? false;
+}
+
+function canonicalizeDiscoveryArgs(args: QueryAnalyticsArgs): QueryAnalyticsArgs | null {
+  if (args.cube !== 'Discovery') {
+    return args;
+  }
+
+  const rewriteMember = (member: string): string | null => {
+    if (!member.startsWith('Discovery.')) {
+      return member;
+    }
+
+    const field = member.slice('Discovery.'.length);
+    return DISCOVERY_TO_GAME_CATALOG_FIELDS.has(field) ? `GameCatalog.${field}` : null;
+  };
+
+  const dimensions = (args.dimensions ?? []).map(rewriteMember);
+  const filters = (args.filters ?? []).map((filter) => {
+    const member = rewriteMember(filter.member);
+    return member ? { ...filter, member } : null;
+  });
+  const segments = (args.segments ?? []).map((segment) => {
+    if (!segment.startsWith('Discovery.')) {
+      return segment;
+    }
+
+    const field = segment.slice('Discovery.'.length);
+    return DISCOVERY_TO_GAME_CATALOG_SEGMENTS.has(field) ? `GameCatalog.${field}` : null;
+  });
+  const orderEntries = Object.entries(args.order ?? {}).map(([member, direction]) => {
+    const rewrittenMember = rewriteMember(member);
+    return rewrittenMember ? [rewrittenMember, direction] as const : null;
+  });
+
+  if (
+    dimensions.some((member) => member === null)
+    || filters.some((filter) => filter === null)
+    || segments.some((segment) => segment === null)
+    || orderEntries.some((entry) => entry === null)
+    || (args.measures ?? []).length > 0
+  ) {
+    return null;
+  }
+
+  return {
+    ...args,
+    cube: 'GameCatalog',
+    dimensions: dimensions as string[],
+    filters: filters as CubeFilter[],
+    order: Object.fromEntries(orderEntries as Array<[string, 'asc' | 'desc']>),
+    segments: segments as string[],
+  };
 }
 
 function parseSegmentWindowDays(segments: string[] | undefined): number | null {
@@ -554,9 +681,356 @@ function mapRankedCompanyRow(
     [`${baseName}Id`]: entityId,
     [`${baseName}Name`]: item.displayName,
     avgReviewScore: reviewScore,
+    avgReviewPercentage: reviewScore,
+    exactGameCount: gameCount,
+    hitGameCount: gameCount,
+    meaningfulGameCount: gameCount,
+    releasedGameCount: gameCount,
     gameCount,
+    totalOwners: item.metrics?.ownersMidpoint ?? null,
     totalReviews,
   };
+}
+
+function rankMetricForCompanyOrder(args: QueryAnalyticsArgs): 'total_reviews' | 'owners_midpoint' | 'ccu_peak' | 'review_score' | 'game_count' {
+  const firstOrderField = Object.keys(args.order ?? {})[0];
+  const field = dimensionFieldName(firstOrderField ?? '');
+  if (field === 'totalOwners') {
+    return 'owners_midpoint';
+  }
+  if (field === 'totalCcu') {
+    return 'ccu_peak';
+  }
+  if (field === 'avgReviewScore' || field === 'avgReviewPercentage') {
+    return 'review_score';
+  }
+  if (field === 'totalReviews') {
+    return 'total_reviews';
+  }
+  return 'game_count';
+}
+
+function formatMonthStart(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function shiftMonth(date: Date, offsetMonths: number): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offsetMonths, 1));
+}
+
+function parseMonthlyWindow(args: QueryAnalyticsArgs): { endMonth: string; startMonth: string } {
+  const cube = args.cube;
+  const currentMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+  const lastMonth = shiftMonth(currentMonth, -1);
+  const segments = args.segments ?? [];
+
+  if (segments.includes(`${cube}.currentMonth`)) {
+    const month = formatMonthStart(currentMonth);
+    return { endMonth: month, startMonth: month };
+  }
+
+  if (segments.includes(`${cube}.lastMonth`)) {
+    const month = formatMonthStart(lastMonth);
+    return { endMonth: month, startMonth: month };
+  }
+
+  if (segments.includes(`${cube}.last3Months`)) {
+    return { endMonth: formatMonthStart(currentMonth), startMonth: formatMonthStart(shiftMonth(currentMonth, -3)) };
+  }
+
+  if (segments.includes(`${cube}.last6Months`)) {
+    return { endMonth: formatMonthStart(currentMonth), startMonth: formatMonthStart(shiftMonth(currentMonth, -6)) };
+  }
+
+  if (segments.includes(`${cube}.last12Months`)) {
+    return { endMonth: formatMonthStart(currentMonth), startMonth: formatMonthStart(shiftMonth(currentMonth, -12)) };
+  }
+
+  const explicitYear = getSingleNumericFilterValue(args.filters, `${cube}.year`, 'equals');
+  const explicitMonth = getSingleNumericFilterValue(args.filters, `${cube}.monthNum`, 'equals');
+  if (explicitYear != null && explicitMonth != null && explicitMonth >= 1 && explicitMonth <= 12) {
+    const month = `${explicitYear}-${String(explicitMonth).padStart(2, '0')}-01`;
+    return { endMonth: month, startMonth: month };
+  }
+
+  if (segments.includes(`${cube}.year2025`)) {
+    return { endMonth: '2025-12-01', startMonth: '2025-01-01' };
+  }
+
+  if (segments.includes(`${cube}.year2024`)) {
+    return { endMonth: '2024-12-01', startMonth: '2024-01-01' };
+  }
+
+  const monthRange = getFilterValues(args.filters, `${cube}.month`, 'inDateRange');
+  if (monthRange?.length >= 2) {
+    return {
+      endMonth: String(monthRange[1]).slice(0, 7) + '-01',
+      startMonth: String(monthRange[0]).slice(0, 7) + '-01',
+    };
+  }
+
+  const month = formatMonthStart(lastMonth);
+  return { endMonth: month, startMonth: month };
+}
+
+function mapMonthlyPlaytimeRow(
+  item: NonNullable<QueryMonthlyPlaytimeResponse['items']>[number],
+  cube: string
+): Record<string, unknown> {
+  if (cube === 'MonthlyPublisherMetrics') {
+    return {
+      estimatedMonthlyHours: item.estimatedMonthlyHours,
+      gameCount: item.gameCount ?? null,
+      month: item.month,
+      monthNum: item.monthNum,
+      publisherId: item.entityId,
+      publisherName: item.name,
+      year: item.year,
+    };
+  }
+
+  return {
+    appid: item.entityId,
+    estimatedMonthlyHours: item.estimatedMonthlyHours,
+    gameName: item.name,
+    month: item.month,
+    monthNum: item.monthNum,
+    monthlyCcuSum: item.monthlyCcuSum ?? null,
+    year: item.year,
+  };
+}
+
+async function tryMonthlyPlaytimeCompat(args: QueryAnalyticsArgs): Promise<QueryAnalyticsResult | null> {
+  if (args.cube !== 'MonthlyGameMetrics' && args.cube !== 'MonthlyPublisherMetrics') {
+    return null;
+  }
+
+  const cube = args.cube;
+  const entityKind = cube === 'MonthlyPublisherMetrics' ? 'publisher' : 'game';
+  const entityIdMember = cube === 'MonthlyPublisherMetrics'
+    ? 'MonthlyPublisherMetrics.publisherId'
+    : 'MonthlyGameMetrics.appid';
+  const entityId = getSingleNumericFilterValue(args.filters, entityIdMember, 'equals');
+  const { endMonth, startMonth } = parseMonthlyWindow(args);
+
+  const response = await postToQueryApi<QueryMonthlyPlaytimeResponse>(
+    '/v1/contracts/query-monthly-playtime',
+    {
+      endMonth,
+      entityIds: entityId == null ? undefined : [entityId],
+      entityKind,
+      limit: normalizeLimit(args.limit, 10, 25),
+      startMonth,
+    }
+  );
+
+  if (!response.ok || !response.data) {
+    return null;
+  }
+
+  return buildTigerQueryAnalyticsResult(
+    args,
+    (response.data.items ?? []).map((item) => mapMonthlyPlaytimeRow(item, cube)),
+    TIGER_QUERY_ANALYTICS_MONTHLY_PLAYTIME_PROVENANCE,
+    'queryMonthlyPlaytime'
+  );
+}
+
+function traceMetricForDailyField(field: string): string | null {
+  switch (field) {
+    case 'ownersMidpoint':
+      return 'owners_midpoint';
+    case 'ccuPeak':
+      return 'ccu_peak';
+    case 'totalReviews':
+      return 'total_reviews';
+    case 'positiveReviews':
+      return 'positive_reviews';
+    case 'negativeReviews':
+      return 'negative_reviews';
+    case 'reviewScore':
+      return 'review_score';
+    case 'positivePercentage':
+      return 'positive_percentage';
+    case 'priceCents':
+      return 'price_cents';
+    case 'discountPercent':
+      return 'discount_percent';
+    case 'avgPlaytimeForever':
+      return 'average_playtime_forever';
+    case 'avgPlaytime2Weeks':
+      return 'average_playtime_2weeks';
+    default:
+      return null;
+  }
+}
+
+function dailyFieldForTraceMetric(metric: string): string {
+  switch (metric) {
+    case 'owners_midpoint':
+      return 'ownersMidpoint';
+    case 'ccu_peak':
+      return 'ccuPeak';
+    case 'total_reviews':
+      return 'totalReviews';
+    case 'positive_reviews':
+      return 'positiveReviews';
+    case 'negative_reviews':
+      return 'negativeReviews';
+    case 'review_score':
+      return 'reviewScore';
+    case 'positive_percentage':
+      return 'positivePercentage';
+    case 'price_cents':
+      return 'priceCents';
+    case 'discount_percent':
+      return 'discountPercent';
+    case 'average_playtime_forever':
+      return 'avgPlaytimeForever';
+    case 'average_playtime_2weeks':
+      return 'avgPlaytime2Weeks';
+    default:
+      return metric;
+  }
+}
+
+async function tryDailyMetricsCompat(args: QueryAnalyticsArgs): Promise<QueryAnalyticsResult | null> {
+  if (args.cube !== 'DailyMetrics') {
+    return null;
+  }
+
+  const appid = getSingleNumericFilterValue(args.filters, 'DailyMetrics.appid', 'equals');
+  if (appid == null) {
+    return null;
+  }
+
+  const requestedMembers = [
+    ...(args.dimensions ?? []),
+    ...(args.measures ?? []),
+    ...Object.keys(args.order ?? {}),
+  ];
+  const metrics = [...new Set(
+    requestedMembers
+      .map((member) => traceMetricForDailyField(dimensionFieldName(member)))
+      .filter((metric): metric is string => Boolean(metric))
+  )];
+  const selectedMetrics = metrics.length > 0 ? metrics.slice(0, 4) : ['total_reviews', 'ccu_peak', 'review_score'];
+  const dateRange = getFilterValues(args.filters, 'DailyMetrics.metricDate', 'inDateRange');
+
+  const response = await postToQueryApi<TraceMetricHistoryResponse>(
+    '/v1/contracts/trace-metric-history',
+    {
+      endDate: dateRange?.[1] ? String(dateRange[1]) : undefined,
+      entityUid: `steam:game:${appid}`,
+      metrics: selectedMetrics,
+      startDate: dateRange?.[0] ? String(dateRange[0]) : undefined,
+    }
+  );
+
+  if (!response.ok || !response.data) {
+    return null;
+  }
+
+  const rowsByDate = new Map<string, Record<string, unknown>>();
+  for (const series of response.data.series ?? []) {
+    const field = dailyFieldForTraceMetric(series.metric);
+    for (const point of series.points ?? []) {
+      const row = rowsByDate.get(point.date) ?? {
+        appid,
+        metricDate: point.date,
+      };
+      row[field] = point.value;
+      rowsByDate.set(point.date, row);
+    }
+  }
+
+  return buildTigerQueryAnalyticsResult(
+    args,
+    [...rowsByDate.values()],
+    TIGER_QUERY_ANALYTICS_TRACE_HISTORY_PROVENANCE,
+    'traceMetricHistory'
+  );
+}
+
+function rankMetricForLatestOrder(args: QueryAnalyticsArgs): 'total_reviews' | 'owners_midpoint' | 'ccu_peak' | 'review_score' {
+  const firstOrderField = Object.keys(args.order ?? {})[0];
+  const field = dimensionFieldName(firstOrderField ?? '');
+  if (field === 'ownersMidpoint') {
+    return 'owners_midpoint';
+  }
+  if (field === 'ccuPeak') {
+    return 'ccu_peak';
+  }
+  if (field === 'reviewScore' || field === 'positivePercentage') {
+    return 'review_score';
+  }
+  return 'total_reviews';
+}
+
+function mapRankedGameRow(item: NonNullable<RankEntitiesResponse['items']>[number]): Record<string, unknown> {
+  return {
+    appid: Number(item.platformEntityId),
+    ccuPeak: item.metrics?.ccuPeak ?? null,
+    name: item.displayName,
+    ownersMidpoint: item.metrics?.ownersMidpoint ?? null,
+    reviewScore: item.metrics?.reviewScore ?? null,
+    totalReviews: item.metrics?.totalReviews ?? null,
+  };
+}
+
+async function tryLatestMetricsCompat(args: QueryAnalyticsArgs): Promise<QueryAnalyticsResult | null> {
+  if (args.cube !== 'LatestMetrics') {
+    return null;
+  }
+
+  const appid = getSingleNumericFilterValue(args.filters, 'LatestMetrics.appid', 'equals');
+  if (appid != null) {
+    const response = await postToQueryApi<GetEntityOverviewResponse>(
+      '/v1/contracts/get-entity-overview',
+      {
+        entityKind: 'game',
+        gamesLimit: 0,
+        platformEntityId: String(appid),
+      }
+    );
+
+    if (!response.ok || !response.data) {
+      return null;
+    }
+
+    const entity = response.data.entity;
+    return buildTigerQueryAnalyticsResult(
+      args,
+      [{
+        appid,
+        ccuPeak: entity.metrics.ccuPeak,
+        name: entity.displayName,
+        ownersMidpoint: entity.metrics.ownersMidpoint,
+        reviewScore: entity.metrics.reviewScore,
+        totalReviews: entity.metrics.totalReviews,
+      }],
+      TIGER_QUERY_ANALYTICS_ENTITY_OVERVIEW_PROVENANCE,
+      'getEntityOverview'
+    );
+  }
+
+  const response = await postToQueryApi<RankEntitiesResponse>('/v1/contracts/rank-entities', {
+    entityKind: 'game',
+    limit: normalizeLimit(args.limit, 10, 25),
+    metric: rankMetricForLatestOrder(args),
+    sortDirection: Object.values(args.order ?? {})[0] ?? 'desc',
+  });
+
+  if (!response.ok || !response.data) {
+    return null;
+  }
+
+  return buildTigerQueryAnalyticsResult(
+    args,
+    (response.data.items ?? []).map(mapRankedGameRow),
+    TIGER_QUERY_ANALYTICS_RANK_ENTITIES_PROVENANCE,
+    'rankEntities'
+  );
 }
 
 async function tryDlcRelationsCompat(args: QueryAnalyticsArgs): Promise<QueryAnalyticsResult | null> {
@@ -612,7 +1086,15 @@ async function tryDlcRelationsCompat(args: QueryAnalyticsArgs): Promise<QueryAna
 async function tryCompanyRankingCompat(args: QueryAnalyticsArgs): Promise<QueryAnalyticsResult | null> {
   if (![
     'PublisherChatWindowMetrics',
+    'PublisherChatScreenMetrics',
+    'PublisherRelationshipMetrics',
+    'PublisherYearMetrics',
+    'PublisherMetrics',
     'DeveloperChatWindowMetrics',
+    'DeveloperChatScreenMetrics',
+    'DeveloperRelationshipMetrics',
+    'DeveloperYearMetrics',
+    'DeveloperMetrics',
     'PublisherGameMetrics',
     'DeveloperGameMetrics',
   ].includes(args.cube)) {
@@ -647,12 +1129,21 @@ async function tryCompanyRankingCompat(args: QueryAnalyticsArgs): Promise<QueryA
             getFilterThreshold(args.filters, `${cube}.avgReviewScore`, 'gte') ?? null,
           minGameCount: getFilterThreshold(args.filters, `${cube}.gameCount`, 'gte') ?? null,
         };
+  const releaseYear = getSingleNumericFilterValue(args.filters, `${cube}.releaseYear`, 'equals');
 
   const response = await postToQueryApi<RankEntitiesResponse>('/v1/contracts/rank-entities', {
     aggregateFilters,
+    catalogFilters: releaseYear == null
+      ? undefined
+      : {
+          releaseYear: {
+            gte: releaseYear,
+            lte: releaseYear,
+          },
+        },
     entityKind,
     limit: normalizeLimit(args.limit, 10, 25),
-    metric: 'game_count',
+    metric: rankMetricForCompanyOrder(args),
     releaseDays,
     sortDirection: 'desc',
   });
@@ -817,6 +1308,27 @@ async function tryCompanyMetricCompat(args: QueryAnalyticsArgs): Promise<QueryAn
 export async function tryTigerQueryAnalyticsCompat(
   args: QueryAnalyticsArgs
 ): Promise<QueryAnalyticsResult | null> {
+  const canonicalizedArgs = canonicalizeDiscoveryArgs(args);
+  if (!canonicalizedArgs) {
+    return null;
+  }
+
+  if (canonicalizedArgs !== args) {
+    return tryTigerQueryAnalyticsCompat(canonicalizedArgs);
+  }
+
+  if (args.cube === 'MonthlyGameMetrics' || args.cube === 'MonthlyPublisherMetrics') {
+    return tryMonthlyPlaytimeCompat(args);
+  }
+
+  if (args.cube === 'DailyMetrics') {
+    return tryDailyMetricsCompat(args);
+  }
+
+  if (args.cube === 'LatestMetrics') {
+    return tryLatestMetricsCompat(args);
+  }
+
   if (args.cube === 'DlcRelations') {
     return tryDlcRelationsCompat(args);
   }
@@ -827,7 +1339,15 @@ export async function tryTigerQueryAnalyticsCompat(
 
   if (
     args.cube === 'PublisherChatWindowMetrics'
+    || args.cube === 'PublisherChatScreenMetrics'
+    || args.cube === 'PublisherRelationshipMetrics'
+    || args.cube === 'PublisherYearMetrics'
+    || args.cube === 'PublisherMetrics'
     || args.cube === 'DeveloperChatWindowMetrics'
+    || args.cube === 'DeveloperChatScreenMetrics'
+    || args.cube === 'DeveloperRelationshipMetrics'
+    || args.cube === 'DeveloperYearMetrics'
+    || args.cube === 'DeveloperMetrics'
     || args.cube === 'PublisherGameMetrics'
     || args.cube === 'DeveloperGameMetrics'
   ) {

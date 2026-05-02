@@ -20,6 +20,7 @@ Current ready contracts:
 - `searchChangeActivity`
 - `discoverChangePatterns`
 - `rankEntities`
+- `queryMonthlyPlaytime`
 - `compareEntities`
 - `traceMetricHistory`
 - `explainChanges`
@@ -44,6 +45,7 @@ These contracts are what `/chat`, similarity routes, momentum screens, YouTube c
 - `POST /v1/contracts/search-change-activity`
 - `POST /v1/contracts/discover-change-patterns`
 - `POST /v1/contracts/rank-entities`
+- `POST /v1/contracts/query-monthly-playtime`
 - `POST /v1/contracts/compare-entities`
 - `POST /v1/contracts/trace-metric-history`
 - `POST /v1/contracts/explain-changes`

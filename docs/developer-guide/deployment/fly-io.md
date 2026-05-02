@@ -322,20 +322,8 @@ Fly.io charges based on machine time and resources.
 
 ## Integration with Dashboard
 
-The admin dashboard connects to Cube.js via JWT authentication:
-
-```typescript
-// apps/admin/src/lib/cube-executor.ts
-function generateToken(): string {
-  return jwt.sign(
-    { iss: 'publisheriq-admin', iat: now, exp: now + 3600 },
-    process.env.CUBE_API_SECRET,
-    { algorithm: 'HS256' }
-  );
-}
-```
-
-Ensure `CUBE_API_SECRET` matches in both Fly.io and Vercel environments.
+Cube.js is no longer the production dashboard/chat analytics path. Legacy
+`query_analytics` compatibility routes through the Tiger Query API instead.
 
 ## Related Documentation
 
