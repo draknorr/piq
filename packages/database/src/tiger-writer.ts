@@ -2066,6 +2066,58 @@ export class TigerMetricsRepository {
     }));
   }
 
+  async listPriorityInputsAfter(afterAppid: number, limit: number): Promise<PriorityInput[]> {
+    const { rows } = await runQuery<PriorityInputRow>(
+      this.pool,
+      'metrics.listPriorityInputsAfter',
+      `
+        WITH status_page AS (
+          SELECT
+            appid,
+            last_reviews_sync,
+            last_steamspy_sync
+          FROM ops.sync_status
+          WHERE appid > $1
+          ORDER BY appid ASC
+          LIMIT $2
+        )
+        SELECT
+          s.appid,
+          s.last_reviews_sync,
+          s.last_steamspy_sync,
+          ldm.ccu_peak,
+          ldm.total_reviews,
+          t.review_velocity_7d,
+          t.review_velocity_30d,
+          t.trend_30d_change_pct,
+          a.is_released,
+          a.release_date
+        FROM status_page s
+        LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = s.appid
+        LEFT JOIN metrics.app_trends t ON t.appid = s.appid
+        LEFT JOIN legacy.apps a ON a.appid = s.appid
+        ORDER BY s.appid ASC
+      `,
+      [afterAppid, limit]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      ccu_peak: row.ccu_peak === null ? null : parseNumber(row.ccu_peak),
+      is_released: Boolean(row.is_released),
+      last_reviews_sync: normalizeTimestamp(row.last_reviews_sync),
+      last_steamspy_sync: normalizeTimestamp(row.last_steamspy_sync),
+      release_date: normalizeDate(row.release_date),
+      review_velocity_30d:
+        row.review_velocity_30d === null ? null : parseNumber(row.review_velocity_30d),
+      review_velocity_7d:
+        row.review_velocity_7d === null ? null : parseNumber(row.review_velocity_7d),
+      total_reviews: row.total_reviews === null ? null : parseNumber(row.total_reviews),
+      trend_30d_change_pct:
+        row.trend_30d_change_pct === null ? null : parseNumber(row.trend_30d_change_pct),
+    }));
+  }
+
   private async upsertMetricsTable(
     table: string,
     rows: JsonRecord[],
