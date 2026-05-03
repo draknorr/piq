@@ -2,11 +2,10 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { useAuthReady } from '@/hooks/useAuthReady';
-import { createBrowserClient } from '@/lib/supabase/client';
 import type { AppType } from '../lib/apps-types';
 
 /**
- * Filter option returned from get_apps_filter_option_counts RPC
+ * Filter option returned from the Tiger-backed filter-count endpoint.
  */
 export interface FilterOption {
   option_id: number;
@@ -31,8 +30,7 @@ interface ContextFilters {
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Hook for lazy-loading filter option counts with caching.
- * Calls get_apps_filter_option_counts RPC when dropdowns open.
+ * Hook for lazy-loading Tiger-backed filter option counts with caching.
  */
 export function useFilterCounts() {
   const authReady = useAuthReady();
@@ -135,39 +133,30 @@ export function useFilterCounts() {
       setLoading((prev) => ({ ...prev, [filterType]: true }));
 
       try {
-        const supabase = createBrowserClient();
+        const searchParams = new URLSearchParams({
+          filterType,
+          type: appType,
+        });
+        if (contextFilters?.minCcu !== undefined) searchParams.set('minCcu', String(contextFilters.minCcu));
+        if (contextFilters?.minReviews !== undefined) searchParams.set('minReviews', String(contextFilters.minReviews));
+        if (contextFilters?.minScore !== undefined) searchParams.set('minScore', String(contextFilters.minScore));
+        if (contextFilters?.minOwners !== undefined) searchParams.set('minOwners', String(contextFilters.minOwners));
 
-        const rpcParams = {
-          p_filter_type: filterType,
-          p_type: appType,
-          p_min_ccu: contextFilters?.minCcu,
-          p_min_reviews: contextFilters?.minReviews,
-          p_min_score: contextFilters?.minScore,
-          p_min_owners: contextFilters?.minOwners,
-        };
+        const response = await fetch(`/api/apps/filter-counts?${searchParams.toString()}`);
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const response = await (supabase.rpc as any)('get_apps_filter_option_counts', rpcParams);
-
-        const { data: result, error } = response;
-
-        if (error) {
-          const errorMessage = error.message.toLowerCase();
-          const isUnauthorized =
-            errorMessage.includes('authentication required') ||
-            errorMessage.includes('jwt') ||
-            errorMessage.includes('unauthorized');
-
-          if (isUnauthorized) {
+        if (!response.ok) {
+          if (response.status === 401) {
             setData((prev) => ({ ...prev, [filterType]: [] }));
             return [];
           }
 
+          const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
           console.error(`Error fetching ${filterType} counts:`, error);
-          throw error;
+          throw new Error(error.error || `HTTP ${response.status}`);
         }
 
-        const options = (result ?? []) as FilterOption[];
+        const result = await response.json() as { data?: FilterOption[] };
+        const options = result.data ?? [];
 
         // Cache the result
         cache.current[cacheKey] = { data: options, timestamp: Date.now() };

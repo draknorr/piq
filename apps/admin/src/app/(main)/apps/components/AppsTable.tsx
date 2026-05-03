@@ -30,7 +30,7 @@ import {
   DEFAULT_APP_COLUMNS,
   type AppColumnId,
 } from '../lib/apps-columns';
-import { formatCompactNumber, formatPrice } from '../lib/apps-queries';
+import { formatCompactNumber, formatPrice } from '../lib/apps-format';
 import type { App, SortField, SortOrder } from '../lib/apps-types';
 
 interface AppsTableProps {

@@ -1,26 +1,26 @@
 import type { Metadata } from 'next';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { getServiceSupabase } from '@/lib/supabase-service';
 import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { notFound } from 'next/navigation';
 import { PageSubHeader } from '@/components/layout';
 import { TypeBadge, ReviewScoreBadge, RatioBar, TrendSparkline, CCUSourceBadge } from '@/components/data-display';
 import { ExternalLink } from 'lucide-react';
 import { AppDetailSections } from './AppDetailSections';
-import { getAppDailyPeakSparkline } from '@/lib/ccu-queries';
 import { PinButton } from '@/components/PinButton';
-import { getUser, createServerClient } from '@/lib/supabase/server';
-import { getAppsByIds } from '../lib/apps-queries';
+import { getUser } from '@/lib/supabase/server';
+import { runTigerQuery } from '@publisheriq/database';
+import { getAppsByIds, isTigerReadConfigured, mapAppRpcRowToApp } from '../lib/apps-queries';
 import type { App as AppSummary } from '../lib/apps-types';
 
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }: { params: Promise<{ appid: string }> }): Promise<Metadata> {
   const { appid } = await params;
-  if (!isSupabaseConfigured()) return { title: 'App Details' };
-  const supabase = getServiceSupabase();
-  const { data: app } = await supabase.from('apps').select('name').eq('appid', Number(appid)).single();
-  return { title: app?.name || 'App Details' };
+  if (!isTigerReadConfigured()) return { title: 'App Details' };
+  const { rows } = await runTigerQuery<{ name: string }>(
+    'SELECT name FROM legacy.apps WHERE appid = $1 LIMIT 1',
+    [Number(appid)]
+  );
+  return { title: rows[0]?.name || 'App Details' };
 }
 
 interface AppDetails {
@@ -141,6 +141,18 @@ interface SyncStatus {
   is_syncable: boolean;
 }
 
+interface AppProfileBundle {
+  app: AppDetails | null;
+  developers: { id: number; name: string }[];
+  publishers: { id: number; name: string }[];
+  steamDeck: SteamDeckInfo | null;
+  genres: Genre[];
+  categories: Category[];
+  franchises: Franchise[];
+  dlcs: DLCApp[];
+  steamTags: SteamTag[];
+}
+
 type DataCoverageStatus = 'ok' | 'missing' | 'stale' | 'unknown';
 
 interface DataCoverageItem {
@@ -159,8 +171,36 @@ function hasFreshSummaryMetrics(appSummary: AppSummary | null): boolean {
   return Boolean(appSummary?.metric_date || appSummary?.data_updated_at);
 }
 
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function toBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value === 'true' || value === 't' || value === '1';
+  return fallback;
+}
+
+function toIso(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
 async function getAppSummary(appid: number): Promise<AppSummary | null> {
   try {
+    try {
+      const { rows } = await runTigerQuery<Parameters<typeof mapAppRpcRowToApp>[0]>(
+        'SELECT * FROM metrics.apps_page_projection WHERE appid = $1 LIMIT 1',
+        [appid]
+      );
+      if (rows[0]) return mapAppRpcRowToApp(rows[0]);
+    } catch {
+      // Fall back for environments that have Tiger reads without the /apps projection materialized view.
+    }
+
     const apps = await getAppsByIds([appid]);
     return apps[0] ?? null;
   } catch (error) {
@@ -169,251 +209,232 @@ async function getAppSummary(appid: number): Promise<AppSummary | null> {
   }
 }
 
-async function getAppDetails(appid: number) {
-  if (!isSupabaseConfigured()) return null;
-  const supabase = getServiceSupabase();
+function mapAppDetails(appData: Record<string, unknown> | null | undefined, appid: number): AppDetails | null {
+  if (!appData) return null;
 
-  const { data, error } = await supabase
-    .from('apps')
-    .select('*')
-    .eq('appid', appid)
-    .single();
-
-  if (error || !data) return null;
-
-  const appData = data as typeof data & { has_developer_info?: boolean };
   return {
-    ...appData,
-    has_developer_info: appData.has_developer_info ?? false,
+    appid: toNumber(appData.appid) ?? appid,
+    name: String(appData.name ?? ''),
+    type: String(appData.type ?? 'game'),
+    is_free: toBoolean(appData.is_free),
+    release_date: toIso(appData.release_date),
+    release_date_raw: typeof appData.release_date_raw === 'string' ? appData.release_date_raw : null,
+    store_asset_mtime: toIso(appData.store_asset_mtime),
+    has_workshop: toBoolean(appData.has_workshop),
+    current_price_cents: toNumber(appData.current_price_cents),
+    current_discount_percent: toNumber(appData.current_discount_percent),
+    is_released: toBoolean(appData.is_released, true),
+    is_delisted: toBoolean(appData.is_delisted),
+    has_developer_info: toBoolean(appData.has_developer_info),
+    controller_support: typeof appData.controller_support === 'string' ? appData.controller_support : null,
+    pics_review_score: toNumber(appData.pics_review_score),
+    pics_review_percentage: toNumber(appData.pics_review_percentage),
+    metacritic_score: toNumber(appData.metacritic_score),
+    metacritic_url: typeof appData.metacritic_url === 'string' ? appData.metacritic_url : null,
+    platforms: typeof appData.platforms === 'string' ? appData.platforms : null,
+    release_state: typeof appData.release_state === 'string' ? appData.release_state : null,
+    parent_appid: toNumber(appData.parent_appid),
+    homepage_url: typeof appData.homepage_url === 'string' ? appData.homepage_url : null,
+    last_content_update: toIso(appData.last_content_update),
+    current_build_id: typeof appData.current_build_id === 'string' ? appData.current_build_id : null,
+    app_state: typeof appData.app_state === 'string' ? appData.app_state : null,
+    languages: typeof appData.languages === 'object' && appData.languages !== null && !Array.isArray(appData.languages)
+      ? appData.languages as Record<string, unknown>
+      : null,
+    content_descriptors: Array.isArray(appData.content_descriptors) ? appData.content_descriptors : null,
+    created_at: toIso(appData.created_at) ?? '',
+    updated_at: toIso(appData.updated_at) ?? '',
   } as AppDetails;
 }
 
-async function getDevelopers(appid: number): Promise<{ id: number; name: string }[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_developers')
-    .select('developers(id, name)')
-    .eq('appid', appid);
-
-  return (data ?? [])
-    .map((d: { developers: { id: number; name: string } | null }) => d.developers)
-    .filter((dev): dev is { id: number; name: string } => dev !== null);
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value as T[] : [];
 }
 
-async function getPublishers(appid: number): Promise<{ id: number; name: string }[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_publishers')
-    .select('publishers(id, name)')
-    .eq('appid', appid);
-
-  return (data ?? [])
-    .map((p: { publishers: { id: number; name: string } | null }) => p.publishers)
-    .filter((pub): pub is { id: number; name: string } => pub !== null);
+function mapSteamTags(rows: SteamTag[]): SteamTag[] {
+  return rows.map((row) => ({ ...row, rank: toNumber(row.rank) ?? 0 }));
 }
 
-async function getTags(appid: number): Promise<{ tag: string; vote_count: number | null }[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+async function getAppProfileBundle(appid: number): Promise<AppProfileBundle> {
+  const { rows } = await runTigerQuery<{
+    app: Record<string, unknown> | null;
+    developers: { id: number; name: string }[] | null;
+    publishers: { id: number; name: string }[] | null;
+    steam_deck: { category: SteamDeckInfo['category']; tests: unknown } | null;
+    genres: Genre[] | null;
+    categories: Category[] | null;
+    franchises: Franchise[] | null;
+    dlcs: DLCApp[] | null;
+    steam_tags: SteamTag[] | null;
+  }>(
+    `
+      SELECT
+        to_jsonb(a) AS app,
+        COALESCE(developers.items, '[]'::jsonb) AS developers,
+        COALESCE(publishers.items, '[]'::jsonb) AS publishers,
+        to_jsonb(deck) AS steam_deck,
+        COALESCE(genres.items, '[]'::jsonb) AS genres,
+        COALESCE(categories.items, '[]'::jsonb) AS categories,
+        COALESCE(franchises.items, '[]'::jsonb) AS franchises,
+        COALESCE(dlcs.items, '[]'::jsonb) AS dlcs,
+        COALESCE(steam_tags.items, '[]'::jsonb) AS steam_tags
+      FROM legacy.apps a
+      LEFT JOIN legacy.app_steam_deck deck ON deck.appid = a.appid
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name) ORDER BY d.name) AS items
+        FROM legacy.app_developers ad
+        JOIN legacy.developers d ON d.id = ad.developer_id
+        WHERE ad.appid = a.appid
+      ) developers ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name) AS items
+        FROM legacy.app_publishers ap
+        JOIN legacy.publishers p ON p.id = ap.publisher_id
+        WHERE ap.appid = a.appid
+      ) publishers ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+          jsonb_build_object('id', sg.genre_id, 'name', sg.name, 'is_primary', COALESCE(ag.is_primary, false))
+          ORDER BY ag.is_primary DESC NULLS LAST, sg.name
+        ) AS items
+        FROM legacy.app_genres ag
+        JOIN legacy.steam_genres sg ON sg.genre_id = ag.genre_id
+        WHERE ag.appid = a.appid
+      ) genres ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('id', sc.category_id, 'name', sc.name) ORDER BY sc.name) AS items
+        FROM legacy.app_categories ac
+        JOIN legacy.steam_categories sc ON sc.category_id = ac.category_id
+        WHERE ac.appid = a.appid
+      ) categories ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('id', f.id::integer, 'name', f.name) ORDER BY f.name) AS items
+        FROM legacy.app_franchises af
+        JOIN legacy.franchises f ON f.id = af.franchise_id
+        WHERE af.appid = a.appid
+      ) franchises ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('appid', child.appid, 'name', child.name, 'type', COALESCE(child.type, 'dlc')) ORDER BY child.name) AS items
+        FROM legacy.apps child
+        WHERE child.parent_appid = a.appid
+      ) dlcs ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('id', st.tag_id, 'name', st.name, 'rank', ast.rank) ORDER BY ast.rank NULLS LAST, st.name) AS items
+        FROM legacy.app_steam_tags ast
+        JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id
+        WHERE ast.appid = a.appid
+      ) steam_tags ON true
+      WHERE a.appid = $1
+      LIMIT 1
+    `,
+    [appid]
+  );
+  const row = rows[0];
+  const steamDeck = row?.steam_deck
+    ? {
+        category: row.steam_deck.category,
+        tests_failed: null,
+        tests_passed: Array.isArray(row.steam_deck.tests) ? row.steam_deck.tests.map(String) : null,
+      }
+    : null;
+  const steamTags = mapSteamTags(asArray<SteamTag>(row?.steam_tags));
 
-  const { data } = await supabase
-    .from('app_tags')
-    .select('tag, vote_count')
-    .eq('appid', appid)
-    .order('vote_count', { ascending: false });
-
-  return data ?? [];
+  return {
+    app: mapAppDetails(row?.app, appid),
+    developers: asArray(row?.developers),
+    publishers: asArray(row?.publishers),
+    steamDeck,
+    genres: asArray(row?.genres),
+    categories: asArray(row?.categories),
+    franchises: asArray(row?.franchises),
+    dlcs: asArray(row?.dlcs),
+    steamTags,
+  };
 }
 
 async function getDailyMetrics(appid: number): Promise<DailyMetric[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<DailyMetric>(
+    `
+      SELECT
+        metric_date,
+        review_score,
+        review_score_desc,
+        total_reviews,
+        positive_reviews,
+        negative_reviews,
+        owners_min,
+        owners_max,
+        ccu_peak,
+        ccu_source,
+        average_playtime_forever,
+        average_playtime_2weeks,
+        price_cents,
+        discount_percent
+      FROM metrics.daily_metrics
+      WHERE appid = $1
+      ORDER BY metric_date DESC
+      LIMIT 30
+    `,
+    [appid]
+  );
 
-  const { data } = await supabase
-    .from('daily_metrics')
-    .select('*')
-    .eq('appid', appid)
-    .order('metric_date', { ascending: false })
-    .limit(30);
-
-  if (!data) return [];
-
-  // Cast ccu_source to the correct literal type
-  return data.map(d => ({
-    ...d,
-    ccu_source: d.ccu_source as DailyMetric['ccu_source'],
+  return rows.map((row) => ({
+    ...row,
+    metric_date: toIso(row.metric_date) ?? '',
+    ccu_source: row.ccu_source as DailyMetric['ccu_source'],
   }));
 }
 
 async function getReviewHistogram(appid: number): Promise<ReviewHistogram[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<ReviewHistogram>(
+    `
+      SELECT
+        to_char(month_start, 'YYYY-MM') AS month_start,
+        SUM(recommendations_up)::integer AS recommendations_up,
+        SUM(recommendations_down)::integer AS recommendations_down
+      FROM metrics.review_histogram
+      WHERE appid = $1
+      GROUP BY 1
+      ORDER BY 1 DESC
+      LIMIT 24
+    `,
+    [appid]
+  );
 
-  const { data } = await supabase
-    .from('review_histogram')
-    .select('month_start, recommendations_up, recommendations_down')
-    .eq('appid', appid)
-    .order('month_start', { ascending: false });
-
-  if (!data) return [];
-
-  // Validate ISO date format (YYYY-MM-DD or YYYY-MM)
-  const isoDatePattern = /^\d{4}-\d{2}(?:-\d{2})?$/;
-
-  // Aggregate by month to handle duplicate entries for the same month
-  const monthMap = new Map<string, { up: number; down: number }>();
-
-  for (const h of data) {
-    // Skip entries with invalid month_start format
-    if (!isoDatePattern.test(h.month_start)) {
-      continue;
-    }
-
-    // Normalize to YYYY-MM for grouping
-    const monthKey = h.month_start.substring(0, 7);
-    const existing = monthMap.get(monthKey) ?? { up: 0, down: 0 };
-
-    existing.up += h.recommendations_up;
-    existing.down += h.recommendations_down;
-
-    monthMap.set(monthKey, existing);
-  }
-
-  return [...monthMap.entries()]
-    .map(([month_start, { up, down }]) => ({
-      month_start,
-      recommendations_up: up,
-      recommendations_down: down,
-    }))
-    .sort((a, b) => b.month_start.localeCompare(a.month_start))
-    .slice(0, 24);
+  return rows;
 }
 
 async function getTrends(appid: number): Promise<AppTrends | null> {
-  if (!isSupabaseConfigured()) return null;
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_trends')
-    .select('*')
-    .eq('appid', appid)
-    .single();
-
-  return data ?? null;
+  const { rows } = await runTigerQuery<AppTrends>(
+    'SELECT * FROM metrics.app_trends WHERE appid = $1 LIMIT 1',
+    [appid]
+  );
+  return rows[0] ?? null;
 }
 
 async function getSyncStatus(appid: number): Promise<SyncStatus | null> {
-  if (!isSupabaseConfigured()) return null;
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<Record<string, unknown>>(
+    'SELECT * FROM ops.sync_status WHERE appid = $1 LIMIT 1',
+    [appid]
+  );
+  const syncData = rows[0];
+  if (!syncData) return null;
 
-  const { data } = await supabase
-    .from('sync_status')
-    .select('*')
-    .eq('appid', appid)
-    .single();
-
-  if (!data) return null;
-
-  const syncData = data as typeof data & { refresh_tier?: string; last_activity_at?: string; review_velocity_tier?: string };
   return {
-    ...syncData,
-    refresh_tier: syncData.refresh_tier ?? null,
+    last_steamspy_sync: toIso(syncData.last_steamspy_sync),
+    last_storefront_sync: toIso(syncData.last_storefront_sync),
+    last_reviews_sync: toIso(syncData.last_reviews_sync),
+    last_histogram_sync: toIso(syncData.last_histogram_sync),
+    priority_score: toNumber(syncData.priority_score),
+    refresh_tier: typeof syncData.refresh_tier === 'string' ? syncData.refresh_tier : null,
     review_velocity_tier: (syncData.review_velocity_tier as SyncStatus['review_velocity_tier']) ?? null,
-    last_activity_at: syncData.last_activity_at ?? null,
+    last_activity_at: toIso(syncData.last_activity_at),
+    consecutive_errors: toNumber(syncData.consecutive_errors),
+    last_error_source: typeof syncData.last_error_source === 'string' ? syncData.last_error_source : null,
+    last_error_message: typeof syncData.last_error_message === 'string' ? syncData.last_error_message : null,
+    last_error_at: toIso(syncData.last_error_at),
+    is_syncable: toBoolean(syncData.is_syncable, true),
   } as SyncStatus;
-}
-
-async function getSteamDeckInfo(appid: number): Promise<SteamDeckInfo | null> {
-  if (!isSupabaseConfigured()) return null;
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_steam_deck')
-    .select('category, tests_passed, tests_failed')
-    .eq('appid', appid)
-    .single();
-
-  return data as SteamDeckInfo | null;
-}
-
-async function getGenres(appid: number): Promise<Genre[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_genres')
-    .select('is_primary, steam_genres(genre_id, name)')
-    .eq('appid', appid)
-    .order('is_primary', { ascending: false });
-
-  type GenreRow = { is_primary: boolean; steam_genres: { genre_id: number; name: string } | null };
-  return ((data ?? []) as unknown as GenreRow[])
-    .map((g) =>
-      g.steam_genres ? { id: g.steam_genres.genre_id, name: g.steam_genres.name, is_primary: g.is_primary ?? false } : null)
-    .filter((genre): genre is Genre => genre !== null);
-}
-
-async function getCategories(appid: number): Promise<Category[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_categories')
-    .select('steam_categories(category_id, name)')
-    .eq('appid', appid);
-
-  return (data ?? [])
-    .map((c: { steam_categories: { category_id: number; name: string } | null }) =>
-      c.steam_categories ? { id: c.steam_categories.category_id, name: c.steam_categories.name } : null)
-    .filter((category): category is Category => category !== null);
-}
-
-async function getFranchises(appid: number): Promise<Franchise[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_franchises')
-    .select('franchises(id, name)')
-    .eq('appid', appid);
-
-  return (data ?? [])
-    .map((f: { franchises: { id: number; name: string } | null }) => f.franchises)
-    .filter((franchise): franchise is Franchise => franchise !== null);
-}
-
-async function getDLCs(appid: number): Promise<DLCApp[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('apps')
-    .select('appid, name, type')
-    .eq('parent_appid', appid)
-    .order('name');
-
-  return (data ?? []) as DLCApp[];
-}
-
-async function getSteamTags(appid: number): Promise<SteamTag[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
-
-  const { data } = await supabase
-    .from('app_steam_tags')
-    .select('rank, steam_tags(tag_id, name)')
-    .eq('appid', appid)
-    .order('rank');
-
-  type TagRow = { rank: number; steam_tags: { tag_id: number; name: string } | null };
-  return ((data ?? []) as unknown as TagRow[])
-    .map((t) =>
-      t.steam_tags ? { id: t.steam_tags.tag_id, name: t.steam_tags.name, rank: t.rank } : null)
-    .filter((tag): tag is SteamTag => tag !== null);
 }
 
 function formatPrice(cents: number | null, isFree: boolean): string {
@@ -491,12 +512,42 @@ function shouldPreferLatestReviewMetrics(
   );
 }
 
+async function getAppDailyPeakSparkline(appid: number, days: 7 | 30 = 7) {
+  const { rows } = await runTigerQuery<{ bucket: string; ccu: number | string | null }>(
+    `
+      SELECT date_trunc('day', snapshot_time)::date AS bucket, max(player_count) AS ccu
+      FROM metrics.ccu_snapshots
+      WHERE appid = $1
+        AND snapshot_time >= now() - ($2::integer * INTERVAL '1 day')
+      GROUP BY bucket
+      ORDER BY bucket ASC
+    `,
+    [appid, days]
+  );
+  const dataPoints = rows.map((row) => toNumber(row.ccu) ?? 0).filter((value) => value > 0);
+  const midpoint = Math.floor(dataPoints.length / 2);
+  const firstHalf = dataPoints.slice(0, midpoint);
+  const secondHalf = dataPoints.slice(midpoint);
+  const firstAverage = firstHalf.length > 0 ? firstHalf.reduce((sum, value) => sum + value, 0) / firstHalf.length : 0;
+  const secondAverage = secondHalf.length > 0 ? secondHalf.reduce((sum, value) => sum + value, 0) / secondHalf.length : 0;
+  const growthPct = firstAverage > 0 ? Math.round(((secondAverage - firstAverage) / firstAverage) * 100) : null;
+  const trend: 'up' | 'down' | 'stable' =
+    growthPct === null ? 'stable' : growthPct > 5 ? 'up' : growthPct < -5 ? 'down' : 'stable';
+
+  return {
+    dataPoints,
+    growthPct,
+    peakCCU: dataPoints.length > 0 ? Math.max(...dataPoints) : null,
+    trend,
+  };
+}
+
 export default async function AppDetailPage({
   params,
 }: {
   params: Promise<{ appid: string }>;
 }) {
-  if (!isSupabaseConfigured()) {
+  if (!isTigerReadConfigured()) {
     return <ConfigurationRequired />;
   }
 
@@ -508,40 +559,24 @@ export default async function AppDetailPage({
   }
 
   const [
-    app,
+    appProfile,
     appSummary,
-    developers,
-    publishers,
-    tags,
     metrics,
     histogram,
     trends,
     syncStatus,
-    steamDeck,
-    genres,
-    categories,
-    franchises,
-    dlcs,
-    steamTags,
     ccuSparkline,
   ] = await Promise.all([
-    getAppDetails(appid),
+    getAppProfileBundle(appid),
     getAppSummary(appid),
-    getDevelopers(appid),
-    getPublishers(appid),
-    getTags(appid),
     getDailyMetrics(appid),
     getReviewHistogram(appid),
     getTrends(appid),
     getSyncStatus(appid),
-    getSteamDeckInfo(appid),
-    getGenres(appid),
-    getCategories(appid),
-    getFranchises(appid),
-    getDLCs(appid),
-    getSteamTags(appid),
     getAppDailyPeakSparkline(appid, 7),
   ]);
+  const { app, developers, publishers, steamDeck, genres, categories, franchises, dlcs, steamTags } = appProfile;
+  const tags = steamTags.slice(0, 30).map((tag) => ({ tag: tag.name, vote_count: null }));
 
   if (!app) {
     notFound();
@@ -552,16 +587,18 @@ export default async function AppDetailPage({
   const user = await getUser();
   let pinStatus: { id: string } | null = null;
   if (user) {
-    const supabaseAuth = await createServerClient();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabaseAuth as any)
-      .from('user_pins')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('entity_type', 'game')
-      .eq('entity_id', app.appid)
-      .maybeSingle();
-    pinStatus = data;
+    const { rows } = await runTigerQuery<{ id: string }>(
+      `
+        SELECT id::text AS id
+        FROM legacy.user_pins
+        WHERE user_id = $1::uuid
+          AND entity_type = 'game'
+          AND entity_id = $2
+        LIMIT 1
+      `,
+      [user.id, app.appid]
+    );
+    pinStatus = rows[0] ?? null;
   }
 
   const latestMetrics = metrics[0] ?? null;
@@ -614,22 +651,22 @@ export default async function AppDetailPage({
         key: 'app_record',
         label: 'App record',
         status: 'ok',
-        source: 'apps (table)',
-        detail: `apps.appid = ${app.appid}`,
+        source: 'Tiger legacy.apps',
+        detail: `legacy.apps.appid = ${app.appid}`,
       },
       {
         key: 'canonical_metrics',
         label: 'Canonical metrics + computed insights',
         status: getCoverageStatus({ present: appSummary !== null }),
-        source: 'get_apps_by_ids (RPC)',
+        source: 'Tiger apps summary query',
         detail:
           appSummary
             ? `metric_date: ${appSummary.metric_date ?? '—'} · data_updated_at: ${appSummary.data_updated_at ?? '—'}`
             : app.is_delisted
-              ? 'Not returned by RPC for delisted apps'
+              ? 'Not returned by Tiger summary for delisted apps'
               : !app.is_released
-                ? 'Not returned by RPC for unreleased apps'
-                : 'No RPC result (check get_apps_by_ids)',
+                ? 'Not returned by Tiger summary for unreleased apps'
+                : 'No Tiger summary result',
       },
       {
         key: 'storefront',
@@ -639,78 +676,78 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_storefront_sync ?? null,
           staleAfterDays: 7,
         }),
-        source: 'apps (table) + sync_status.last_storefront_sync',
+        source: 'Tiger legacy.apps + ops.sync_status',
         detail: `price_cents: ${priceCents ?? '—'} · discount_percent: ${discountPercent} · last_storefront_sync: ${syncStatus?.last_storefront_sync ?? '—'}`,
       },
       {
         key: 'developers',
         label: 'Developers',
         status: getCoverageStatus({ present: developers.length > 0 }),
-        source: 'app_developers → developers (tables)',
+        source: 'Tiger legacy.app_developers → legacy.developers',
         detail: `count: ${developers.length}`,
       },
       {
         key: 'publishers',
         label: 'Publishers',
         status: getCoverageStatus({ present: publishers.length > 0 }),
-        source: 'app_publishers → publishers (tables)',
+        source: 'Tiger legacy.app_publishers → legacy.publishers',
         detail: `count: ${publishers.length}`,
       },
       {
         key: 'steam_deck',
         label: 'Steam Deck compatibility',
         status: getCoverageStatus({ present: steamDeck !== null }),
-        source: 'app_steam_deck (table)',
-        detail: steamDeck ? `category: ${steamDeck.category}` : 'No row in app_steam_deck',
+        source: 'Tiger legacy.app_steam_deck',
+        detail: steamDeck ? `category: ${steamDeck.category}` : 'No row in legacy.app_steam_deck',
       },
       {
         key: 'genres',
         label: 'Genres',
         status: getCoverageStatus({ present: genres.length > 0 }),
-        source: 'app_genres → steam_genres (tables)',
+        source: 'Tiger legacy.app_genres → legacy.steam_genres',
         detail: `count: ${genres.length}`,
       },
       {
         key: 'categories',
         label: 'Features / categories',
         status: getCoverageStatus({ present: categories.length > 0 }),
-        source: 'app_categories → steam_categories (tables)',
+        source: 'Tiger legacy.app_categories → legacy.steam_categories',
         detail: `count: ${categories.length}`,
       },
       {
         key: 'franchises',
         label: 'Franchises',
         status: getCoverageStatus({ present: franchises.length > 0 }),
-        source: 'app_franchises → franchises (tables)',
+        source: 'Tiger legacy.app_franchises → legacy.franchises',
         detail: `count: ${franchises.length}`,
       },
       {
         key: 'official_tags',
         label: 'Official Steam tags',
         status: getCoverageStatus({ present: steamTags.length > 0 }),
-        source: 'app_steam_tags → steam_tags (tables)',
+        source: 'Tiger legacy.app_steam_tags → legacy.steam_tags',
         detail: `count: ${steamTags.length}`,
       },
       {
         key: 'community_tags',
         label: 'Community tags',
         status: getCoverageStatus({ present: tags.length > 0 }),
-        source: 'app_tags (table)',
+        source: 'Tiger legacy.app_steam_tags → legacy.steam_tags',
         detail: `count: ${tags.length}`,
       },
       {
         key: 'dlcs',
         label: 'DLCs (children)',
         status: getCoverageStatus({ present: dlcs.length > 0 }),
-        source: 'apps.parent_appid (table)',
+        source: 'Tiger legacy.apps.parent_appid',
         detail: `count: ${dlcs.length}`,
       },
       {
         key: 'trends',
         label: 'Trend analysis',
         status: getCoverageStatus({ present: trends !== null }),
-        source: 'app_trends (table)',
-        detail: trends ? 'app_trends row present' : 'No app_trends row',
+        source: 'Tiger metrics.app_trends',
+        detail: trends ? 'metrics.app_trends row present' : 'No metrics.app_trends row',
       },
       {
         key: 'daily_metrics',
@@ -720,7 +757,7 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_steamspy_sync ?? null,
           staleAfterDays: 14,
         }),
-        source: 'daily_metrics (table)',
+        source: 'Tiger metrics.daily_metrics',
         detail: `rows: ${metrics.length} · latest: ${metrics[0]?.metric_date ?? '—'} · last_steamspy_sync: ${syncStatus?.last_steamspy_sync ?? '—'} · last_reviews_sync: ${syncStatus?.last_reviews_sync ?? '—'}`,
       },
       {
@@ -731,14 +768,14 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_histogram_sync ?? null,
           staleAfterDays: 30,
         }),
-        source: 'review_histogram (table)',
+        source: 'Tiger metrics.review_histogram',
         detail: `rows: ${histogram.length} · latest: ${histogram[0]?.month_start ?? '—'} · last_histogram_sync: ${syncStatus?.last_histogram_sync ?? '—'}`,
       },
       {
         key: 'ccu_snapshots',
         label: 'CCU snapshots sparkline',
         status: getCoverageStatus({ present: ccuSparkline.dataPoints.length > 0 }),
-        source: 'get_app_sparkline_data (RPC) ← ccu_snapshots (table)',
+        source: 'Tiger metrics.ccu_snapshots',
         detail:
           ccuSparkline.dataPoints.length > 0
             ? `points: ${ccuSparkline.dataPoints.length} (last 7 days)`
@@ -750,7 +787,7 @@ export default async function AppDetailPage({
         key: 'sync_status',
         label: 'Sync status + errors',
         status: getCoverageStatus({ present: syncStatus !== null }),
-        source: 'sync_status (table)',
+        source: 'Tiger ops.sync_status',
         detail: syncStatus
           ? `is_syncable: ${syncStatus.is_syncable} · errors: ${syncStatus.consecutive_errors ?? 0} · last_error: ${syncStatus.last_error_message ?? '—'}`
           : 'No sync_status row',

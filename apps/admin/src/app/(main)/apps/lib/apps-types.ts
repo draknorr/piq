@@ -106,7 +106,7 @@ export type ControllerSupport = 'full' | 'partial' | null;
 export type FilterMode = 'any' | 'all';
 
 /**
- * Filter option from get_apps_filter_option_counts RPC
+ * Filter option from the Tiger-backed filter-count endpoint
  */
 export interface FilterOption {
   option_id: number;
@@ -115,7 +115,7 @@ export interface FilterOption {
 }
 
 /**
- * App data returned from get_apps_with_filters RPC
+ * App data returned from Tiger-backed apps queries
  */
 export interface App {
   appid: number;

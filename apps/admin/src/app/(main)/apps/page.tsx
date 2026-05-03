@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
-import { isSupabaseConfigured } from '@/lib/supabase';
 import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/layout';
 import { AppsPageClient } from './components/AppsPageClient';
-import { getApps, getAggregateStats, getAppsByIdsWithFreshReviews } from './lib/apps-queries';
+import { getApps, getAggregateStats, getAppsByIdsWithFreshReviews, isTigerReadConfigured } from './lib/apps-queries';
 import { parseCompareParam } from './lib/apps-compare-utils';
 import type {
   App,
@@ -51,8 +50,7 @@ export default async function AppsPage({
 }: {
   searchParams: Promise<AppsSearchParams>;
 }) {
-  // Check Supabase configuration
-  if (!isSupabaseConfigured()) {
+  if (!isTigerReadConfigured()) {
     return <ConfigurationRequired />;
   }
 
@@ -150,15 +148,14 @@ export default async function AppsPage({
   let fetchError: string | null = null;
 
   try {
-    // Fetch apps first (critical for page render)
+    // Fetch apps first (critical for page render).
     apps = await getApps(filterParams);
 
-    // Fetch aggregate stats separately - don't block page on timeout
+    // Fetch aggregate stats separately so a stats failure does not blank the page.
     try {
       aggregateStats = await getAggregateStats(filterParams);
     } catch (statsError) {
       console.error('Failed to fetch aggregate stats (non-blocking):', statsError);
-      // Use defaults - page will still render
     }
 
     // M6a: Fetch compare apps if valid (2-5 IDs)
