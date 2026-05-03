@@ -2,7 +2,6 @@
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { useAuthReady } from '@/hooks/useAuthReady';
-import { createBrowserClient } from '@/lib/supabase/client';
 
 export interface SparklineData {
   dataPoints: number[];
@@ -21,8 +20,8 @@ export interface UseSparklineLoaderReturn {
 }
 
 /**
- * Hook for lazy-loading sparkline data using IntersectionObserver
- * Batches multiple visible rows into a single RPC call for efficiency
+ * Hook for lazy-loading Tiger-backed sparkline data using IntersectionObserver.
+ * Batches multiple visible rows into a single API call for efficiency.
  */
 export function useSparklineLoader(): UseSparklineLoaderReturn {
   const authReady = useAuthReady();
@@ -70,15 +69,15 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
     forceUpdate((n) => n + 1);
 
     try {
-      const supabase = createBrowserClient();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.rpc as any)('get_app_sparkline_data', {
-        p_appids: appids,
-        p_days: 7,
+      const response = await fetch('/api/apps/sparklines', {
+        body: JSON.stringify({ appids, days: 7 }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
       });
 
-      if (!error && data) {
-        const responseData = data as SparklineRpcResponse[];
+      if (response.ok) {
+        const json = await response.json() as { data?: SparklineRpcResponse[] };
+        const responseData = json.data ?? [];
 
         // Process each app's sparkline data
         const receivedAppids = new Set<number>();
