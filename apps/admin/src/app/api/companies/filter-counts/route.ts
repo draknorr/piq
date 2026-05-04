@@ -173,6 +173,86 @@ function queryForFilter(filterType: FilterType, baseSql: string): string {
   }
 }
 
+function queryForUnfilteredFacet(filterType: Exclude<FilterType, 'steam_deck'>, companyType: CompanyType): string {
+  const config = {
+    genre: {
+      appFacetTable: 'legacy.app_genres',
+      facetAlias: 'ag',
+      optionColumn: 'genre_id',
+      optionTable: 'legacy.steam_genres',
+      optionAlias: 'sg',
+      nameColumn: 'name',
+      topLimit: 150,
+    },
+    tag: {
+      appFacetTable: 'legacy.app_steam_tags',
+      facetAlias: 'ast',
+      optionColumn: 'tag_id',
+      optionTable: 'legacy.steam_tags',
+      optionAlias: 'st',
+      nameColumn: 'name',
+      topLimit: 250,
+    },
+    category: {
+      appFacetTable: 'legacy.app_categories',
+      facetAlias: 'ac',
+      optionColumn: 'category_id',
+      optionTable: 'legacy.steam_categories',
+      optionAlias: 'sc',
+      nameColumn: 'name',
+      topLimit: 200,
+    },
+  }[filterType];
+
+  const parts: string[] = [];
+  if (companyType === 'all' || companyType === 'publisher') {
+    parts.push(`
+      SELECT ${config.facetAlias}.${config.optionColumn} AS option_id, 'publisher:' || ap.publisher_id::text AS company_key
+      FROM top_options top
+      JOIN ${config.appFacetTable} ${config.facetAlias} ON ${config.facetAlias}.${config.optionColumn} = top.option_id
+      JOIN legacy.app_publishers ap ON ap.appid = ${config.facetAlias}.appid
+      JOIN legacy.apps a ON a.appid = ${config.facetAlias}.appid
+      WHERE COALESCE(a.type, 'game') = 'game'
+        AND COALESCE(a.is_released, true) = true
+        AND COALESCE(a.is_delisted, false) = false
+    `);
+  }
+  if (companyType === 'all' || companyType === 'developer') {
+    parts.push(`
+      SELECT ${config.facetAlias}.${config.optionColumn} AS option_id, 'developer:' || ad.developer_id::text AS company_key
+      FROM top_options top
+      JOIN ${config.appFacetTable} ${config.facetAlias} ON ${config.facetAlias}.${config.optionColumn} = top.option_id
+      JOIN legacy.app_developers ad ON ad.appid = ${config.facetAlias}.appid
+      JOIN legacy.apps a ON a.appid = ${config.facetAlias}.appid
+      WHERE COALESCE(a.type, 'game') = 'game'
+        AND COALESCE(a.is_released, true) = true
+        AND COALESCE(a.is_delisted, false) = false
+    `);
+  }
+
+  return `
+    WITH top_options AS (
+      SELECT ${config.optionColumn} AS option_id
+      FROM ${config.appFacetTable}
+      GROUP BY ${config.optionColumn}
+      ORDER BY COUNT(*) DESC
+      LIMIT ${config.topLimit}
+    ),
+    facet_companies AS (
+      ${parts.join('\nUNION ALL\n')}
+    )
+    SELECT
+      ${config.optionAlias}.${config.optionColumn} AS option_id,
+      ${config.optionAlias}.${config.nameColumn} AS option_name,
+      COUNT(DISTINCT fc.company_key)::integer AS company_count
+    FROM facet_companies fc
+    JOIN ${config.optionTable} ${config.optionAlias} ON ${config.optionAlias}.${config.optionColumn} = fc.option_id
+    GROUP BY ${config.optionAlias}.${config.optionColumn}, ${config.optionAlias}.${config.nameColumn}
+    ORDER BY company_count DESC, option_name
+    LIMIT 100
+  `;
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -198,14 +278,25 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const { sql, values } = buildBaseCtes({
-    companyType: parseCompanyType(searchParams.get('type')),
-    minGames: parseNumber(searchParams.get('minGames')),
-    minRevenue: parseNumber(searchParams.get('minRevenue')),
-    status: parseStatus(searchParams.get('status')),
-  });
+  const companyType = parseCompanyType(searchParams.get('type'));
+  const minGames = parseNumber(searchParams.get('minGames'));
+  const minRevenue = parseNumber(searchParams.get('minRevenue'));
+  const status = parseStatus(searchParams.get('status'));
+  const canUseFastFacetQuery = filterType !== 'steam_deck'
+    && minGames === undefined
+    && minRevenue === undefined
+    && status === undefined;
 
-  const { rows } = await runTigerQuery<FilterOptionRow>(queryForFilter(filterType, sql), values);
+  const query = canUseFastFacetQuery
+    ? queryForUnfilteredFacet(filterType as Exclude<FilterType, 'steam_deck'>, companyType)
+    : (() => {
+        const { sql, values } = buildBaseCtes({ companyType, minGames, minRevenue, status });
+        return { sql: queryForFilter(filterType, sql), values };
+      })();
+
+  const { rows } = typeof query === 'string'
+    ? await runTigerQuery<FilterOptionRow>(query)
+    : await runTigerQuery<FilterOptionRow>(query.sql, query.values);
   if (filterCountCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = filterCountCache.keys().next().value as string | undefined;
     if (oldestKey) filterCountCache.delete(oldestKey);
