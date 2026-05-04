@@ -65,6 +65,10 @@ function normalizeOffset(offset: number | undefined): number {
   return Math.max(Math.floor(offset ?? 0), 0);
 }
 
+function hasSplitQueryOffset(params: CompaniesFilterParams): boolean {
+  return normalizeOffset(params.offset) > 0;
+}
+
 export function isTigerReadConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(env.TIGER_PRIMARY_URL || env.CHANGE_INTEL_TIGER_URL);
 }
@@ -88,39 +92,91 @@ function periodPredicate(params: CompaniesFilterParams, appAlias: string, values
   }
 }
 
-function contentPredicate(params: CompaniesFilterParams, appAlias: string, values: SqlValue[]): string {
-  const predicates: string[] = [];
+function buildContentFilterCtes(params: CompaniesFilterParams, values: SqlValue[]): string[] {
+  const ctes: string[] = [];
 
   if (hasItems(params.genres)) {
     const placeholder = addParam(values, params.genres);
-    predicates.push(params.genreMode === 'all'
-      ? `(SELECT COUNT(DISTINCT ag.genre_id) FROM legacy.app_genres ag WHERE ag.appid = ${appAlias}.appid AND ag.genre_id = ANY(${placeholder}::int[])) = cardinality(${placeholder}::int[])`
-      : `EXISTS (SELECT 1 FROM legacy.app_genres ag WHERE ag.appid = ${appAlias}.appid AND ag.genre_id = ANY(${placeholder}::int[]))`);
+    ctes.push(params.genreMode === 'all'
+      ? `
+        genre_filter AS (
+          SELECT ag.appid
+          FROM legacy.app_genres ag
+          WHERE ag.genre_id = ANY(${placeholder}::int[])
+          GROUP BY ag.appid
+          HAVING COUNT(DISTINCT ag.genre_id) = cardinality(${placeholder}::int[])
+        )
+      `
+      : `
+        genre_filter AS (
+          SELECT DISTINCT ag.appid
+          FROM legacy.app_genres ag
+          WHERE ag.genre_id = ANY(${placeholder}::int[])
+        )
+      `);
   }
 
   if (hasItems(params.tags)) {
-    predicates.push(`EXISTS (SELECT 1 FROM legacy.app_steam_tags ast WHERE ast.appid = ${appAlias}.appid AND ast.tag_id = ANY(${addParam(values, params.tags)}::int[]))`);
+    ctes.push(`
+      tag_filter AS (
+        SELECT DISTINCT ast.appid
+        FROM legacy.app_steam_tags ast
+        WHERE ast.tag_id = ANY(${addParam(values, params.tags)}::int[])
+      )
+    `);
   }
 
   if (hasItems(params.categories)) {
-    predicates.push(`EXISTS (SELECT 1 FROM legacy.app_categories ac WHERE ac.appid = ${appAlias}.appid AND ac.category_id = ANY(${addParam(values, params.categories)}::int[]))`);
+    ctes.push(`
+      category_filter AS (
+        SELECT DISTINCT ac.appid
+        FROM legacy.app_categories ac
+        WHERE ac.category_id = ANY(${addParam(values, params.categories)}::int[])
+      )
+    `);
   }
 
   if (params.steamDeck === 'verified') {
-    predicates.push(`EXISTS (SELECT 1 FROM legacy.app_steam_deck sd WHERE sd.appid = ${appAlias}.appid AND sd.category = 'verified')`);
+    ctes.push(`
+      steam_deck_filter AS (
+        SELECT DISTINCT sd.appid
+        FROM legacy.app_steam_deck sd
+        WHERE sd.category = 'verified'
+      )
+    `);
   } else if (params.steamDeck === 'playable') {
-    predicates.push(`EXISTS (SELECT 1 FROM legacy.app_steam_deck sd WHERE sd.appid = ${appAlias}.appid AND sd.category IN ('verified', 'playable'))`);
+    ctes.push(`
+      steam_deck_filter AS (
+        SELECT DISTINCT sd.appid
+        FROM legacy.app_steam_deck sd
+        WHERE sd.category IN ('verified', 'playable')
+      )
+    `);
   }
 
-  if (hasItems(params.platforms)) {
-    const checks = params.platforms.map((platform) => {
-      const normalized = platform.trim();
-      return `${appAlias}.platforms ILIKE ${addParam(values, `%${normalized}%`)}`;
-    });
-    predicates.push(params.platformMode === 'all' ? checks.map((check) => `(${check})`).join(' AND ') : `(${checks.join(' OR ')})`);
-  }
+  return ctes;
+}
 
-  return predicates.length ? `AND ${predicates.join(' AND ')}` : '';
+function contentFilterJoinSql(params: CompaniesFilterParams): string {
+  const joins: string[] = [];
+  if (hasItems(params.genres)) joins.push('JOIN genre_filter gf ON gf.appid = a.appid');
+  if (hasItems(params.tags)) joins.push('JOIN tag_filter tf ON tf.appid = a.appid');
+  if (hasItems(params.categories)) joins.push('JOIN category_filter cf ON cf.appid = a.appid');
+  if (params.steamDeck === 'verified' || params.steamDeck === 'playable') joins.push('JOIN steam_deck_filter sdf ON sdf.appid = a.appid');
+  return joins.join('\n');
+}
+
+function platformPredicate(params: CompaniesFilterParams, appAlias: string, values: SqlValue[]): string {
+  if (!hasItems(params.platforms)) return '';
+
+  const checks = params.platforms.map((platform) => {
+    const normalized = platform.trim();
+    return `${appAlias}.platforms ILIKE ${addParam(values, `%${normalized}%`)}`;
+  });
+
+  return params.platformMode === 'all'
+    ? `AND ${checks.map((check) => `(${check})`).join(' AND ')}`
+    : `AND (${checks.join(' OR ')})`;
 }
 
 function companyTypePredicate(params: CompaniesFilterParams): { publishers: boolean; developers: boolean } {
@@ -130,11 +186,29 @@ function companyTypePredicate(params: CompaniesFilterParams): { publishers: bool
   };
 }
 
-function buildCompanyCtes(params: CompaniesFilterParams, values: SqlValue[]): string {
+function needsTrendMetricsInCore(params: CompaniesFilterParams): boolean {
+  return params.sort === 'games_trending_up'
+    || params.sort === 'ccu_growth_7d'
+    || params.sort === 'growth_30d'
+    || params.sort === 'review_velocity'
+    || params.minGrowth7d !== undefined
+    || params.maxGrowth7d !== undefined
+    || params.minGrowth30d !== undefined
+    || params.maxGrowth30d !== undefined;
+}
+
+function buildCompanyCtes(
+  params: CompaniesFilterParams,
+  values: SqlValue[],
+  options: { includeTrendMetrics?: boolean } = {}
+): string {
   const { publishers, developers } = companyTypePredicate(params);
+  const includeTrendMetrics = options.includeTrendMetrics ?? true;
   const publisherPeriod = periodPredicate(params, 'a', values);
   const developerPeriod = periodPredicate(params, 'a', values);
-  const appContentPredicate = contentPredicate(params, 'a', values);
+  const contentFilterCtes = buildContentFilterCtes(params, values);
+  const appContentJoins = contentFilterJoinSql(params);
+  const appPlatformPredicate = platformPredicate(params, 'a', values);
   const unionParts: string[] = [];
 
   if (publishers) {
@@ -145,15 +219,20 @@ function buildCompanyCtes(params: CompaniesFilterParams, values: SqlValue[]): st
         p.name,
         p.steam_vanity_url,
         p.first_game_release_date,
-        ap.appid
+        ap.appid,
+        a.release_date,
+        a.current_price_cents,
+        a.platforms,
+        a.updated_at AS app_updated_at
       FROM legacy.publishers p
       JOIN legacy.app_publishers ap ON ap.publisher_id = p.id
       JOIN legacy.apps a ON a.appid = ap.appid
+      ${appContentJoins}
       WHERE COALESCE(a.type, 'game') = 'game'
         AND COALESCE(a.is_released, true) = true
         AND COALESCE(a.is_delisted, false) = false
         ${publisherPeriod}
-        ${appContentPredicate}
+        ${appPlatformPredicate}
     `);
   }
 
@@ -165,25 +244,32 @@ function buildCompanyCtes(params: CompaniesFilterParams, values: SqlValue[]): st
         d.name,
         d.steam_vanity_url,
         d.first_game_release_date,
-        ad.appid
+        ad.appid,
+        a.release_date,
+        a.current_price_cents,
+        a.platforms,
+        a.updated_at AS app_updated_at
       FROM legacy.developers d
       JOIN legacy.app_developers ad ON ad.developer_id = d.id
       JOIN legacy.apps a ON a.appid = ad.appid
+      ${appContentJoins}
       WHERE COALESCE(a.type, 'game') = 'game'
         AND COALESCE(a.is_released, true) = true
         AND COALESCE(a.is_delisted, false) = false
         ${developerPeriod}
-        ${appContentPredicate}
+        ${appPlatformPredicate}
     `);
   }
 
   const companyAppsSql = unionParts.length > 0 ? unionParts.join('\nUNION ALL\n') : `
-      SELECT NULL::text AS type, NULL::integer AS id, NULL::text AS name, NULL::text AS steam_vanity_url, NULL::date AS first_game_release_date, NULL::integer AS appid
+      SELECT NULL::text AS type, NULL::integer AS id, NULL::text AS name, NULL::text AS steam_vanity_url, NULL::date AS first_game_release_date, NULL::integer AS appid, NULL::date AS release_date, NULL::integer AS current_price_cents, NULL::text AS platforms, NULL::timestamp with time zone AS app_updated_at
       WHERE false
   `;
+  const leadingCtes = contentFilterCtes.length > 0 ? `${contentFilterCtes.join(',\n')},` : '';
 
   return `
-    WITH company_apps AS (
+    WITH ${leadingCtes}
+    company_apps AS (
       ${companyAppsSql}
     ),
     app_metric_rows AS (
@@ -194,9 +280,9 @@ function buildCompanyCtes(params: CompaniesFilterParams, values: SqlValue[]): st
         ca.steam_vanity_url,
         ca.first_game_release_date,
         ca.appid,
-        a.release_date,
-        a.current_price_cents,
-        a.platforms,
+        ca.release_date,
+        ca.current_price_cents,
+        ca.platforms,
         COALESCE(ldm.owners_min, 0) AS owners_min,
         COALESCE(ldm.owners_max, 0) AS owners_max,
         COALESCE(ldm.owners_midpoint, ((COALESCE(ldm.owners_min, 0)::bigint + COALESCE(ldm.owners_max, 0)::bigint) / 2)) AS owners_midpoint,
@@ -204,26 +290,27 @@ function buildCompanyCtes(params: CompaniesFilterParams, values: SqlValue[]): st
         COALESCE(ldm.total_reviews, 0) AS total_reviews,
         COALESCE(ldm.positive_reviews, 0) AS positive_reviews,
         COALESCE(ldm.estimated_weekly_hours, 0) AS estimated_weekly_hours,
-        COALESCE(ldm.price_cents, a.current_price_cents, 0) AS price_cents,
+        COALESCE(ldm.price_cents, ca.current_price_cents, 0) AS price_cents,
         ldm.metric_date,
-        atr.trend_30d_direction,
-        atr.review_velocity_7d,
-        atr.review_velocity_30d,
-        cta.ccu_growth_7d_percent,
-        cta.ccu_growth_30d_percent,
-        GREATEST(a.updated_at, COALESCE(cta.updated_at, a.updated_at), COALESCE(atr.updated_at, a.updated_at)) AS data_updated_at
+        ${includeTrendMetrics ? 'atr.trend_30d_direction' : 'NULL::text AS trend_30d_direction'},
+        ${includeTrendMetrics ? 'atr.review_velocity_7d' : 'NULL::numeric AS review_velocity_7d'},
+        ${includeTrendMetrics ? 'atr.review_velocity_30d' : 'NULL::numeric AS review_velocity_30d'},
+        ${includeTrendMetrics ? 'cta.ccu_growth_7d_percent' : 'NULL::numeric AS ccu_growth_7d_percent'},
+        ${includeTrendMetrics ? 'cta.ccu_growth_30d_percent' : 'NULL::numeric AS ccu_growth_30d_percent'},
+        ${includeTrendMetrics
+          ? 'GREATEST(ca.app_updated_at, COALESCE(cta.updated_at, ca.app_updated_at), COALESCE(atr.updated_at, ca.app_updated_at))'
+          : 'ca.app_updated_at'} AS data_updated_at
       FROM company_apps ca
-      JOIN legacy.apps a ON a.appid = ca.appid
       LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = ca.appid
-      LEFT JOIN metrics.app_trends atr ON atr.appid = ca.appid
-      LEFT JOIN ops.ccu_tier_assignments cta ON cta.appid = ca.appid
+      ${includeTrendMetrics ? 'LEFT JOIN metrics.app_trends atr ON atr.appid = ca.appid' : ''}
+      ${includeTrendMetrics ? 'LEFT JOIN ops.ccu_tier_assignments cta ON cta.appid = ca.appid' : ''}
     ),
     core AS (
       SELECT
         type,
         id,
         name,
-        COUNT(DISTINCT appid)::integer AS game_count,
+        COUNT(*)::integer AS game_count,
         COALESCE(SUM(owners_midpoint), 0)::bigint AS total_owners,
         COALESCE(SUM(ccu_peak), 0)::bigint AS total_ccu,
         COALESCE(SUM(estimated_weekly_hours), 0)::bigint AS estimated_weekly_hours,
@@ -380,61 +467,9 @@ function mapCompanyRow(row: CompanyRow): Company {
  * Fetch companies from TigerData.
  */
 export async function getCompanies(params: CompaniesFilterParams): Promise<Company[]> {
-  const values: SqlValue[] = [];
-  const ctes = buildCompanyCtes(params, values);
-  const whereSql = buildCompanyWhere(params, values);
-  const sortColumn = SORT_SQL[params.sort] ?? SORT_SQL.estimated_weekly_hours;
-  const limitPlaceholder = addParam(values, normalizeLimit(params.limit));
-  const offsetPlaceholder = addParam(values, normalizeOffset(params.offset));
-  const direction = params.order === 'asc' ? 'ASC' : 'DESC';
-
-  const { rows } = await runTigerQuery<CompanyRow>(
-    `
-      ${ctes}
-      SELECT
-        id,
-        name,
-        type,
-        game_count,
-        total_owners,
-        total_ccu,
-        estimated_weekly_hours,
-        total_reviews,
-        positive_reviews,
-        avg_review_score,
-        revenue_estimate_cents,
-        games_trending_up,
-        games_trending_down,
-        ccu_growth_7d_percent,
-        ccu_growth_30d_percent,
-        review_velocity_7d,
-        review_velocity_30d,
-        is_self_published,
-        works_with_external_devs,
-        external_partner_count,
-        first_release_date,
-        latest_release_date,
-        CASE
-          WHEN first_release_date IS NOT NULL
-            THEN EXTRACT(YEAR FROM AGE(COALESCE(latest_release_date, CURRENT_DATE), first_release_date))::integer
-          ELSE NULL
-        END AS years_active,
-        steam_vanity_url,
-        CASE WHEN type = 'publisher' THEN (
-          SELECT COUNT(DISTINCT ad.developer_id)::integer
-          FROM legacy.app_publishers ap
-          JOIN legacy.app_developers ad ON ad.appid = ap.appid
-          WHERE ap.publisher_id = companies.id
-        ) ELSE 0 END AS unique_developers,
-        data_updated_at
-      FROM companies
-      ${whereSql}
-      ORDER BY ${sortColumn} ${direction} NULLS LAST, name ASC, type ASC, id ASC
-      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
-    `,
-    values
-  );
-
+  const rows = params.type === 'all' && !hasSplitQueryOffset(params)
+    ? await queryCompaniesSplitByType(params)
+    : await queryCompanies(params);
   return rows.map(mapCompanyRow);
 }
 
@@ -470,6 +505,272 @@ function writeAggregateStatsCache(key: string, data: AggregateStats): void {
   aggregateStatsCache.set(key, { data, timestamp: Date.now() });
 }
 
+function hasSimpleAggregateShape(params: CompaniesFilterParams): boolean {
+  return !params.search
+    && params.period === undefined
+    && params.status === undefined
+    && params.relationship === undefined
+    && !hasItems(params.genres)
+    && !hasItems(params.tags)
+    && !hasItems(params.categories)
+    && !hasItems(params.platforms)
+    && params.steamDeck === undefined
+    && [
+      params.minGames,
+      params.maxGames,
+      params.minOwners,
+      params.maxOwners,
+      params.minCcu,
+      params.maxCcu,
+      params.minHours,
+      params.maxHours,
+      params.minRevenue,
+      params.maxRevenue,
+      params.minScore,
+      params.maxScore,
+      params.minReviews,
+      params.maxReviews,
+      params.minGrowth7d,
+      params.maxGrowth7d,
+      params.minGrowth30d,
+      params.maxGrowth30d,
+    ].every((value) => value === undefined);
+}
+
+function simpleAggregateCompanyEdgesSql(companyType: CompaniesFilterParams['type']): string {
+  const parts: string[] = [];
+
+  if (companyType === 'all' || companyType === 'publisher') {
+    parts.push(`
+      SELECT 'publisher'::text AS type, ap.publisher_id AS id, ap.appid
+      FROM legacy.app_publishers ap
+      JOIN legacy.apps a ON a.appid = ap.appid
+      WHERE COALESCE(a.type, 'game') = 'game'
+        AND COALESCE(a.is_released, true) = true
+        AND COALESCE(a.is_delisted, false) = false
+    `);
+  }
+
+  if (companyType === 'all' || companyType === 'developer') {
+    parts.push(`
+      SELECT 'developer'::text AS type, ad.developer_id AS id, ad.appid
+      FROM legacy.app_developers ad
+      JOIN legacy.apps a ON a.appid = ad.appid
+      WHERE COALESCE(a.type, 'game') = 'game'
+        AND COALESCE(a.is_released, true) = true
+        AND COALESCE(a.is_delisted, false) = false
+    `);
+  }
+
+  return parts.join('\nUNION ALL\n');
+}
+
+async function getSimpleAggregateStats(params: CompaniesFilterParams): Promise<AggregateStats> {
+  const { rows } = await runTigerQuery<Record<string, unknown>>(
+    `
+      WITH company_edges AS (
+        ${simpleAggregateCompanyEdgesSql(params.type)}
+      )
+      SELECT
+        COUNT(DISTINCT ce.type || ':' || ce.id)::integer AS total_companies,
+        COUNT(*)::integer AS total_games,
+        COALESCE(SUM(COALESCE(ldm.owners_midpoint, ((COALESCE(ldm.owners_min, 0)::bigint + COALESCE(ldm.owners_max, 0)::bigint) / 2))), 0)::bigint AS total_owners,
+        COALESCE(SUM(COALESCE(ldm.owners_midpoint, ((COALESCE(ldm.owners_min, 0)::bigint + COALESCE(ldm.owners_max, 0)::bigint) / 2))::numeric * COALESCE(ldm.price_cents, a.current_price_cents, 0)), 0)::bigint AS total_revenue,
+        CASE WHEN SUM(COALESCE(ldm.total_reviews, 0)) > 0
+          THEN ROUND((SUM(COALESCE(ldm.positive_reviews, 0))::numeric / SUM(COALESCE(ldm.total_reviews, 0))) * 100, 2)
+          ELSE NULL
+        END AS avg_review_score,
+        COALESCE(SUM(COALESCE(ldm.ccu_peak, 0)), 0)::bigint AS total_ccu
+      FROM company_edges ce
+      JOIN legacy.apps a ON a.appid = ce.appid
+      LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = ce.appid
+    `
+  );
+
+  const row = rows[0] ?? {};
+  return {
+    total_companies: toNumber(row.total_companies) ?? 0,
+    total_games: toNumber(row.total_games) ?? 0,
+    total_owners: toNumber(row.total_owners) ?? 0,
+    total_revenue: toNumber(row.total_revenue) ?? 0,
+    avg_review_score: toNumber(row.avg_review_score),
+    total_ccu: toNumber(row.total_ccu) ?? 0,
+  };
+}
+
+async function queryCompanies(params: CompaniesFilterParams): Promise<CompanyRow[]> {
+  const includeTrendMetrics = needsTrendMetricsInCore(params);
+  const values: SqlValue[] = [];
+  const ctes = buildCompanyCtes(params, values, { includeTrendMetrics });
+  const whereSql = buildCompanyWhere(params, values);
+  const sortColumn = SORT_SQL[params.sort] ?? SORT_SQL.estimated_weekly_hours;
+  const limitPlaceholder = addParam(values, normalizeLimit(params.limit));
+  const offsetPlaceholder = addParam(values, normalizeOffset(params.offset));
+  const direction = params.order === 'asc' ? 'ASC' : 'DESC';
+
+  const { rows } = await runTigerQuery<CompanyRow>(
+    `
+      ${ctes}
+      SELECT
+        id,
+        name,
+        type,
+        game_count,
+        total_owners,
+        total_ccu,
+        estimated_weekly_hours,
+        total_reviews,
+        positive_reviews,
+        avg_review_score,
+        revenue_estimate_cents,
+        games_trending_up,
+        games_trending_down,
+        ccu_growth_7d_percent,
+        ccu_growth_30d_percent,
+        review_velocity_7d,
+        review_velocity_30d,
+        is_self_published,
+        works_with_external_devs,
+        external_partner_count,
+        revenue_per_game,
+        owners_per_game,
+        reviews_per_1k_owners,
+        first_release_date,
+        latest_release_date,
+        CASE
+          WHEN first_release_date IS NOT NULL
+            THEN EXTRACT(YEAR FROM AGE(COALESCE(latest_release_date, CURRENT_DATE), first_release_date))::integer
+          ELSE NULL
+        END AS years_active,
+        steam_vanity_url,
+        CASE WHEN type = 'publisher' THEN (
+          SELECT COUNT(DISTINCT ad.developer_id)::integer
+          FROM legacy.app_publishers ap
+          JOIN legacy.app_developers ad ON ad.appid = ap.appid
+          WHERE ap.publisher_id = companies.id
+        ) ELSE 0 END AS unique_developers,
+        data_updated_at
+      FROM companies
+      ${whereSql}
+      ORDER BY ${sortColumn} ${direction} NULLS LAST, name ASC, type ASC, id ASC
+      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
+    `,
+    values
+  );
+
+  if (!includeTrendMetrics) {
+    await hydrateTrendMetrics(rows);
+  }
+
+  return rows;
+}
+
+async function hydrateTrendMetrics(rows: CompanyRow[]): Promise<void> {
+  if (rows.length === 0) return;
+
+  const publisherIds = rows.filter((row) => row.type === 'publisher').map((row) => row.id);
+  const developerIds = rows.filter((row) => row.type === 'developer').map((row) => row.id);
+  if (publisherIds.length === 0 && developerIds.length === 0) return;
+
+  const values: SqlValue[] = [];
+  const parts: string[] = [];
+
+  if (publisherIds.length > 0) {
+    parts.push(`
+      SELECT 'publisher'::text AS type, ap.publisher_id AS id, ap.appid
+      FROM legacy.app_publishers ap
+      WHERE ap.publisher_id = ANY(${addParam(values, publisherIds)}::int[])
+    `);
+  }
+
+  if (developerIds.length > 0) {
+    parts.push(`
+      SELECT 'developer'::text AS type, ad.developer_id AS id, ad.appid
+      FROM legacy.app_developers ad
+      WHERE ad.developer_id = ANY(${addParam(values, developerIds)}::int[])
+    `);
+  }
+
+  const { rows: metricRows } = await runTigerQuery<Record<string, unknown>>(
+    `
+      WITH selected_company_apps AS (
+        ${parts.join('\nUNION ALL\n')}
+      )
+      SELECT
+        sca.type,
+        sca.id,
+        COUNT(*) FILTER (WHERE atr.trend_30d_direction = 'up')::integer AS games_trending_up,
+        COUNT(*) FILTER (WHERE atr.trend_30d_direction = 'down')::integer AS games_trending_down,
+        AVG(cta.ccu_growth_7d_percent) FILTER (WHERE cta.ccu_growth_7d_percent IS NOT NULL)::numeric AS ccu_growth_7d_percent,
+        AVG(cta.ccu_growth_30d_percent) FILTER (WHERE cta.ccu_growth_30d_percent IS NOT NULL)::numeric AS ccu_growth_30d_percent,
+        SUM(atr.review_velocity_7d) FILTER (WHERE atr.review_velocity_7d IS NOT NULL)::numeric AS review_velocity_7d,
+        SUM(atr.review_velocity_30d) FILTER (WHERE atr.review_velocity_30d IS NOT NULL)::numeric AS review_velocity_30d,
+        MAX(GREATEST(COALESCE(cta.updated_at, '-infinity'::timestamp with time zone), COALESCE(atr.updated_at, '-infinity'::timestamp with time zone))) AS trend_updated_at
+      FROM selected_company_apps sca
+      LEFT JOIN metrics.app_trends atr ON atr.appid = sca.appid
+      LEFT JOIN ops.ccu_tier_assignments cta ON cta.appid = sca.appid
+      GROUP BY sca.type, sca.id
+    `,
+    values
+  );
+
+  const metrics = new Map(metricRows.map((row) => [`${row.type}:${row.id}`, row]));
+  for (const row of rows) {
+    const metric = metrics.get(`${row.type}:${row.id}`);
+    if (!metric) continue;
+    row.games_trending_up = metric.games_trending_up;
+    row.games_trending_down = metric.games_trending_down;
+    row.ccu_growth_7d_percent = metric.ccu_growth_7d_percent;
+    row.ccu_growth_30d_percent = metric.ccu_growth_30d_percent;
+    row.review_velocity_7d = metric.review_velocity_7d;
+    row.review_velocity_30d = metric.review_velocity_30d;
+    if (metric.trend_updated_at) {
+      const currentUpdatedAt = row.data_updated_at ? new Date(String(row.data_updated_at)).getTime() : Number.NEGATIVE_INFINITY;
+      const trendUpdatedAt = new Date(String(metric.trend_updated_at)).getTime();
+      if (Number.isFinite(trendUpdatedAt) && trendUpdatedAt > currentUpdatedAt) {
+        row.data_updated_at = metric.trend_updated_at;
+      }
+    }
+  }
+}
+
+function compareCompanyRows(a: CompanyRow, b: CompanyRow, params: CompaniesFilterParams): number {
+  const sortColumn = SORT_SQL[params.sort] ?? SORT_SQL.estimated_weekly_hours;
+  if (sortColumn === 'name') {
+    const nameSortCompare = a.name.localeCompare(b.name);
+    if (nameSortCompare !== 0) {
+      return params.order === 'asc' ? nameSortCompare : -nameSortCompare;
+    }
+  }
+
+  const aValue = toNumber(a[sortColumn]);
+  const bValue = toNumber(b[sortColumn]);
+
+  if (aValue === null && bValue !== null) return 1;
+  if (aValue !== null && bValue === null) return -1;
+  if (aValue !== null && bValue !== null && aValue !== bValue) {
+    return params.order === 'asc' ? aValue - bValue : bValue - aValue;
+  }
+
+  const nameCompare = a.name.localeCompare(b.name);
+  if (nameCompare !== 0) return nameCompare;
+  const typeCompare = a.type.localeCompare(b.type);
+  if (typeCompare !== 0) return typeCompare;
+  return a.id - b.id;
+}
+
+async function queryCompaniesSplitByType(params: CompaniesFilterParams): Promise<CompanyRow[]> {
+  const limit = normalizeLimit(params.limit);
+  const [publisherRows, developerRows] = await Promise.all([
+    queryCompanies({ ...params, type: 'publisher', offset: 0, limit }),
+    queryCompanies({ ...params, type: 'developer', offset: 0, limit }),
+  ]);
+
+  return [...publisherRows, ...developerRows]
+    .sort((a, b) => compareCompanyRows(a, b, params))
+    .slice(0, limit);
+}
+
 /**
  * Fetch aggregate statistics for filtered companies from TigerData.
  */
@@ -479,6 +780,12 @@ export async function getAggregateStats(
   const cacheKey = getAggregateStatsCacheKey(params);
   const cached = readAggregateStatsCache(cacheKey);
   if (cached) return cached;
+
+  if (hasSimpleAggregateShape(params)) {
+    const stats = await getSimpleAggregateStats(params);
+    writeAggregateStatsCache(cacheKey, stats);
+    return stats;
+  }
 
   const values: SqlValue[] = [];
   const ctes = buildCompanyCtes(params, values);
