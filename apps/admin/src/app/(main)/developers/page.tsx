@@ -1,12 +1,13 @@
 import type { Metadata } from 'next';
-import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
+import { runTigerQuery } from '@publisheriq/database';
 import Link from 'next/link';
 import { PageHeader } from '@/components/layout';
 import { MetricCard, ReviewScoreBadge, TierBadge } from '@/components/data-display';
 import { Card } from '@/components/ui';
 import { Users, Layers, TrendingUp, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
 import { AdvancedFilters } from '@/components/filters/AdvancedFilters';
+import { isTigerReadConfigured } from '@/app/(main)/apps/lib/apps-queries';
+import { TigerConfigRequired } from '@/app/(main)/apps/lib/tiger-config-required';
 
 export const metadata: Metadata = {
   title: 'Developers',
@@ -50,103 +51,121 @@ interface FilterParams {
 }
 
 async function getDevelopers(params: FilterParams): Promise<DeveloperWithMetrics[]> {
-  if (!isSupabaseConfigured()) {
-    return [];
-  }
-  const supabase = getSupabase();
+  const values: Array<string | number> = [];
+  const where: string[] = [];
+  const having: string[] = [];
+  const sortSql: Record<SortField, string> = {
+    estimated_revenue_usd: 'estimated_revenue_usd',
+    first_game_release_date: 'first_game_release_date',
+    game_count: 'game_count',
+    games_trending_up: 'games_trending_up',
+    name: 'name',
+    total_ccu_peak: 'total_ccu_peak',
+    total_owners_max: 'total_owners_max',
+    weighted_review_score: 'weighted_review_score',
+  };
 
-  // Use the RPC function for server-side filtering with metrics
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase.rpc as any)('get_developers_with_metrics', {
-    p_search: params.search || null,
-    p_min_owners: params.minOwners || null,
-    p_min_ccu: params.minCcu || null,
-    p_min_score: params.minScore || null,
-    p_min_games: params.filter === 'prolific' ? 5 : (params.minGames || null),
-    p_status: params.status || null,
-    p_sort_field: params.sort,
-    p_sort_order: params.order,
-    p_limit: 100,
-    p_offset: 0,
-  }) as { data: DeveloperWithMetrics[] | null; error: Error | null };
+  const addParam = (value: string | number) => {
+    values.push(value);
+    return `$${values.length}`;
+  };
 
-  if (error) {
-    console.error('Error fetching developers via RPC:', error);
-    // Fallback to basic query if RPC fails
-    return getDevelopersFallback(params);
+  if (params.search?.trim()) {
+    where.push(`d.name ILIKE ${addParam(`%${params.search.trim()}%`)}`);
   }
 
-  return data ?? [];
-}
-
-// Fallback query without metrics (in case materialized view doesn't exist)
-async function getDevelopersFallback(params: FilterParams): Promise<DeveloperWithMetrics[]> {
-  const supabase = getSupabase();
-
-  let query = supabase
-    .from('developers')
-    .select('*')
-    .limit(100);
-
-  if (params.search) {
-    query = query.ilike('name', `%${params.search}%`);
+  const minGames = params.filter === 'prolific' ? 5 : params.minGames;
+  if (typeof minGames === 'number' && Number.isFinite(minGames)) {
+    having.push(`COUNT(DISTINCT a.appid) >= ${addParam(minGames)}`);
+  }
+  if (params.filter === 'recent' || params.status === 'active') {
+    having.push(`COUNT(DISTINCT a.appid) FILTER (WHERE a.release_date >= CURRENT_DATE - INTERVAL '1 year') > 0`);
+  } else if (params.status === 'dormant') {
+    having.push(`COUNT(DISTINCT a.appid) FILTER (WHERE a.release_date >= CURRENT_DATE - INTERVAL '1 year') = 0`);
+  }
+  if (typeof params.minOwners === 'number' && Number.isFinite(params.minOwners)) {
+    having.push(`COALESCE(SUM(ldm.owners_max), 0) >= ${addParam(params.minOwners)}`);
+  }
+  if (typeof params.minCcu === 'number' && Number.isFinite(params.minCcu)) {
+    having.push(`COALESCE(SUM(ldm.ccu_peak), 0) >= ${addParam(params.minCcu)}`);
+  }
+  if (typeof params.minScore === 'number' && Number.isFinite(params.minScore)) {
+    having.push(`CASE WHEN SUM(ldm.total_reviews) > 0 THEN ROUND((SUM(ldm.positive_reviews)::numeric / NULLIF(SUM(ldm.total_reviews), 0)) * 100, 2) ELSE NULL END >= ${addParam(params.minScore)}`);
   }
 
-  if (params.filter === 'prolific') {
-    query = query.gte('game_count', 5);
-  } else if (params.filter === 'recent') {
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    query = query.gte('first_game_release_date', oneYearAgo.toISOString().split('T')[0]);
-  }
+  const orderSql = params.order === 'asc' ? 'ASC' : 'DESC';
+  const orderBy = sortSql[params.sort] ?? 'game_count';
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const havingSql = having.length ? `HAVING ${having.join(' AND ')}` : '';
 
-  const basicSort = ['name', 'game_count', 'first_game_release_date'].includes(params.sort) ? params.sort : 'game_count';
-  query = query.order(basicSort, { ascending: params.order === 'asc' });
+  const { rows } = await runTigerQuery<DeveloperWithMetrics>(
+    `
+      SELECT
+        d.id,
+        d.name,
+        d.normalized_name,
+        d.steam_vanity_url,
+        d.first_game_release_date,
+        COUNT(DISTINCT a.appid)::integer AS game_count,
+        COALESCE(SUM(ldm.owners_min), 0)::bigint AS total_owners_min,
+        COALESCE(SUM(ldm.owners_max), 0)::bigint AS total_owners_max,
+        COALESCE(SUM(ldm.ccu_peak), 0)::bigint AS total_ccu_peak,
+        COALESCE(MAX(ldm.ccu_peak), 0)::integer AS max_ccu_peak,
+        COALESCE(SUM(ldm.total_reviews), 0)::bigint AS total_reviews,
+        CASE
+          WHEN SUM(ldm.total_reviews) > 0
+            THEN ROUND((SUM(ldm.positive_reviews)::numeric / NULLIF(SUM(ldm.total_reviews), 0)) * 100, 2)
+          ELSE NULL
+        END AS weighted_review_score,
+        COALESCE(SUM((COALESCE(ldm.price_cents, a.current_price_cents, 0)::numeric / 100) * COALESCE(ldm.owners_midpoint, 0)), 0)::numeric AS estimated_revenue_usd,
+        COUNT(DISTINCT a.appid) FILTER (WHERE trends.trend_30d_direction = 'up' OR trends.ccu_trend_7d_pct > 5)::integer AS games_trending_up,
+        COUNT(DISTINCT a.appid) FILTER (WHERE trends.trend_30d_direction = 'down' OR trends.ccu_trend_7d_pct < -5)::integer AS games_trending_down,
+        COUNT(DISTINCT a.appid) FILTER (WHERE a.release_date >= CURRENT_DATE - INTERVAL '1 year')::integer AS games_released_last_year,
+        MAX(GREATEST(d.updated_at, COALESCE(trends.updated_at, d.updated_at))) AS computed_at
+      FROM legacy.developers d
+      LEFT JOIN legacy.app_developers ad ON ad.developer_id = d.id
+      LEFT JOIN legacy.apps a ON a.appid = ad.appid
+      LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = a.appid
+      LEFT JOIN metrics.app_trends trends ON trends.appid = a.appid
+      ${whereSql}
+      GROUP BY d.id, d.name, d.normalized_name, d.steam_vanity_url, d.first_game_release_date
+      ${havingSql}
+      ORDER BY ${orderBy} ${orderSql} NULLS LAST, d.name ASC
+      LIMIT 100
+    `,
+    values
+  );
 
-  const { data, error } = await query;
-
-  if (error) {
-    console.error('Error fetching developers (fallback):', error);
-    return [];
-  }
-
-  // Map to expected interface with zeroed metrics
-  return (data ?? []).map(d => ({
-    ...d,
-    total_owners_min: 0,
-    total_owners_max: 0,
-    total_ccu_peak: 0,
-    max_ccu_peak: 0,
-    total_reviews: 0,
-    weighted_review_score: null,
-    estimated_revenue_usd: 0,
-    games_trending_up: 0,
-    games_trending_down: 0,
-    games_released_last_year: 0,
-    computed_at: null,
-  }));
+  return rows;
 }
 
 async function getDeveloperStats() {
-  if (!isSupabaseConfigured()) {
-    return { total: 0, prolific: 0, recentlyActive: 0 };
-  }
-  const supabase = getSupabase();
+  const { rows } = await runTigerQuery<{ total: number; prolific: number; recentlyactive: number }>(
+    `
+      WITH developer_rollups AS (
+        SELECT
+          d.id,
+          COUNT(DISTINCT ad.appid)::integer AS game_count,
+          COUNT(DISTINCT ad.appid) FILTER (WHERE a.release_date >= CURRENT_DATE - INTERVAL '1 year')::integer AS recent_games
+        FROM legacy.developers d
+        LEFT JOIN legacy.app_developers ad ON ad.developer_id = d.id
+        LEFT JOIN legacy.apps a ON a.appid = ad.appid
+        GROUP BY d.id
+      )
+      SELECT
+        COUNT(*)::integer AS total,
+        COUNT(*) FILTER (WHERE game_count >= 5)::integer AS prolific,
+        COUNT(*) FILTER (WHERE recent_games > 0)::integer AS recentlyActive
+      FROM developer_rollups
+    `,
+    []
+  );
 
-  // Use RPC for efficient stats query
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase.rpc as any)('get_developer_stats') as {
-    data: { total: number; prolific: number; recentlyActive: number } | null;
-    error: Error | null;
-  };
-
-  if (error) {
-    // Fallback to basic count if RPC doesn't exist
-    const { count } = await supabase.from('developers').select('*', { count: 'exact', head: true });
-    return { total: count ?? 0, prolific: 0, recentlyActive: 0 };
-  }
-
-  return data ?? { total: 0, prolific: 0, recentlyActive: 0 };
+  return rows[0] ? {
+    total: rows[0].total,
+    prolific: rows[0].prolific,
+    recentlyActive: rows[0].recentlyactive,
+  } : { total: 0, prolific: 0, recentlyActive: 0 };
 }
 
 // Format helpers
@@ -251,8 +270,8 @@ export default async function DevelopersPage({
     status?: 'active' | 'dormant';
   }>;
 }) {
-  if (!isSupabaseConfigured()) {
-    return <ConfigurationRequired />;
+  if (!isTigerReadConfigured()) {
+    return <TigerConfigRequired />;
   }
 
   const params = await searchParams;

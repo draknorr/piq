@@ -1,8 +1,6 @@
 import type { Metadata } from 'next';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { getServiceSupabase } from '@/lib/supabase-service';
+import { runTigerQuery } from '@publisheriq/database';
 import { getPortfolioPICSData } from '@/lib/portfolio-pics';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { notFound } from 'next/navigation';
 import { PageSubHeader } from '@/components/layout';
 import { ReviewScoreBadge, RatioBar, TrendSparkline } from '@/components/data-display';
@@ -11,17 +9,20 @@ import { DeveloperDetailSections } from './DeveloperDetailSections';
 import { getCCUSparklinesBatch, getPortfolioCCUSparkline, type CCUSparklineData } from '@/lib/ccu-queries';
 import { PinButton } from '@/components/PinButton';
 import { getUser, createServerClient } from '@/lib/supabase/server';
-import { getAppsByIds } from '@/app/(main)/apps/lib/apps-queries';
+import { getAppsByIds, isTigerReadConfigured } from '@/app/(main)/apps/lib/apps-queries';
 import type { App as AppSummary } from '@/app/(main)/apps/lib/apps-types';
+import { TigerConfigRequired } from '@/app/(main)/apps/lib/tiger-config-required';
 
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
-  if (!isSupabaseConfigured()) return { title: 'Developer Details' };
-  const supabase = getServiceSupabase();
-  const { data: developer } = await supabase.from('developers').select('name').eq('id', Number(id)).single();
-  return { title: developer?.name || 'Developer Details' };
+  if (!isTigerReadConfigured()) return { title: 'Developer Details' };
+  const { rows } = await runTigerQuery<{ name: string }>(
+    `SELECT name FROM legacy.developers WHERE id = $1 LIMIT 1`,
+    [Number(id)]
+  );
+  return { title: rows[0]?.name || 'Developer Details' };
 }
 
 interface Developer {
@@ -121,166 +122,123 @@ function mapAppSummaryToDeveloperApp(
 }
 
 async function getDeveloper(id: number): Promise<Developer | null> {
-  if (!isSupabaseConfigured()) return null;
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<Developer>(
+    `
+      SELECT id, name, normalized_name, steam_vanity_url, first_game_release_date, game_count, created_at, updated_at
+      FROM legacy.developers
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
 
-  const { data, error } = await supabase
-    .from('developers')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (error || !data) return null;
-  return data as Developer;
+  return rows[0] ?? null;
 }
 
 async function getDeveloperApps(developerId: number): Promise<DeveloperApp[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows: appLinks } = await runTigerQuery<{ appid: number }>(
+    `
+      SELECT appid
+      FROM legacy.app_developers
+      WHERE developer_id = $1
+    `,
+    [developerId]
+  );
 
-  // Get all appids for this developer
-  const { data: appLinks } = await supabase
-    .from('app_developers')
-    .select('appid')
-    .eq('developer_id', developerId);
-
-  if (!appLinks || appLinks.length === 0) return [];
+  if (appLinks.length === 0) return [];
 
   const appIds = [...new Set(appLinks.map((appLink) => appLink.appid))];
   const [apps, trendsResult] = await Promise.all([
     getAppsByIds(appIds),
-    supabase
-      .from('app_trends')
-      .select('appid, trend_30d_direction, trend_30d_change_pct')
-      .in('appid', appIds),
+    runTigerQuery<AppTrend>(
+      `
+        SELECT appid, trend_30d_direction, trend_30d_change_pct
+        FROM metrics.app_trends
+        WHERE appid = ANY($1::int[])
+      `,
+      [appIds]
+    ),
   ]);
 
   const trendsMap = new Map<number, AppTrend>();
-  for (const trend of trendsResult.data ?? []) {
-    trendsMap.set(trend.appid, trend as AppTrend);
+  for (const trend of trendsResult.rows) {
+    trendsMap.set(trend.appid, trend);
   }
 
   return apps.map((app) => mapAppSummaryToDeveloperApp(app, trendsMap.get(app.appid) ?? null));
 }
 
 async function getRelatedPublishers(developerId: number): Promise<RelatedPublisher[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<RelatedPublisher>(
+    `
+      SELECT
+        p.id,
+        p.name,
+        p.game_count,
+        COUNT(DISTINCT ap.appid)::integer AS shared_apps
+      FROM legacy.app_developers ad
+      JOIN legacy.app_publishers ap ON ap.appid = ad.appid
+      JOIN legacy.publishers p ON p.id = ap.publisher_id
+      WHERE ad.developer_id = $1
+      GROUP BY p.id, p.name, p.game_count
+      ORDER BY shared_apps DESC, p.game_count DESC NULLS LAST, p.name
+      LIMIT 10
+    `,
+    [developerId]
+  );
 
-  // Get all apps by this developer
-  const { data: devApps } = await supabase
-    .from('app_developers')
-    .select('appid')
-    .eq('developer_id', developerId);
-
-  if (!devApps || devApps.length === 0) return [];
-
-  const appIds = devApps.map(a => a.appid);
-
-  // Get all publishers for those apps
-  const { data: pubLinks } = await supabase
-    .from('app_publishers')
-    .select('publisher_id, appid')
-    .in('appid', appIds);
-
-  if (!pubLinks || pubLinks.length === 0) return [];
-
-  // Count shared apps per publisher
-  const pubCounts = new Map<number, number>();
-  for (const link of pubLinks) {
-    pubCounts.set(link.publisher_id, (pubCounts.get(link.publisher_id) ?? 0) + 1);
-  }
-
-  const publisherIds = [...pubCounts.keys()];
-
-  // Get publisher details
-  const { data: publishers } = await supabase
-    .from('publishers')
-    .select('id, name, game_count')
-    .in('id', publisherIds);
-
-  if (!publishers) return [];
-
-  return publishers
-    .map((pub: { id: number; name: string; game_count: number | null }) => ({
-      id: pub.id,
-      name: pub.name,
-      game_count: pub.game_count ?? 0,
-      shared_apps: pubCounts.get(pub.id) ?? 0,
-    }))
-    .sort((a, b) => b.shared_apps - a.shared_apps)
-    .slice(0, 10);
+  return rows;
 }
 
 async function getDeveloperTags(developerId: number): Promise<{ tag: string; count: number }[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows } = await runTigerQuery<{ tag: string; count: number }>(
+    `
+      SELECT
+        st.name AS tag,
+        COUNT(DISTINCT ast.appid)::integer AS count
+      FROM legacy.app_developers ad
+      JOIN legacy.app_steam_tags ast ON ast.appid = ad.appid
+      JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id
+      WHERE ad.developer_id = $1
+      GROUP BY st.name
+      ORDER BY count DESC, st.name
+      LIMIT 20
+    `,
+    [developerId]
+  );
 
-  // Get all apps by this developer
-  const { data: appLinks } = await supabase
-    .from('app_developers')
-    .select('appid')
-    .eq('developer_id', developerId);
-
-  if (!appLinks || appLinks.length === 0) return [];
-
-  const appIds = appLinks.map(a => a.appid);
-
-  // Get all tags for those apps from PICS data (app_steam_tags joined with steam_tags)
-  const { data: tagData } = await supabase
-    .from('app_steam_tags')
-    .select('appid, steam_tags(name)')
-    .in('appid', appIds);
-
-  if (!tagData) return [];
-
-  // Aggregate: count how many apps have each tag
-  const tagCounts = new Map<string, number>();
-  for (const t of tagData) {
-    const tagName = (t.steam_tags as { name: string } | null)?.name;
-    if (tagName) {
-      tagCounts.set(tagName, (tagCounts.get(tagName) ?? 0) + 1);
-    }
-  }
-
-  return [...tagCounts.entries()]
-    .map(([tag, count]) => ({ tag, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 20);
+  return rows;
 }
 
 async function getDeveloperReviewHistogram(developerId: number): Promise<ReviewHistogram[]> {
-  if (!isSupabaseConfigured()) return [];
-  const supabase = getServiceSupabase();
+  const { rows: data } = await runTigerQuery<{
+    appid: number;
+    name: string;
+    month_start: string;
+    recommendations_up: number;
+    recommendations_down: number;
+  }>(
+    `
+      SELECT
+        rh.appid,
+        a.name,
+        rh.month_start,
+        rh.recommendations_up,
+        rh.recommendations_down
+      FROM legacy.app_developers ad
+      JOIN metrics.review_histogram rh ON rh.appid = ad.appid
+      JOIN legacy.apps a ON a.appid = rh.appid
+      WHERE ad.developer_id = $1
+      ORDER BY rh.month_start DESC
+    `,
+    [developerId]
+  );
 
-  // Get all apps by this developer with their names
-  const { data: appLinks } = await supabase
-    .from('app_developers')
-    .select('appid, apps(name)')
-    .eq('developer_id', developerId);
-
-  if (!appLinks || appLinks.length === 0) return [];
-
-  const appIds = appLinks.map(a => a.appid);
-  const appNameMap = new Map<number, string>();
-  for (const link of appLinks) {
-    const appData = link.apps as { name: string } | null;
-    if (appData) {
-      appNameMap.set(link.appid, appData.name);
-    }
-  }
-
-  // Get histogram data for all apps with appid included
-  const { data } = await supabase
-    .from('review_histogram')
-    .select('appid, month_start, recommendations_up, recommendations_down')
-    .in('appid', appIds)
-    .order('month_start', { ascending: false });
-
-  if (!data) return [];
+  if (data.length === 0) return [];
 
   // Validate ISO date format (YYYY-MM-DD or YYYY-MM)
   const isoDatePattern = /^\d{4}-\d{2}(?:-\d{2})?$/;
+  const rowsByAppName = new Map(data.map((row) => [row.appid, row.name]));
 
   // Aggregate by month while preserving per-game data
   const monthMap = new Map<string, {
@@ -320,7 +278,7 @@ async function getDeveloperReviewHistogram(developerId: number): Promise<ReviewH
       games: [...games.entries()]
         .map(([appid, data]) => ({
           appid,
-          name: appNameMap.get(appid) ?? `App ${appid}`,
+          name: rowsByAppName.get(appid) ?? `App ${appid}`,
           recommendations_up: data.up,
           recommendations_down: data.down,
         }))
@@ -331,63 +289,37 @@ async function getDeveloperReviewHistogram(developerId: number): Promise<ReviewH
 }
 
 async function getSimilarDevelopers(developerId: number, topTags: string[]): Promise<SimilarDeveloper[]> {
-  if (!isSupabaseConfigured() || topTags.length === 0) return [];
-  const supabase = getServiceSupabase();
+  if (topTags.length === 0) return [];
 
-  // First, get tag_ids for the tag names from steam_tags
-  const { data: steamTags } = await supabase
-    .from('steam_tags')
-    .select('tag_id')
-    .in('name', topTags.slice(0, 5));
+  const { rows } = await runTigerQuery<SimilarDeveloper>(
+    `
+      WITH selected_tags AS (
+        SELECT tag_id
+        FROM legacy.steam_tags
+        WHERE name = ANY($2::text[])
+      ),
+      tagged_apps AS (
+        SELECT DISTINCT ast.appid
+        FROM legacy.app_steam_tags ast
+        JOIN selected_tags st ON st.tag_id = ast.tag_id
+      )
+      SELECT
+        d.id,
+        d.name,
+        d.game_count,
+        COUNT(DISTINCT ad.appid)::integer AS shared_tags
+      FROM tagged_apps ta
+      JOIN legacy.app_developers ad ON ad.appid = ta.appid
+      JOIN legacy.developers d ON d.id = ad.developer_id
+      WHERE d.id <> $1
+      GROUP BY d.id, d.name, d.game_count
+      ORDER BY shared_tags DESC, d.game_count DESC NULLS LAST, d.name
+      LIMIT 10
+    `,
+    [developerId, topTags.slice(0, 5)]
+  );
 
-  if (!steamTags || steamTags.length === 0) return [];
-
-  const tagIds = steamTags.map(t => t.tag_id);
-
-  // Get apps that have these top tags from PICS data
-  const { data: taggedApps } = await supabase
-    .from('app_steam_tags')
-    .select('appid')
-    .in('tag_id', tagIds);
-
-  if (!taggedApps || taggedApps.length === 0) return [];
-
-  const appIds = [...new Set(taggedApps.map(t => t.appid))];
-
-  // Find developers of those apps (excluding current developer)
-  const { data: devLinks } = await supabase
-    .from('app_developers')
-    .select('developer_id, appid')
-    .in('appid', appIds)
-    .neq('developer_id', developerId);
-
-  if (!devLinks || devLinks.length === 0) return [];
-
-  // Count shared apps per developer
-  const devCounts = new Map<number, number>();
-  for (const link of devLinks) {
-    devCounts.set(link.developer_id, (devCounts.get(link.developer_id) ?? 0) + 1);
-  }
-
-  const developerIds = [...devCounts.keys()].slice(0, 20);
-
-  // Get developer details
-  const { data: developers } = await supabase
-    .from('developers')
-    .select('id, name, game_count')
-    .in('id', developerIds);
-
-  if (!developers) return [];
-
-  return developers
-    .map((dev: { id: number; name: string; game_count: number | null }) => ({
-      id: dev.id,
-      name: dev.name,
-      game_count: dev.game_count ?? 0,
-      shared_tags: devCounts.get(dev.id) ?? 0,
-    }))
-    .sort((a, b) => b.shared_tags - a.shared_tags)
-    .slice(0, 10);
+  return rows;
 }
 
 function formatOwners(min: number | null, max: number | null): string {
@@ -410,8 +342,8 @@ export default async function DeveloperDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  if (!isSupabaseConfigured()) {
-    return <ConfigurationRequired />;
+  if (!isTigerReadConfigured()) {
+    return <TigerConfigRequired />;
   }
 
   const { id: idStr } = await params;
