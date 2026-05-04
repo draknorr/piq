@@ -762,7 +762,7 @@ function parseMonthlyWindow(args: QueryAnalyticsArgs): { endMonth: string; start
   }
 
   const monthRange = getFilterValues(args.filters, `${cube}.month`, 'inDateRange');
-  if (monthRange?.length >= 2) {
+  if (monthRange && monthRange.length >= 2) {
     return {
       endMonth: String(monthRange[1]).slice(0, 7) + '-01',
       startMonth: String(monthRange[0]).slice(0, 7) + '-01',
