@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/layout';
 import { CompaniesPageClient } from './components/CompaniesPageClient';
-import { getCompanies, getAggregateStats, getCompaniesByIds, type AggregateStats } from './lib/companies-queries';
+import { getCompanies, getAggregateStats, getCompaniesByIds, isTigerReadConfigured } from './lib/companies-queries';
+import { TigerConfigRequired } from '../apps/lib/tiger-config-required';
 // Columns are parsed from URL in useCompaniesFilters hook
 import type {
   Company,
+  AggregateStats,
   CompanyType,
   SortField,
   SortOrder,
@@ -44,6 +44,11 @@ const SERVER_SORTS: SortField[] = [
   'revenue_estimate_cents',
   'games_trending_up',
   'ccu_growth_7d',
+  'growth_30d',
+  'review_velocity',
+  'revenue_per_game',
+  'owners_per_game',
+  'reviews_per_1k_owners',
 ];
 
 // All valid sort fields (including client-side sortable)
@@ -125,9 +130,9 @@ export default async function CompaniesPage({
 }: {
   searchParams: Promise<CompaniesSearchParams>;
 }) {
-  // Check Supabase configuration
-  if (!isSupabaseConfigured()) {
-    return <ConfigurationRequired />;
+  // Check TigerData read configuration
+  if (!isTigerReadConfigured()) {
+    return <TigerConfigRequired />;
   }
 
   // Parse and validate search params

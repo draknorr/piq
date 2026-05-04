@@ -21,8 +21,7 @@ import { useCompaniesSelection } from '../hooks/useCompaniesSelection';
 import { useCompaniesCompare } from '../hooks/useCompaniesCompare';
 import { useCommandPalette, useCommandPaletteShortcut } from '../hooks/useCommandPalette';
 import { useFilterCounts } from '../hooks/useFilterCounts';
-import type { Company, CompanyType, SortField, SortOrder, SavedView, PresetId, QuickFilterId } from '../lib/companies-types';
-import type { AggregateStats } from '../lib/companies-queries';
+import type { AggregateStats, Company, CompanyType, SortField, SortOrder, SavedView, PresetId, QuickFilterId } from '../lib/companies-types';
 
 interface CompaniesPageClientProps {
   initialData: Company[];

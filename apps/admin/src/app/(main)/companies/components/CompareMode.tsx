@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { SparklineCell } from './SparklineCell';
 import type { Company, CompanyIdentifier } from '../lib/companies-types';
-import type { AggregateStats } from '../lib/companies-queries';
+import type { AggregateStats } from '../lib/companies-types';
 import type { useSparklineLoader } from '../hooks/useSparklineLoader';
 import {
   buildCompareMetricRows,

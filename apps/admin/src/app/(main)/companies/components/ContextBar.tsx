@@ -1,6 +1,7 @@
 'use client';
 
-import { formatCompactNumber, formatRevenue, type AggregateStats } from '../lib/companies-queries';
+import { formatCompactNumber, formatRevenue } from '../lib/companies-format';
+import type { AggregateStats } from '../lib/companies-types';
 
 interface ContextBarProps {
   stats: AggregateStats;

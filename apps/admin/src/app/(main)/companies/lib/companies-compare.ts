@@ -2,14 +2,13 @@
  * Utilities for company comparison calculations
  */
 
-import type { Company, CompareMetricRow } from './companies-types';
-import type { AggregateStats } from './companies-queries';
+import type { AggregateStats, Company, CompareMetricRow } from './companies-types';
 import {
   formatCompactNumber,
   formatRevenue,
   formatHours,
   getReviewPercentage,
-} from './companies-queries';
+} from './companies-format';
 
 /**
  * Metric definition for comparison

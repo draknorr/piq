@@ -33,7 +33,7 @@ export type PlatformValue = 'windows' | 'mac' | 'linux';
 export type FilterMode = 'any' | 'all';
 
 /**
- * Filter option returned from get_filter_option_counts RPC
+ * Filter option returned from the Tiger-backed filter-count API
  */
 export interface FilterOption {
   option_id: number;
@@ -102,7 +102,7 @@ export type QuickFilterId =
 export type UnifiedFilterId = PresetId | QuickFilterId;
 
 /**
- * Company data returned from get_companies_with_filters RPC
+ * Company data returned from the Tiger-backed companies query
  */
 export interface Company {
   id: number;
@@ -135,6 +135,18 @@ export interface Company {
   steam_vanity_url: string | null;
   unique_developers: number;
   data_updated_at: string | null;
+}
+
+/**
+ * Aggregate statistics for filtered companies
+ */
+export interface AggregateStats {
+  total_companies: number;
+  total_games: number;
+  total_owners: number;
+  total_revenue: number;
+  avg_review_score: number | null;
+  total_ccu: number;
 }
 
 /**

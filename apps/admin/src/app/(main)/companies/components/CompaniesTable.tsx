@@ -15,7 +15,7 @@ import {
   formatRevenue,
   formatHours,
   getReviewPercentage,
-} from '../lib/companies-queries';
+} from '../lib/companies-format';
 import {
   COLUMN_DEFINITIONS,
   isRatioColumn,

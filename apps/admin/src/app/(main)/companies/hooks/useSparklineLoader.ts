@@ -1,7 +1,6 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { createBrowserClient } from '@/lib/supabase/client';
 
 interface SparklineData {
   dataPoints: number[];
@@ -63,15 +62,25 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
       forceUpdate((n) => n + 1);
 
       try {
-        const supabase = createBrowserClient();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data, error } = await (supabase.rpc as any)('get_company_sparkline_data', {
-          p_company_id: companyId,
-          p_company_type: companyType,
-          p_days: 7,
+        const response = await fetch('/api/companies/sparklines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companies: [{ id: companyId, type: companyType }],
+            days: 7,
+          }),
         });
 
-        if (!error && data && Array.isArray(data) && data.length > 0) {
+        if (!response.ok) {
+          throw new Error('Failed to fetch sparkline data');
+        }
+
+        const result = await response.json() as {
+          data?: Array<{ sparkline_data?: Array<{ total_ccu: number }> | null }>;
+        };
+        const data = result.data?.[0]?.sparkline_data;
+
+        if (data && Array.isArray(data) && data.length > 0) {
           // Extract CCU values for sparkline
           const dataPoints = data.map((d: { total_ccu: number }) => Number(d.total_ccu) || 0);
           const trend = calculateTrend(dataPoints);

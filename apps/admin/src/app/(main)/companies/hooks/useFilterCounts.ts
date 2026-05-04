@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { createBrowserClient } from '@/lib/supabase/client';
 import type { FilterOption, CompanyType, StatusFilterValue } from '../lib/companies-types';
 
 export type FilterType = 'genre' | 'tag' | 'category' | 'steam_deck';
@@ -21,7 +20,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Hook for lazy-loading filter option counts with caching.
- * Calls get_filter_option_counts RPC when dropdowns open.
+ * Calls the Tiger-backed filter-count API when dropdowns open.
  */
 export function useFilterCounts() {
   const [loading, setLoading] = useState<Record<FilterType, boolean>>({
@@ -88,23 +87,23 @@ export function useFilterCounts() {
       setLoading((prev) => ({ ...prev, [filterType]: true }));
 
       try {
-        const supabase = createBrowserClient();
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: result, error } = await (supabase.rpc as any)('get_filter_option_counts', {
-          p_filter_type: filterType,
-          p_company_type: companyType,
-          p_min_games: contextFilters?.minGames,
-          p_min_revenue: contextFilters?.minRevenue,
-          p_status: contextFilters?.status ?? undefined,
+        const params = new URLSearchParams({
+          filterType,
+          type: companyType,
         });
+        if (contextFilters?.minGames !== undefined) params.set('minGames', String(contextFilters.minGames));
+        if (contextFilters?.minRevenue !== undefined) params.set('minRevenue', String(contextFilters.minRevenue));
+        if (contextFilters?.status) params.set('status', contextFilters.status);
 
-        if (error) {
+        const response = await fetch(`/api/companies/filter-counts?${params.toString()}`);
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
           console.error(`Error fetching ${filterType} counts:`, error);
-          throw error;
+          throw new Error(error.error || `Failed to fetch ${filterType} counts`);
         }
 
-        const options = (result ?? []) as FilterOption[];
+        const result = await response.json() as { data?: FilterOption[] };
+        const options = result.data ?? [];
 
         // Cache the result
         cache.current[cacheKey] = { data: options, timestamp: Date.now() };
