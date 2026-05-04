@@ -1,0 +1,68 @@
+{
+  "bug_id": "20260504-021510-restore-apps-tiger-growth-momentum-sparklines",
+  "slug": "restore-apps-tiger-growth-momentum-sparklines",
+  "created_at": "2026-05-04T02:15:10.867681+00:00",
+  "status": "fix_implemented",
+  "summary": "Tiger /apps read path changed the metric contract for CCU growth and momentum, and Tiger lacked the old growth columns/formula. The fix restores the ccu_tier_assignments growth contract, rebuilds the apps projection, and adds a snapshot backfill utility.",
+  "triage_score": 6,
+  "triage_tier": 4,
+  "depth_classification": "deep",
+  "spawned_agents": [],
+  "why_this_tier": "Touches DB correctness, API/query contracts, frontend rendering, sync pipelines, and cross-surface metric semantics. Subagents were not spawned because session-level tool rules only allow them when the user explicitly asks for delegation.",
+  "observed_facts": [],
+  "reproduction_status": {
+    "state": "reproduced_by_readonly_db_and_static_trace",
+    "summary": "Tiger ccu_trend_7d_pct and apps_page_projection ccu_growth_7d_percent were null for all checked rows, while Supabase ccu_tier_assignments still had non-null growth values.",
+    "evidence_paths": []
+  },
+  "owning_files": [
+    "apps/admin/src/app/(main)/apps/lib/apps-queries.ts",
+    "apps/admin/src/app/(main)/apps/hooks/useSparklineLoader.ts",
+    "packages/data-plane/sql/tiger-bootstrap/0072_primary_writer_surfaces.sql",
+    "packages/data-plane/sql/tiger-bootstrap/0080_apps_page_query_accelerators.sql",
+    "packages/data-plane/sql/tiger-bootstrap/0081_restore_apps_ccu_growth_contract.sql",
+    "packages/ingestion/src/scripts/backfill-tiger-ccu-snapshots.ts",
+    "packages/ingestion/src/workers/refresh-views-worker.ts"
+  ],
+  "affected_surfaces": [
+    "/apps",
+    "/apps/[appid]",
+    "Tiger CCU sync/recalculation",
+    "Tiger apps materialized projection",
+    "Apps sparklines"
+  ],
+  "db_checks": [
+    {
+      "label": "Tiger app trends and projection coverage",
+      "type": "source-of-truth evidence",
+      "result": "metrics.app_trends had 0 non-null ccu_trend_7d_pct rows; metrics.apps_page_projection had 0 non-null ccu_growth_7d_percent rows."
+    },
+    {
+      "label": "Supabase old growth coverage",
+      "type": "source-of-truth evidence",
+      "result": "public.ccu_tier_assignments had 29,099 non-null ccu_growth_7d_percent rows and 48,485 non-null ccu_growth_30d_percent rows."
+    }
+  ],
+  "root_cause_hypotheses": [
+    "Confirmed: Tiger /apps sourced 7d growth from metrics.app_trends.ccu_trend_7d_pct, which was unpopulated.",
+    "Confirmed: Tiger recalculate_ccu_tiers did not carry forward Supabase growth columns or formulas.",
+    "Confirmed: Tiger apps projection included delisted rows that old Supabase /apps excluded.",
+    "Likely: sparse Tiger snapshot history made sparklines and growth incomplete until backfill."
+  ],
+  "fix_options": [
+    "Restore the old ccu_tier_assignments growth contract in Tiger and update /apps to read it.",
+    "Keep the new app_trends semantics and rename/reframe UI metrics.",
+    "Disable Tiger projection and fall back to direct ad hoc formulas."
+  ],
+  "recommended_fix": "Restore the old ccu_tier_assignments growth contract in Tiger, rebuild the projection, backfill recent CCU snapshots, and keep /apps metric labels stable.",
+  "open_questions": [],
+  "verification_plan": [
+    "pnpm check-types",
+    "pnpm --filter @publisheriq/admin lint",
+    "pnpm --filter @publisheriq/ingestion check-types",
+    "Post-migration read-only parity checks for growth non-null counts and sample appids"
+  ],
+  "residual_risks": [
+    "Production values will remain null until the Tiger SQL migration, CCU snapshot backfill, tier recalculation, and materialized view refresh are run with DB-write approval."
+  ]
+}

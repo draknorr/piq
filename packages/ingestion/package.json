@@ -23,6 +23,7 @@
     "change-intel-backfill-projection": "tsx src/scripts/backfill-change-activity-projection.ts",
     "change-intel-tiger-backfill-archives": "tsx src/scripts/backfill-change-intel-tiger-archives.ts",
     "change-intel-tiger-backfill-bulk": "tsx src/scripts/backfill-change-intel-tiger-bulk.ts",
+    "backfill-tiger-ccu-snapshots": "tsx src/scripts/backfill-tiger-ccu-snapshots.ts",
     "change-intel-tiger-parity": "tsx src/scripts/change-intel-tiger-parity.ts",
     "change-intel-copy-hero-assets-to-r2": "tsx src/scripts/copy-hero-assets-to-r2.ts",
     "repair-current-ccu-state": "tsx src/scripts/repair-current-ccu-state.ts",
