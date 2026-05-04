@@ -1,10 +1,10 @@
 import type { Metadata } from 'next';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/layout';
 import { AppsPageClient } from './components/AppsPageClient';
 import { getApps, getAggregateStats, getAppsByIdsWithFreshReviews, isTigerReadConfigured } from './lib/apps-queries';
 import { parseCompareParam } from './lib/apps-compare-utils';
+import { TigerConfigRequired } from './lib/tiger-config-required';
 import type {
   App,
   AppType,
@@ -51,7 +51,7 @@ export default async function AppsPage({
   searchParams: Promise<AppsSearchParams>;
 }) {
   if (!isTigerReadConfigured()) {
-    return <ConfigurationRequired />;
+    return <TigerConfigRequired />;
   }
 
   // Parse and validate search params

@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
 import { notFound } from 'next/navigation';
 import { PageSubHeader } from '@/components/layout';
 import { TypeBadge, ReviewScoreBadge, RatioBar, TrendSparkline, CCUSourceBadge } from '@/components/data-display';
@@ -9,6 +8,7 @@ import { PinButton } from '@/components/PinButton';
 import { getUser } from '@/lib/supabase/server';
 import { runTigerQuery } from '@publisheriq/database';
 import { getAppsByIds, isTigerReadConfigured, mapAppRpcRowToApp } from '../lib/apps-queries';
+import { TigerConfigRequired } from '../lib/tiger-config-required';
 import type { App as AppSummary } from '../lib/apps-types';
 
 export const dynamic = 'force-dynamic';
@@ -548,7 +548,7 @@ export default async function AppDetailPage({
   params: Promise<{ appid: string }>;
 }) {
   if (!isTigerReadConfigured()) {
-    return <ConfigurationRequired />;
+    return <TigerConfigRequired />;
   }
 
   const { appid: appidStr } = await params;

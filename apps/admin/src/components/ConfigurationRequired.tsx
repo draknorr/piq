@@ -1,4 +1,21 @@
-export function ConfigurationRequired() {
+interface ConfigurationRequiredProps {
+  message?: string;
+  envVars?: string[];
+  instruction?: string;
+  footer?: string;
+}
+
+const DEFAULT_ENV_VARS = [
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+];
+
+export function ConfigurationRequired({
+  message = 'Supabase environment variables are not configured.',
+  envVars = DEFAULT_ENV_VARS,
+  instruction = 'Add these to your Vercel project:',
+  footer = 'Then redeploy your application.',
+}: ConfigurationRequiredProps) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="max-w-md rounded-lg border border-yellow-900/50 bg-yellow-950/20 p-8 text-center">
@@ -19,23 +36,22 @@ export function ConfigurationRequired() {
           Configuration Required
         </h2>
         <p className="mt-2 text-gray-400">
-          Supabase environment variables are not configured.
+          {message}
         </p>
         <div className="mt-4 rounded-lg bg-gray-900 p-4 text-left">
           <p className="text-sm font-medium text-gray-300">
-            Add these to your Vercel project:
+            {instruction}
           </p>
           <ul className="mt-2 space-y-1 text-sm text-gray-400">
-            <li>
-              <code className="text-yellow-400">NEXT_PUBLIC_SUPABASE_URL</code>
-            </li>
-            <li>
-              <code className="text-yellow-400">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>
-            </li>
+            {envVars.map((envVar) => (
+              <li key={envVar}>
+                <code className="text-yellow-400">{envVar}</code>
+              </li>
+            ))}
           </ul>
         </div>
         <p className="mt-4 text-sm text-gray-500">
-          Then redeploy your application.
+          {footer}
         </p>
       </div>
     </div>
