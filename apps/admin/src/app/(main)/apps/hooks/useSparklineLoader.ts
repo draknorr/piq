@@ -30,7 +30,9 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
   const loadingRef = useRef<Set<number>>(new Set());
   const elementsRef = useRef<Map<number, HTMLElement>>(new Map());
   const pendingBatchRef = useRef<Set<number>>(new Set());
+  const retryCountRef = useRef<Map<number, number>>(new Map());
   const batchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const retryTimeoutsRef = useRef<Set<number>>(new Set());
   const [, forceUpdate] = useState(0);
 
   // Calculate trend from data points
@@ -68,6 +70,26 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
     appids.forEach(appid => loadingRef.current.add(appid));
     forceUpdate((n) => n + 1);
 
+    const scheduleRetry = () => {
+      const retryAppids = appids.filter((appid) => (retryCountRef.current.get(appid) ?? 0) < 2);
+      if (retryAppids.length === 0) return;
+
+      retryAppids.forEach((appid) => {
+        retryCountRef.current.set(appid, (retryCountRef.current.get(appid) ?? 0) + 1);
+      });
+
+      const timeoutId = window.setTimeout(() => {
+        retryTimeoutsRef.current.delete(timeoutId);
+        retryAppids.forEach((appid) => {
+          if (!loadedRef.current.has(appid)) {
+            pendingBatchRef.current.add(appid);
+          }
+        });
+        void processBatch();
+      }, 1000);
+      retryTimeoutsRef.current.add(timeoutId);
+    };
+
     try {
       const response = await fetch('/api/apps/sparklines', {
         body: JSON.stringify({ appids, days: 7 }),
@@ -86,26 +108,22 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
           const sparklineData = row.sparkline_data || [];
           const dataPoints = sparklineData.map((d) => Number(d.ccu) || 0);
           const trend = calculateTrend(dataPoints);
+          retryCountRef.current.delete(row.appid);
           loadedRef.current.set(row.appid, { dataPoints, trend });
         });
 
         // Mark apps with no data as empty (to prevent retry)
         appids.forEach(appid => {
           if (!receivedAppids.has(appid)) {
+            retryCountRef.current.delete(appid);
             loadedRef.current.set(appid, { dataPoints: [], trend: 'stable' });
           }
         });
       } else {
-        // Store empty result for all on error
-        appids.forEach(appid => {
-          loadedRef.current.set(appid, { dataPoints: [], trend: 'stable' });
-        });
+        scheduleRetry();
       }
     } catch {
-      // Store empty result on error to prevent retry loops
-      appids.forEach(appid => {
-        loadedRef.current.set(appid, { dataPoints: [], trend: 'stable' });
-      });
+      scheduleRetry();
     } finally {
       // Remove all from loading
       appids.forEach(appid => loadingRef.current.delete(appid));
@@ -161,6 +179,8 @@ export function useSparklineLoader(): UseSparklineLoaderReturn {
       if (batchTimeoutRef.current) {
         clearTimeout(batchTimeoutRef.current);
       }
+      retryTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      retryTimeoutsRef.current.clear();
     };
   }, [queueForLoading]);
 

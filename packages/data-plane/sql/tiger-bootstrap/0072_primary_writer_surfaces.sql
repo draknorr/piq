@@ -283,6 +283,8 @@ CREATE TABLE IF NOT EXISTS ops.ccu_tier_assignments (
     last_tier_change timestamp with time zone DEFAULT now(),
     recent_peak_ccu integer,
     release_rank integer,
+    ccu_growth_7d_percent numeric,
+    ccu_growth_30d_percent numeric,
     updated_at timestamp with time zone DEFAULT now()
 );
 
@@ -294,6 +296,20 @@ ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS ccu_skip_until tim
 ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS last_ccu_synced timestamp with time zone;
 ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS last_ccu_validation_state text;
 ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS last_ccu_validation_at timestamp with time zone;
+ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS ccu_growth_7d_percent numeric;
+ALTER TABLE ops.ccu_tier_assignments ADD COLUMN IF NOT EXISTS ccu_growth_30d_percent numeric;
+
+COMMENT ON COLUMN ops.ccu_tier_assignments.ccu_growth_7d_percent IS
+  '3-day CCU growth: ((last 3 days avg - prior 3 days avg) / prior avg) * 100. Named 7d for backwards compatibility.';
+COMMENT ON COLUMN ops.ccu_tier_assignments.ccu_growth_30d_percent IS
+  '30-day CCU growth: ((last 3 days avg - 30-day baseline avg) / baseline avg) * 100.';
+
+CREATE INDEX IF NOT EXISTS idx_ops_ccu_tier_assignments_growth_7d
+  ON ops.ccu_tier_assignments (ccu_growth_7d_percent DESC NULLS LAST)
+  WHERE ccu_growth_7d_percent IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ops_ccu_tier_assignments_growth_30d
+  ON ops.ccu_tier_assignments (ccu_growth_30d_percent DESC NULLS LAST)
+  WHERE ccu_growth_30d_percent IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ops.alert_detection_state (
     user_id uuid,
@@ -1418,6 +1434,31 @@ BEGIN
     ORDER BY r.release_rank ASC
     LIMIT 1000
   ),
+  ccu_growth AS (
+    SELECT
+      appid,
+      CASE
+        WHEN prior_3d_avg IS NULL OR prior_3d_avg = 0 THEN NULL
+        ELSE ROUND(((last_3d_avg - prior_3d_avg) / prior_3d_avg) * 100, 2)
+      END AS ccu_growth_7d_percent,
+      CASE
+        WHEN baseline_30d_avg IS NULL OR baseline_30d_avg = 0 THEN NULL
+        ELSE ROUND(((last_3d_avg - baseline_30d_avg) / baseline_30d_avg) * 100, 2)
+      END AS ccu_growth_30d_percent
+    FROM (
+      SELECT
+        appid,
+        AVG(player_count) FILTER (WHERE snapshot_time > now() - INTERVAL '3 days') AS last_3d_avg,
+        AVG(player_count) FILTER (
+          WHERE snapshot_time > now() - INTERVAL '6 days'
+            AND snapshot_time <= now() - INTERVAL '3 days'
+        ) AS prior_3d_avg,
+        AVG(player_count) FILTER (WHERE snapshot_time > now() - INTERVAL '30 days') AS baseline_30d_avg
+      FROM metrics.ccu_snapshots
+      WHERE snapshot_time > now() - INTERVAL '30 days'
+      GROUP BY appid
+    ) growth_calcs
+  ),
   tier_assignments AS (
     SELECT
       a.appid,
@@ -1432,12 +1473,15 @@ BEGIN
         ELSE 'default'
       END AS tier_reason,
       rc.recent_peak_ccu,
-      rr.release_rank
+      rr.release_rank,
+      cg.ccu_growth_7d_percent,
+      cg.ccu_growth_30d_percent
     FROM legacy.apps a
     LEFT JOIN tier1_games t1 ON t1.appid = a.appid
     LEFT JOIN tier2_games t2 ON t2.appid = a.appid
     LEFT JOIN recent_ccu rc ON rc.appid = a.appid
     LEFT JOIN release_ranks rr ON rr.appid = a.appid
+    LEFT JOIN ccu_growth cg ON cg.appid = a.appid
     WHERE a.type = 'game'
       AND COALESCE(a.is_released, false) = true
       AND COALESCE(a.is_delisted, false) = false
@@ -1448,6 +1492,8 @@ BEGIN
     tier_reason,
     recent_peak_ccu,
     release_rank,
+    ccu_growth_7d_percent,
+    ccu_growth_30d_percent,
     last_tier_change,
     updated_at
   )
@@ -1457,6 +1503,8 @@ BEGIN
     tier_reason,
     recent_peak_ccu,
     release_rank,
+    ccu_growth_7d_percent,
+    ccu_growth_30d_percent,
     now(),
     now()
   FROM tier_assignments
@@ -1466,6 +1514,8 @@ BEGIN
     tier_reason = EXCLUDED.tier_reason,
     recent_peak_ccu = EXCLUDED.recent_peak_ccu,
     release_rank = EXCLUDED.release_rank,
+    ccu_growth_7d_percent = EXCLUDED.ccu_growth_7d_percent,
+    ccu_growth_30d_percent = EXCLUDED.ccu_growth_30d_percent,
     last_tier_change = CASE
       WHEN existing.ccu_tier IS DISTINCT FROM EXCLUDED.ccu_tier THEN now()
       ELSE existing.last_tier_change
@@ -1484,7 +1534,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.recalculate_ccu_tiers() IS
-  'Recalculates Tiger CCU tier assignments. Tier 1 = top 500 by 7-day peak CCU, Tier 2 = 1000 newest releases, Tier 3 = all other released games.';
+  'Recalculates Tiger CCU tier assignments and /apps CCU growth percentages. Tier 1 = top 500 by 7-day peak CCU, Tier 2 = 1000 newest releases, Tier 3 = all other released games. Growth uses 3-day comparison windows from metrics.ccu_snapshots.';
 
 CREATE OR REPLACE FUNCTION public.refresh_ccu_quality_stats()
 RETURNS void

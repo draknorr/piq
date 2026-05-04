@@ -1,16 +1,196 @@
--- Tiger read accelerators for the admin /apps page.
+-- Restore the /apps CCU growth contract on Tiger.
 --
--- The /apps UI needs fast full-catalog counts, computed metric sorts, taxonomy
--- filters, and publisher-relative review deltas. Querying those directly from
--- the normalized legacy/metrics tables requires repeated catalog-wide joins.
--- This projection precomputes the stable per-app row shape used by the page so
--- reads can filter/sort/aggregate over one indexed relation.
---
--- Apply only during an approved Tiger maintenance window. The initial refresh
--- scans legacy.apps, legacy.latest_daily_metrics, taxonomy tables, and
--- publisher/developer relationships.
+-- Supabase /apps exposed ccu_growth_7d_percent from ccu_tier_assignments,
+-- where the "7d" label is a backwards-compatible name for a 3-day vs
+-- prior-3-day CCU snapshot comparison. The initial Tiger tier function only
+-- assigned tiers and recent peak CCU, leaving growth null after cutover.
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS metrics.apps_page_projection AS
+ALTER TABLE ops.ccu_tier_assignments
+  ADD COLUMN IF NOT EXISTS ccu_growth_7d_percent numeric,
+  ADD COLUMN IF NOT EXISTS ccu_growth_30d_percent numeric;
+
+COMMENT ON COLUMN ops.ccu_tier_assignments.ccu_growth_7d_percent IS
+  '3-day CCU growth: ((last 3 days avg - prior 3 days avg) / prior avg) * 100. Named 7d for backwards compatibility.';
+COMMENT ON COLUMN ops.ccu_tier_assignments.ccu_growth_30d_percent IS
+  '30-day CCU growth: ((last 3 days avg - 30-day baseline avg) / baseline avg) * 100.';
+
+CREATE INDEX IF NOT EXISTS idx_ops_ccu_tier_assignments_growth_7d
+  ON ops.ccu_tier_assignments (ccu_growth_7d_percent DESC NULLS LAST)
+  WHERE ccu_growth_7d_percent IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ops_ccu_tier_assignments_growth_30d
+  ON ops.ccu_tier_assignments (ccu_growth_30d_percent DESC NULLS LAST)
+  WHERE ccu_growth_30d_percent IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.recalculate_ccu_tiers()
+RETURNS TABLE(tier1_count integer, tier2_count integer, tier3_count integer)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_tier1_count integer;
+  v_tier2_count integer;
+  v_tier3_count integer;
+BEGIN
+  WITH recent_snapshot_ccu AS (
+    SELECT appid, max(player_count) AS peak_ccu
+    FROM metrics.ccu_snapshots
+    WHERE snapshot_time > now() - INTERVAL '7 days'
+    GROUP BY appid
+  ),
+  recent_daily_ccu AS (
+    SELECT appid, max(ccu_peak) AS peak_ccu
+    FROM metrics.daily_metrics
+    WHERE metric_date > CURRENT_DATE - INTERVAL '7 days'
+    GROUP BY appid
+  ),
+  recent_ccu AS (
+    SELECT
+      COALESCE(s.appid, d.appid) AS appid,
+      GREATEST(COALESCE(s.peak_ccu, 0), COALESCE(d.peak_ccu, 0)) AS recent_peak_ccu
+    FROM recent_snapshot_ccu s
+    FULL OUTER JOIN recent_daily_ccu d ON d.appid = s.appid
+  ),
+  release_ranks AS (
+    SELECT
+      appid,
+      (row_number() OVER (
+        ORDER BY
+          CASE WHEN release_date IS NULL THEN 0 ELSE 1 END,
+          release_date DESC NULLS LAST,
+          appid DESC
+      ))::integer AS release_rank
+    FROM legacy.apps
+    WHERE type = 'game'
+      AND COALESCE(is_released, false) = true
+      AND COALESCE(is_delisted, false) = false
+      AND (
+        release_date >= CURRENT_DATE - INTERVAL '1 year'
+        OR release_date IS NULL
+      )
+  ),
+  tier1_games AS (
+    SELECT appid
+    FROM recent_ccu
+    WHERE recent_peak_ccu > 0
+    ORDER BY recent_peak_ccu DESC NULLS LAST, appid ASC
+    LIMIT 500
+  ),
+  tier2_games AS (
+    SELECT r.appid
+    FROM release_ranks r
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM tier1_games t1
+      WHERE t1.appid = r.appid
+    )
+    ORDER BY r.release_rank ASC
+    LIMIT 1000
+  ),
+  ccu_growth AS (
+    SELECT
+      appid,
+      CASE
+        WHEN prior_3d_avg IS NULL OR prior_3d_avg = 0 THEN NULL
+        ELSE ROUND(((last_3d_avg - prior_3d_avg) / prior_3d_avg) * 100, 2)
+      END AS ccu_growth_7d_percent,
+      CASE
+        WHEN baseline_30d_avg IS NULL OR baseline_30d_avg = 0 THEN NULL
+        ELSE ROUND(((last_3d_avg - baseline_30d_avg) / baseline_30d_avg) * 100, 2)
+      END AS ccu_growth_30d_percent
+    FROM (
+      SELECT
+        appid,
+        AVG(player_count) FILTER (WHERE snapshot_time > now() - INTERVAL '3 days') AS last_3d_avg,
+        AVG(player_count) FILTER (
+          WHERE snapshot_time > now() - INTERVAL '6 days'
+            AND snapshot_time <= now() - INTERVAL '3 days'
+        ) AS prior_3d_avg,
+        AVG(player_count) FILTER (WHERE snapshot_time > now() - INTERVAL '30 days') AS baseline_30d_avg
+      FROM metrics.ccu_snapshots
+      WHERE snapshot_time > now() - INTERVAL '30 days'
+      GROUP BY appid
+    ) growth_calcs
+  ),
+  tier_assignments AS (
+    SELECT
+      a.appid,
+      CASE
+        WHEN t1.appid IS NOT NULL THEN 1
+        WHEN t2.appid IS NOT NULL THEN 2
+        ELSE 3
+      END::smallint AS ccu_tier,
+      CASE
+        WHEN t1.appid IS NOT NULL THEN 'top_ccu'
+        WHEN t2.appid IS NOT NULL THEN 'new_release'
+        ELSE 'default'
+      END AS tier_reason,
+      rc.recent_peak_ccu,
+      rr.release_rank,
+      cg.ccu_growth_7d_percent,
+      cg.ccu_growth_30d_percent
+    FROM legacy.apps a
+    LEFT JOIN tier1_games t1 ON t1.appid = a.appid
+    LEFT JOIN tier2_games t2 ON t2.appid = a.appid
+    LEFT JOIN recent_ccu rc ON rc.appid = a.appid
+    LEFT JOIN release_ranks rr ON rr.appid = a.appid
+    LEFT JOIN ccu_growth cg ON cg.appid = a.appid
+    WHERE a.type = 'game'
+      AND COALESCE(a.is_released, false) = true
+      AND COALESCE(a.is_delisted, false) = false
+  )
+  INSERT INTO ops.ccu_tier_assignments AS existing (
+    appid,
+    ccu_tier,
+    tier_reason,
+    recent_peak_ccu,
+    release_rank,
+    ccu_growth_7d_percent,
+    ccu_growth_30d_percent,
+    last_tier_change,
+    updated_at
+  )
+  SELECT
+    appid,
+    ccu_tier,
+    tier_reason,
+    recent_peak_ccu,
+    release_rank,
+    ccu_growth_7d_percent,
+    ccu_growth_30d_percent,
+    now(),
+    now()
+  FROM tier_assignments
+  ON CONFLICT (appid)
+  DO UPDATE SET
+    ccu_tier = EXCLUDED.ccu_tier,
+    tier_reason = EXCLUDED.tier_reason,
+    recent_peak_ccu = EXCLUDED.recent_peak_ccu,
+    release_rank = EXCLUDED.release_rank,
+    ccu_growth_7d_percent = EXCLUDED.ccu_growth_7d_percent,
+    ccu_growth_30d_percent = EXCLUDED.ccu_growth_30d_percent,
+    last_tier_change = CASE
+      WHEN existing.ccu_tier IS DISTINCT FROM EXCLUDED.ccu_tier THEN now()
+      ELSE existing.last_tier_change
+    END,
+    updated_at = now();
+
+  SELECT
+    count(*) FILTER (WHERE ccu_tier = 1)::integer,
+    count(*) FILTER (WHERE ccu_tier = 2)::integer,
+    count(*) FILTER (WHERE ccu_tier = 3)::integer
+  INTO v_tier1_count, v_tier2_count, v_tier3_count
+  FROM ops.ccu_tier_assignments;
+
+  RETURN QUERY SELECT v_tier1_count, v_tier2_count, v_tier3_count;
+END;
+$$;
+
+COMMENT ON FUNCTION public.recalculate_ccu_tiers() IS
+  'Recalculates Tiger CCU tier assignments and /apps CCU growth percentages. Tier 1 = top 500 by 7-day peak CCU, Tier 2 = 1000 newest releases, Tier 3 = all other released games. Growth uses 3-day comparison windows from metrics.ccu_snapshots.';
+
+DROP MATERIALIZED VIEW IF EXISTS metrics.apps_page_filter_counts;
+DROP MATERIALIZED VIEW IF EXISTS metrics.apps_page_projection;
+
+CREATE MATERIALIZED VIEW metrics.apps_page_projection AS
 WITH publisher_primary AS (
   SELECT DISTINCT ON (ap.appid)
     ap.appid,
@@ -83,8 +263,8 @@ SELECT
   COALESCE(ldm.discount_percent, a.current_discount_percent, 0) AS current_discount_percent,
   ldm.average_playtime_forever,
   ldm.average_playtime_2weeks,
-  cta.ccu_growth_7d_percent AS ccu_growth_7d_percent,
-  cta.ccu_growth_30d_percent AS ccu_growth_30d_percent,
+  cta.ccu_growth_7d_percent,
+  cta.ccu_growth_30d_percent,
   cta.ccu_tier,
   rvs.velocity_7d,
   rvs.velocity_30d,
@@ -168,39 +348,36 @@ WHERE COALESCE(a.is_released, false) = true
   AND COALESCE(a.is_delisted, false) = false
 WITH NO DATA;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_appid
+CREATE UNIQUE INDEX idx_metrics_apps_page_projection_appid
   ON metrics.apps_page_projection (appid);
-
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_ccu
+CREATE INDEX idx_metrics_apps_page_projection_type_ccu
   ON metrics.apps_page_projection (type, ccu_peak DESC NULLS LAST, appid);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_reviews
+CREATE INDEX idx_metrics_apps_page_projection_type_reviews
   ON metrics.apps_page_projection (type, total_reviews DESC NULLS LAST, appid);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_value
+CREATE INDEX idx_metrics_apps_page_projection_type_value
   ON metrics.apps_page_projection (type, value_score DESC NULLS LAST, appid);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_momentum
+CREATE INDEX idx_metrics_apps_page_projection_type_momentum
   ON metrics.apps_page_projection (type, momentum_score DESC NULLS LAST, appid);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_vs_publisher
+CREATE INDEX idx_metrics_apps_page_projection_type_vs_publisher
   ON metrics.apps_page_projection (type, vs_publisher_avg DESC NULLS LAST, appid);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_type_release_date
+CREATE INDEX idx_metrics_apps_page_projection_type_release_date
   ON metrics.apps_page_projection (type, release_date DESC NULLS LAST, appid);
-
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_genres
+CREATE INDEX idx_metrics_apps_page_projection_genres
   ON metrics.apps_page_projection USING gin (genre_ids);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_tags
+CREATE INDEX idx_metrics_apps_page_projection_tags
   ON metrics.apps_page_projection USING gin (tag_ids);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_categories
+CREATE INDEX idx_metrics_apps_page_projection_categories
   ON metrics.apps_page_projection USING gin (category_ids);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_platforms
+CREATE INDEX idx_metrics_apps_page_projection_platforms
   ON metrics.apps_page_projection USING gin (platform_array);
-
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_publisher_name
+CREATE INDEX idx_metrics_apps_page_projection_publisher_name
   ON metrics.apps_page_projection USING gin (publisher_name public.gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_developer_name
+CREATE INDEX idx_metrics_apps_page_projection_developer_name
   ON metrics.apps_page_projection USING gin (developer_name public.gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_projection_name
+CREATE INDEX idx_metrics_apps_page_projection_name
   ON metrics.apps_page_projection USING gin (name_lower public.gin_trgm_ops);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS metrics.apps_page_filter_counts AS
+CREATE MATERIALIZED VIEW metrics.apps_page_filter_counts AS
 SELECT 'genre'::text AS filter_type, genre_id AS option_id, COUNT(*)::integer AS app_count
 FROM metrics.apps_page_projection p
 CROSS JOIN LATERAL unnest(p.genre_ids) genre_id
@@ -220,20 +397,15 @@ WHERE p.type = 'game'
 GROUP BY category_id
 WITH NO DATA;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_apps_page_filter_counts_type_option
+CREATE UNIQUE INDEX idx_metrics_apps_page_filter_counts_type_option
   ON metrics.apps_page_filter_counts (filter_type, option_id);
-CREATE INDEX IF NOT EXISTS idx_metrics_apps_page_filter_counts_type_count
+CREATE INDEX idx_metrics_apps_page_filter_counts_type_count
   ON metrics.apps_page_filter_counts (filter_type, app_count DESC);
 
 COMMENT ON MATERIALIZED VIEW metrics.apps_page_projection IS
-  'Precomputed per-app projection for the admin /apps page. Refresh after Tiger legacy/metrics sync batches.';
+  'Precomputed active-game projection for the admin /apps page. Refresh after Tiger legacy/metrics sync batches.';
 COMMENT ON MATERIALIZED VIEW metrics.apps_page_filter_counts IS
   'Precomputed default taxonomy option counts for the admin /apps filter UI.';
 
--- Initial population. This can be slow; run off peak if applying manually.
 REFRESH MATERIALIZED VIEW metrics.apps_page_projection;
 REFRESH MATERIALIZED VIEW metrics.apps_page_filter_counts;
-
--- Follow-up refreshes may use CONCURRENTLY after the initial population:
--- REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.apps_page_projection;
--- REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.apps_page_filter_counts;

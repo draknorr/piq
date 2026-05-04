@@ -7,7 +7,13 @@
  * Run with: pnpm --filter @publisheriq/ingestion refresh-views
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import {
+  getServiceClient,
+  getTigerWriter,
+  readDataWriteTarget,
+  type SyncJobUpdate,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { refreshMaterializedView } from '@publisheriq/database/ingestion';
 import { logger } from '@publisheriq/shared';
 
@@ -15,7 +21,10 @@ const log = logger.child({ worker: 'refresh-views' });
 
 const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
 
-const MATERIALIZED_VIEWS = [
+type SupabaseClient = ReturnType<typeof getServiceClient>;
+type RefreshDbClient = SupabaseClient | null;
+
+const LEGACY_MATERIALIZED_VIEWS = [
   { name: 'latest_daily_metrics', timeoutMs: 600_000 },
   { name: 'publisher_metrics', timeoutMs: 600_000 },
   { name: 'developer_metrics', timeoutMs: 600_000 },
@@ -26,6 +35,61 @@ const MATERIALIZED_VIEWS = [
   { name: 'monthly_game_metrics', timeoutMs: 300_000 },
   { name: 'mv_apps_aggregate_stats', timeoutMs: 120_000 },
 ] as const;
+
+const TIGER_MATERIALIZED_VIEWS = [
+  { name: 'metrics.review_velocity_stats', timeoutMs: 600_000 },
+  { name: 'metrics.apps_page_projection', timeoutMs: 900_000 },
+  { name: 'metrics.apps_page_filter_counts', timeoutMs: 300_000 },
+] as const;
+
+async function createRefreshJob(
+  githubRunId: string | undefined,
+  supabase: RefreshDbClient,
+  tiger: TigerWriter | null
+): Promise<string | null> {
+  if (tiger) {
+    return tiger.ops.createSyncJob({
+      jobType: 'refresh_views',
+      githubRunId,
+    });
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy refresh job tracking');
+  }
+
+  const { data: job } = await supabase
+    .from('sync_jobs')
+    .insert({
+      job_type: 'refresh_views',
+      github_run_id: githubRunId,
+      status: 'running',
+    })
+    .select()
+    .single();
+
+  return job?.id ?? null;
+}
+
+async function updateRefreshJob(
+  jobId: string | null,
+  supabase: RefreshDbClient,
+  tiger: TigerWriter | null,
+  values: SyncJobUpdate
+): Promise<void> {
+  if (!jobId) return;
+
+  if (tiger) {
+    await tiger.ops.updateSyncJob(jobId, values);
+    return;
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy refresh job tracking');
+  }
+
+  await supabase.from('sync_jobs').update(values).eq('id', jobId);
+}
 
 async function refreshView(
   viewName: string,
@@ -64,27 +128,20 @@ async function refreshView(
 async function main(): Promise<void> {
   const startTime = Date.now();
   const githubRunId = process.env.GITHUB_RUN_ID;
+  const useTiger = readDataWriteTarget(process.env) === 'tiger';
+  const materializedViews = useTiger ? TIGER_MATERIALIZED_VIEWS : LEGACY_MATERIALIZED_VIEWS;
 
-  log.info('Starting materialized view refresh', { githubRunId });
+  log.info('Starting materialized view refresh', { githubRunId, target: useTiger ? 'tiger' : 'supabase' });
 
-  const supabase = getServiceClient();
-
-  // Create sync job record
-  const { data: job } = await supabase
-    .from('sync_jobs')
-    .insert({
-      job_type: 'refresh_views',
-      github_run_id: githubRunId,
-      status: 'running',
-    })
-    .select()
-    .single();
+  const tiger = useTiger ? getTigerWriter(process.env) : null;
+  const supabase = useTiger ? null : getServiceClient();
+  const jobId = await createRefreshJob(githubRunId, supabase, tiger);
 
   const results: Array<{ view: string; success: boolean; durationMs: number; error?: string }> = [];
 
   try {
     // Refresh each view in order
-    for (const { name, timeoutMs } of MATERIALIZED_VIEWS) {
+    for (const { name, timeoutMs } of materializedViews) {
       log.info('Refreshing view', {
         lockTimeoutMs: DEFAULT_LOCK_TIMEOUT_MS,
         statementTimeoutMs: timeoutMs,
@@ -105,18 +162,13 @@ async function main(): Promise<void> {
     const succeeded = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success).length;
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: failed > 0 ? 'completed_with_errors' : 'completed',
-          completed_at: new Date().toISOString(),
-          items_processed: results.length,
-          items_succeeded: succeeded,
-          items_failed: failed,
-        })
-        .eq('id', job.id);
-    }
+    await updateRefreshJob(jobId, supabase, tiger, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      items_processed: results.length,
+      items_succeeded: succeeded,
+      items_failed: failed,
+    });
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     log.info('Materialized view refresh completed', {
@@ -132,16 +184,11 @@ async function main(): Promise<void> {
   } catch (error) {
     log.error('Materialized view refresh failed', { error });
 
-    if (job) {
-      await supabase
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error instanceof Error ? error.message : String(error),
-        })
-        .eq('id', job.id);
-    }
+    await updateRefreshJob(jobId, supabase, tiger, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: error instanceof Error ? error.message : String(error),
+    });
 
     process.exit(1);
   }

@@ -433,7 +433,11 @@ async function withSessionStatementTimeout<T>(
 }
 
 function assertSafeIdentifier(identifier: string): void {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+  const parts = identifier.split('.');
+  if (
+    parts.length > 2 ||
+    parts.some((part) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(part))
+  ) {
     throw new Error(`Invalid SQL identifier: ${identifier}`);
   }
 }

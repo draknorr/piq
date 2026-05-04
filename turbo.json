@@ -15,6 +15,9 @@
         "CHAT_TIGER_SHADOW_TIMEOUT_MS",
         "CHAT_TIGER_YOUTUBE_ENABLED",
         "CHAT_PHASE1_QUALITY_ENABLED",
+        "CHANGE_INTEL_READ_STRICT",
+        "CHANGE_INTEL_READ_TARGET",
+        "CHANGE_INTEL_TIGER_URL",
         "CUBE_API_SECRET",
         "CUBE_API_URL",
         "LLM_PROVIDER",
@@ -26,6 +29,7 @@
         "QUERY_API_BEARER_TOKEN",
         "SUPABASE_SERVICE_KEY",
         "SUPABASE_URL",
+        "TIGER_PRIMARY_URL",
         "USE_CUBE_CHAT"
       ],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]

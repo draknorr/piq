@@ -52,6 +52,9 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 250;
 const AGGREGATE_STATS_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_AGGREGATE_STATS_CACHE_ENTRIES = 128;
+const ACTIVE_APPS_SQL = `COALESCE(a.is_released, false) = true AND COALESCE(a.is_delisted, false) = false`;
+const ACTIVE_APP_ROWS_SQL = `COALESCE(is_released, false) = true AND COALESCE(is_delisted, false) = false`;
+const ACTIVE_PROJECTION_APPS_SQL = `COALESCE(p.is_released, false) = true AND COALESCE(p.is_delisted, false) = false`;
 
 const aggregateStatsCache = new Map<string, { data: AggregateStats; timestamp: number }>();
 let appsPageProjectionAvailable: boolean | null = null;
@@ -76,8 +79,8 @@ const APP_SELECT_SQL = `
   COALESCE(ldm.discount_percent, a.current_discount_percent, 0) AS current_discount_percent,
   ldm.average_playtime_forever,
   ldm.average_playtime_2weeks,
-  trends.ccu_trend_7d_pct AS ccu_growth_7d_percent,
-  trends.trend_30d_change_pct AS ccu_growth_30d_percent,
+  cta.ccu_growth_7d_percent AS ccu_growth_7d_percent,
+  cta.ccu_growth_30d_percent AS ccu_growth_30d_percent,
   cta.ccu_tier,
   rvs.velocity_7d,
   rvs.velocity_30d,
@@ -87,15 +90,21 @@ const APP_SELECT_SQL = `
       THEN ROUND((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 2)
     ELSE NULL
   END AS sentiment_delta,
-  ROUND(
-    COALESCE(rvs.velocity_7d, 0) * 8
-    + COALESCE(trends.ccu_trend_7d_pct, 0)
-    + COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0),
-    2
-  ) AS momentum_score,
   CASE
-    WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
-      THEN ROUND(((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100, 2)
+    WHEN cta.ccu_growth_7d_percent IS NOT NULL
+      THEN ROUND((cta.ccu_growth_7d_percent + COALESCE(
+        CASE
+          WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
+            THEN ((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100
+          ELSE 0
+        END,
+        0
+      )) / 2, 2)
+    ELSE NULL
+  END AS momentum_score,
+  CASE
+    WHEN rvs.velocity_7d IS NOT NULL AND rvs.velocity_30d IS NOT NULL
+      THEN ROUND(rvs.velocity_7d - rvs.velocity_30d, 4)
     ELSE NULL
   END AS velocity_acceleration,
   CASE
@@ -213,16 +222,22 @@ const SORT_SQL: Record<AppsFilterParams['sort'], string> = {
 
 const DIRECT_SORT_SQL: Record<Exclude<AppsFilterParams['sort'], 'vs_publisher_avg'>, string> = {
   active_player_pct: `CASE WHEN ldm.owners_midpoint IS NOT NULL AND ldm.owners_midpoint > 0 AND ldm.ccu_peak IS NOT NULL THEN (ldm.ccu_peak::numeric / ldm.owners_midpoint) * 100 ELSE NULL END`,
-  ccu_growth_30d_percent: 'trends.trend_30d_change_pct',
-  ccu_growth_7d_percent: 'trends.ccu_trend_7d_pct',
+  ccu_growth_30d_percent: 'cta.ccu_growth_30d_percent',
+  ccu_growth_7d_percent: 'cta.ccu_growth_7d_percent',
   ccu_peak: 'COALESCE(ldm.ccu_peak, 0)',
   days_live: 'CASE WHEN a.release_date IS NOT NULL THEN CURRENT_DATE - a.release_date ELSE NULL END',
-  momentum_score: `ROUND(
-    COALESCE(rvs.velocity_7d, 0) * 8
-    + COALESCE(trends.ccu_trend_7d_pct, 0)
-    + COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0),
-    2
-  )`,
+  momentum_score: `CASE
+    WHEN cta.ccu_growth_7d_percent IS NOT NULL
+      THEN ROUND((cta.ccu_growth_7d_percent + COALESCE(
+        CASE
+          WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
+            THEN ((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100
+          ELSE 0
+        END,
+        0
+      )) / 2, 2)
+    ELSE NULL
+  END`,
   owners_midpoint: 'COALESCE(ldm.owners_midpoint, 0)',
   price_cents: 'COALESCE(ldm.price_cents, a.current_price_cents)',
   release_date: 'a.release_date',
@@ -256,7 +271,7 @@ function hasItems<T>(items: readonly T[] | undefined): items is readonly T[] {
 }
 
 function buildAppsWhere(params: AppsFilterParams, values: SqlValue[]): string {
-  const where: string[] = [];
+  const where: string[] = [ACTIVE_APP_ROWS_SQL];
 
   if (params.type && params.type !== 'all') {
     where.push(`type = ${addParam(values, params.type)}`);
@@ -372,7 +387,7 @@ function buildAppsWhere(params: AppsFilterParams, values: SqlValue[]): string {
 }
 
 function buildAggregateWhere(params: AppsFilterParams, values: SqlValue[]): string {
-  const where: string[] = [];
+  const where: string[] = [ACTIVE_APPS_SQL];
 
   if (params.type && params.type !== 'all') {
     where.push(`COALESCE(a.type, 'game') = ${addParam(values, params.type)}`);
@@ -390,12 +405,18 @@ function buildAggregateWhere(params: AppsFilterParams, values: SqlValue[]): stri
 
   const priceSql = 'COALESCE(ldm.price_cents, a.current_price_cents)';
   const discountSql = 'COALESCE(ldm.discount_percent, a.current_discount_percent, 0)';
-  const momentumSql = `ROUND(
-    COALESCE(rvs.velocity_7d, 0) * 8
-    + COALESCE(trends.ccu_trend_7d_pct, 0)
-    + COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0),
-    2
-  )`;
+  const momentumSql = `CASE
+    WHEN cta.ccu_growth_7d_percent IS NOT NULL
+      THEN ROUND((cta.ccu_growth_7d_percent + COALESCE(
+        CASE
+          WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
+            THEN ((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100
+          ELSE 0
+        END,
+        0
+      )) / 2, 2)
+    ELSE NULL
+  END`;
   const sentimentDeltaSql = `ROUND((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 2)`;
   const activePlayerSql = `ROUND((ldm.ccu_peak::numeric / NULLIF(ldm.owners_midpoint, 0)) * 100, 4)`;
   const reviewRateSql = `ROUND(ldm.total_reviews::numeric / GREATEST(CURRENT_DATE - a.release_date, 1), 4)`;
@@ -415,10 +436,10 @@ function buildAggregateWhere(params: AppsFilterParams, values: SqlValue[]): stri
     [params.maxPrice, priceSql, '<='],
     [params.minPlaytime, 'ldm.average_playtime_forever', '>='],
     [params.maxPlaytime, 'ldm.average_playtime_forever', '<='],
-    [params.minGrowth7d, 'trends.ccu_trend_7d_pct', '>='],
-    [params.maxGrowth7d, 'trends.ccu_trend_7d_pct', '<='],
-    [params.minGrowth30d, 'trends.trend_30d_change_pct', '>='],
-    [params.maxGrowth30d, 'trends.trend_30d_change_pct', '<='],
+    [params.minGrowth7d, 'cta.ccu_growth_7d_percent', '>='],
+    [params.maxGrowth7d, 'cta.ccu_growth_7d_percent', '<='],
+    [params.minGrowth30d, 'cta.ccu_growth_30d_percent', '>='],
+    [params.maxGrowth30d, 'cta.ccu_growth_30d_percent', '<='],
     [params.minMomentum, momentumSql, '>='],
     [params.maxMomentum, momentumSql, '<='],
     [params.minSentimentDelta, sentimentDeltaSql, '>='],
@@ -528,7 +549,7 @@ function buildAggregateWhere(params: AppsFilterParams, values: SqlValue[]): stri
 }
 
 function buildProjectionWhere(params: AppsFilterParams, values: SqlValue[]): string {
-  const where: string[] = [];
+  const where: string[] = [ACTIVE_PROJECTION_APPS_SQL];
 
   if (params.type && params.type !== 'all') where.push(`p.type = ${addParam(values, params.type)}`);
 
@@ -741,7 +762,7 @@ export async function getApps(params: AppsFilterParams): Promise<App[]> {
   ) {
     const values: SqlValue[] = [];
     const typeSql = params.type && params.type !== 'all'
-      ? `WHERE COALESCE(a.type, 'game') = ${addParam(values, params.type)}`
+      ? `AND COALESCE(a.type, 'game') = ${addParam(values, params.type)}`
       : '';
     const limitSql = addParam(values, normalizeLimit(params.limit));
     const offsetSql = addParam(values, normalizeOffset(params.offset));
@@ -754,6 +775,7 @@ export async function getApps(params: AppsFilterParams): Promise<App[]> {
         SELECT a.appid
         FROM legacy.latest_daily_metrics ldm
         JOIN legacy.apps a ON a.appid = ldm.appid
+        WHERE ${ACTIVE_APPS_SQL}
         ${typeSql}
         ORDER BY ldm.ccu_peak DESC NULLS LAST, a.appid ASC
         LIMIT ${limitSql} OFFSET ${offsetSql}
@@ -994,7 +1016,7 @@ export async function getAggregateStats(
   if (isDefaultQuery(params)) {
     const values: SqlValue[] = [];
     const typeSql = params.type && params.type !== 'all'
-      ? `WHERE COALESCE(a.type, 'game') = ${addParam(values, params.type)}`
+      ? `AND COALESCE(a.type, 'game') = ${addParam(values, params.type)}`
       : '';
     const sql = `
       SELECT
@@ -1002,15 +1024,21 @@ export async function getAggregateStats(
         AVG(COALESCE(ldm.ccu_peak, 0))::numeric AS avg_ccu,
         AVG(ldm.review_score)::numeric AS avg_score,
         AVG(
-          ROUND(
-            COALESCE(rvs.velocity_7d, 0) * 8
-            + COALESCE(trends.ccu_trend_7d_pct, 0)
-            + COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0),
-            2
-          )
+          CASE
+            WHEN cta.ccu_growth_7d_percent IS NOT NULL
+              THEN ROUND((cta.ccu_growth_7d_percent + COALESCE(
+                CASE
+                  WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
+                    THEN ((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100
+                  ELSE 0
+                END,
+                0
+              )) / 2, 2)
+            ELSE NULL
+          END
         )::numeric AS avg_momentum,
-        COUNT(*) FILTER (WHERE COALESCE(trends.ccu_trend_7d_pct, 0) > 10)::integer AS trending_up_count,
-        COUNT(*) FILTER (WHERE COALESCE(trends.ccu_trend_7d_pct, 0) < -10)::integer AS trending_down_count,
+        COUNT(*) FILTER (WHERE cta.ccu_growth_7d_percent >= 10)::integer AS trending_up_count,
+        COUNT(*) FILTER (WHERE cta.ccu_growth_7d_percent <= -10)::integer AS trending_down_count,
         COUNT(*) FILTER (
           WHERE COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0) > 1
         )::integer AS sentiment_improving_count,
@@ -1028,6 +1056,8 @@ export async function getAggregateStats(
       LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = a.appid
       LEFT JOIN metrics.review_velocity_stats rvs ON rvs.appid = a.appid
       LEFT JOIN metrics.app_trends trends ON trends.appid = a.appid
+      LEFT JOIN ops.ccu_tier_assignments cta ON cta.appid = a.appid
+      WHERE ${ACTIVE_APPS_SQL}
       ${typeSql}
     `;
     const { rows } = await runTigerQuery<AggregateStatsRow>(sql, values as unknown[]);
@@ -1070,13 +1100,19 @@ export async function getAggregateStats(
         a.appid,
         COALESCE(ldm.ccu_peak, 0) AS ccu_peak,
         ldm.review_score,
-        trends.ccu_trend_7d_pct AS ccu_growth_7d_percent,
-        ROUND(
-          COALESCE(rvs.velocity_7d, 0) * 8
-          + COALESCE(trends.ccu_trend_7d_pct, 0)
-          + COALESCE((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 0),
-          2
-        ) AS momentum_score,
+        cta.ccu_growth_7d_percent AS ccu_growth_7d_percent,
+        CASE
+          WHEN cta.ccu_growth_7d_percent IS NOT NULL
+            THEN ROUND((cta.ccu_growth_7d_percent + COALESCE(
+              CASE
+                WHEN rvs.velocity_30d IS NOT NULL AND rvs.velocity_30d > 0
+                  THEN ((rvs.velocity_7d - rvs.velocity_30d) / rvs.velocity_30d) * 100
+                ELSE 0
+              END,
+              0
+            )) / 2, 2)
+          ELSE NULL
+        END AS momentum_score,
         ROUND((trends.current_positive_ratio - trends.previous_positive_ratio) * 100, 2) AS sentiment_delta,
         CASE
           WHEN COALESCE(ldm.price_cents, a.current_price_cents, 0) > 0 AND ldm.review_score IS NOT NULL
@@ -1097,8 +1133,8 @@ export async function getAggregateStats(
       AVG(ccu_peak)::numeric AS avg_ccu,
       AVG(review_score)::numeric AS avg_score,
       AVG(momentum_score)::numeric AS avg_momentum,
-      COUNT(*) FILTER (WHERE COALESCE(ccu_growth_7d_percent, 0) > 10)::integer AS trending_up_count,
-      COUNT(*) FILTER (WHERE COALESCE(ccu_growth_7d_percent, 0) < -10)::integer AS trending_down_count,
+      COUNT(*) FILTER (WHERE ccu_growth_7d_percent >= 10)::integer AS trending_up_count,
+      COUNT(*) FILTER (WHERE ccu_growth_7d_percent <= -10)::integer AS trending_down_count,
       COUNT(*) FILTER (WHERE COALESCE(sentiment_delta, 0) > 1)::integer AS sentiment_improving_count,
       COUNT(*) FILTER (WHERE COALESCE(sentiment_delta, 0) < -1)::integer AS sentiment_declining_count,
       AVG(value_score)::numeric AS avg_value_score
@@ -1146,8 +1182,8 @@ async function getAggregateStatsFromProjection(params: AppsFilterParams): Promis
       AVG(p.ccu_peak)::numeric AS avg_ccu,
       AVG(p.review_score)::numeric AS avg_score,
       AVG(p.momentum_score)::numeric AS avg_momentum,
-      COUNT(*) FILTER (WHERE COALESCE(p.ccu_growth_7d_percent, 0) > 10)::integer AS trending_up_count,
-      COUNT(*) FILTER (WHERE COALESCE(p.ccu_growth_7d_percent, 0) < -10)::integer AS trending_down_count,
+      COUNT(*) FILTER (WHERE p.ccu_growth_7d_percent >= 10)::integer AS trending_up_count,
+      COUNT(*) FILTER (WHERE p.ccu_growth_7d_percent <= -10)::integer AS trending_down_count,
       COUNT(*) FILTER (WHERE COALESCE(p.sentiment_delta, 0) > 1)::integer AS sentiment_improving_count,
       COUNT(*) FILTER (WHERE COALESCE(p.sentiment_delta, 0) < -1)::integer AS sentiment_declining_count,
       AVG(p.value_score)::numeric AS avg_value_score
