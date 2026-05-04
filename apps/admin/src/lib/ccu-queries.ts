@@ -8,7 +8,7 @@ import 'server-only';
  * TypeScript types may not include it yet - we use type assertions where needed.
  */
 
-import { getServiceSupabase } from '@/lib/supabase-service';
+import { runTigerQuery } from '@publisheriq/database';
 
 // ============================================================================
 // Types
@@ -140,14 +140,104 @@ export async function getAppDailyPeakSparkline(
   appid: number,
   days: 7 | 30 = 7
 ): Promise<CCUSparklineData> {
-  const supabase = getServiceSupabase();
+  const result = await getCCUSparklinesBatch([appid], days === 7 ? '7d' : '30d');
+  return result.get(appid) ?? {
+    dataPoints: [],
+    trend: 'stable',
+    growthPct: null,
+    peakCCU: null,
+  };
+}
 
-  const { data, error } = await supabase.rpc('get_app_sparkline_data', {
-    p_appids: [appid],
-    p_days: days,
-  });
+interface CcuSnapshotRow {
+  appid: number;
+  snapshot_time: string;
+  player_count: number;
+}
 
-  if (error || !data || data.length === 0) {
+function emptySparkline(): CCUSparklineData {
+  return {
+    dataPoints: [],
+    trend: 'stable',
+    growthPct: null,
+    peakCCU: null,
+  };
+}
+
+function uniqueFiniteAppIds(appIds: number[]): number[] {
+  return [...new Set(appIds.filter(Number.isFinite))];
+}
+
+async function getCcuSnapshotRows(
+  appIds: number[],
+  cutoffTime: Date
+): Promise<CcuSnapshotRow[]> {
+  const uniqueAppIds = uniqueFiniteAppIds(appIds);
+  if (uniqueAppIds.length === 0) return [];
+
+  const { rows } = await runTigerQuery<CcuSnapshotRow>(
+    `
+      SELECT appid, snapshot_time, player_count
+      FROM metrics.ccu_snapshots
+      WHERE appid = ANY($1::int[])
+        AND snapshot_time >= $2::timestamptz
+      ORDER BY snapshot_time ASC
+    `,
+    [uniqueAppIds, cutoffTime.toISOString()]
+  );
+
+  return rows;
+}
+
+function aggregateSparklineRows(
+  appIds: number[],
+  rows: CcuSnapshotRow[],
+  targetPoints: number
+): Map<number, CCUSparklineData> {
+  const result = new Map<number, CCUSparklineData>();
+
+  if (rows.length === 0) {
+    for (const appid of appIds) {
+      result.set(appid, emptySparkline());
+    }
+    return result;
+  }
+
+  const byApp = new Map<number, { time: Date; ccu: number }[]>();
+  const peakByApp = new Map<number, number>();
+
+  for (const row of rows) {
+    if (!byApp.has(row.appid)) byApp.set(row.appid, []);
+    byApp.get(row.appid)!.push({
+      time: new Date(row.snapshot_time),
+      ccu: row.player_count,
+    });
+
+    const currentPeak = peakByApp.get(row.appid) ?? 0;
+    if (row.player_count > currentPeak) {
+      peakByApp.set(row.appid, row.player_count);
+    }
+  }
+
+  for (const appid of appIds) {
+    const points = byApp.get(appid) ?? [];
+    const dataPoints = downsampleToPoints(points, targetPoints);
+    result.set(appid, {
+      dataPoints,
+      trend: calculateTrend(dataPoints),
+      growthPct: calculateGrowthPct(dataPoints),
+      peakCCU: peakByApp.get(appid) ?? null,
+    });
+  }
+
+  return result;
+}
+
+function aggregatePortfolioSparklineRows(
+  rows: CcuSnapshotRow[],
+  targetPoints: number
+): CCUSparklineData {
+  if (rows.length === 0) {
     return {
       dataPoints: [],
       trend: 'stable',
@@ -156,24 +246,31 @@ export async function getAppDailyPeakSparkline(
     };
   }
 
-  const row = data[0];
-  const points = Array.isArray(row.sparkline_data) ? row.sparkline_data : [];
+  const byTimeBucket = new Map<string, number>();
+  let overallPeak = 0;
 
-  const dataPoints: number[] = points
-    .map((p) => {
-      if (!p || typeof p !== 'object') return null;
-      const ccu = (p as { ccu?: unknown }).ccu;
-      return typeof ccu === 'number' ? ccu : typeof ccu === 'string' ? Number(ccu) : null;
-    })
-    .filter((v): v is number => v !== null && !Number.isNaN(v));
+  for (const row of rows) {
+    const time = new Date(row.snapshot_time);
+    time.setMinutes(0, 0, 0);
+    const bucket = time.toISOString();
 
-  const peakCCU = dataPoints.length > 0 ? Math.max(...dataPoints) : null;
+    byTimeBucket.set(bucket, (byTimeBucket.get(bucket) ?? 0) + row.player_count);
+    if (row.player_count > overallPeak) {
+      overallPeak = row.player_count;
+    }
+  }
+
+  const sortedBuckets = Array.from(byTimeBucket.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([time, ccu]) => ({ time: new Date(time), ccu }));
+
+  const dataPoints = downsampleToPoints(sortedBuckets, targetPoints);
 
   return {
     dataPoints,
     trend: calculateTrend(dataPoints),
     growthPct: calculateGrowthPct(dataPoints),
-    peakCCU,
+    peakCCU: overallPeak,
   };
 }
 
@@ -184,7 +281,6 @@ export async function getCCUSparklinesBatch(
   appIds: number[],
   timeRange: TimeRange = '7d'
 ): Promise<Map<number, CCUSparklineData>> {
-  const supabase = getServiceSupabase();
   const { cutoffTime, targetPoints } = getTimeRangeParams(timeRange);
 
   const result = new Map<number, CCUSparklineData>();
@@ -194,71 +290,8 @@ export async function getCCUSparklinesBatch(
     return result;
   }
 
-  // Fetch all snapshots for all apps in one query
-  const { data, error } = await (supabase as unknown as {
-    from: (table: string) => {
-      select: (cols: string) => {
-        in: (col: string, vals: number[]) => {
-          gte: (col: string, val: string) => {
-            order: (col: string, opts: { ascending: boolean }) => Promise<{
-              data: { appid: number; snapshot_time: string; player_count: number }[] | null;
-              error: Error | null;
-            }>;
-          };
-        };
-      };
-    };
-  })
-    .from('ccu_snapshots')
-    .select('appid, snapshot_time, player_count')
-    .in('appid', appIds)
-    .gte('snapshot_time', cutoffTime.toISOString())
-    .order('snapshot_time', { ascending: true });
-
-  if (error || !data) {
-    // Return empty sparklines for all apps
-    for (const appid of appIds) {
-      result.set(appid, {
-        dataPoints: [],
-        trend: 'stable',
-        growthPct: null,
-        peakCCU: null,
-      });
-    }
-    return result;
-  }
-
-  // Group by appid and track peaks
-  const byApp = new Map<number, { time: Date; ccu: number }[]>();
-  const peakByApp = new Map<number, number>();
-
-  for (const row of data) {
-    // Group points for sparkline
-    if (!byApp.has(row.appid)) byApp.set(row.appid, []);
-    byApp.get(row.appid)!.push({
-      time: new Date(row.snapshot_time),
-      ccu: row.player_count,
-    });
-
-    // Track peak
-    const currentPeak = peakByApp.get(row.appid) ?? 0;
-    if (row.player_count > currentPeak) {
-      peakByApp.set(row.appid, row.player_count);
-    }
-  }
-
-  // Process each app's data
-  for (const appid of appIds) {
-    const points = byApp.get(appid) ?? [];
-    const dataPoints = downsampleToPoints(points, targetPoints);
-    const trend = calculateTrend(dataPoints);
-    const growthPct = calculateGrowthPct(dataPoints);
-    const peakCCU = peakByApp.get(appid) ?? null;
-
-    result.set(appid, { dataPoints, trend, growthPct, peakCCU });
-  }
-
-  return result;
+  const rows = await getCcuSnapshotRows(appIds, cutoffTime);
+  return aggregateSparklineRows(appIds, rows, targetPoints);
 }
 
 /**
@@ -269,7 +302,6 @@ export async function getPortfolioCCUSparkline(
   appIds: number[],
   timeRange: TimeRange = '7d'
 ): Promise<CCUSparklineData> {
-  const supabase = getServiceSupabase();
   const { cutoffTime, targetPoints } = getTimeRangeParams(timeRange);
 
   // Return empty data for empty input
@@ -282,69 +314,6 @@ export async function getPortfolioCCUSparkline(
     };
   }
 
-  // Fetch all snapshots for all apps
-  const { data, error } = await (supabase as unknown as {
-    from: (table: string) => {
-      select: (cols: string) => {
-        in: (col: string, vals: number[]) => {
-          gte: (col: string, val: string) => {
-            order: (col: string, opts: { ascending: boolean }) => Promise<{
-              data: { appid: number; snapshot_time: string; player_count: number }[] | null;
-              error: Error | null;
-            }>;
-          };
-        };
-      };
-    };
-  })
-    .from('ccu_snapshots')
-    .select('appid, snapshot_time, player_count')
-    .in('appid', appIds)
-    .gte('snapshot_time', cutoffTime.toISOString())
-    .order('snapshot_time', { ascending: true });
-
-  if (error || !data || data.length === 0) {
-    return {
-      dataPoints: [],
-      trend: 'stable',
-      growthPct: null,
-      peakCCU: null,
-    };
-  }
-
-  // Group by time bucket and aggregate CCU across all apps
-  // Round to nearest hour for aggregation
-  const byTimeBucket = new Map<string, number>();
-  let overallPeak = 0;
-
-  for (const row of data) {
-    const time = new Date(row.snapshot_time);
-    // Round to nearest hour
-    time.setMinutes(0, 0, 0);
-    const bucket = time.toISOString();
-
-    const current = byTimeBucket.get(bucket) ?? 0;
-    byTimeBucket.set(bucket, current + row.player_count);
-
-    // Track overall peak (single snapshot, not aggregated)
-    if (row.player_count > overallPeak) {
-      overallPeak = row.player_count;
-    }
-  }
-
-  // Convert to sorted array of points
-  const sortedBuckets = Array.from(byTimeBucket.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([time, ccu]) => ({ time: new Date(time), ccu }));
-
-  // Downsample and calculate trend
-  const dataPoints = downsampleToPoints(sortedBuckets, targetPoints);
-  const trend = calculateTrend(dataPoints);
-  const growthPct = calculateGrowthPct(dataPoints);
-
-  // Peak CCU for portfolio is the max of individual peaks, not aggregated
-  // (Games are rarely played simultaneously by the same users)
-  const peakCCU = overallPeak;
-
-  return { dataPoints, trend, growthPct, peakCCU };
+  const rows = await getCcuSnapshotRows(appIds, cutoffTime);
+  return aggregatePortfolioSparklineRows(rows, targetPoints);
 }
