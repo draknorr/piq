@@ -821,6 +821,38 @@ export interface AlertInsert {
   user_id: string;
 }
 
+export interface IssueReportInsert extends JsonRecord {
+  app_context: JsonRecord;
+  app_environment?: string | null;
+  app_release?: string | null;
+  app_version?: string | null;
+  browser_context: JsonRecord;
+  chat_preview?: JsonRecord | null;
+  debug_context: JsonRecord;
+  id: string;
+  include_chat_preview: boolean;
+  issue_type: string;
+  note?: string | null;
+  organization?: string | null;
+  page_context: JsonRecord;
+  route_context: JsonRecord;
+  route_pathname?: string | null;
+  route_url?: string | null;
+  sentry_server_event_id?: string | null;
+  status?: string;
+  user_email?: string | null;
+  user_id?: string | null;
+  user_role?: string | null;
+}
+
+export interface IssueReportSentryIds extends JsonRecord {
+  sentry_client_event_id?: string | null;
+  sentry_feedback_id?: string | null;
+  sentry_replay_id?: string | null;
+  sentry_server_event_id?: string | null;
+  sentry_trace_id?: string | null;
+}
+
 export interface UserPinUpsert {
   display_name: string;
   entity_id: number;
@@ -3299,10 +3331,68 @@ export class TigerAlertsPinsChatRepository {
   }
 }
 
+export class TigerIssueReportsRepository {
+  private readonly sentryColumns = new Set([
+    'sentry_client_event_id',
+    'sentry_feedback_id',
+    'sentry_replay_id',
+    'sentry_server_event_id',
+    'sentry_trace_id',
+  ]);
+
+  constructor(private readonly pool: TigerWriterPool) {}
+
+  async createIssueReport(report: IssueReportInsert): Promise<string | null> {
+    const rows = [report];
+    const columns = formatColumns(rows, ['id', 'issue_type', 'status']);
+    const { rows: resultRows } = await runQuery<IdRow>(
+      this.pool,
+      'issueReports.createIssueReport',
+      `
+        INSERT INTO chat.issue_reports (${columns.join(', ')})
+        SELECT ${columns.join(', ')}
+        FROM jsonb_populate_recordset(NULL::chat.issue_reports, $1::jsonb) AS rows
+        RETURNING id::text AS id
+      `,
+      [jsonRows(rows)]
+    );
+
+    return resultRows[0]?.id ? String(resultRows[0].id) : null;
+  }
+
+  async attachSentryIds(params: {
+    ids: IssueReportSentryIds;
+    reportId: string;
+    userId: string;
+  }): Promise<number> {
+    const entries = allowedEntries(params.ids, this.sentryColumns);
+    if (entries.length === 0) {
+      return 0;
+    }
+
+    const setClauses = entries.map(([column], index) => `${column} = $${index + 3}`);
+    setClauses.push('updated_at = now()');
+    const result = await runQuery(
+      this.pool,
+      'issueReports.attachSentryIds',
+      `
+        UPDATE chat.issue_reports
+        SET ${setClauses.join(', ')}
+        WHERE id = $1::uuid
+          AND user_id = $2::uuid
+      `,
+      [params.reportId, params.userId, ...entries.map(([, value]) => value)]
+    );
+
+    return result.rowCount ?? 0;
+  }
+}
+
 export class TigerWriter {
   readonly alertsPinsChat: TigerAlertsPinsChatRepository;
   readonly catalog: TigerCatalogRepository;
   readonly embeddings: TigerEmbeddingsRepository;
+  readonly issueReports: TigerIssueReportsRepository;
   readonly metrics: TigerMetricsRepository;
   readonly ops: TigerOpsRepository;
   readonly reviews: TigerReviewsRepository;
@@ -3316,6 +3406,7 @@ export class TigerWriter {
     this.reviews = new TigerReviewsRepository(pool, this.metrics, this.syncStatus);
     this.embeddings = new TigerEmbeddingsRepository(pool);
     this.alertsPinsChat = new TigerAlertsPinsChatRepository(pool);
+    this.issueReports = new TigerIssueReportsRepository(pool);
   }
 }
 

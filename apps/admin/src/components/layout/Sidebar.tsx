@@ -28,6 +28,7 @@ import { useGlobalSearch } from '@/components/search';
 import { ThemeToggle } from '@/components/ui';
 import { AlertBadge } from '@/components/alerts';
 import { createBrowserClient } from '@/lib/supabase/client';
+import { ReportIssueMenuButton } from '@/features/report-issue';
 
 interface NavItem {
   href: string;
@@ -346,6 +347,16 @@ export function Sidebar() {
 
           {/* Footer */}
           <div className="border-t border-border-subtle p-4">
+            <ReportIssueMenuButton
+              onOpen={close}
+              className="
+                mb-3 flex w-full items-center gap-2 rounded-lg border border-border-subtle
+                bg-surface-elevated px-3 py-2 text-body-sm font-medium text-text-secondary
+                transition-colors hover:border-border-muted hover:text-text-primary
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary
+                focus-visible:ring-offset-2 focus-visible:ring-offset-surface-raised
+              "
+            />
             <Link
               href="/updates"
               prefetch={false}

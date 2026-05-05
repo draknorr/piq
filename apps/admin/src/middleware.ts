@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   '/auth/confirm',
   '/api/auth/callback',
   '/api/auth/validate-email',
+  '/_piq/ingest',
 ];
 
 // Admin-only paths (requires admin role)
