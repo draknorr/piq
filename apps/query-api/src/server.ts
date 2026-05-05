@@ -18,6 +18,7 @@ import {
   type GetRelatedEntitiesResponse,
   type GetUserContextRequest,
   type GetYoutubeGameCoverageRequest,
+  type GetYoutubeMarketPulseRequest,
   loadQueryApiConfig,
   loadSourceBaselineConfig,
   type QueryMonthlyPlaytimeRequest,
@@ -93,6 +94,7 @@ interface QueryApiService {
   getRelatedEntities: DataPlaneService['getRelatedEntities'];
   getUserContext: DataPlaneService['getUserContext'];
   getYoutubeGameCoverage: DataPlaneService['getYoutubeGameCoverage'];
+  getYoutubeMarketPulse: DataPlaneService['getYoutubeMarketPulse'];
   healthCheck: DataPlaneService['healthCheck'];
   queryMonthlyPlaytime: DataPlaneService['queryMonthlyPlaytime'];
   rankEntities: DataPlaneService['rankEntities'];
@@ -103,6 +105,47 @@ interface QueryApiService {
   searchDocuments: DataPlaneService['searchDocuments'];
   semanticSearch: DataPlaneService['semanticSearch'];
   traceMetricHistory: DataPlaneService['traceMetricHistory'];
+}
+
+const YOUTUBE_MARKET_PULSE_CACHE_TTL_MS = 10 * 60 * 1000;
+const youtubeMarketPulseCache = new Map<string, { expiresAt: number; result: unknown }>();
+
+function youtubeMarketPulseCacheKey(body: GetYoutubeMarketPulseRequest): string {
+  return JSON.stringify({
+    contentClass: body.contentClass ?? null,
+    limit: body.limit ?? null,
+    offset: body.offset ?? null,
+    sort: body.sort ?? null,
+    window: body.window ?? null,
+  });
+}
+
+async function getCachedYoutubeMarketPulse(
+  dataPlane: QueryApiService,
+  body: GetYoutubeMarketPulseRequest
+): Promise<unknown> {
+  const now = Date.now();
+  const key = youtubeMarketPulseCacheKey(body);
+  const cached = youtubeMarketPulseCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+
+  const result = await dataPlane.getYoutubeMarketPulse(body);
+  youtubeMarketPulseCache.set(key, {
+    expiresAt: now + YOUTUBE_MARKET_PULSE_CACHE_TTL_MS,
+    result,
+  });
+
+  if (youtubeMarketPulseCache.size > 200) {
+    for (const [cacheKey, value] of youtubeMarketPulseCache.entries()) {
+      if (value.expiresAt <= now || youtubeMarketPulseCache.size > 200) {
+        youtubeMarketPulseCache.delete(cacheKey);
+      }
+    }
+  }
+
+  return result;
 }
 
 async function executeWithSourceFallback<T>(params: {
@@ -408,6 +451,13 @@ export function createQueryApiRequestHandler(params: {
       if (request.method === 'POST' && url.pathname === '/v1/contracts/get-youtube-game-coverage') {
         const body = await readJsonBody<GetYoutubeGameCoverageRequest>(request);
         const result = await dataPlane.getYoutubeGameCoverage(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/contracts/get-youtube-market-pulse') {
+        const body = await readJsonBody<GetYoutubeMarketPulseRequest>(request);
+        const result = await getCachedYoutubeMarketPulse(dataPlane, body);
         sendJson(response, 200, result);
         return;
       }

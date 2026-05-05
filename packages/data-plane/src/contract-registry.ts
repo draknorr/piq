@@ -324,4 +324,25 @@ export const CONTRACT_REGISTRY: QueryContractDescriptor[] = [
       'latest or fastest-growing matched videos',
     ],
   },
+  {
+    name: 'getYoutubeMarketPulse',
+    endpoint: '/v1/contracts/get-youtube-market-pulse',
+    status: 'ready',
+    requiredRelations: [
+      'apps',
+      'latest_daily_metrics',
+      'docs_youtube_videos',
+      'docs_youtube_channels',
+      'docs_youtube_video_matches',
+      'metrics_youtube_video_snapshots',
+      'metrics_youtube_game_daily',
+    ],
+    description:
+      'Return a top-Steam-games YouTube pulse board with latest videos, creator breadth, format mix, and matched view movement.',
+    naturalLanguageStrength: [
+      'big-picture YouTube activity across top Steam games',
+      'spot creator trends and latest videos',
+      'shorts versus long-form YouTube pulse',
+    ],
+  },
 ];

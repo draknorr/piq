@@ -2585,6 +2585,9 @@ test('getYoutubeGameCoverage returns latest matched videos for a supported title
     }],
     totalRows: 27,
   });
+  (service as any).queryYoutubeVideoLanguageOptions = async () => [
+    { code: 'en', label: 'English', videoCount: 27 },
+  ];
 
   const result = await service.getYoutubeGameCoverage({
     entityUid: '11111111-1111-4111-8111-111111111111',
@@ -2656,6 +2659,9 @@ test('getYoutubeGameCoverage supports expanded windows for latest-video answers'
       totalRows: 1,
     };
   };
+  (service as any).queryYoutubeVideoLanguageOptions = async () => [
+    { code: 'en', label: 'English', videoCount: 1 },
+  ];
 
   const result = await service.getYoutubeGameCoverage({
     entityUid: '11111111-1111-4111-8111-111111111111',
@@ -2723,6 +2729,9 @@ test('getYoutubeGameCoverage forwards row pagination for latest-video answers', 
       totalRows: 24,
     };
   };
+  (service as any).queryYoutubeVideoLanguageOptions = async () => [
+    { code: 'en', label: 'English', videoCount: 24 },
+  ];
 
   const result = await service.getYoutubeGameCoverage({
     entityUid: '11111111-1111-4111-8111-111111111111',
@@ -2790,4 +2799,72 @@ test('getYoutubeGameCoverage supports expanded windows for cadence answers', asy
   assert.equal(receivedWindow, '14d');
   assert.equal(result.cadence?.window, '14d');
   assert.equal(result.cadence?.newMatchedVideos, 31);
+});
+
+test('getYoutubeMarketPulse normalizes filters and returns market rows', async () => {
+  const service = createService();
+  let receivedParams: Record<string, unknown> | null = null;
+
+  (service as any).getBlockingTables = async () => [];
+  (service as any).queryYoutubeMarketPulseRows = async (params: Record<string, unknown>) => {
+    receivedParams = params;
+    return {
+      items: [{
+        appid: 1149460,
+        ccuPeak: 10000,
+        contentMix: [{
+          contentClass: 'short',
+          currentViews: 120000,
+          matchedPrimaryVideoCount: 42,
+          newMatchedVideos: 8,
+          viewDelta: 50000,
+        }],
+        coverageQuality: 'strong',
+        currentViews: 120000,
+        dominantContentClass: 'short',
+        entityUid: 'steam:game:1149460',
+        latestSnapshotAt: '2026-05-05T03:49:57.000Z',
+        latestVideos: [],
+        matchedPrimaryVideoCount: 42,
+        name: 'ARC Raiders',
+        newMatchedVideos: 8,
+        reviewScore: 85,
+        steamRank: 1,
+        totalReviews: 12000,
+        uploadChannels: 7,
+        viewDelta: 50000,
+      }],
+      summary: {
+        currentViews: 120000,
+        gamesAnalyzed: 1,
+        gamesWithCoverage: 1,
+        latestSnapshotAt: '2026-05-05T03:49:57.000Z',
+        newMatchedVideos: 8,
+        uploadChannels: 7,
+        viewDelta: 50000,
+      },
+      totalRows: 1,
+    };
+  };
+
+  const result = await service.getYoutubeMarketPulse({
+    contentClass: 'short',
+    limit: 999,
+    offset: 2,
+    sort: 'youtube_velocity',
+    window: '7d',
+  });
+
+  assert.deepEqual(receivedParams, {
+    contentClass: 'short',
+    limit: 100,
+    offset: 2,
+    sort: 'youtube_velocity',
+    window: '7d',
+  });
+  assert.equal(result.availability.state, 'ready');
+  assert.equal(result.items[0]?.name, 'ARC Raiders');
+  assert.equal(result.pagination.limit, 100);
+  assert.equal(result.pagination.hasPreviousPage, true);
+  assert.equal(result.sufficientToAnswer, true);
 });
