@@ -4,6 +4,7 @@ import { GeistMono } from 'geist/font/mono';
 import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/jetbrains-mono';
 import { ThemeProvider } from '@/contexts/ThemeContext';
+import { ReportIssueRoot } from '@/features/report-issue';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -58,7 +59,7 @@ export default function RootLayout({
       <body className="min-h-screen-safe bg-surface font-sans antialiased">
         <Providers>
           <ThemeProvider>
-            {children}
+            <ReportIssueRoot>{children}</ReportIssueRoot>
           </ThemeProvider>
         </Providers>
       </body>

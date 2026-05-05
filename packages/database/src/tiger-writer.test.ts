@@ -238,6 +238,66 @@ test('metrics.insertCcuSnapshots uses Tiger table row typing for JSON payloads',
   );
 });
 
+test('issueReports.createIssueReport inserts into chat.issue_reports with JSON row typing', async () => {
+  const pool = new CapturingPool([
+    result([{ id: '00000000-0000-0000-0000-000000000001' }]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const id = await writer.issueReports.createIssueReport({
+    app_context: { environment: 'production' },
+    browser_context: { userAgent: 'test' },
+    debug_context: {},
+    id: '00000000-0000-0000-0000-000000000001',
+    include_chat_preview: false,
+    issue_type: 'UI bug or layout issue',
+    page_context: {},
+    route_context: { pathname: '/apps' },
+    route_pathname: '/apps',
+    route_url: 'https://publisheriq.app/apps',
+    status: 'open',
+    user_id: '00000000-0000-0000-0000-000000000002',
+  });
+
+  assert.equal(id, '00000000-0000-0000-0000-000000000001');
+  assert.match(pool.calls[0]?.sql ?? '', /INSERT INTO chat\.issue_reports/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /jsonb_populate_recordset\(NULL::chat\.issue_reports/
+  );
+  assert.equal(
+    JSON.parse(String(pool.calls[0]?.values?.[0]))[0].issue_type,
+    'UI bug or layout issue'
+  );
+});
+
+test('issueReports.attachSentryIds only updates allowlisted Sentry columns for owner', async () => {
+  const pool = new CapturingPool([result([], 1)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.issueReports.attachSentryIds({
+    ids: {
+      bad_column: 'ignored',
+      sentry_client_event_id: 'client-event',
+      sentry_feedback_id: 'feedback',
+    },
+    reportId: '00000000-0000-0000-0000-000000000001',
+    userId: '00000000-0000-0000-0000-000000000002',
+  });
+
+  assert.equal(updated, 1);
+  assert.match(pool.calls[0]?.sql ?? '', /sentry_client_event_id = \$3/);
+  assert.match(pool.calls[0]?.sql ?? '', /sentry_feedback_id = \$4/);
+  assert.match(pool.calls[0]?.sql ?? '', /user_id = \$2::uuid/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /bad_column/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    '00000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000002',
+    'client-event',
+    'feedback',
+  ]);
+});
+
 test('metrics.listPriceSyncAppids reads due price candidates from ops.sync_status', async () => {
   const pool = new CapturingPool([result([{ appid: 10 }, { appid: 20 }])]);
   const writer = createTigerWriterForPool(pool);
