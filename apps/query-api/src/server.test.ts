@@ -19,6 +19,7 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
     getRelatedEntities: async () => ({ ok: true }),
     getUserContext: async () => ({ ok: true }),
     getYoutubeGameCoverage: async () => ({ ok: true }),
+    getYoutubeMarketPulse: async () => ({ ok: true }),
     healthCheck: async () => ({
       capturedAt: '2026-04-01T00:00:00.000Z',
       source: 'tiger',
@@ -459,18 +460,23 @@ test('query-api routes get-youtube-game-coverage requests to the data-plane serv
             commentCount: 40,
             confidenceScore: 0.98,
             contentClass: 'standard_video',
+            defaultAudioLanguage: 'en',
+            defaultLanguage: 'en',
             firstSnapshotAt: null,
             growthPct: null,
+            languageCode: 'en',
             lastSnapshotAt: null,
             likeCount: 320,
             matchedAlias: 'ARC Raiders',
             publishedAt: '2026-04-01T00:00:00.000Z',
+            thumbnailUrl: 'https://i.ytimg.com/vi/video-1/mqdefault.jpg',
             title: 'ARC Raiders preview',
             url: 'https://www.youtube.com/watch?v=video-1',
             videoId: 'video-1',
             viewCount: 12000,
             viewDelta: null,
           }],
+          languageOptions: [{ code: 'en', label: 'English', videoCount: 42 }],
           limit: 10,
           provenance: {
             capturedAt: '2026-04-01T00:00:00.000Z',
@@ -522,6 +528,88 @@ test('query-api routes get-youtube-game-coverage requests to the data-plane serv
       });
       const payload = await response.json() as { items: Array<{ title: string }> };
       assert.equal(payload.items[0]?.title, 'ARC Raiders preview');
+    }
+  );
+});
+
+test('query-api routes get-youtube-market-pulse requests to the data-plane service', async () => {
+  let receivedBody: unknown = null;
+
+  await withServer(
+    createDataPlaneStub({
+      getYoutubeMarketPulse: async (body: unknown) => {
+        receivedBody = body;
+        return {
+          availability: { blockingTables: [], reason: null, state: 'ready' },
+          contentClass: 'short',
+          items: [{
+            appid: 1149460,
+            ccuPeak: 10000,
+            contentMix: [],
+            coverageQuality: 'strong',
+            currentViews: 120000,
+            dominantContentClass: 'short',
+            entityUid: 'steam:game:1149460',
+            latestSnapshotAt: '2026-05-05T03:49:57.000Z',
+            latestVideos: [],
+            matchedPrimaryVideoCount: 42,
+            name: 'ARC Raiders',
+            newMatchedVideos: 8,
+            reviewScore: 85,
+            steamRank: 1,
+            totalReviews: 12000,
+            uploadChannels: 7,
+            viewDelta: 50000,
+          }],
+          limit: 50,
+          offset: 0,
+          pagination: {
+            hasNextPage: false,
+            hasPreviousPage: false,
+            limit: 50,
+            offset: 0,
+            totalRows: 1,
+          },
+          provenance: {
+            capturedAt: '2026-05-05T00:00:00.000Z',
+            source: 'tiger',
+            tables: ['metrics.youtube_game_daily'],
+          },
+          sort: 'youtube_velocity',
+          sufficientToAnswer: true,
+          summary: {
+            currentViews: 120000,
+            gamesAnalyzed: 1,
+            gamesWithCoverage: 1,
+            latestSnapshotAt: '2026-05-05T03:49:57.000Z',
+            newMatchedVideos: 8,
+            uploadChannels: 7,
+            viewDelta: 50000,
+          },
+          window: '7d',
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(`${origin}/v1/contracts/get-youtube-market-pulse`, {
+        body: JSON.stringify({
+          contentClass: 'short',
+          sort: 'youtube_velocity',
+          window: '7d',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(receivedBody, {
+        contentClass: 'short',
+        sort: 'youtube_velocity',
+        window: '7d',
+      });
+      const payload = await response.json() as { items: Array<{ name: string }> };
+      assert.equal(payload.items[0]?.name, 'ARC Raiders');
     }
   );
 });

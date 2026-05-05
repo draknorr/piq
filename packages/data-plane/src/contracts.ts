@@ -1234,6 +1234,9 @@ export type YoutubeCoverageWindow = 'current' | `${YoutubeCoverageWindowDays}d`;
 export interface GetYoutubeGameCoverageRequest {
   contentClass?: YoutubeContentClass | null;
   entityUid: string;
+  includeLanguageOptions?: boolean;
+  includeSummary?: boolean;
+  language?: string | null;
   limit?: number;
   offset?: number;
   view: YoutubeGameCoverageView;
@@ -1248,11 +1251,15 @@ export interface YoutubeGameCoverageVideoItem {
   commentCount: number | null;
   confidenceScore: number | null;
   contentClass: YoutubeContentClass;
+  defaultAudioLanguage: string | null;
+  defaultLanguage: string | null;
   firstSnapshotAt: string | null;
   growthPct: number | null;
+  languageCode: string | null;
   likeCount: number | null;
   matchedAlias: string | null;
   publishedAt: string | null;
+  thumbnailUrl: string | null;
   url: string;
   videoId: string;
   viewCount: number | null;
@@ -1323,12 +1330,19 @@ export interface YoutubeGameCoveragePagination {
   totalRows: number;
 }
 
+export interface YoutubeGameCoverageLanguageOption {
+  code: string;
+  label: string;
+  videoCount: number;
+}
+
 export interface GetYoutubeGameCoverageResponse {
   availability: YoutubeGameCoverageAvailability;
   contentClass: YoutubeContentClass | null;
   creators: YoutubeGameCoverageCreatorItem[];
   entity: YoutubeGameCoverageEntity;
   items: YoutubeGameCoverageVideoItem[];
+  languageOptions: YoutubeGameCoverageLanguageOption[];
   limit: number;
   pagination?: YoutubeGameCoveragePagination | null;
   provenance: QueryProvenance;
@@ -1338,6 +1352,84 @@ export interface GetYoutubeGameCoverageResponse {
   view: YoutubeGameCoverageView;
   cadence: YoutubeGameCoverageCadenceItem | null;
   contentMix: YoutubeGameCoverageContentMixItem[];
+}
+
+export type YoutubeMarketPulseSort =
+  | 'steam_rank'
+  | 'youtube_velocity'
+  | 'new_videos'
+  | 'creator_breadth';
+
+export interface GetYoutubeMarketPulseRequest {
+  contentClass?: YoutubeContentClass | null;
+  limit?: number;
+  offset?: number;
+  sort?: YoutubeMarketPulseSort;
+  window?: Extract<YoutubeCoverageWindow, '1d' | '7d' | '30d'>;
+}
+
+export interface YoutubeMarketPulseVideoItem {
+  channelId: string;
+  channelTitle: string;
+  contentClass: YoutubeContentClass;
+  publishedAt: string | null;
+  title: string;
+  url: string;
+  videoId: string;
+  viewCount: number | null;
+  viewDelta: number | null;
+}
+
+export interface YoutubeMarketPulseContentMixItem {
+  contentClass: YoutubeContentClass;
+  currentViews: number;
+  matchedPrimaryVideoCount: number;
+  newMatchedVideos: number;
+  viewDelta: number;
+}
+
+export interface YoutubeMarketPulseItem {
+  appid: number;
+  ccuPeak: number | null;
+  contentMix: YoutubeMarketPulseContentMixItem[];
+  coverageQuality: 'strong' | 'limited' | 'noisy' | 'none';
+  currentViews: number;
+  dominantContentClass: YoutubeContentClass | null;
+  entityUid: string;
+  latestSnapshotAt: string | null;
+  latestVideos: YoutubeMarketPulseVideoItem[];
+  matchedPrimaryVideoCount: number;
+  name: string;
+  newMatchedVideos: number;
+  reviewScore: number | null;
+  steamRank: number;
+  totalReviews: number | null;
+  uploadChannels: number;
+  viewDelta: number;
+}
+
+export interface YoutubeMarketPulseSummary {
+  currentViews: number;
+  gamesAnalyzed: number;
+  gamesWithCoverage: number;
+  latestSnapshotAt: string | null;
+  newMatchedVideos: number;
+  uploadChannels: number;
+  viewDelta: number;
+}
+
+export interface GetYoutubeMarketPulseResponse {
+  availability: YoutubeGameCoverageAvailability;
+  contentClass: YoutubeContentClass | null;
+  items: YoutubeMarketPulseItem[];
+  limit: number;
+  offset: number;
+  pagination: YoutubeGameCoveragePagination;
+  provenance: QueryProvenance;
+  sort: YoutubeMarketPulseSort;
+  sufficientToAnswer: boolean;
+  summary: YoutubeMarketPulseSummary;
+  window: Extract<YoutubeCoverageWindow, '1d' | '7d' | '30d'>;
 }
 
 export interface QueryContractDescriptor {
@@ -1362,7 +1454,8 @@ export interface QueryContractDescriptor {
     | 'getUserContext'
     | 'getRelatedEntities'
     | 'continueResultSet'
-    | 'getYoutubeGameCoverage';
+    | 'getYoutubeGameCoverage'
+    | 'getYoutubeMarketPulse';
   naturalLanguageStrength: string[];
   requiredRelations: DataPlaneRelationKey[];
   status: ContractStatus;

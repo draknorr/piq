@@ -39,6 +39,8 @@ import type {
   GetUserContextResponse,
   GetYoutubeGameCoverageRequest,
   GetYoutubeGameCoverageResponse,
+  GetYoutubeMarketPulseRequest,
+  GetYoutubeMarketPulseResponse,
   MatchQuality,
   QueryProvenance,
   QueryMonthlyPlaytimeRequest,
@@ -86,10 +88,15 @@ import type {
   YoutubeGameCoverageContentMixItem,
   YoutubeGameCoverageCreatorItem,
   YoutubeGameCoverageEntity,
+  YoutubeGameCoverageLanguageOption,
   YoutubeGameCoveragePagination,
   YoutubeGameCoverageSummary,
   YoutubeGameCoverageVideoItem,
   YoutubeGameCoverageView,
+  YoutubeMarketPulseContentMixItem,
+  YoutubeMarketPulseItem,
+  YoutubeMarketPulseSort,
+  YoutubeMarketPulseVideoItem,
 } from './contracts.js';
 import { CONTRACT_REGISTRY } from './contract-registry.js';
 import { loadDataPlaneConfig, type DataPlaneConfig } from './config.js';
@@ -248,21 +255,30 @@ interface DailyMetricHistoryRow extends QueryResultRow {
 interface YoutubeVideoCoverageRow extends QueryResultRow {
   channel_country: string | null;
   channel_id: string;
-  channel_subscriber_count: number | null;
+  channel_subscriber_count: number | string | null;
   channel_title: string;
-  comment_count: number | null;
+  comment_count: number | string | null;
   confidence_score: number | null;
   content_class: YoutubeContentClass;
+  default_audio_language: string | null;
+  default_language: string | null;
   first_snapshot_at: string | null;
   growth_pct: number | null;
   last_snapshot_at: string | null;
-  like_count: number | null;
+  language_code: string | null;
+  like_count: number | string | null;
   matched_alias: string | null;
   published_at: string | null;
+  thumbnail_url: string | null;
   title: string;
   video_id: string;
-  view_count: number | null;
-  view_delta: number | null;
+  view_count: number | string | null;
+  view_delta: number | string | null;
+}
+
+interface YoutubeLanguageOptionRow extends QueryResultRow {
+  language_code: string | null;
+  video_count: number | string | null;
 }
 
 interface YoutubeCreatorCoverageRow extends QueryResultRow {
@@ -307,6 +323,45 @@ interface YoutubeCoverageSummaryRow extends QueryResultRow {
 interface YoutubeCoveragePage<T> {
   rows: T[];
   totalRows: number;
+}
+
+interface YoutubeMarketPulseRow extends QueryResultRow {
+  ambiguous_match_count: number | string | null;
+  ccu_peak: number | string | null;
+  content_mix: unknown;
+  current_views: number | string | null;
+  dominant_content_class: YoutubeContentClass | null;
+  latest_snapshot_at: string | null;
+  latest_videos: unknown;
+  matched_primary_video_count: number | string | null;
+  name: string;
+  new_matched_videos: number | string | null;
+  rejected_match_count: number | string | null;
+  review_score: number | string | null;
+  steam_rank: number | string;
+  total_reviews: number | string | null;
+  total_rows: number | string;
+  upload_channels: number | string | null;
+  view_delta: number | string | null;
+  appid: number | string;
+}
+
+interface YoutubeMarketPulseCurrentViewRow extends QueryResultRow {
+  appid: number | string;
+  content_class: YoutubeContentClass;
+  current_views: number | string | null;
+}
+
+interface YoutubeMarketPulseLatestVideoRow extends QueryResultRow {
+  appid: number | string;
+  channel_id: string | null;
+  channel_title: string | null;
+  content_class: YoutubeContentClass;
+  published_at: string | null;
+  title: string | null;
+  video_id: string;
+  view_count: number | string | null;
+  view_delta: number | string | null;
 }
 
 interface ChangeEventRow extends QueryResultRow {
@@ -772,6 +827,7 @@ const DEFAULT_DOCUMENT_SEARCH_DAYS = 30;
 const DEFAULT_DOCUMENT_LIMIT = 8;
 const DEFAULT_USER_ALERT_LIMIT = 10;
 const DEFAULT_YOUTUBE_LIMIT = 10;
+const DEFAULT_YOUTUBE_MARKET_LIMIT = 50;
 const MAX_ENTITY_LIMIT = 15;
 const MAX_CHAT_STRICT_ENTITY_LIMIT = 50;
 const AUTOCOMPLETE_ENTITY_SCAN_BUFFER = 25;
@@ -798,6 +854,8 @@ const MAX_DOCUMENT_SEARCH_DAYS = 90;
 const MAX_DOCUMENT_LIMIT = 10;
 const MAX_USER_ALERT_LIMIT = 50;
 const MAX_YOUTUBE_LIMIT = 25;
+const MAX_YOUTUBE_MARKET_LIMIT = 100;
+const YOUTUBE_MARKET_CANDIDATE_LIMIT = 200;
 const EXPLAIN_CHANGE_MOMENT_GAP_MS = 6 * 60 * 60 * 1000;
 const EXPLAIN_NEWS_PROXIMITY_MS = 24 * 60 * 60 * 1000;
 const ALLOW_EMPTY_RELATIONS = new Set<DataPlaneRelationKey>([
@@ -1205,7 +1263,7 @@ function normalizePositiveIntegers(values: number[] | undefined, max = 25): numb
   ).slice(0, max);
 }
 
-function parseCountValue(value: string | number | null | undefined): number {
+function parseCountValue(value: unknown): number {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : 0;
   }
@@ -1216,6 +1274,14 @@ function parseCountValue(value: string | number | null | undefined): number {
   }
 
   return 0;
+}
+
+function parseNullableCountValue(value: unknown): number | null {
+  if (value == null) {
+    return null;
+  }
+
+  return parseCountValue(value);
 }
 
 function normalizeOffset(value: number | undefined): number {
@@ -3947,6 +4013,9 @@ export class DataPlaneService {
     const view = this.normalizeYoutubeCoverageView(request.view);
     const resolvedWindow = this.normalizeYoutubeCoverageWindow(view, request.window ?? null);
     const contentClass = this.normalizeYoutubeContentClass(request.contentClass ?? null);
+    const includeSummary = request.includeSummary ?? true;
+    const includeLanguageOptions = request.includeLanguageOptions ?? true;
+    const language = this.normalizeYoutubeCoverageLanguage(request.language ?? null);
     const limit = normalizeLimit(request.limit, DEFAULT_YOUTUBE_LIMIT, MAX_YOUTUBE_LIMIT);
     const offset = normalizeOffset(request.offset);
     const entity = await this.resolveCoreEntity(request.entityUid.trim(), {
@@ -4093,10 +4162,12 @@ export class DataPlaneService {
       });
     }
 
-    const summary = await this.queryYoutubeCoverageSummary({
-      appid,
-      contentClass,
-    });
+    const summary = includeSummary
+      ? await this.queryYoutubeCoverageSummary({
+          appid,
+          contentClass,
+        })
+      : this.buildEmptyYoutubeCoverageSummary();
     const nonCurrentWindow: Exclude<YoutubeCoverageWindow, 'current'> =
       resolvedWindow === 'current' ? '7d' : resolvedWindow;
     const latestVideosPage =
@@ -4104,6 +4175,7 @@ export class DataPlaneService {
         ? await this.queryYoutubeLatestVideoRows({
             appid,
             contentClass,
+            language,
             limit,
             offset,
             window: resolvedWindow,
@@ -4114,6 +4186,7 @@ export class DataPlaneService {
         ? await this.queryYoutubeTopVideoRows({
             appid,
             contentClass,
+            language,
             limit,
             offset,
             window: resolvedWindow,
@@ -4124,6 +4197,7 @@ export class DataPlaneService {
         ? await this.queryYoutubeVideoGrowthRows({
             appid,
             contentClass,
+            language,
             limit,
             offset,
             window: nonCurrentWindow,
@@ -4155,6 +4229,15 @@ export class DataPlaneService {
             window: nonCurrentWindow,
           })
         : null;
+    const languageOptions =
+      includeLanguageOptions
+      && (view === 'latest_videos' || view === 'top_videos' || view === 'video_growth')
+        ? await this.queryYoutubeVideoLanguageOptions({
+            appid,
+            contentClass,
+            window: view === 'video_growth' ? nonCurrentWindow : resolvedWindow,
+          })
+        : [];
     const pagination =
       latestVideosPage
         ? this.buildYoutubePagination({
@@ -4198,6 +4281,7 @@ export class DataPlaneService {
         : topVideosPage?.rows.length
           ? topVideosPage.rows
           : growthVideosPage?.rows ?? [],
+      languageOptions,
       limit,
       pagination,
       provenance,
@@ -4205,6 +4289,106 @@ export class DataPlaneService {
       summary,
       view,
     });
+  }
+
+  async getYoutubeMarketPulse(
+    request: GetYoutubeMarketPulseRequest = {}
+  ): Promise<GetYoutubeMarketPulseResponse> {
+    const window = this.normalizeYoutubeMarketPulseWindow(request.window ?? '7d');
+    const contentClass = this.normalizeYoutubeContentClass(request.contentClass ?? null);
+    const sort = this.normalizeYoutubeMarketPulseSort(request.sort ?? 'steam_rank');
+    const limit = normalizeLimit(
+      request.limit,
+      DEFAULT_YOUTUBE_MARKET_LIMIT,
+      MAX_YOUTUBE_MARKET_LIMIT
+    );
+    const offset = normalizeOffset(request.offset);
+    const provenance = buildProvenance(this.config.source, [
+      this.relation('apps').sql,
+      this.relation('latest_daily_metrics').sql,
+      this.relation('docs_youtube_videos').sql,
+      this.relation('docs_youtube_channels').sql,
+      this.relation('docs_youtube_video_matches').sql,
+      this.relation('metrics_youtube_video_snapshots').sql,
+      this.relation('metrics_youtube_game_daily').sql,
+    ]);
+
+    if (this.config.source !== 'tiger') {
+      return {
+        availability: {
+          blockingTables: [this.relation('docs_youtube_videos').sql],
+          reason: 'YouTube market pulse is only available from the Tiger-backed query runtime.',
+          state: 'unavailable',
+        },
+        contentClass,
+        items: [],
+        limit,
+        offset,
+        pagination: this.buildYoutubePagination({ limit, offset, totalRows: 0 }),
+        provenance,
+        sort,
+        sufficientToAnswer: false,
+        summary: this.buildEmptyYoutubeMarketPulseSummary(),
+        window,
+      };
+    }
+
+    const blockingTables = await this.getBlockingTables([
+      'apps',
+      'latest_daily_metrics',
+      'docs_youtube_videos',
+      'docs_youtube_channels',
+      'docs_youtube_video_matches',
+      'metrics_youtube_video_snapshots',
+      'metrics_youtube_game_daily',
+    ]);
+
+    if (blockingTables.length > 0) {
+      return {
+        availability: {
+          blockingTables,
+          reason:
+            'YouTube market pulse is not available on this Tiger environment yet because required tables are still empty or missing.',
+          state: 'unavailable',
+        },
+        contentClass,
+        items: [],
+        limit,
+        offset,
+        pagination: this.buildYoutubePagination({ limit, offset, totalRows: 0 }),
+        provenance,
+        sort,
+        sufficientToAnswer: false,
+        summary: this.buildEmptyYoutubeMarketPulseSummary(),
+        window,
+      };
+    }
+
+    const { items, summary, totalRows } = await this.queryYoutubeMarketPulseRows({
+      contentClass,
+      limit,
+      offset,
+      sort,
+      window,
+    });
+
+    return {
+      availability: {
+        blockingTables: [],
+        reason: null,
+        state: 'ready',
+      },
+      contentClass,
+      items,
+      limit,
+      offset,
+      pagination: this.buildYoutubePagination({ limit, offset, totalRows }),
+      provenance,
+      sort,
+      sufficientToAnswer: items.some((item) => item.matchedPrimaryVideoCount > 0),
+      summary,
+      window,
+    };
   }
 
   async continueResultSet(
@@ -11172,6 +11356,38 @@ export class DataPlaneService {
     );
   }
 
+  private normalizeYoutubeMarketPulseWindow(
+    window: string | null
+  ): Extract<YoutubeCoverageWindow, '1d' | '7d' | '30d'> {
+    const normalized = (window ?? '7d').trim().toLowerCase();
+    if (normalized === '1d' || normalized === '7d' || normalized === '30d') {
+      return normalized;
+    }
+
+    throw new PublisherIQError(
+      'getYoutubeMarketPulse requires a supported time window.',
+      'INVALID_YOUTUBE_MARKET_WINDOW',
+      { window: normalized }
+    );
+  }
+
+  private normalizeYoutubeMarketPulseSort(sort: string): YoutubeMarketPulseSort {
+    if (
+      sort === 'steam_rank'
+      || sort === 'youtube_velocity'
+      || sort === 'new_videos'
+      || sort === 'creator_breadth'
+    ) {
+      return sort;
+    }
+
+    throw new PublisherIQError(
+      'getYoutubeMarketPulse requires a supported sort.',
+      'INVALID_YOUTUBE_MARKET_SORT',
+      { sort }
+    );
+  }
+
   private normalizeYoutubeContentClass(
     value: string | null
   ): YoutubeContentClass | null {
@@ -11192,6 +11408,27 @@ export class DataPlaneService {
       'INVALID_YOUTUBE_CONTENT_CLASS',
       { contentClass: value }
     );
+  }
+
+  private normalizeYoutubeCoverageLanguage(value: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+      return null;
+    }
+
+    if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/.test(normalized)) {
+      throw new PublisherIQError(
+        'getYoutubeGameCoverage received an unsupported language filter.',
+        'INVALID_YOUTUBE_LANGUAGE',
+        { language: normalized }
+      );
+    }
+
+    return normalized;
   }
 
   private normalizeYoutubeCoverageWindow(
@@ -11241,6 +11478,7 @@ export class DataPlaneService {
     creators: YoutubeGameCoverageCreatorItem[];
     entity: YoutubeGameCoverageEntity;
     items: YoutubeGameCoverageVideoItem[];
+    languageOptions?: YoutubeGameCoverageLanguageOption[];
     limit: number;
     pagination: YoutubeGameCoveragePagination | null;
     provenance: QueryProvenance;
@@ -11265,6 +11503,7 @@ export class DataPlaneService {
       creators: params.creators,
       entity: params.entity,
       items: params.items,
+      languageOptions: params.languageOptions ?? [],
       limit: params.limit,
       pagination: params.pagination,
       provenance: params.provenance,
@@ -11288,6 +11527,459 @@ export class DataPlaneService {
       newMatchedVideos30d: 0,
       newMatchedVideos7d: 0,
     };
+  }
+
+  private buildEmptyYoutubeMarketPulseSummary(): GetYoutubeMarketPulseResponse['summary'] {
+    return {
+      currentViews: 0,
+      gamesAnalyzed: 0,
+      gamesWithCoverage: 0,
+      latestSnapshotAt: null,
+      newMatchedVideos: 0,
+      uploadChannels: 0,
+      viewDelta: 0,
+    };
+  }
+
+  private async queryYoutubeMarketPulseRows(params: {
+    contentClass: YoutubeContentClass | null;
+    limit: number;
+    offset: number;
+    sort: YoutubeMarketPulseSort;
+    window: Extract<YoutubeCoverageWindow, '1d' | '7d' | '30d'>;
+  }): Promise<{
+    items: YoutubeMarketPulseItem[];
+    summary: GetYoutubeMarketPulseResponse['summary'];
+    totalRows: number;
+  }> {
+    const appsTable = this.relation('apps').sql;
+    const latestMetricsTable = this.relation('latest_daily_metrics').sql;
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const rollupsTable = this.relation('metrics_youtube_game_daily').sql;
+    const orderBy =
+      params.sort === 'youtube_velocity'
+        ? 'view_delta DESC NULLS LAST, new_matched_videos DESC NULLS LAST, upload_channels DESC NULLS LAST, steam_rank ASC'
+        : params.sort === 'new_videos'
+          ? 'new_matched_videos DESC NULLS LAST, upload_channels DESC NULLS LAST, view_delta DESC NULLS LAST, steam_rank ASC'
+          : params.sort === 'creator_breadth'
+            ? 'upload_channels DESC NULLS LAST, new_matched_videos DESC NULLS LAST, view_delta DESC NULLS LAST, steam_rank ASC'
+            : 'steam_rank ASC';
+
+    const result = await runQuery<YoutubeMarketPulseRow>(
+      `
+        WITH steam_ranked AS (
+          SELECT
+            a.appid,
+            a.name,
+            COALESCE(ldm.ccu_peak, 0) AS ccu_peak,
+            ldm.review_score,
+            ldm.total_reviews,
+            row_number() OVER (
+              ORDER BY COALESCE(ldm.ccu_peak, 0) DESC, COALESCE(ldm.total_reviews, 0) DESC, a.appid ASC
+            )::int AS steam_rank
+          FROM ${appsTable} a
+          LEFT JOIN ${latestMetricsTable} ldm ON ldm.appid = a.appid
+          WHERE a.type = 'game'
+            AND COALESCE(a.is_delisted, FALSE) = FALSE
+            AND COALESCE(a.is_released, TRUE) = TRUE
+          ORDER BY COALESCE(ldm.ccu_peak, 0) DESC, COALESCE(ldm.total_reviews, 0) DESC, a.appid ASC
+          LIMIT ${YOUTUBE_MARKET_CANDIDATE_LIMIT}
+        ),
+        latest_rollup_date AS (
+          SELECT max(metric_date) AS metric_date
+          FROM ${rollupsTable}
+        ),
+        rollups AS (
+          SELECT
+            appid,
+            content_class,
+            matched_primary_video_count::bigint AS matched_primary_video_count,
+            CASE $4::text
+              WHEN '1d' THEN new_matched_videos_1d
+              WHEN '30d' THEN new_matched_videos_30d
+              ELSE new_matched_videos_7d
+            END::bigint AS new_matched_videos,
+            CASE $4::text
+              WHEN '30d' THEN distinct_upload_channels_30d
+              ELSE distinct_upload_channels_7d
+            END::bigint AS upload_channels,
+            CASE $4::text
+              WHEN '1d' THEN matched_video_view_delta_1d
+              WHEN '30d' THEN matched_video_view_delta_7d
+              ELSE matched_video_view_delta_7d
+            END::bigint AS view_delta,
+            latest_snapshot_at::text AS latest_snapshot_at
+          FROM ${rollupsTable}
+          WHERE metric_date = (SELECT metric_date FROM latest_rollup_date)
+            AND ($1::text IS NULL OR content_class = $1::text)
+        ),
+        rollup_totals AS (
+          SELECT
+            appid,
+            sum(matched_primary_video_count)::bigint AS matched_primary_video_count,
+            sum(new_matched_videos)::bigint AS new_matched_videos,
+            sum(upload_channels)::bigint AS upload_channels,
+            sum(view_delta)::bigint AS view_delta,
+            max(latest_snapshot_at)::text AS latest_snapshot_at
+          FROM rollups
+          GROUP BY appid
+        ),
+        content_totals AS (
+          SELECT
+            r.appid,
+            0::bigint AS current_views,
+            sum(r.matched_primary_video_count)::bigint AS matched_primary_video_count,
+            sum(r.new_matched_videos)::bigint AS new_matched_videos,
+            sum(r.view_delta)::bigint AS view_delta,
+            (
+              array_agg(r.content_class ORDER BY r.new_matched_videos DESC, r.view_delta DESC, r.matched_primary_video_count DESC)
+            )[1]::text AS dominant_content_class,
+            jsonb_agg(
+              jsonb_build_object(
+                'contentClass', r.content_class,
+                'currentViews', 0,
+                'matchedPrimaryVideoCount', r.matched_primary_video_count,
+                'newMatchedVideos', r.new_matched_videos,
+                'viewDelta', r.view_delta
+              )
+              ORDER BY
+                CASE r.content_class
+                  WHEN 'standard_video' THEN 1
+                  WHEN 'short' THEN 2
+                  ELSE 3
+                END
+            ) AS content_mix
+          FROM rollups r
+          GROUP BY r.appid
+        ),
+        match_quality AS (
+          SELECT
+            m.appid,
+            count(*) FILTER (WHERE m.match_state = 'ambiguous')::bigint AS ambiguous_match_count,
+            count(*) FILTER (WHERE m.match_state = 'rejected')::bigint AS rejected_match_count
+          FROM ${matchesTable} m
+          JOIN steam_ranked sr ON sr.appid = m.appid
+          GROUP BY m.appid
+        ),
+        ranked AS (
+          SELECT
+            sr.appid,
+            sr.name,
+            sr.ccu_peak,
+            sr.review_score,
+            sr.total_reviews,
+            sr.steam_rank,
+            COALESCE(ct.current_views, 0)::bigint AS current_views,
+            COALESCE(ct.matched_primary_video_count, rt.matched_primary_video_count, 0)::bigint AS matched_primary_video_count,
+            COALESCE(rt.new_matched_videos, ct.new_matched_videos, 0)::bigint AS new_matched_videos,
+            COALESCE(rt.upload_channels, 0)::bigint AS upload_channels,
+            COALESCE(ct.view_delta, 0)::bigint AS view_delta,
+            COALESCE(ct.dominant_content_class, NULL)::text AS dominant_content_class,
+            COALESCE(rt.latest_snapshot_at, NULL)::text AS latest_snapshot_at,
+            COALESCE(ct.content_mix, '[]'::jsonb) AS content_mix,
+            '[]'::jsonb AS latest_videos,
+            COALESCE(mq.ambiguous_match_count, 0)::bigint AS ambiguous_match_count,
+            COALESCE(mq.rejected_match_count, 0)::bigint AS rejected_match_count
+          FROM steam_ranked sr
+          LEFT JOIN content_totals ct ON ct.appid = sr.appid
+          LEFT JOIN rollup_totals rt ON rt.appid = sr.appid
+          LEFT JOIN match_quality mq ON mq.appid = sr.appid
+        ),
+        ordered AS (
+          SELECT *, count(*) OVER ()::int AS total_rows
+          FROM ranked
+          ORDER BY ${orderBy}
+        )
+        SELECT *
+        FROM ordered
+        LIMIT $2
+        OFFSET $3
+      `,
+      [params.contentClass, params.limit, params.offset, params.window],
+      this.config
+    );
+
+    const items = result.rows.map((row) => this.mapYoutubeMarketPulseRow(row));
+    const totalRows = parseCountValue(result.rows[0]?.total_rows);
+    const enrichedItems = await this.enrichYoutubeMarketPulseItems({
+      contentClass: params.contentClass,
+      items,
+    });
+    const summary = enrichedItems.reduce<GetYoutubeMarketPulseResponse['summary']>(
+      (accumulator, item) => ({
+        gamesAnalyzed: totalRows || accumulator.gamesAnalyzed,
+        gamesWithCoverage:
+          accumulator.gamesWithCoverage + (item.matchedPrimaryVideoCount > 0 ? 1 : 0),
+        latestSnapshotAt:
+          !accumulator.latestSnapshotAt
+            ? item.latestSnapshotAt
+            : item.latestSnapshotAt && item.latestSnapshotAt > accumulator.latestSnapshotAt
+              ? item.latestSnapshotAt
+              : accumulator.latestSnapshotAt,
+        newMatchedVideos: accumulator.newMatchedVideos + item.newMatchedVideos,
+        uploadChannels: accumulator.uploadChannels + item.uploadChannels,
+        currentViews: accumulator.currentViews + item.currentViews,
+        viewDelta: accumulator.viewDelta + item.viewDelta,
+      }),
+      {
+        ...this.buildEmptyYoutubeMarketPulseSummary(),
+        gamesAnalyzed: totalRows,
+      }
+    );
+
+    return {
+      items: enrichedItems,
+      summary,
+      totalRows,
+    };
+  }
+
+  private mapYoutubeMarketPulseRow(row: YoutubeMarketPulseRow): YoutubeMarketPulseItem {
+    const matchedPrimaryVideoCount = parseCountValue(row.matched_primary_video_count);
+    const ambiguousMatchCount = parseCountValue(row.ambiguous_match_count);
+    const rejectedMatchCount = parseCountValue(row.rejected_match_count);
+    const noisyMatchCount = ambiguousMatchCount + rejectedMatchCount;
+    const noiseRatio =
+      matchedPrimaryVideoCount > 0
+        ? noisyMatchCount / Math.max(matchedPrimaryVideoCount + noisyMatchCount, 1)
+        : 0;
+    const coverageQuality =
+      matchedPrimaryVideoCount === 0
+        ? 'none'
+        : noiseRatio >= 0.35
+          ? 'noisy'
+          : matchedPrimaryVideoCount >= 20
+            ? 'strong'
+            : 'limited';
+
+    return {
+      appid: parseCountValue(row.appid),
+      ccuPeak: row.ccu_peak == null ? null : parseCountValue(row.ccu_peak),
+      contentMix: this.parseYoutubeMarketContentMix(row.content_mix),
+      coverageQuality,
+      currentViews: parseCountValue(row.current_views),
+      dominantContentClass: this.parseYoutubeContentClassValue(row.dominant_content_class),
+      entityUid: buildEntityUid('steam', 'game', String(parseCountValue(row.appid))),
+      latestSnapshotAt: row.latest_snapshot_at,
+      latestVideos: this.parseYoutubeMarketVideos(row.latest_videos),
+      matchedPrimaryVideoCount,
+      name: row.name,
+      newMatchedVideos: parseCountValue(row.new_matched_videos),
+      reviewScore: row.review_score == null ? null : Number(row.review_score),
+      steamRank: parseCountValue(row.steam_rank),
+      totalReviews: row.total_reviews == null ? null : parseCountValue(row.total_reviews),
+      uploadChannels: parseCountValue(row.upload_channels),
+      viewDelta: parseCountValue(row.view_delta),
+    };
+  }
+
+  private async enrichYoutubeMarketPulseItems(params: {
+    contentClass: YoutubeContentClass | null;
+    items: YoutubeMarketPulseItem[];
+  }): Promise<YoutubeMarketPulseItem[]> {
+    if (params.items.length === 0) {
+      return params.items;
+    }
+
+    const appids = params.items.map((item) => item.appid);
+    const [currentViewsByApp, latestVideosByApp] = await Promise.all([
+      this.queryYoutubeMarketCurrentViewsForApps({
+        appids,
+        contentClass: params.contentClass,
+      }),
+      this.queryYoutubeMarketLatestVideosForApps({
+        appids,
+        contentClass: params.contentClass,
+      }),
+    ]);
+
+    return params.items.map((item) => {
+      const viewRows = currentViewsByApp.get(item.appid) ?? new Map<YoutubeContentClass, number>();
+      const contentMix = item.contentMix.map((mix) => ({
+        ...mix,
+        currentViews: viewRows.get(mix.contentClass) ?? mix.currentViews,
+      }));
+      const currentViews = contentMix.reduce(
+        (total, mix) => total + mix.currentViews,
+        0
+      );
+
+      return {
+        ...item,
+        contentMix,
+        currentViews,
+        latestVideos: latestVideosByApp.get(item.appid) ?? item.latestVideos,
+      };
+    });
+  }
+
+  private async queryYoutubeMarketCurrentViewsForApps(params: {
+    appids: number[];
+    contentClass: YoutubeContentClass | null;
+  }): Promise<Map<number, Map<YoutubeContentClass, number>>> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const result = await runQuery<YoutubeMarketPulseCurrentViewRow>(
+      `
+        SELECT
+          m.appid,
+          v.content_class,
+          COALESCE(sum(COALESCE(v.view_count, 0)), 0)::bigint AS current_views
+        FROM ${matchesTable} m
+        JOIN ${videosTable} v ON v.video_id = m.video_id
+        WHERE m.appid = ANY($1::int[])
+          AND m.match_state = 'matched_primary'
+          AND ($2::text IS NULL OR v.content_class = $2::text)
+        GROUP BY m.appid, v.content_class
+      `,
+      [params.appids, params.contentClass],
+      this.config
+    );
+
+    const byApp = new Map<number, Map<YoutubeContentClass, number>>();
+    for (const row of result.rows) {
+      const appid = parseCountValue(row.appid);
+      if (!byApp.has(appid)) {
+        byApp.set(appid, new Map<YoutubeContentClass, number>());
+      }
+      byApp.get(appid)!.set(row.content_class, parseCountValue(row.current_views));
+    }
+
+    return byApp;
+  }
+
+  private async queryYoutubeMarketLatestVideosForApps(params: {
+    appids: number[];
+    contentClass: YoutubeContentClass | null;
+  }): Promise<Map<number, YoutubeMarketPulseVideoItem[]>> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const channelsTable = this.relation('docs_youtube_channels').sql;
+    const result = await runQuery<YoutubeMarketPulseLatestVideoRow>(
+      `
+        WITH ranked_videos AS (
+          SELECT
+            m.appid,
+            v.video_id,
+            v.title,
+            v.published_at::text AS published_at,
+            v.content_class,
+            v.view_count,
+            NULL::bigint AS view_delta,
+            v.channel_id,
+            COALESCE(c.title, v.channel_title, v.channel_id) AS channel_title,
+            row_number() OVER (
+              PARTITION BY m.appid
+              ORDER BY v.published_at DESC NULLS LAST, v.video_id ASC
+            ) AS video_rank
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
+          WHERE m.appid = ANY($1::int[])
+            AND m.match_state = 'matched_primary'
+            AND ($2::text IS NULL OR v.content_class = $2::text)
+        )
+        SELECT *
+        FROM ranked_videos
+        WHERE video_rank <= 10
+        ORDER BY appid ASC, video_rank ASC
+      `,
+      [params.appids, params.contentClass],
+      this.config
+    );
+
+    const byApp = new Map<number, YoutubeMarketPulseVideoItem[]>();
+    for (const row of result.rows) {
+      const appid = parseCountValue(row.appid);
+      const videos = byApp.get(appid) ?? [];
+      videos.push({
+        channelId: row.channel_id ?? '',
+        channelTitle: row.channel_title ?? 'Unknown channel',
+        contentClass: row.content_class,
+        publishedAt: row.published_at,
+        title: row.title ?? 'Untitled video',
+        url: `https://www.youtube.com/watch?v=${row.video_id}`,
+        videoId: row.video_id,
+        viewCount: parseNullableCountValue(row.view_count),
+        viewDelta: parseNullableCountValue(row.view_delta),
+      });
+      byApp.set(appid, videos);
+    }
+
+    return byApp;
+  }
+
+  private parseYoutubeMarketContentMix(value: unknown): YoutubeMarketPulseContentMixItem[] {
+    const rows = this.parseJsonArray(value);
+    return rows
+      .map((row) => {
+        const contentClass = this.parseYoutubeContentClassValue(row.contentClass);
+        if (!contentClass) {
+          return null;
+        }
+
+        return {
+          contentClass,
+          currentViews: parseCountValue(row.currentViews),
+          matchedPrimaryVideoCount: parseCountValue(row.matchedPrimaryVideoCount),
+          newMatchedVideos: parseCountValue(row.newMatchedVideos),
+          viewDelta: parseCountValue(row.viewDelta),
+        };
+      })
+      .filter((row): row is YoutubeMarketPulseContentMixItem => Boolean(row));
+  }
+
+  private parseYoutubeMarketVideos(value: unknown): YoutubeMarketPulseVideoItem[] {
+    const rows = this.parseJsonArray(value);
+    return rows
+      .map((row) => {
+        const contentClass = this.parseYoutubeContentClassValue(row.contentClass);
+        const videoId = typeof row.videoId === 'string' ? row.videoId : null;
+        if (!contentClass || !videoId) {
+          return null;
+        }
+
+        return {
+          channelId: typeof row.channelId === 'string' ? row.channelId : '',
+          channelTitle: typeof row.channelTitle === 'string' ? row.channelTitle : 'Unknown channel',
+          contentClass,
+          publishedAt: typeof row.publishedAt === 'string' ? row.publishedAt : null,
+          title: typeof row.title === 'string' ? row.title : 'Untitled video',
+          url:
+            typeof row.url === 'string'
+              ? row.url
+              : `https://www.youtube.com/watch?v=${videoId}`,
+          videoId,
+          viewCount: row.viewCount == null ? null : parseCountValue(row.viewCount),
+          viewDelta: row.viewDelta == null ? null : parseCountValue(row.viewDelta),
+        };
+      })
+      .filter((row): row is YoutubeMarketPulseVideoItem => Boolean(row));
+  }
+
+  private parseJsonArray(value: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(value)) {
+      return value.filter((item): item is Record<string, unknown> =>
+        typeof item === 'object' && item !== null && !Array.isArray(item)
+      );
+    }
+
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        return this.parseJsonArray(parsed);
+      } catch {
+        return [];
+      }
+    }
+
+    return [];
+  }
+
+  private parseYoutubeContentClassValue(value: unknown): YoutubeContentClass | null {
+    return value === 'standard_video' || value === 'short' || value === 'live_or_recent_live'
+      ? value
+      : null;
   }
 
   private buildYoutubePagination(params: {
@@ -11487,6 +12179,7 @@ export class DataPlaneService {
   private async queryYoutubeLatestVideoRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     limit: number;
     offset: number;
     window: YoutubeCoverageWindow;
@@ -11505,6 +12198,7 @@ export class DataPlaneService {
   private async queryYoutubeTopVideoRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     limit: number;
     offset: number;
     window: YoutubeCoverageWindow;
@@ -11523,6 +12217,7 @@ export class DataPlaneService {
   private async queryYoutubeRankedVideoRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     limit: number;
     offset: number;
     orderBy: string;
@@ -11548,6 +12243,20 @@ export class DataPlaneService {
           v.title,
           v.published_at::text,
           v.content_class,
+          v.default_audio_language,
+          v.default_language,
+          CASE
+            WHEN COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')) ILIKE 'en%'
+              THEN 'en'
+            ELSE lower(COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')))
+          END AS language_code,
+          COALESCE(
+            v.raw_latest_payload #>> '{snippet,thumbnails,medium,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,high,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,standard,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,maxres,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,default,url}'
+          ) AS thumbnail_url,
           COALESCE(v.view_count, latest_snapshots.view_count) AS view_count,
           v.like_count,
           v.comment_count,
@@ -11568,12 +12277,17 @@ export class DataPlaneService {
         WHERE m.appid = $1
           AND m.match_state = 'matched_primary'
           AND ($2::text IS NULL OR v.content_class = $2::text)
+          AND (
+            $5::text IS NULL
+            OR ($5::text = 'en' AND COALESCE(v.default_language, v.default_audio_language, '') ILIKE 'en%')
+            OR lower(COALESCE(v.default_language, v.default_audio_language, '')) = $5::text
+          )
           ${this.youtubePublishedWindowPredicate('v', params.window)}
         ORDER BY ${params.orderBy}
         LIMIT $3
         OFFSET $4
       `,
-      [params.appid, params.contentClass, params.limit, params.offset],
+      [params.appid, params.contentClass, params.limit, params.offset, params.language],
       this.config
     );
 
@@ -11583,6 +12297,7 @@ export class DataPlaneService {
   private async queryYoutubeRankedVideoRowCount(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     window: YoutubeCoverageWindow;
   }): Promise<number> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
@@ -11595,9 +12310,14 @@ export class DataPlaneService {
         WHERE m.appid = $1
           AND m.match_state = 'matched_primary'
           AND ($2::text IS NULL OR v.content_class = $2::text)
+          AND (
+            $3::text IS NULL
+            OR ($3::text = 'en' AND COALESCE(v.default_language, v.default_audio_language, '') ILIKE 'en%')
+            OR lower(COALESCE(v.default_language, v.default_audio_language, '')) = $3::text
+          )
           ${this.youtubePublishedWindowPredicate('v', params.window)}
       `,
-      [params.appid, params.contentClass],
+      [params.appid, params.contentClass, params.language],
       this.config
     );
 
@@ -11607,6 +12327,7 @@ export class DataPlaneService {
   private async queryYoutubeVideoGrowthRows(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     limit: number;
     offset: number;
     window: Exclude<YoutubeCoverageWindow, 'current'>;
@@ -11635,6 +12356,20 @@ export class DataPlaneService {
           v.title,
           v.published_at::text,
           v.content_class,
+          v.default_audio_language,
+          v.default_language,
+          CASE
+            WHEN COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')) ILIKE 'en%'
+              THEN 'en'
+            ELSE lower(COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')))
+          END AS language_code,
+          COALESCE(
+            v.raw_latest_payload #>> '{snippet,thumbnails,medium,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,high,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,standard,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,maxres,url}',
+            v.raw_latest_payload #>> '{snippet,thumbnails,default,url}'
+          ) AS thumbnail_url,
           last_snapshot.view_count,
           v.like_count,
           v.comment_count,
@@ -11669,11 +12404,16 @@ export class DataPlaneService {
         JOIN ${videosTable} v ON v.video_id = scoped.video_id
         LEFT JOIN ${channelsTable} c ON c.channel_id = v.channel_id
         WHERE GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0) > 0
+          AND (
+            $5::text IS NULL
+            OR ($5::text = 'en' AND COALESCE(v.default_language, v.default_audio_language, '') ILIKE 'en%')
+            OR lower(COALESCE(v.default_language, v.default_audio_language, '')) = $5::text
+          )
         ORDER BY view_delta DESC, view_count DESC NULLS LAST, v.published_at DESC NULLS LAST, v.video_id ASC
         LIMIT $3
         OFFSET $4
       `,
-      [params.appid, params.contentClass, params.limit, params.offset],
+      [params.appid, params.contentClass, params.limit, params.offset, params.language],
       this.config
     ),
       this.queryYoutubeVideoGrowthRowCount(params),
@@ -11756,9 +12496,11 @@ export class DataPlaneService {
   private async queryYoutubeVideoGrowthRowCount(params: {
     appid: number;
     contentClass: YoutubeContentClass | null;
+    language: string | null;
     window: Exclude<YoutubeCoverageWindow, 'current'>;
   }): Promise<number> {
     const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
     const snapshotsTable = this.relation('metrics_youtube_video_snapshots').sql;
     const result = await runQuery<{ total_rows: number }>(
       `
@@ -11780,6 +12522,7 @@ export class DataPlaneService {
           ON m.video_id = scoped.video_id
          AND m.appid = $1
          AND m.match_state = 'matched_primary'
+        JOIN ${videosTable} v ON v.video_id = scoped.video_id
         JOIN ${snapshotsTable} first_snapshot
           ON first_snapshot.video_id = scoped.video_id
          AND first_snapshot.snapshot_time = scoped.first_snapshot_at
@@ -11787,12 +12530,82 @@ export class DataPlaneService {
           ON last_snapshot.video_id = scoped.video_id
          AND last_snapshot.snapshot_time = scoped.last_snapshot_at
         WHERE GREATEST(last_snapshot.view_count - first_snapshot.view_count, 0) > 0
+          AND (
+            $3::text IS NULL
+            OR ($3::text = 'en' AND COALESCE(v.default_language, v.default_audio_language, '') ILIKE 'en%')
+            OR lower(COALESCE(v.default_language, v.default_audio_language, '')) = $3::text
+          )
+      `,
+      [params.appid, params.contentClass, params.language],
+      this.config
+    );
+
+    return result.rows[0]?.total_rows ?? 0;
+  }
+
+  private async queryYoutubeVideoLanguageOptions(params: {
+    appid: number;
+    contentClass: YoutubeContentClass | null;
+    window: YoutubeCoverageWindow;
+  }): Promise<YoutubeGameCoverageLanguageOption[]> {
+    const matchesTable = this.relation('docs_youtube_video_matches').sql;
+    const videosTable = this.relation('docs_youtube_videos').sql;
+    const result = await runQuery<YoutubeLanguageOptionRow>(
+      `
+        WITH scoped_videos AS (
+          SELECT
+            CASE
+              WHEN COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')) ILIKE 'en%'
+                THEN 'en'
+              WHEN COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')) IS NULL
+                THEN 'unknown'
+              ELSE lower(COALESCE(NULLIF(v.default_language, ''), NULLIF(v.default_audio_language, '')))
+            END AS language_code,
+            v.video_id
+          FROM ${matchesTable} m
+          JOIN ${videosTable} v ON v.video_id = m.video_id
+          WHERE m.appid = $1
+            AND m.match_state = 'matched_primary'
+            AND ($2::text IS NULL OR v.content_class = $2::text)
+            ${this.youtubePublishedWindowPredicate('v', params.window)}
+        )
+        SELECT
+          language_code,
+          count(DISTINCT video_id)::bigint AS video_count
+        FROM scoped_videos
+        GROUP BY language_code
+        ORDER BY
+          CASE language_code WHEN 'en' THEN 0 WHEN 'unknown' THEN 2 ELSE 1 END,
+          video_count DESC,
+          language_code ASC
+        LIMIT 25
       `,
       [params.appid, params.contentClass],
       this.config
     );
 
-    return result.rows[0]?.total_rows ?? 0;
+    return result.rows.map((row) => {
+      const code = row.language_code ?? 'unknown';
+      return {
+        code,
+        label: this.formatYoutubeLanguageLabel(code),
+        videoCount: parseCountValue(row.video_count),
+      };
+    });
+  }
+
+  private formatYoutubeLanguageLabel(code: string): string {
+    if (code === 'en') return 'English';
+    if (code === 'unknown') return 'Unknown';
+
+    try {
+      const [language] = code.split('-');
+      const displayName = new Intl.DisplayNames(['en'], { type: 'language' });
+      const label = displayName.of(language);
+      return label ? `${label} (${code.toUpperCase()})` : code.toUpperCase();
+    } catch {
+      return code.toUpperCase();
+    }
   }
 
   private async queryYoutubeCreatorCoverageRowCount(params: {
@@ -12031,22 +12844,26 @@ export class DataPlaneService {
     return {
       channelCountry: row.channel_country,
       channelId: row.channel_id,
-      channelSubscriberCount: row.channel_subscriber_count,
+      channelSubscriberCount: parseNullableCountValue(row.channel_subscriber_count),
       channelTitle: row.channel_title,
-      commentCount: row.comment_count,
+      commentCount: parseNullableCountValue(row.comment_count),
       confidenceScore: row.confidence_score,
       contentClass: row.content_class,
+      defaultAudioLanguage: row.default_audio_language,
+      defaultLanguage: row.default_language,
       firstSnapshotAt: row.first_snapshot_at,
       growthPct: row.growth_pct,
+      languageCode: row.language_code,
       lastSnapshotAt: row.last_snapshot_at,
-      likeCount: row.like_count,
+      likeCount: parseNullableCountValue(row.like_count),
       matchedAlias: row.matched_alias,
       publishedAt: row.published_at,
+      thumbnailUrl: row.thumbnail_url,
       title: row.title,
       url: `https://www.youtube.com/watch?v=${row.video_id}`,
       videoId: row.video_id,
-      viewCount: row.view_count,
-      viewDelta: row.view_delta,
+      viewCount: parseNullableCountValue(row.view_count),
+      viewDelta: parseNullableCountValue(row.view_delta),
     };
   }
 

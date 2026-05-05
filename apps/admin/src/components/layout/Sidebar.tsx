@@ -20,6 +20,7 @@ import {
   ChevronDown,
   TrendingUp,
   Sparkles,
+  Youtube,
   type LucideIcon,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts';
@@ -40,6 +41,7 @@ const mainNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/insights', label: 'Insights', icon: TrendingUp },
+  { href: '/youtube', label: 'YouTube Pulse', icon: Youtube },
   { href: '/changes', label: 'Change Feed', icon: Activity },
   { href: '/apps', label: 'Apps', icon: Gamepad2 },
   { href: '/companies?type=publisher', label: 'Publishers', icon: Building2 },
