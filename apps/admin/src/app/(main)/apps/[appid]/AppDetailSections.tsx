@@ -235,6 +235,12 @@ function formatNumber(n: number | null): string {
   return n.toLocaleString();
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 /**
  * Short month names for consistent formatting between server and client.
  * Using manual lookup avoids toLocaleDateString hydration mismatches.
@@ -522,6 +528,9 @@ function SummarySection({
   const displayedDescriptors = contentDescriptorsExpanded ? contentDescriptors : contentDescriptors.slice(0, CONTENT_DESCRIPTOR_LIMIT);
   const displayedDLCs = dlcsExpanded ? dlcs : dlcs.slice(0, DLC_LIMIT);
   const displayedCategories = categoriesExpanded ? categories : categories.slice(0, CATEGORY_LIMIT);
+  const trend30dChangePct = toFiniteNumber(trends?.trend_30d_change_pct);
+  const trend90dChangePct = toFiniteNumber(trends?.trend_90d_change_pct);
+  const reviewVelocity7d = toFiniteNumber(trends?.review_velocity_7d);
 
   // Check if we have any extended facts to show
   const hasExtendedFacts = app.pics_review_score !== null ||
@@ -561,16 +570,16 @@ function SummarySection({
                   <div className="col-span-2 flex flex-wrap items-center gap-2 pt-2 border-t border-border-subtle">
                     <TrendBadge
                       direction={(trends.trend_30d_direction as 'up' | 'down' | 'stable') ?? 'stable'}
-                      value={trends.trend_30d_change_pct ?? undefined}
+                      value={trend30dChangePct ?? undefined}
                       label="30d"
                     />
                     <TrendBadge
                       direction={(trends.trend_90d_direction as 'up' | 'down' | 'stable') ?? 'stable'}
-                      value={trends.trend_90d_change_pct ?? undefined}
+                      value={trend90dChangePct ?? undefined}
                       label="90d"
                     />
                     <span className="text-caption text-text-muted ml-auto">
-                      {trends.review_velocity_7d?.toFixed(1) ?? '—'}/day
+                      {reviewVelocity7d?.toFixed(1) ?? '—'}/day
                     </span>
                   </div>
                 </>

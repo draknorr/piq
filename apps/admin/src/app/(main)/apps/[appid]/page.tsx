@@ -405,11 +405,42 @@ async function getReviewHistogram(appid: number): Promise<ReviewHistogram[]> {
 }
 
 async function getTrends(appid: number): Promise<AppTrends | null> {
-  const { rows } = await runTigerQuery<AppTrends>(
-    'SELECT * FROM metrics.app_trends WHERE appid = $1 LIMIT 1',
+  const { rows } = await runTigerQuery<Record<string, unknown>>(
+    `
+      SELECT
+        trend_30d_direction,
+        trend_30d_change_pct,
+        trend_90d_direction,
+        trend_90d_change_pct,
+        current_positive_ratio,
+        previous_positive_ratio,
+        review_velocity_7d,
+        review_velocity_30d,
+        ccu_trend_7d_pct
+      FROM metrics.app_trends
+      WHERE appid = $1
+      LIMIT 1
+    `,
     [appid]
   );
-  return rows[0] ?? null;
+  const trendData = rows[0];
+  if (!trendData) return null;
+
+  return {
+    trend_30d_direction: typeof trendData.trend_30d_direction === 'string'
+      ? trendData.trend_30d_direction
+      : null,
+    trend_30d_change_pct: toNumber(trendData.trend_30d_change_pct),
+    trend_90d_direction: typeof trendData.trend_90d_direction === 'string'
+      ? trendData.trend_90d_direction
+      : null,
+    trend_90d_change_pct: toNumber(trendData.trend_90d_change_pct),
+    current_positive_ratio: toNumber(trendData.current_positive_ratio),
+    previous_positive_ratio: toNumber(trendData.previous_positive_ratio),
+    review_velocity_7d: toNumber(trendData.review_velocity_7d),
+    review_velocity_30d: toNumber(trendData.review_velocity_30d),
+    ccu_trend_7d_pct: toNumber(trendData.ccu_trend_7d_pct),
+  };
 }
 
 async function getSyncStatus(appid: number): Promise<SyncStatus | null> {
