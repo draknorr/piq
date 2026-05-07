@@ -380,7 +380,7 @@ const CONTRACT_PROVENANCE: Record<AuditedTigerContractName, ChatExecutionProvena
       'relation:metrics.monthly_publisher_metrics',
     ],
     migrationDisposition: 'already_tiger',
-    migrationNotes: 'Monthly playtime rankings now run through bounded Tiger monthly aggregates.',
+    migrationNotes: 'Monthly playtime rankings now run through bounded monthly aggregates.',
     recommendedTigerContracts: ['queryMonthlyPlaytime'],
   },
   rankEntities: {

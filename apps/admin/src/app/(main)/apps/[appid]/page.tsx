@@ -682,22 +682,22 @@ export default async function AppDetailPage({
         key: 'app_record',
         label: 'App record',
         status: 'ok',
-        source: 'Tiger legacy.apps',
-        detail: `legacy.apps.appid = ${app.appid}`,
+        source: 'Catalog record',
+        detail: `appid = ${app.appid}`,
       },
       {
         key: 'canonical_metrics',
         label: 'Canonical metrics + computed insights',
         status: getCoverageStatus({ present: appSummary !== null }),
-        source: 'Tiger apps summary query',
+        source: 'Summary projection',
         detail:
           appSummary
             ? `metric_date: ${appSummary.metric_date ?? '—'} · data_updated_at: ${appSummary.data_updated_at ?? '—'}`
             : app.is_delisted
-              ? 'Not returned by Tiger summary for delisted apps'
+              ? 'Not returned by the summary projection for delisted apps'
               : !app.is_released
-                ? 'Not returned by Tiger summary for unreleased apps'
-                : 'No Tiger summary result',
+                ? 'Not returned by the summary projection for unreleased apps'
+                : 'No summary projection result',
       },
       {
         key: 'storefront',
@@ -707,78 +707,78 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_storefront_sync ?? null,
           staleAfterDays: 7,
         }),
-        source: 'Tiger legacy.apps + ops.sync_status',
+        source: 'Catalog record + sync status',
         detail: `price_cents: ${priceCents ?? '—'} · discount_percent: ${discountPercent} · last_storefront_sync: ${syncStatus?.last_storefront_sync ?? '—'}`,
       },
       {
         key: 'developers',
         label: 'Developers',
         status: getCoverageStatus({ present: developers.length > 0 }),
-        source: 'Tiger legacy.app_developers → legacy.developers',
+        source: 'Developer links',
         detail: `count: ${developers.length}`,
       },
       {
         key: 'publishers',
         label: 'Publishers',
         status: getCoverageStatus({ present: publishers.length > 0 }),
-        source: 'Tiger legacy.app_publishers → legacy.publishers',
+        source: 'Publisher links',
         detail: `count: ${publishers.length}`,
       },
       {
         key: 'steam_deck',
         label: 'Steam Deck compatibility',
         status: getCoverageStatus({ present: steamDeck !== null }),
-        source: 'Tiger legacy.app_steam_deck',
-        detail: steamDeck ? `category: ${steamDeck.category}` : 'No row in legacy.app_steam_deck',
+        source: 'Steam Deck compatibility',
+        detail: steamDeck ? `category: ${steamDeck.category}` : 'No Steam Deck compatibility row',
       },
       {
         key: 'genres',
         label: 'Genres',
         status: getCoverageStatus({ present: genres.length > 0 }),
-        source: 'Tiger legacy.app_genres → legacy.steam_genres',
+        source: 'Genre links',
         detail: `count: ${genres.length}`,
       },
       {
         key: 'categories',
         label: 'Features / categories',
         status: getCoverageStatus({ present: categories.length > 0 }),
-        source: 'Tiger legacy.app_categories → legacy.steam_categories',
+        source: 'Feature links',
         detail: `count: ${categories.length}`,
       },
       {
         key: 'franchises',
         label: 'Franchises',
         status: getCoverageStatus({ present: franchises.length > 0 }),
-        source: 'Tiger legacy.app_franchises → legacy.franchises',
+        source: 'Franchise links',
         detail: `count: ${franchises.length}`,
       },
       {
         key: 'official_tags',
         label: 'Official Steam tags',
         status: getCoverageStatus({ present: steamTags.length > 0 }),
-        source: 'Tiger legacy.app_steam_tags → legacy.steam_tags',
+        source: 'Official Steam tag links',
         detail: `count: ${steamTags.length}`,
       },
       {
         key: 'community_tags',
         label: 'Community tags',
         status: getCoverageStatus({ present: tags.length > 0 }),
-        source: 'Tiger legacy.app_steam_tags → legacy.steam_tags',
+        source: 'Community tag links',
         detail: `count: ${tags.length}`,
       },
       {
         key: 'dlcs',
         label: 'DLCs (children)',
         status: getCoverageStatus({ present: dlcs.length > 0 }),
-        source: 'Tiger legacy.apps.parent_appid',
+        source: 'Catalog parent links',
         detail: `count: ${dlcs.length}`,
       },
       {
         key: 'trends',
         label: 'Trend analysis',
         status: getCoverageStatus({ present: trends !== null }),
-        source: 'Tiger metrics.app_trends',
-        detail: trends ? 'metrics.app_trends row present' : 'No metrics.app_trends row',
+        source: 'Trend metrics',
+        detail: trends ? 'Trend metrics present' : 'No trend metrics row',
       },
       {
         key: 'daily_metrics',
@@ -788,7 +788,7 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_steamspy_sync ?? null,
           staleAfterDays: 14,
         }),
-        source: 'Tiger metrics.daily_metrics',
+        source: 'Daily metrics',
         detail: `rows: ${metrics.length} · latest: ${metrics[0]?.metric_date ?? '—'} · last_steamspy_sync: ${syncStatus?.last_steamspy_sync ?? '—'} · last_reviews_sync: ${syncStatus?.last_reviews_sync ?? '—'}`,
       },
       {
@@ -799,14 +799,14 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_histogram_sync ?? null,
           staleAfterDays: 30,
         }),
-        source: 'Tiger metrics.review_histogram',
+        source: 'Review histogram',
         detail: `rows: ${histogram.length} · latest: ${histogram[0]?.month_start ?? '—'} · last_histogram_sync: ${syncStatus?.last_histogram_sync ?? '—'}`,
       },
       {
         key: 'ccu_snapshots',
         label: 'CCU snapshots sparkline',
         status: getCoverageStatus({ present: ccuSparkline.dataPoints.length > 0 }),
-        source: 'Tiger metrics.ccu_snapshots',
+        source: 'CCU snapshots',
         detail:
           ccuSparkline.dataPoints.length > 0
             ? `points: ${ccuSparkline.dataPoints.length} (last 7 days)`
@@ -818,7 +818,7 @@ export default async function AppDetailPage({
         key: 'sync_status',
         label: 'Sync status + errors',
         status: getCoverageStatus({ present: syncStatus !== null }),
-        source: 'Tiger ops.sync_status',
+        source: 'Sync status',
         detail: syncStatus
           ? `is_syncable: ${syncStatus.is_syncable} · errors: ${syncStatus.consecutive_errors ?? 0} · last_error: ${syncStatus.last_error_message ?? '—'}`
           : 'No sync_status row',

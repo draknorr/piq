@@ -29,6 +29,7 @@ import {
 } from '@/lib/chat/tiger-answer-brief';
 import type { ChatToolCall } from '@/lib/llm/types';
 import { renderTigerPrimaryResult } from '@/lib/chat/tiger-primary-renderer';
+import { sanitizeForwardFacingDataCopy } from '@/lib/chat/forward-facing-copy';
 
 import type {
   TigerPrimaryInfo,
@@ -1757,14 +1758,14 @@ function buildTigerPrimaryNoResultText(params: {
 
   if (params.matchedIntent === 'entity_compare') {
     if (hasContractRuntimeBlockedFailure) {
-      return 'I could not complete that comparison from the current Tiger data slice yet because the compare surface is not fully ready in this environment.';
+      return 'I could not complete that comparison from the current structured data yet because the compare surface is not fully ready in this environment.';
     }
 
     if (hasTransientRuntimeFailure) {
-      return 'I could not complete that comparison from Tiger right now. Please try again in a moment.';
+      return 'I could not complete that comparison from PublisherIQ data right now. Please try again in a moment.';
     }
 
-    return 'I could not find a stable Tiger comparison set for that request.';
+    return 'I could not find a stable comparison set for that request.';
   }
 
   if (params.matchedIntent === 'momentum_discovery') {
@@ -10231,7 +10232,9 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
 
   const entityName = response.entity.displayName;
   const availabilityState = response.availability?.state ?? 'ready';
-  const availabilityReason = response.availability?.reason?.trim() ?? null;
+  const availabilityReason = response.availability?.reason?.trim()
+    ? sanitizeForwardFacingDataCopy(response.availability.reason.trim())
+    : null;
 
   if (availabilityState === 'blocked') {
     return `I’m not returning a YouTube answer for ${entityName} right now because ${availabilityReason ?? 'the current match precision is not reliable enough for this title.'}`;
@@ -10241,7 +10244,7 @@ function renderYoutubeGameCoverage(response: GetYoutubeGameCoverageResponse | nu
     const blockingTables = response.availability?.blockingTables?.length
       ? ` Blocking tables: ${response.availability.blockingTables.join(', ')}.`
       : '';
-    return `I can route this YouTube prompt for ${entityName}, but this Tiger environment does not have mirrored YouTube data ready yet.${availabilityReason ? ` ${availabilityReason}` : ''}${blockingTables}`.trim();
+    return `I can route this YouTube prompt for ${entityName}, but this data environment does not have mirrored YouTube data ready yet.${availabilityReason ? ` ${availabilityReason}` : ''}${blockingTables}`.trim();
   }
 
   const summary = response.summary ?? {};
@@ -10441,7 +10444,7 @@ async function runYoutubeGameCoveragePrimary(params: {
         entityName: entity.displayName,
         view,
       }),
-      renderedText: `I could not load the YouTube coverage view for ${entity.displayName} right now.${response.reason ? ` ${response.reason}` : ''}`.trim(),
+      renderedText: `I could not load the YouTube coverage view for ${entity.displayName} right now.${response.reason ? ` ${sanitizeForwardFacingDataCopy(response.reason)}` : ''}`.trim(),
       request,
       response: null,
       selectionState,

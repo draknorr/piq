@@ -113,7 +113,7 @@ export const UNRELEASED_COLUMN_DEFINITIONS: Record<UnreleasedColumnId, Unrelease
     width: 190,
     sortable: true,
     sortField: 'publisher_name',
-    methodology: 'Publisher and developer links from Steam/Tiger entity matching.',
+    methodology: 'Publisher and developer links from Steam and PublisherIQ entity matching.',
     exportFields: [
       { header: 'publisher', getValue: (game) => game.publisher_name },
       { header: 'developer', getValue: (game) => game.developer_name },
@@ -265,7 +265,7 @@ export const UNRELEASED_COLUMN_DEFINITIONS: Record<UnreleasedColumnId, Unrelease
     category: 'commercial',
     width: 100,
     sortable: false,
-    methodology: 'Whether Tiger found purchase packages for the app.',
+    methodology: 'Whether PublisherIQ found purchase packages for the app.',
     exportFields: [
       { header: 'has_purchase_packages', getValue: (game) => game.has_purchase_packages ? 'yes' : 'no' },
     ],
@@ -381,7 +381,7 @@ export const UNRELEASED_COLUMN_DEFINITIONS: Record<UnreleasedColumnId, Unrelease
     category: 'timeline',
     width: 120,
     sortable: false,
-    methodology: 'Raw Steam release state captured by Tiger.',
+    methodology: 'Raw Steam release state captured by PublisherIQ.',
     exportFields: [
       { header: 'release_state', getValue: (game) => game.release_state },
     ],
@@ -392,7 +392,7 @@ export const UNRELEASED_COLUMN_DEFINITIONS: Record<UnreleasedColumnId, Unrelease
     category: 'timeline',
     width: 120,
     sortable: false,
-    methodology: 'Raw Steam app state captured by Tiger.',
+    methodology: 'Raw Steam app state captured by PublisherIQ.',
     exportFields: [
       { header: 'app_state', getValue: (game) => game.app_state },
     ],

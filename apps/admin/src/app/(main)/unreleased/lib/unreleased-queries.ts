@@ -480,7 +480,7 @@ export function mapUnreleasedRow(row: UnreleasedRow): UnreleasedGame {
 
 export async function getUnreleasedGames(params: UnreleasedFilters): Promise<UnreleasedGame[]> {
   if (!(await hasUnreleasedProjection())) {
-    throw new Error('Tiger projection metrics.unreleased_games_projection is not available. Apply 0084_unreleased_games_page_projection.sql before using /unreleased.');
+    throw new Error('The unreleased games projection is not available. Apply the unreleased games page projection before using /unreleased.');
   }
 
   const values: SqlValue[] = [];
@@ -507,7 +507,7 @@ export async function getUnreleasedGames(params: UnreleasedFilters): Promise<Unr
 
 export async function getUnreleasedStats(params: UnreleasedFilters): Promise<UnreleasedStats> {
   if (!(await hasUnreleasedProjection())) {
-    throw new Error('Tiger projection metrics.unreleased_games_projection is not available. Apply 0084_unreleased_games_page_projection.sql before using /unreleased.');
+    throw new Error('The unreleased games projection is not available. Apply the unreleased games page projection before using /unreleased.');
   }
 
   const key = statsCacheKey(params);
@@ -561,7 +561,7 @@ export async function getUnreleasedFilterOptions(
   params: UnreleasedFilters
 ): Promise<FilterOption[]> {
   if (!(await hasUnreleasedProjection())) {
-    throw new Error('Tiger projection metrics.unreleased_games_projection is not available.');
+    throw new Error('The unreleased games projection is not available.');
   }
 
   const defaultFilterCountsAvailable = await hasUnreleasedFilterCounts();
@@ -668,7 +668,7 @@ export async function getUnreleasedFilterOptions(
 
 export async function getUnreleasedGameDetail(appid: number): Promise<UnreleasedGameDetail | null> {
   if (!(await hasUnreleasedProjection())) {
-    throw new Error('Tiger projection metrics.unreleased_games_projection is not available.');
+    throw new Error('The unreleased games projection is not available.');
   }
 
   const { rows } = await runTigerQuery<Record<string, unknown>>(
@@ -794,7 +794,7 @@ export async function getUnreleasedGameTimeline(
   params: { limit?: number; offset?: number } = {}
 ): Promise<UnreleasedTimelineResult> {
   if (!(await hasUnreleasedProjection())) {
-    throw new Error('Tiger projection metrics.unreleased_games_projection is not available.');
+    throw new Error('The unreleased games projection is not available.');
   }
 
   const limit = Math.min(Math.max(Math.floor(params.limit ?? 40), 1), 100);

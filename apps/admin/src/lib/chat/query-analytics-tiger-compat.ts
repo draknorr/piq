@@ -213,7 +213,7 @@ const TIGER_QUERY_ANALYTICS_MONTHLY_PLAYTIME_PROVENANCE: ChatExecutionProvenance
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Monthly playtime query_analytics requests execute through bounded Tiger monthly aggregates instead of Cube.',
+    'Monthly playtime query_analytics requests execute through bounded monthly aggregates instead of Cube.',
   recommendedTigerContracts: ['queryMonthlyPlaytime'],
 };
 
@@ -225,7 +225,7 @@ const TIGER_QUERY_ANALYTICS_TRACE_HISTORY_PROVENANCE: ChatExecutionProvenanceOve
   ],
   migrationDisposition: 'already_tiger',
   migrationNotes:
-    'Daily metrics query_analytics requests execute through bounded Tiger metric history contracts instead of Cube.',
+    'Daily metrics query_analytics requests execute through bounded metric history contracts instead of Cube.',
   recommendedTigerContracts: ['traceMetricHistory'],
 };
 

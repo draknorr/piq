@@ -4087,7 +4087,7 @@ test('Tiger primary does not retry compare when Tiger reports the contract runti
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult, null);
   assert.deepEqual(compareAttempts.map((attempt) => attempt.status), ['error']);
-  assert.match(result.renderedText ?? '', /current Tiger data slice yet/i);
+  assert.match(result.renderedText ?? '', /current structured data yet/i);
   assert.match(result.renderedText ?? '', /compare surface is not fully ready/i);
 });
 
@@ -4166,7 +4166,7 @@ test('Tiger primary returns compare-specific Tiger copy after the transient retr
   assert.equal(result.info.route, 'primary_success');
   assert.equal(result.contractResult, null);
   assert.deepEqual(compareAttempts.map((attempt) => attempt.status), ['error', 'error']);
-  assert.match(result.renderedText ?? '', /complete that comparison from Tiger right now/i);
+  assert.match(result.renderedText ?? '', /complete that comparison from PublisherIQ data right now/i);
   assert.doesNotMatch(result.renderedText ?? '', /structured lookup right now/i);
 });
 
@@ -7999,7 +7999,7 @@ test('Tiger primary returns a deterministic unavailable message when mirrored Yo
     return jsonResponse({
       availability: {
         blockingTables: ['docs.youtube_videos', 'metrics.youtube_video_snapshots'],
-        reason: 'YouTube coverage is not available on this Tiger environment yet because the mirrored tables are still empty or missing.',
+        reason: 'YouTube coverage is not available on this data environment yet because the mirrored tables are still empty or missing.',
         state: 'unavailable',
       },
       cadence: null,
@@ -8042,7 +8042,7 @@ test('Tiger primary returns a deterministic unavailable message when mirrored Yo
 
   assert.equal(result.info.matchedIntent, 'youtube_game_activity');
   assert.equal(result.info.route, 'primary_success');
-  assert.match(result.renderedText ?? '', /Tiger environment does not have mirrored YouTube data ready yet/i);
+  assert.match(result.renderedText ?? '', /data environment does not have mirrored YouTube data ready yet/i);
   assert.match(result.renderedText ?? '', /docs\.youtube_videos/);
 });
 

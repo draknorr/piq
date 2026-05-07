@@ -796,13 +796,13 @@ function renderRelatedEntities(
   const scopeSuffix = appliedScope.length > 0 ? ` after filtering to ${joinHumanList(appliedScope)}` : '';
   const baselineFallbackNote =
     response.provenance?.source === 'supabase-postgres'
-      ? ' I used the source baseline relation graph because Tiger does not yet carry the complete linked rows for this title.'
+      ? ' I used the source baseline relation graph because PublisherIQ data does not yet carry the complete linked rows for this title.'
       : '';
   const matchModeNote =
     response.matchMode === 'title_family'
       ? ' I used title-family matching because exact franchise links are not fully backfilled in this data slice yet.'
       : response.matchMode === 'relation_ids_only'
-        ? ' Tiger found structured relation links, but the current app snapshot is missing the linked titles.'
+        ? ' PublisherIQ found structured relation links, but the current app snapshot is missing the linked titles.'
       : response.matchMode === 'parent_appid'
         ? ' This is based on current parent/child app links in the catalog.'
         : '';
@@ -810,7 +810,7 @@ function renderRelatedEntities(
     const linkedAppids = (response.unresolvedAppids ?? []).slice(0, 8).map((appid) => String(appid));
     const linkedAppidNote = linkedAppids.length > 0 ? ` Linked appids: ${linkedAppids.join(', ')}.` : '';
 
-    return `Tiger found **${formatNumber(response.unresolvedCount ?? 0)}** ${relationLabel} link${(response.unresolvedCount ?? 0) === 1 ? '' : 's'} for **${sourceName}**, but the current app snapshot is missing those linked titles.${matchModeNote}${baselineFallbackNote}${linkedAppidNote}`;
+    return `PublisherIQ found **${formatNumber(response.unresolvedCount ?? 0)}** ${relationLabel} link${(response.unresolvedCount ?? 0) === 1 ? '' : 's'} for **${sourceName}**, but the current app snapshot is missing those linked titles.${matchModeNote}${baselineFallbackNote}${linkedAppidNote}`;
   }
 
   const intro = response.relationKind === 'dlc'

@@ -1390,7 +1390,7 @@ async function fetchTigerChangeFeedActivityResponse(
 
   if (!result.ok || !result.data) {
     throw new ChangeFeedQueryError(
-      `Tiger Change Feed activity query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+      `Change Feed activity query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
     );
   }
 
@@ -1427,7 +1427,7 @@ export async function fetchChangeFeedActivityResponse(
         throw error;
       }
 
-      console.warn('Tiger Change Feed activity query failed; falling back to Supabase.', error);
+      console.warn('Change Feed activity query failed; falling back to Supabase.', error);
       response = await fetchComposedChangeFeedActivityFallback(params);
     }
   } else {
@@ -1679,7 +1679,7 @@ async function fetchTigerChangeActivityDetail(
 
   if (!result.ok || !result.data) {
     throw new ChangeFeedQueryError(
-      `Tiger Change Feed activity detail query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+      `Change Feed activity detail query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
     );
   }
 
@@ -1739,7 +1739,7 @@ export async function fetchChangeFeedActivityDetail(
         throw error;
       }
 
-      console.warn('Tiger Change Feed activity detail query failed; falling back to Supabase.', error);
+      console.warn('Change Feed activity detail query failed; falling back to Supabase.', error);
     }
   }
 

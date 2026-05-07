@@ -60,6 +60,7 @@ import {
 } from '@/lib/chat/company-answer-policy';
 import { normalizeTrendToolCall } from '@/lib/chat/trend-tool-policy';
 import { sanitizeCompanyAssistantResponse } from '@/lib/chat/company-response-sanitizer';
+import { sanitizeForwardFacingDataCopy } from '@/lib/chat/forward-facing-copy';
 import { tryTigerQueryAnalyticsCompat } from '@/lib/chat/query-analytics-tiger-compat';
 import { logChatQuery } from '@/lib/chat-query-logger';
 import type {
@@ -1100,6 +1101,7 @@ function buildSessionLogSummary(
         (tigerPrimary.attempts ?? [])
           .map((attempt) => attempt.reason)
           .filter((value): value is string => Boolean(value))
+          .map((value) => sanitizeForwardFacingDataCopy(value))
       )
     );
     if (primaryReasons.length > 0) {
@@ -1120,6 +1122,7 @@ function buildSessionLogSummary(
         (tigerShadow.attempts ?? [])
           .map((attempt) => attempt.reason)
           .filter((value): value is string => Boolean(value))
+          .map((value) => sanitizeForwardFacingDataCopy(value))
       )
     );
     if (shadowReasons.length > 0) {
@@ -1161,6 +1164,7 @@ function extractTigerPrimaryReasons(
       (tigerPrimary?.attempts ?? [])
         .map((attempt) => attempt.reason?.trim())
         .filter((reason): reason is string => Boolean(reason))
+        .map((reason) => sanitizeForwardFacingDataCopy(reason))
     )
   );
 }
@@ -1233,10 +1237,10 @@ function buildTigerOnlyFallbackReply(params: {
       return `I couldn't route that overview cleanly in the system yet because it couldn't resolve a single stable game or company. Try the exact Steam title or the exact studio or publisher name.${reasonSuffix}`;
     case 'entity_compare':
       if (hasCompareRuntimeBlockedFailure) {
-        return `I couldn't complete that comparison from the current Tiger data slice yet because the compare surface isn't fully ready in this environment.`;
+        return `I couldn't complete that comparison from the current structured data yet because the compare surface isn't fully ready in this environment.`;
       }
       if (hasCompareTransientFailure) {
-        return `I couldn't complete that comparison from Tiger right now. Please try again in a moment.`;
+        return `I couldn't complete that comparison from PublisherIQ data right now. Please try again in a moment.`;
       }
       return `I couldn't route that comparison cleanly in the system yet. Try \`compare FromSoftware and Rockstar Games by reviews\` or name the exact entities you want compared.${reasonSuffix}`;
     case 'catalog_search':
@@ -2061,7 +2065,9 @@ export async function handleChatStreamRequest(
 
             if (!contractResponse.ok || !contractResponse.data || !isRecord(contractResponse.data.result)) {
               continuationResult = {
-                error: contractResponse.reason ?? 'Unknown system continuation error',
+                error: contractResponse.reason
+                  ? sanitizeForwardFacingDataCopy(contractResponse.reason)
+                  : 'Unknown system continuation error',
                 success: false,
               };
               tigerPrimaryResult = {
@@ -2190,7 +2196,9 @@ export async function handleChatStreamRequest(
                 contractName: 'continueResultSet',
                 fallbackReason:
                   !contractResponse.ok || !contractResponse.data || !isRecord(contractResponse.data.result)
-                    ? contractResponse.reason ?? 'Unknown system continuation error'
+                    ? contractResponse.reason
+                      ? sanitizeForwardFacingDataCopy(contractResponse.reason)
+                      : 'Unknown system continuation error'
                     : null,
                 latencyMs: Math.round(executionMs),
                 stage: 'continuation',

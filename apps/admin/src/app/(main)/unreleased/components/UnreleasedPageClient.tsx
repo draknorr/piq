@@ -1194,7 +1194,7 @@ function DetailInspector({
                     <div>
                       <div className="text-body-sm font-medium text-text-primary">No media payload available</div>
                       <p className="mt-1 text-body-sm text-text-secondary">
-                        Tiger has no screenshot or trailer URLs for this game yet.
+                        PublisherIQ has no screenshot or trailer URLs for this game yet.
                       </p>
                     </div>
                   </div>

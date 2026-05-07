@@ -21,7 +21,7 @@ export const QUERY_ANALYTICS_TOOL: Tool = {
   type: 'function',
   function: {
     name: 'query_analytics',
-    description: `Query game, publisher, and developer analytics through Tiger-backed compatibility models.
+    description: `Query game, publisher, and developer analytics through PublisherIQ compatibility models.
 
 CUBES:
 - Discovery: Games with discovery, trend, and metacritic metrics

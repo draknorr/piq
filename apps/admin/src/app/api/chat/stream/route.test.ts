@@ -1165,7 +1165,7 @@ test('chat route uses compare-specific Tiger-only fallback copy for Tiger compar
   assert.deepEqual(getEventTypes(events), ['text_delta', 'message_end']);
   assert.ok(endEvent);
   assert.equal(endEvent.tigerPrimary?.route, 'primary_success');
-  assert.match(text, /complete that comparison from Tiger right now/i);
+  assert.match(text, /complete that comparison from PublisherIQ data right now/i);
   assert.doesNotMatch(text, /route that comparison cleanly/i);
   assertExhausted();
 });

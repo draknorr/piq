@@ -67,7 +67,7 @@ async function fetchTigerStatus(): Promise<ChangeFeedStatus> {
 
   if (!result.ok || !result.data) {
     throw new Error(
-      `Tiger Change Feed status query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
+      `Change Feed status query failed: ${result.reason ?? result.errorCode ?? 'unknown error'}`
     );
   }
 
@@ -208,11 +208,11 @@ export async function GET() {
         return NextResponse.json(status);
       } catch (error) {
         if (shouldUseStrictTigerChangeFeedReads()) {
-          console.error('Tiger Change Feed status query error:', error);
+          console.error('Change Feed status query error:', error);
           return NextResponse.json({ error: 'Failed to load Change Feed status' }, { status: 500 });
         }
 
-        console.warn('Tiger Change Feed status query failed; falling back to Supabase.', error);
+        console.warn('Change Feed status query failed; falling back to Supabase.', error);
       }
     }
 
