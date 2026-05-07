@@ -1427,7 +1427,7 @@ function GamesTable({
         <div className="inline-flex items-center gap-1">
           <button
             onClick={() => onSort(field)}
-            className={`inline-flex items-center gap-1 hover:text-text-primary ${active ? 'text-accent-primary' : ''}`}
+            className={`inline-flex items-center gap-1 whitespace-nowrap hover:text-text-primary ${active ? 'text-accent-primary' : ''}`}
           >
             {label}
             {active ? (order === 'asc' ? '↑' : '↓') : <ArrowUpDown className="h-3 w-3" />}
@@ -1458,7 +1458,7 @@ function GamesTable({
                   {!allSelected && selectedSome && <span className="h-0.5 w-2 bg-white" />}
                 </button>
               </th>
-              {header('opportunity_score', 'Opp. Score', 'w-24', true)}
+              {header('opportunity_score', 'Opp Score', 'w-28', true)}
               {header('name', 'Game', 'min-w-[270px]')}
               {header('release_date', 'Release', 'min-w-[150px]')}
               {header('latest_added_at', 'Added', 'min-w-[110px]')}
