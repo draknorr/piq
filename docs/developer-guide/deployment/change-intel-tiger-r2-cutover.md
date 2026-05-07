@@ -2,7 +2,7 @@
 
 This runbook covers the accepted cutover state for Steam change intelligence.
 
-Current state: Storefront/news/change-intel writer paths are Tiger/R2-primary when they run with `CHANGE_INTEL_WRITE_TARGET=tiger`, `DATA_WRITE_TARGET=tiger`, and `CHANGE_INTEL_ARCHIVE_TARGET=object_storage`. Supabase is retained for auth/session/reference/legacy surfaces and any product read path not proven Tiger-backed.
+Current state: Storefront/news/change-intel writer paths are Tiger/R2-primary when they run with `CHANGE_INTEL_WRITE_TARGET=tiger`, `DATA_WRITE_TARGET=tiger`, and `CHANGE_INTEL_ARCHIVE_TARGET=object_storage`. Supabase is retained for auth/session/user-control/reference/legacy surfaces and explicitly documented route exceptions.
 
 ## Ownership
 

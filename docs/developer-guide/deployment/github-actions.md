@@ -2,7 +2,7 @@
 
 PublisherIQ uses GitHub Actions for scheduled data sync jobs. This guide covers setup and configuration.
 
-Current state: accepted incoming ingestion and product-data writer paths use Tiger/R2 where the workflow sets `DATA_WRITE_TARGET=tiger`, `CHANGE_INTEL_WRITE_TARGET=tiger`, or a PICS Tiger target. Supabase is still retained for auth/session/reference data, legacy reads, and product surfaces that have not been proven Tiger-backed.
+Current state: accepted incoming ingestion and product-data writer paths use Tiger/R2 where the workflow sets `DATA_WRITE_TARGET=tiger`, `CHANGE_INTEL_WRITE_TARGET=tiger`, or a PICS Tiger target. Supabase is still retained for auth/session/user-control/reference data, legacy reads, and explicitly documented route exceptions.
 
 ## Prerequisites
 

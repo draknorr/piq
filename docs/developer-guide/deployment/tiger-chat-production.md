@@ -1,14 +1,15 @@
 # Tiger Chat Production Deployment
 
-This guide covers the production rollout for the Tiger/query-api contract runtime and the accepted Tiger/R2 ingestion writer paths. Supabase and Cube still exist for retained auth/session/reference/legacy surfaces and product pages not proven Tiger-backed.
+This guide covers the production rollout for the Tiger/query-api contract runtime, Tiger-backed admin product reads, and accepted Tiger/R2 ingestion writer paths. Supabase and Cube still exist for retained auth/session/reference/legacy surfaces and documented exceptions.
 
 Target topology:
 
 - Vercel Preview -> Railway Preview `query-api` -> Tiger Preview database
 - Vercel Production -> Railway Production `query-api` -> Tiger Production database
 - TigerData powers the contract-serving query plane used by `/chat`, similarity, momentum, change-intel, and YouTube coverage routes
+- TigerData powers documented admin page reads including `/apps`, `/companies`, and `/unreleased`
 - Tiger/R2 is primary for accepted incoming ingestion/product-data writer paths that set Tiger write targets
-- Supabase remains retained for auth/session/reference/legacy data and product surfaces not yet cut over
+- Supabase remains retained for auth/session/user-control/reference/legacy data and documented exceptions
 
 Do not treat this as a full Supabase exit. The cutover boundary is per writer/read surface.
 
@@ -40,12 +41,19 @@ Then seed core identity:
 
 11. `packages/data-plane/sql/tiger-bootstrap/0030_seed_core_identity_from_legacy.sql`
 
+Then apply page-specific accelerators/projections needed by the deployed admin surface:
+
+12. `packages/data-plane/sql/tiger-bootstrap/0080_apps_page_query_accelerators.sql`
+13. `packages/data-plane/sql/tiger-bootstrap/0082_companies_page_query_accelerator.sql`
+14. `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql`
+
 For an already-bootstrapped Tiger target, apply only the incremental deltas that
 are not already present:
 
 1. `packages/data-plane/sql/tiger-bootstrap/0015_core_identity_loose_lookup.sql`
 2. `packages/data-plane/sql/tiger-bootstrap/0030_seed_core_identity_from_legacy.sql`
 3. `packages/data-plane/sql/tiger-bootstrap/0051_events_and_news_projection_performance.sql`
+4. any missing page projection delta from `0080`, `0082`, or `0084`
 
 Use `pnpm tiger:target-baseline` before and after the bootstrap window so you
 have a recorded snapshot of the target service.
@@ -143,6 +151,7 @@ Preview envs:
 
 - `QUERY_API_BASE_URL=<preview railway https url>`
 - `QUERY_API_BEARER_TOKEN=<preview bearer token>`
+- `TIGER_PRIMARY_URL=<preview tiger postgres url>`
 - `CHAT_TIGER_PRIMARY_MODE=all`
 - `CHAT_TIGER_SHADOW_MODE=off`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
@@ -153,6 +162,7 @@ Production envs:
 
 - `QUERY_API_BASE_URL=<production railway https url>`
 - `QUERY_API_BEARER_TOKEN=<production bearer token>`
+- `TIGER_PRIMARY_URL=<production tiger postgres url>`
 - `CHAT_TIGER_PRIMARY_MODE=all`
 - `CHAT_TIGER_SHADOW_MODE=off`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED=false`
@@ -165,7 +175,7 @@ Important:
 - the admin app now refuses to silently fall back to `127.0.0.1:4318` on
   deployed Vercel environments
 
-Supabase-facing product surfaces:
+Retained Supabase surfaces:
 
 - keep `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for auth/session and client-side Supabase surfaces
 - keep server-side Supabase service-role credentials only for approved auth/reference/legacy server paths

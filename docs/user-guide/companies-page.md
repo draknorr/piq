@@ -550,6 +550,7 @@ Share the full URL with colleagues to give them the exact same view.
 - [Keyboard Shortcuts](./keyboard-shortcuts.md) - All application shortcuts
 - [Global Search](./search.md) - Quick search with ⌘K
 - [Games Page](./games-page.md) - Game discovery and analytics
+- [Unreleased Games](./unreleased-games.md) - Upcoming game tracker
 - [Personalization](./personalization.md) - Pinning and alerts
 - [Companies Page Architecture](../developer-guide/features/companies-page.md) - Technical details
 - [v2.5 Release Notes](../releases/v2.5-companies-page.md) - Full feature list

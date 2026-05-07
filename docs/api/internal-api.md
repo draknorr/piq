@@ -145,6 +145,103 @@ Returns change-capture health state:
 - `catching_up`
 - `delayed`
 
+## Unreleased Games
+
+These routes serve the `/unreleased` workspace. They require an authenticated Supabase session cookie, then read TigerData from the admin server runtime through `runTigerQuery`.
+
+The required Tiger projection is `metrics.unreleased_games_projection`, created by `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql`.
+
+### `GET /api/unreleased`
+
+Returns unreleased game rows plus aggregate stats for the current filter set.
+
+Important query params:
+
+- `sort`
+- `order`
+- `limit`
+- `offset`
+- `search`
+- `adult`
+- `releaseStatus`
+- `publisherStatus`
+- `publisherSearch`
+- `developerSearch`
+- `minDaysUntilRelease`
+- `maxDaysUntilRelease`
+- `minOpportunityScore`
+- `minChanges30d`
+- `minNewsDays`
+- `hasNews`
+- `hasRecentChange`
+- `hasScreenshots`
+- `hasTrailers`
+- `hasPurchasePackages`
+- `isFree`
+- `hasWorkshop`
+- `genres`
+- `genreMode`
+- `tags`
+- `tagMode`
+- `categories`
+- `categoryMode`
+- `platforms`
+- `platformMode`
+- `signalFamilies`
+- `signalMode`
+
+Supported sort fields:
+
+- `opportunity_score`
+- `latest_added_at`
+- `release_date`
+- `name`
+- `publisher_name`
+- `developer_name`
+- `primary_tag_name`
+- `primary_category_name`
+- `latest_news_at`
+- `latest_change_at`
+- `change_count_30d`
+- `screenshot_count`
+- `movie_count`
+
+### `GET /api/unreleased/filter-counts`
+
+Returns filter option counts for genre, tag, or category.
+
+Important query params:
+
+- `filterType`: required, one of `genre`, `tag`, or `category`
+- all `/api/unreleased` filter params are accepted so counts can reflect the active filter set
+
+The default non-adult unfiltered request uses `metrics.unreleased_filter_counts` when available.
+
+### `GET /api/unreleased/[appid]/detail`
+
+Returns the detail drawer payload for one game:
+
+- projected game row
+- screenshots
+- trailers
+- hero assets
+- recent change events
+- recent Steam news
+
+### `GET /api/unreleased/[appid]/timeline`
+
+Returns a paginated merged timeline of:
+
+- `events.app_change_events`
+- `docs.steam_news_items`
+
+Important query params:
+
+- `limit`: normalized to `1..100`, default `40`
+- `offset`: zero-based offset, default `0`
+
+Response includes `items` and `next_offset`.
+
 ## Pins
 
 ### `GET /api/pins`
@@ -162,6 +259,14 @@ Remove a pin.
 ### `GET /api/pins/check`
 
 Check whether a specific entity is pinned.
+
+Also supports a bulk form used by `/unreleased`:
+
+```text
+GET /api/pins/check?entityType=game&entityIds=123,456
+```
+
+The bulk response includes `pins`, `pinnedIds`, and `pinIdsByEntityId`. The route caps bulk checks to 250 IDs.
 
 ### `GET` / `PUT` `/api/pins/[id]/alert-settings`
 
@@ -202,6 +307,7 @@ Server-side callback router that validates origin handling and forwards callback
 ## Notes
 
 - Change Feed endpoints return `503` when the required SQL read surfaces are not available yet.
+- Unreleased Games endpoints return a clear projection error when `metrics.unreleased_games_projection` has not been applied yet.
 - The unified activity list uses server-side cursor pagination when the new read surface is available and a legacy fallback when it is not.
 - Chat endpoints should be debugged from the query details panel and execution trace when a Tiger-backed contract is involved.
 - YouTube chat turns should be debugged with the `/api/chat/youtube-coverage` route name, `youtube_game_activity` render data, and the `getYoutubeGameCoverage` contract summary.
@@ -210,4 +316,5 @@ Server-side callback router that validates origin handling and forwards callback
 ## Related Documentation
 
 - [Change Feed Feature](../developer-guide/features/change-feed.md)
+- [Unreleased Games Feature](../developer-guide/features/unreleased-games.md)
 - [Steam Change Intelligence](../developer-guide/workers/steam-change-intelligence.md)

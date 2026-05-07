@@ -2,15 +2,15 @@
 
 This document is the current source of truth for how PublisherIQ uses **TigerData (Timescale)** alongside Supabase and Cube.
 
-**Last Updated:** May 1, 2026
+**Last Updated:** May 7, 2026
 
 ## Summary
 
 PublisherIQ is currently a **split-serving system**:
 
-- **TigerData + R2** are primary for accepted and tested incoming ingestion/product-data paths that have been cut over.
-- **Supabase** remains the control plane for auth/session/reference data, legacy reads, and product surfaces that are not proven Tiger-backed.
-- **TigerData** serves the contract-backed read plane through `apps/query-api`, including YouTube coverage.
+- **TigerData + R2** are primary for accepted and tested incoming ingestion/product-data paths and the main Tiger-backed product reads.
+- **Supabase** remains the control plane for auth/session/user data, reference data, and retained legacy exceptions.
+- **TigerData** serves the contract-backed read plane through `apps/query-api`, plus documented admin page projections through server-side `runTigerQuery`.
 - **Cube.js** remains available for compatibility and legacy analytics reads that have not yet moved to typed contracts.
 
 This is the live operating model today. It is not a future-state memo and it is not a full Supabase exit.
@@ -22,6 +22,7 @@ This is the live operating model today. It is not a future-state memo and it is 
 ```text
 Vercel Preview      -> Railway Preview query-api      -> Tiger Preview
 Vercel Production   -> Railway Production query-api   -> Tiger Production
+Vercel Preview/Prod -> Tiger Preview/Production       -> documented admin page projections
 
 Accepted ingestion/product-data path:
 Workers + PICS service -> TigerData + R2 where the writer path is enabled and verified
@@ -33,11 +34,12 @@ Supabase + source DB -> @publisheriq/youtube -> Tiger targets
 
 ```text
 Local admin app      -> local query-api on 127.0.0.1:4318 -> TigerData target
+Local admin app      -> TigerData target for /apps, /companies, /unreleased
 Workers / scripts    -> TigerData/R2 for enabled writer paths; Supabase for retained/default paths
 Tiger scripts        -> Supabase source + Tiger target for backfill/refresh
 ```
 
-Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BASE_URL` is unset. Deployed Vercel preview and production environments must set an explicit HTTPS `QUERY_API_BASE_URL`.
+Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BASE_URL` is unset for chat/query-api work. Deployed Vercel preview and production environments must set an explicit HTTPS `QUERY_API_BASE_URL` for chat and a server-side `TIGER_PRIMARY_URL` for Tiger-backed admin page reads.
 
 ## Current Load-Sharing Matrix
 
@@ -45,12 +47,13 @@ Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BAS
 | ------------------------ | ------------------------------------------------- | ---------------------------------- | ------------- | -------------------------------------------------- |
 | Auth and sessions        | Supabase                                          | admin app                          | Supabase      | OTP-first auth, callbacks, waitlist, roles         |
 | Credits and chat logging | Supabase                                          | admin app                          | Supabase      | reservations, finalized charges, chat logs         |
-| `/apps`                  | Supabase                                          | Supabase RPCs/views                | Supabase      | current page-serving path                          |
-| `/companies`             | Supabase                                          | Supabase RPCs/views                | Supabase      | current page-serving path                          |
+| `/apps`                  | TigerData/R2 writer and refresh paths             | admin server -> TigerData          | TigerData     | `metrics.apps_page_projection` and direct Tiger queries |
+| `/companies`             | TigerData/R2 writer and refresh paths             | admin server -> TigerData          | TigerData     | direct Tiger aggregate queries                     |
+| `/unreleased`            | TigerData/R2 writer and refresh paths             | admin server -> TigerData          | TigerData     | `metrics.unreleased_games_projection`              |
 | `/insights`              | Supabase                                          | Supabase and Cube                  | Supabase      | not yet re-homed to TigerData                      |
 | `/changes`               | Supabase                                          | Supabase RPCs/projections          | Supabase      | page stays on Supabase change surfaces             |
 | `/admin`                 | Supabase                                          | Supabase RPCs/tables               | Supabase      | queue, catalog, CCU, usage, logs                   |
-| Accepted product ingestion | TigerData/R2 writer surfaces where enabled       | `query-api` contracts or retained product reads | TigerData/R2 | do not infer every app route is Tiger-backed       |
+| Accepted product ingestion | TigerData/R2 writer surfaces where enabled       | `query-api` contracts or retained product reads | TigerData/R2 | route ownership is documented per surface          |
 | Chat contract reads      | TigerData-backed slices, some refreshed from Supabase | `query-api` contracts          | TigerData     | canonical path for supported families              |
 | YouTube chat coverage    | Supabase source routing plus TigerData collector   | `query-api` contracts              | TigerData     | `getYoutubeGameCoverage` and `/api/chat/youtube-coverage` |
 | Legacy chat analytics    | Supabase                                          | Cube compatibility or legacy reads | Supabase      | shrinking fallback layer                           |
@@ -58,7 +61,7 @@ Local admin development can default to `http://127.0.0.1:4318` if `QUERY_API_BAS
 
 ## What Lives In TigerData Today
 
-TigerData is not a generic mirror of the full Supabase database. It contains the read slices needed for contract-backed chat and discovery.
+TigerData is not a generic mirror of the full Supabase database. It contains the read slices needed for contract-backed chat, discovery, and documented admin product projections.
 
 ### Primary TigerData schema groups
 
@@ -81,6 +84,7 @@ TigerData is not a generic mirror of the full Supabase database. It contains the
 - change/news event and search relations
 - YouTube coverage relations and daily rollups across `ops`, `docs`, `events`, and `metrics`
 - user-context relations for pins and alerts
+- admin product projections including `metrics.apps_page_projection` and `metrics.unreleased_games_projection`
 
 ## Current Contract Surface
 
@@ -103,13 +107,13 @@ The live contract registry in `packages/data-plane/src/contract-registry.ts` cur
 - `getUserContext`
 - `continueResultSet`
 
-These are served by `apps/query-api`. The admin app should consume them through HTTP, not by connecting directly to TigerData.
+These contracts are served by `apps/query-api`. Chat and contract callers should consume them through HTTP. Separately, documented admin page reads such as `/apps`, `/companies`, and `/unreleased` use server-side `runTigerQuery` directly against TigerData.
 
 ## Data Movement and Refresh Path
 
 ### 1. Ingest and normalize into the accepted target
 
-Current accepted/tested incoming ingestion and product-data paths write to TigerData and, for archived payloads, R2 when their writer flags and environment variables are enabled. Supabase remains the target for retained/default paths and for surfaces that have not been proven Tiger-backed.
+Current accepted/tested incoming ingestion and product-data paths write to TigerData and, for archived payloads, R2 when their writer flags and environment variables are enabled. Supabase remains the target for retained/default paths and explicitly documented exceptions.
 
 - catalog and metadata sync
 - reviews, histograms, CCU, and derived metrics
@@ -135,6 +139,7 @@ The key phases are:
 7. events and news
 8. events/news performance delta
 9. core identity seed
+10. page-specific query accelerators and projections, including `/apps`, `/companies`, and `/unreleased`
 
 ### 3. Backfill TigerData from the live source
 
@@ -195,6 +200,7 @@ Important environment variables:
 
 - `QUERY_API_BASE_URL`
 - `QUERY_API_BEARER_TOKEN`
+- `TIGER_PRIMARY_URL`
 - `CHAT_TIGER_PRIMARY_MODE`
 - `CHAT_TIGER_SHADOW_MODE`
 - `CHAT_TIGER_LEGACY_FALLBACK_ENABLED`
@@ -215,7 +221,7 @@ Important environment variables:
 
 - `TIGER_PRIMARY_URL` points at the TigerData target.
 - `DATA_PLANE_SOURCE_URL` / `DATABASE_URL` represent the retained live source for bootstrap, backfill, and local fallback cases.
-- The admin app never needs `TIGER_PRIMARY_URL` directly.
+- The admin app needs server-side `TIGER_PRIMARY_URL` for Tiger-backed page reads. Do not expose it with a `NEXT_PUBLIC_` prefix.
 - `CHAT_TIGER_YOUTUBE_ENABLED=true` exposes the YouTube coverage family in `/chat`; the contract itself remains available through `query-api`.
 - PICS latest-state Tiger writes require `PICS_LATEST_STATE_TARGET=tiger` plus a Tiger URL in the Railway service environment; do not treat code support alone as runtime proof.
 - PICS change-history Tiger/R2 writes require `PICS_CHANGE_HISTORY_TARGET=tiger` and object-storage archive configuration.
@@ -258,15 +264,15 @@ When chat results look wrong, inspect:
 
 TigerData does **not** currently replace Supabase for:
 
-- product-page reads for `/apps`, `/companies`, `/changes`, `/admin`
 - auth and user/session state
 - credits and chat logs
-- reference/control-plane tables and legacy warehouse surfaces not proven Tiger-backed
+- reference/control-plane tables and retained legacy warehouse exceptions
+- retained page reads that are still explicitly Supabase-backed, including `/changes`, `/insights`, and `/admin`
 - app runtime writes that have not been explicitly cut over and verified
 - PICS latest-state writes unless the Railway environment is confirmed to use the Tiger target
 - the YouTube collector's source routing and Tiger write path, which are owned by `@publisheriq/youtube`
 
-TigerData should therefore be described as the **contract-serving read plane plus accepted primary product-data writer target**, not the universal product database.
+TigerData should therefore be described as the **contract-serving read plane, documented admin projection read plane, and accepted primary product-data writer target**, not the universal replacement for auth/session/user-control storage.
 
 ## Related Documentation
 

@@ -2,15 +2,15 @@
 
 This document describes how PublisherIQ moves data from external sources into the accepted Tiger/R2 and retained Supabase paths that feed TigerData-backed contract reads.
 
-**Last Updated:** May 1, 2026
+**Last Updated:** May 7, 2026
 
 ## Pipeline Summary
 
 PublisherIQ currently has three data-plane roles:
 
 - **TigerData + R2 product-data plane** for accepted/tested incoming ingestion and product-data writer paths
-- **Supabase control/legacy plane** for auth, sessions, reference data, retained/default ingestion paths, queues, projections, and page-facing RPCs not proven Tiger-backed
-- **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, change/news, and YouTube contracts
+- **Supabase control/legacy plane** for auth, sessions, user-control data, reference data, retained/default ingestion paths, queues, and explicitly retained page-facing RPCs
+- **TigerData read plane** for contract-backed chat, search/discovery, semantic retrieval, momentum, change/news, YouTube contracts, and documented admin product reads
 
 That means the pipeline is now:
 
@@ -21,8 +21,8 @@ source APIs
   -> Supabase for retained/default paths
   -> Tiger bootstrap/backfill/refresh workflows where Supabase remains the source
   -> YouTube routing / discovery / refresh / rollup workflows
-  -> query-api
-  -> contract-backed reads
+  -> query-api for contract-backed reads
+  -> admin server runTigerQuery for /apps, /companies, /unreleased
 ```
 
 ## Scheduled Warehouse Syncs
@@ -46,7 +46,7 @@ The TypeScript workers in `packages/ingestion` handle regular ingestion/product-
 | `change-intel-backfill-projection` | Seed projection refresh jobs for change-intel backfills |
 | `repair-storefront-authority` | Repair missing storefront-authority fields before downstream refreshes |
 
-Do not describe these workers as Supabase-only. Tiger writer surfaces exist for accepted product-data paths, while Supabase remains the target for retained/default worker flows and page-facing projections that have not been cut over.
+Do not describe these workers as Supabase-only. Tiger writer surfaces exist for accepted product-data paths, while Supabase remains the target for retained/default worker flows and explicitly retained page projections.
 
 ## YouTube Collector Pipeline
 
@@ -126,18 +126,19 @@ They do not manage the YouTube collector, which has its own `youtube-production-
 
 After data lands:
 
-- `/apps`, `/companies`, `/changes`, `/admin`, and most operational reads still use Supabase RPCs/views/tables
-- `query-api` contracts read TigerData for chat/search/discovery families that have already moved, including `getYoutubeGameCoverage`
-- Cube reads Supabase-backed analytical models for compatibility and page-level paths not yet cut over
+- `/apps`, `/companies`, and `/unreleased` read TigerData directly from the admin server
+- `query-api` contracts read TigerData for chat/search/discovery families, including `getYoutubeGameCoverage`
+- `/changes`, `/insights`, `/admin`, and user-control flows still use retained Supabase RPCs/views/tables where documented
+- Cube reads Supabase-backed analytical models for compatibility paths that have not yet moved
 
 ## Authority Rules
 
 - Storefront is authoritative for parsed `release_date` and `is_free`
 - PICS is enrichment/fallback data
 - projection refresh is a derived read surface only and never the source of truth for Storefront values
-- TigerData/R2 is primary for accepted/tested incoming ingestion and product-data writer paths
-- Supabase remains authoritative for auth/session/control data, reference data, legacy surfaces, and product surfaces not proven Tiger-backed
-- TigerData is a contract-serving read target and accepted product-data write target, not a universal replacement for Supabase
+- TigerData/R2 is primary for accepted/tested incoming ingestion, product-data writer paths, and documented Tiger-backed admin reads
+- Supabase remains authoritative for auth/session/control data, reference data, and retained legacy exceptions
+- TigerData is a contract-serving read target, admin projection read target, and accepted product-data write target, not a universal replacement for Supabase
 - YouTube coverage data is written directly to TigerData by `@publisheriq/youtube`; Supabase only holds the source-side routing and operational state that the collector reads
 
 ## Useful Runtime Knobs

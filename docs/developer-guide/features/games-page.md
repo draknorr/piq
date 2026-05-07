@@ -2,7 +2,7 @@
 
 This document describes the technical architecture of the Games page in PublisherIQ.
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 7, 2026
 
 ---
 
@@ -10,7 +10,7 @@ This document describes the technical architecture of the Games page in Publishe
 
 The Games page (`/apps`) is a powerful game discovery and analytics dashboard. It follows the architectural patterns established by the Companies page (v2.5) with game-specific features and novel computed insight metrics.
 
-This page is still Supabase/RPC-backed today. It uses materialized views and stored functions for its main reads, while Tiger/query-api serves the chat contract layer rather than this page directly.
+This page is Tiger-backed today. The admin server reads TigerData through `runTigerQuery`, preferring `metrics.apps_page_projection` when present and using direct Tiger SQL for supported fallback paths. It does not use Supabase RPCs for the main game list.
 
 **Key Capabilities:**
 - Browse games, DLC, and demos with type toggle
@@ -94,7 +94,7 @@ This page is still Supabase/RPC-backed today. It uses materialized views and sto
 │
 └── lib/
     ├── apps-types.ts                 # TypeScript interfaces
-    ├── apps-queries.ts               # RPC wrappers + formatters
+    ├── apps-queries.ts               # Tiger query wrappers + formatters
     ├── apps-columns.ts               # 33 column definitions
     ├── apps-presets.ts               # 12 presets + 12 quick filter definitions
     ├── apps-methodology.ts           # Column methodology text
@@ -295,116 +295,49 @@ const {
 
 ## Database Layer
 
-### RPC Functions
+### Tiger Query Surfaces
 
-| Function | Purpose | Performance |
-|----------|---------|-------------|
-| `get_apps_with_filters()` | Main query with all filters | Fast: ~200ms, Slow: ~4s |
-| `get_apps_aggregate_stats()` | Summary for stats bar | Fast: <10ms, Slow: ~4s |
-| `get_app_sparkline_data()` | CCU time-series for sparklines | ~100ms |
-| `get_apps_filter_option_counts()` | Filter dropdown counts | Fast: <10ms, Slow: ~4s |
+The page reads TigerData from `apps-queries.ts`.
 
-### Two-Path Optimization
+| Surface | Purpose |
+|---------|---------|
+| `metrics.apps_page_projection` | Fast default list, filtered list, and aggregate reads when the projection is present |
+| `legacy.apps` | fallback catalog rows and app identity |
+| `legacy.latest_daily_metrics` | current reviews, owners, prices, playtime, and metric date |
+| `metrics.review_velocity_stats` | 7d/30d review velocity and velocity tier |
+| `metrics.app_trends` | sentiment and trend inputs |
+| `ops.ccu_tier_assignments` | CCU tier and growth signals |
+| `legacy.app_publishers` / `legacy.app_developers` | primary publisher/developer context |
 
-The main RPC uses conditional query paths based on filter requirements:
+### Projection Path
 
-```sql
--- Check if expensive computations needed
-v_needs_slow_path := (p_min_vs_publisher IS NOT NULL
-                      OR p_sort_field = 'vs_publisher_avg');
-
-IF NOT v_needs_slow_path THEN
-  -- Fast path: Skips publisher_metrics JOIN
-  -- Returns NULL for vs_publisher_avg
-  -- Uses app_filter_data materialized view for content filters
-  -- Expected: ~200ms
-  RETURN QUERY SELECT ...
-    FROM apps a
-    JOIN app_filter_data afd ON a.appid = afd.appid
-    JOIN latest_daily_metrics ldm ON a.appid = ldm.appid
-    LEFT JOIN ccu_tier_assignments cta ON a.appid = cta.appid
-    LEFT JOIN review_velocity_stats rvs ON a.appid = rvs.appid
-    LEFT JOIN app_trends at ON a.appid = at.appid
-    LEFT JOIN LATERAL (...) dm_playtime ON true
-    WHERE filters...;
-ELSE
-  -- Slow path: Full computation with publisher_metrics JOIN
-  -- Computes vs_publisher_avg
-  -- Expected: ~4s
-  RETURN QUERY SELECT ...
-    LEFT JOIN publisher_metrics pm ON afd.publisher_id = pm.publisher_id
-    WHERE filters...;
-END IF;
-```
-
-**Fast Path (~200ms):**
-- Used when no vs_publisher filter and not sorting by vs_publisher
-- Returns NULL for vs_publisher_avg
-- Sufficient for most browsing scenarios
-
-**Slow Path (~4s):**
-- Used when vs_publisher filter active or sorting by vs_publisher_avg
-- Joins publisher_metrics for average score calculation
-
-### Pre-Computed Content Arrays (app_filter_data)
-
-Materialized view for O(1) content filtering:
+When `metrics.apps_page_projection` exists, the list and aggregate stats query that projection directly:
 
 ```sql
--- app_filter_data materialized view columns
-appid INTEGER PRIMARY KEY
-genre_ids INT[]                    -- Pre-computed genre IDs
-tag_ids INT[]                      -- Pre-computed tag IDs
-category_ids INT[]                 -- Pre-computed category IDs
-has_workshop BOOLEAN               -- Workshop support flag
-platform_array TEXT[]              -- ['windows', 'macos', 'linux']
-steam_deck_category TEXT           -- 'verified', 'playable', 'unsupported', 'unknown'
-publisher_id INTEGER               -- Primary publisher ID
-publisher_name TEXT                -- Publisher name
-publisher_game_count INTEGER       -- Publisher's total games
-developer_id INTEGER               -- Primary developer ID
-developer_name TEXT                -- Developer name
+SELECT p.*
+FROM metrics.apps_page_projection p
+WHERE ...
+ORDER BY p.ccu_peak DESC NULLS LAST, p.appid ASC
+LIMIT $1 OFFSET $2;
 ```
 
-**Query Pattern:**
-```sql
--- Array containment instead of expensive EXISTS subqueries
-WHERE afd.genre_ids @> ARRAY[1,2,3]::INT[]   -- Contains ALL (All mode)
-WHERE afd.genre_ids && ARRAY[1,2,3]::INT[]   -- Overlaps ANY (Any mode)
-```
+The query layer caches aggregate stats for 5 minutes per normalized filter set and caps list reads at 250 rows.
 
-### GIN Indexes
+### Fallback Path
+
+If the projection is missing, the page can still use direct Tiger SQL for supported paths. This fallback is for resilience and local bootstrap states; production should keep `metrics.apps_page_projection` present and refreshed.
+
+### Array Filters And Search
+
+Content and platform filters use Tiger-side arrays and indexed predicates where available:
 
 ```sql
-CREATE INDEX idx_app_filter_data_genre_ids ON app_filter_data USING GIN (genre_ids);
-CREATE INDEX idx_app_filter_data_tag_ids ON app_filter_data USING GIN (tag_ids);
-CREATE INDEX idx_app_filter_data_category_ids ON app_filter_data USING GIN (category_ids);
-CREATE INDEX idx_app_filter_data_platform_array ON app_filter_data USING GIN (platform_array);
-CREATE INDEX idx_apps_name_trgm ON apps USING GIN (name gin_trgm_ops);
+WHERE p.genre_ids @> $1::int[]      -- all selected genres
+WHERE p.genre_ids && $1::int[]      -- any selected genre
+WHERE p.platform_array @> $2::text[]
 ```
 
-### Filter Count Materialized Views
-
-Seven materialized views provide instant filter dropdown counts:
-
-| View | Purpose | Query Time |
-|------|---------|------------|
-| `mv_tag_counts` | Tag counts by app type | <10ms |
-| `mv_genre_counts` | Genre counts by app type | <10ms |
-| `mv_category_counts` | Category counts by app type | <10ms |
-| `mv_steam_deck_counts` | Steam Deck status counts | <10ms |
-| `mv_ccu_tier_counts` | CCU tier distribution | <10ms |
-| `mv_velocity_tier_counts` | Velocity tier counts | <10ms |
-| `mv_apps_aggregate_stats` | Pre-computed summary stats | <10ms |
-
-Refresh ownership:
-- `app_filter_data` refreshes every 6 hours via GitHub Actions `refresh-app-filter-data.yml`.
-- `mv_tag_counts`, `mv_genre_counts`, `mv_category_counts`, `mv_steam_deck_counts`, `mv_ccu_tier_counts`, and `mv_velocity_tier_counts` refresh every 4 hours via `pg_cron` and `refresh_filter_count_views()`.
-- `mv_apps_aggregate_stats` refreshes daily via GitHub Actions `refresh-views.yml`.
-
-**Fast vs Slow Path for Counts:**
-- Fast path (<10ms): No metric filters → read from materialized views
-- Slow path (~4s): Metric filters applied → compute on-the-fly
+Name and entity search stay server-side and parameterized.
 
 ---
 
@@ -562,7 +495,7 @@ function mergeQuickFilters(filters: QuickFilterId[]): MergedFilters {
 ### Sort Field Mapping
 
 ```typescript
-// Server-side sortable (passed to RPC)
+// Server-side sortable (passed to Tiger SQL)
 const SERVER_SORTS = [
   'name', 'ccu_peak', 'owners_midpoint', 'total_reviews',
   'review_score', 'price_cents', 'release_date',
@@ -593,7 +526,7 @@ interface ColumnDefinition {
 
 ### Pricing Semantics
 
-- The current Games page price field is storefront-first: the RPC and `app_filter_data` use `COALESCE(a.current_price_cents, ldm.price_cents)` for the effective price.
+- The current Games page price field is storefront-first: Tiger queries prefer `apps.current_price_cents` and fall back to latest summary pricing only when needed.
 - Sale state is only rendered when the app is paid and the effective price is non-null.
 - This prevents stale summary pricing from surfacing `$0.00` or orphaned discount badges on paid titles.
 
@@ -601,7 +534,7 @@ interface ColumnDefinition {
 
 ## Computed Metrics
 
-The Games page features 6 novel computed insight metrics calculated in the RPC layer:
+The Games page features 6 novel computed insight metrics calculated in the Tiger query/projection layer:
 
 ### Metric Formulas
 
@@ -683,12 +616,11 @@ momentum_score := COALESCE(ccu_growth_7d_pct, 0) +
 
 | Strategy | Impact |
 |----------|--------|
-| Two-path queries | Fast path ~200ms vs slow path ~4s |
-| app_filter_data MV | Content filtering: seconds → milliseconds |
-| Filter count MVs | Dropdown counts: ~5s → <10ms |
-| Aggregate stats MV | Summary: timeout → <10ms |
-| GIN indexes | Sub-ms array containment |
-| Trigram index | Fast ILIKE text search |
+| `metrics.apps_page_projection` | Fast default and filtered reads when present |
+| Direct Tiger fallback SQL | Keeps local/bootstrap states usable while projection is being prepared |
+| Aggregate stats cache | Avoids repeated count/summary work for the same filter set |
+| GIN indexes | Fast array containment |
+| Trigram indexes | Fast title and entity search |
 | 3-day growth windows | Works with limited CCU history |
 | LATERAL join for playtime | Efficient playtime data fetch |
 
@@ -722,7 +654,7 @@ momentum_score := COALESCE(ccu_growth_7d_pct, 0) +
 | `apps-presets.ts` | ~300 | 12 presets + 12 quick filter definitions |
 | `apps-columns.ts` | ~450 | 33 column definitions |
 | `apps-types.ts` | ~200 | TypeScript interfaces |
-| `apps-queries.ts` | ~200 | RPC wrappers + formatters |
+| `apps-queries.ts` | ~200 | Tiger query wrappers + formatters |
 | `apps-compare.ts` | ~250 | 17 comparison metric definitions |
 | `apps-export.ts` | ~280 | CSV/JSON export formatting |
 | `useAppsSelection.ts` | ~162 | Row selection with shift+click |
@@ -838,58 +770,24 @@ useEffect(() => {
 
 ---
 
-## Supabase Client Patterns (v2.8+)
+## TigerData Read Pattern
 
-The Games page uses different Supabase clients for server vs client contexts.
-
-### Server Component (page.tsx)
-
-Uses service role for initial data fetch:
+The Games page reads product data from TigerData on the server:
 
 ```typescript
-import { createServiceClient } from '@/lib/supabase/server';
+import { runTigerQuery } from '@publisheriq/database';
 
-export default async function AppsPage() {
-  const supabase = createServiceClient();
-
-  // Service role bypasses RLS for efficient queries
-  const { data } = await supabase.rpc('get_apps_with_filters', params);
-
-  return <AppsPageClient initialData={data} />;
-}
+const { rows } = await runTigerQuery<AppRpcRow>(sql, values);
 ```
 
-### Client Hooks
+Environment requirements:
 
-Use `createBrowserClient` for session-aware fetching:
+| Variable | Context | Use |
+|----------|---------|-----|
+| `TIGER_PRIMARY_URL` | server only | primary TigerData read target |
+| `CHANGE_INTEL_TIGER_URL` | server only | fallback Tiger URL accepted by the shared helper |
 
-```typescript
-// hooks/useSparklineLoader.ts
-import { createBrowserClient } from '@supabase/ssr';
-
-export function useSparklineLoader() {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  // Session cookies are automatically included
-  const { data } = await supabase.rpc('get_app_sparkline_data', {
-    p_appids: appIds,
-    p_days: 7
-  });
-}
-```
-
-### Why This Matters
-
-| Pattern | Context | Session | Use Case |
-|---------|---------|---------|----------|
-| `createServiceClient()` | Server | Service role | Initial page load |
-| `createBrowserClient()` | Client | Cookie-aware | Interactive features |
-| `getSupabase()` | Either | Anon only | Public data |
-
-**Common Mistake:** Using `getSupabase()` in client hooks causes auth failures because it creates an anon-key client without session awareness.
+Do not expose Tiger connection strings through `NEXT_PUBLIC_` variables. Supabase clients still matter for auth, pins, alerts, and user-control flows, but they are not the `/apps` product-data read path.
 
 ---
 

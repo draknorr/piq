@@ -22,6 +22,7 @@ The personalized dashboard lets you:
 The **Pin** button appears on entity detail pages:
 
 - **Games**: `/apps/{appid}` - Pin any game to track its metrics
+- **Unreleased Games**: `/unreleased` - Use Watch from a row or the detail drawer to track upcoming games
 - **Publishers**: `/publishers/{id}` - Pin publishers to track their portfolio
 - **Developers**: `/developers/{id}` - Pin developers to track their releases
 
@@ -234,6 +235,7 @@ Toasts appear in the bottom-right corner of the screen and automatically dismiss
 - **Competitors**: Track games in your market segment
 - **Your titles**: Monitor your own games' performance
 - **Trending discoveries**: Pin interesting finds from the Insights tabs
+- **Upcoming opportunities**: Watch promising games from `/unreleased`
 - **Key publishers**: Stay informed about major players in your space
 
 ### Managing Alerts
@@ -254,6 +256,7 @@ Toasts appear in the bottom-right corner of the screen and automatically dismiss
 
 - [Insights Page](./insights-page.md) - My Dashboard and analytics tabs
 - [Games Page](./games-page.md) - Bulk pin from game lists
+- [Unreleased Games](./unreleased-games.md) - Watch upcoming games
 - [Companies Page](./companies-page.md) - Bulk pin companies
 - [Architecture Documentation](../developer-guide/features/personalization.md) - Technical details
 - [v2.4 Release Notes](../releases/v2.4-personalization.md) - Full feature changelog

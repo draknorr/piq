@@ -4,16 +4,17 @@ Steam analytics platform for browsing games and companies, tracking change intel
 
 ## Current Platform Model
 
-- **Supabase Postgres** remains the write authority and control plane.
-- **TigerData (Timescale)** powers the contract-serving read plane through `apps/query-api` and `packages/data-plane`.
+- **TigerData (Timescale) + R2** are primary for accepted product-data writes, Tiger-backed admin product reads, and the contract-serving read plane.
+- **Supabase Postgres** remains the auth/session/user-control authority plus retained reference and legacy exceptions.
 - **Cube.js** remains in the stack for legacy and compatibility analytics paths that have not moved onto Tiger-backed contracts yet.
-- **TypeScript workers** and the **PICS service** ingest, normalize, and project source data into Supabase; selected hot read slices are then refreshed into TigerData.
+- **TypeScript workers** and the **PICS service** ingest, normalize, and project accepted source data into TigerData/R2 where the writer path is enabled; retained source/legacy flows still use Supabase where documented.
 - **`@publisheriq/youtube`** adds Steam-scoped YouTube discovery, refresh, and daily rollup capture directly into TigerData for the chat coverage surface.
 
 ## Current Highlights
 
 - **Change Feed** at `/changes` for grouped storefront, PICS, media, and news activity with health states
-- **Games + Companies analytics** with advanced filters, saved views, compare, and export
+- **Games + Companies analytics** with Tiger-backed advanced filters, saved views, compare, and export
+- **Unreleased Games tracker** at `/unreleased` for upcoming games, media readiness, timelines, news, Opportunity Score, and watch workflows
 - **Insights dashboard** for top games, newest releases, and personalized monitoring
 - **AI chat** backed by the Tiger query-api, streaming responses, and current change/news contract families
 - **Per-game YouTube coverage in chat** for latest videos, creator coverage, top videos, growth, content mix, and cadence
@@ -73,7 +74,7 @@ Start with [docs/START-HERE.md](docs/START-HERE.md).
 | Area | Path |
 |------|------|
 | Documentation index | [docs/README.md](docs/README.md) |
-| Latest release | [docs/releases/v2.12-youtube-tiger-price-refresh.md](docs/releases/v2.12-youtube-tiger-price-refresh.md) |
+| Latest release | [docs/releases/v2.14-unreleased-games.md](docs/releases/v2.14-unreleased-games.md) |
 | User guides | [docs/user-guide/](docs/user-guide/) |
 | Admin guides | [docs/admin-guide/](docs/admin-guide/) |
 | Developer guides | [docs/developer-guide/](docs/developer-guide/) |
@@ -105,8 +106,9 @@ publisheriq/
 | `/chat` supported contract families | Admin route -> `query-api` | TigerData |
 | `/chat` YouTube coverage for one tracked game | Admin route -> `query-api` | TigerData |
 | Chat logging, auth, credits | Admin route -> Supabase | Supabase |
-| `/apps` | Supabase RPCs + views | Supabase |
-| `/companies` | Supabase RPCs + views | Supabase |
+| `/apps` | Admin server -> TigerData | TigerData |
+| `/companies` | Admin server -> TigerData | TigerData |
+| `/unreleased` | Admin server -> TigerData projection | TigerData |
 | `/changes` | Supabase RPCs + projections | Supabase |
 | `/admin` | Supabase RPCs + tables | Supabase |
 | Legacy/compat analytics | Cube.js | Supabase |
@@ -118,6 +120,7 @@ publisheriq/
 - `/insights` - top, newest, trending, and personalized views
 - `/changes` - change feed and Steam news monitoring
 - `/apps` - game analytics
+- `/unreleased` - upcoming games and publisher opportunity tracker
 - `/companies` - unified company analytics
 - `/admin` - admin system status
 - `/updates` - in-app patch notes

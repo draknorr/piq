@@ -8,6 +8,7 @@ This package owns the TigerData-facing data plane:
 
 - typed contract execution and contract registry metadata
 - Tiger bootstrap SQL for the target database
+- admin page projection bootstrap SQL, including `/apps`, `/companies`, and `/unreleased`
 - source-to-Tiger backfill and reconcile scripts
 - target/source baseline capture utilities
 - the contract source of truth used by `apps/query-api`
@@ -45,6 +46,11 @@ Current ready contracts include:
 The YouTube contract reads from the Tiger-side tables bootstrapped under
 `packages/data-plane/sql/tiger-bootstrap/0060_youtube.sql` and backs the
 admin-side `/api/chat/youtube-coverage` helper through `apps/query-api`.
+
+Admin page projections are also bootstrapped here. For example,
+`packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql`
+creates `metrics.unreleased_games_projection` and
+`metrics.unreleased_filter_counts` for the `/unreleased` tracker.
 
 ## Scripts
 

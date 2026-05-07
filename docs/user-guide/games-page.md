@@ -836,6 +836,7 @@ All filters are stored in the URL for bookmarking and sharing. This enables:
 - [Keyboard Shortcuts](./keyboard-shortcuts.md) - All application shortcuts
 - [Global Search](./search.md) - Quick search with ⌘K
 - [Companies Page](./companies-page.md) - Publisher and developer analytics
+- [Unreleased Games](./unreleased-games.md) - Upcoming game tracker
 - [Personalization](./personalization.md) - Pinning and alerts
 - [Games Page Architecture](../developer-guide/features/games-page.md) - Technical details
 - [v2.6 Release Notes](../releases/v2.6-games-page.md) - Full feature list

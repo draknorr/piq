@@ -2,7 +2,7 @@
 
 Common issues and solutions for PublisherIQ.
 
-**Last Updated:** April 13, 2026
+**Last Updated:** May 7, 2026
 
 ## Database and Query API Connection Issues
 
@@ -30,6 +30,17 @@ SUPABASE_SERVICE_KEY=eyJ...
 1. Set `QUERY_API_BASE_URL` to the deployed Railway HTTPS endpoint.
 2. Set `QUERY_API_BEARER_TOKEN` to the matching shared token.
 3. Redeploy the admin app after updating the variables.
+
+### "Tiger projection metrics.unreleased_games_projection is not available"
+
+**Cause:** The Tiger projection required by `/unreleased` has not been applied or refreshed in this environment.
+
+**Solution:**
+
+1. Confirm the environment has server-side `TIGER_PRIMARY_URL` set.
+2. Apply `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql` during an approved Tiger maintenance window.
+3. Refresh `metrics.unreleased_games_projection` and `metrics.unreleased_filter_counts`.
+4. Reload `/unreleased`.
 
 ### "Invalid API key"
 

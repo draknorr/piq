@@ -2,7 +2,7 @@
 
 This document describes the technical architecture of the unified Companies page in PublisherIQ.
 
-**Last Updated:** January 31, 2026
+**Last Updated:** May 7, 2026
 
 ---
 
@@ -10,7 +10,7 @@ This document describes the technical architecture of the unified Companies page
 
 The Companies page (`/companies`) is a unified analytics dashboard for browsing publishers and developers. It replaces the separate `/publishers` and `/developers` index pages with a single, feature-rich interface.
 
-This page is still Supabase/RPC-backed today. The main reads come from stored functions and materialized views; Tiger/query-api does not serve this surface directly.
+This page is Tiger-backed today. The admin server reads TigerData through `runTigerQuery` for company list, aggregate, comparison, and filter-count data. It does not use Supabase RPCs for the main company analytics surface.
 
 **Key Capabilities:**
 - View publishers, developers, or both together
@@ -78,7 +78,7 @@ This page is still Supabase/RPC-backed today. The main reads come from stored fu
 │
 └── lib/
     ├── companies-types.ts            # TypeScript interfaces (361 LOC)
-    ├── companies-queries.ts          # RPC wrappers + formatters (324 LOC)
+    ├── companies-queries.ts          # Tiger query wrappers + formatters (324 LOC)
     ├── companies-columns.ts          # Column definitions (364 LOC)
     ├── companies-presets.ts          # Preset/quick filter definitions (421 LOC)
     ├── companies-ratios.ts           # Ratio computations
@@ -235,74 +235,29 @@ const {
 
 ## Database Layer
 
-### RPC Functions
+### Tiger Query Surfaces
 
-| Function | Purpose | Performance |
-|----------|---------|-------------|
-| `get_companies_with_filters()` | Main query with all filters | Fast: ~214ms, Slow: ~4s |
-| `get_companies_aggregate_stats()` | Summary for context bar | ~100ms |
-| `get_company_sparkline_data()` | CCU time-series | ~50ms |
-| `get_filter_option_counts()` | Filter dropdown counts | ~200ms |
+The page reads TigerData from `companies-queries.ts`.
 
-### Two-Path Optimization
+| Surface | Purpose |
+|---------|---------|
+| `legacy.publishers` / `legacy.developers` | company identity and base portfolio counts |
+| `legacy.app_publishers` / `legacy.app_developers` | company-to-game relationships |
+| `legacy.apps` | release dates, platforms, status, and app metadata |
+| `legacy.latest_daily_metrics` | owners, reviews, review score, CCU, playtime, and pricing inputs |
+| `metrics.review_velocity_stats` | review velocity and velocity tier |
+| `metrics.app_trends` / `ops.ccu_tier_assignments` | growth, trend, and CCU tier inputs |
 
-The main RPC uses conditional query paths based on filter requirements:
+The query layer keeps filters server-side, parameterized, and limited. Aggregate stats are cached for 5 minutes per normalized filter set.
 
-```sql
--- Check if expensive computations needed
-v_needs_growth := (p_min_growth_7d IS NOT NULL OR p_max_growth_7d IS NOT NULL
-                  OR p_sort_by IN ('ccu_growth_7d', 'ccu_growth_30d'));
-v_needs_relationship := (p_relationship IS NOT NULL);
+### Array Filters
 
-IF NOT v_needs_growth AND NOT v_needs_relationship THEN
-  -- Fast path: Simple join, NULL for growth columns
-  RETURN QUERY SELECT ... FROM publishers/developers
-    JOIN metrics WHERE filters...
-ELSE
-  -- Slow path: Full computation with growth/relationship data
-  RETURN QUERY SELECT ... WITH growth_calculation ...
-END IF;
-```
-
-**Fast Path (~214ms):**
-- Used when no growth filters and not sorting by growth
-- Returns NULL for growth/relationship columns
-- Sufficient for most browsing scenarios
-
-**Slow Path (~4s):**
-- Used when growth filters active or sorting by growth
-- Computes CCU growth percentages
-- Computes relationship flags
-
-### Pre-Computed Content Arrays
-
-Materialized view columns for O(1) filtering:
+Genre, tag, category, platform, and relationship filters use Tiger-side arrays and indexed predicates where available:
 
 ```sql
--- On publisher_metrics and developer_metrics views
-genre_ids INT[]                    -- Array of genre IDs
-tag_ids INT[]                      -- Array of tag IDs
-category_ids INT[]                 -- Array of category IDs
-best_steam_deck_category TEXT      -- 'verified', 'playable', 'unsupported'
-has_windows BOOLEAN
-has_mac BOOLEAN
-has_linux BOOLEAN
-```
-
-**Query Pattern:**
-```sql
--- Instead of expensive EXISTS subquery
-WHERE genre_ids @> ARRAY[1,2,3]::INT[]   -- Contains all (ALL mode)
-WHERE genre_ids && ARRAY[1,2,3]::INT[]   -- Overlaps any (ANY mode)
-```
-
-### GIN Indexes
-
-```sql
-CREATE INDEX idx_publisher_metrics_genres ON publisher_metrics USING GIN (genre_ids);
-CREATE INDEX idx_publisher_metrics_tags ON publisher_metrics USING GIN (tag_ids);
-CREATE INDEX idx_publisher_metrics_categories ON publisher_metrics USING GIN (category_ids);
--- Repeated for developer_metrics
+WHERE genre_ids @> $1::int[]      -- contains all selected genres
+WHERE tag_ids && $2::int[]        -- overlaps any selected tag
+WHERE platform_array @> $3::text[]
 ```
 
 ---
@@ -409,7 +364,7 @@ const PRESETS = [
 ### Sort Field Mapping
 
 ```typescript
-// Server-side sortable (passed to RPC)
+// Server-side sortable (passed to Tiger SQL)
 const SERVER_SORTS = [
   'name', 'estimated_weekly_hours', 'game_count',
   'total_owners', 'total_ccu', 'avg_review_score',
@@ -484,7 +439,7 @@ interface ColumnDefinition {
 | `companies-presets.ts` | 421 | Preset/quick filter definitions |
 | `companies-columns.ts` | 364 | Column definitions |
 | `companies-types.ts` | 361 | TypeScript interfaces |
-| `companies-queries.ts` | 324 | RPC wrappers + formatters |
+| `companies-queries.ts` | 324 | Tiger query wrappers + formatters |
 | `companies-compare.ts` | 320 | Comparison logic |
 | `companies-export.ts` | 291 | Export formatting |
 | `DualRangeSlider.tsx` | 412 | Dual-handle range input |
@@ -554,55 +509,24 @@ Company-specific category colors:
 
 ---
 
-## Supabase Client Patterns (v2.8+)
+## TigerData Read Pattern
 
-The Companies page follows the same client patterns as the Games page.
-
-### Server Component (page.tsx)
-
-Uses service role for initial data fetch:
+The Companies page reads product data from TigerData on the server:
 
 ```typescript
-import { createServiceClient } from '@/lib/supabase/server';
+import { runTigerQuery } from '@publisheriq/database';
 
-export default async function CompaniesPage() {
-  const supabase = createServiceClient();
-
-  const { data } = await supabase.rpc('get_companies_with_filters', params);
-
-  return <CompaniesPageClient initialData={data} />;
-}
+const { rows } = await runTigerQuery<CompanyRow>(sql, values);
 ```
 
-### Client Hooks
+Environment requirements:
 
-Use `createBrowserClient` for session-aware fetching:
+| Variable | Context | Use |
+|----------|---------|-----|
+| `TIGER_PRIMARY_URL` | server only | primary TigerData read target |
+| `CHANGE_INTEL_TIGER_URL` | server only | fallback Tiger URL accepted by the shared helper |
 
-```typescript
-// hooks/useSparklineLoader.ts
-import { createBrowserClient } from '@supabase/ssr';
-
-export function useSparklineLoader() {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  const { data } = await supabase.rpc('get_company_sparkline_data', {
-    p_company_ids: companyIds,
-    p_days: 7
-  });
-}
-```
-
-### Pattern Summary
-
-| Pattern | Context | Use Case |
-|---------|---------|----------|
-| `createServiceClient()` | Server Component | Initial page data |
-| `createBrowserClient()` | Client hooks | Interactive features (sparklines, filter counts) |
-
-**Important:** Client hooks that previously used `getSupabase()` were updated in v2.8 to use `createBrowserClient()`. This fixes auth failures where RPC calls would fail silently and cache empty results.
+Supabase clients still matter for auth, pins, alerts, and user-control flows, but they are not the `/companies` analytics read path.
 
 ---
 

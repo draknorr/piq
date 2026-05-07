@@ -4,7 +4,7 @@
 
 **Databases / Storage**: Supabase Postgres + TigerData (Timescale) + R2
 
-**Last Updated:** May 1, 2026
+**Last Updated:** May 7, 2026
 
 **Semantic Layer**: Cube.js still provides compatibility analytics queries over Supabase-backed models. TigerData now serves the contract-backed chat/query plane, including YouTube coverage, through `apps/query-api`.
 
@@ -16,11 +16,11 @@ PublisherIQ now operates with these database/storage roles:
 
 | Plane | System | Current Role |
 |------|--------|--------------|
-| Product data plane | TigerData (Timescale) + R2 | accepted/tested incoming ingestion and product-data writer paths, archived payloads, and contract-backed reads |
-| Control / legacy plane | Supabase Postgres | auth, sessions, user/control data, reference data, retained/default ingestion paths, legacy warehouse surfaces, product RPCs and page reads not proven Tiger-backed |
+| Product data plane | TigerData (Timescale) + R2 | accepted/tested incoming ingestion and product-data writer paths, archived payloads, contract-backed reads, and documented admin product projections |
+| Control / legacy plane | Supabase Postgres | auth, sessions, user/control data, reference data, retained/default ingestion paths, and legacy exceptions |
 | Contract read plane | TigerData (Timescale) | contract-backed chat/search/discovery reads served through `query-api` |
 
-This is not a full migration off Supabase. Tiger/R2 is primary only for accepted and tested product-data paths; Supabase remains authoritative for retained control, reference, legacy, and product surfaces that are not proven Tiger-backed.
+This is not a full migration off Supabase. Tiger/R2 is primary for accepted and tested product-data paths and documented Tiger-backed product reads; Supabase remains authoritative for retained control, reference, and legacy exceptions.
 
 ## TigerData Schema Overview
 
@@ -49,6 +49,7 @@ TigerData-backed contracts currently depend on relations in these categories:
 - change events and change-pattern slices
 - user pins, alerts, and alert settings for `getUserContext`
 - YouTube coverage, channel, and rollup relations for `getYoutubeGameCoverage`
+- admin product projections such as `metrics.apps_page_projection`, company analytics relations, and `metrics.unreleased_games_projection`
 
 For the exact live contract list and ownership, see:
 
@@ -61,7 +62,7 @@ For the exact live contract list and ownership, see:
 The remainder of this document focuses on the Supabase schema detail, because:
 
 - generated database types in `@publisheriq/database` come from the Supabase schema
-- Supabase still serves most product-page reads
+- Supabase still owns generated auth/user-control types and retained legacy exceptions
 - retained/default paths and legacy surfaces still depend on this schema
 
 TigerData schema detail currently lives primarily in:
@@ -74,8 +75,9 @@ TigerData schema detail currently lives primarily in:
 
 | Surface | Primary Read Store |
 |--------|--------------------|
-| `/apps` | Supabase |
-| `/companies` | Supabase |
+| `/apps` | TigerData |
+| `/companies` | TigerData |
+| `/unreleased` | TigerData |
 | `/changes` | Supabase |
 | `/admin` | Supabase |
 | contract-backed chat/search/discovery | TigerData |
@@ -100,6 +102,18 @@ TigerData now also stores the contract-serving YouTube coverage slice used by `g
 | `docs.youtube_video_matches` | Current Steam app to YouTube video match state |
 | `metrics.youtube_video_snapshots` | Time-series video snapshots for view deltas and growth |
 | `metrics.youtube_game_daily` | Derived per-game daily rollups by content class |
+
+### TigerData Admin Product Projections
+
+The admin app also reads selected TigerData page projections directly from server-side code through `runTigerQuery`.
+
+| Relation | Purpose |
+|----------|---------|
+| `metrics.apps_page_projection` | Fast `/apps` list and aggregate reads for released games |
+| `metrics.unreleased_games_projection` | Fast `/unreleased` list, stats, sorting, and drawer seed data for upcoming games |
+| `metrics.unreleased_filter_counts` | Default non-adult genre/tag/category counts for `/unreleased` filters |
+
+`metrics.unreleased_games_projection` is created by `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql`. Apply and refresh it only through the approved Tiger bootstrap/maintenance process.
 
 ---
 
@@ -1393,9 +1407,9 @@ SELECT update_review_velocity_tiers();   -- Sync to sync_status
 
 ---
 
-### Games Page Materialized Views (v2.6+)
+### Legacy Supabase Games Page Materialized Views (v2.6 Historical)
 
-Pre-computed views for the Games page at `/apps` with two-path optimization.
+These Supabase-side views are retained here because older migrations and historical docs reference them. The current `/apps` page reads TigerData through `metrics.apps_page_projection` and direct Tiger queries.
 
 #### app_filter_data
 

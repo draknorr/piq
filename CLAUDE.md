@@ -1,6 +1,6 @@
 # CLAUDE.md - PublisherIQ
 
-> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData/R2-backed ingestion and query-api surfaces. Last updated: May 1, 2026.
+> Steam data analytics platform with AI chat interface. Next.js 15 + Supabase + Cube.js + TigerData/R2-backed ingestion, admin product reads, and query-api surfaces. Last updated: May 7, 2026.
 
 ## When Uncertain, Ask
 
@@ -75,10 +75,10 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 - Using `getSupabase()` in client hooks (use `createBrowserClient()` instead)
 - Referencing `LatestMetrics.js` as a separate file (it's defined inside `DailyMetrics.js`)
 - Running `trends-calculate` or `priority-calculate` (correct: `calculate-trends`, `update-priorities`)
-- Assuming `/apps` is Tiger-backed today (it is still Supabase/RPC-backed)
+- Putting Tiger connection strings in `NEXT_PUBLIC_*` variables. Tiger URLs are server-only.
 - Forgetting that YouTube chat coverage depends on the `getYoutubeGameCoverage` contract and `CHAT_TIGER_YOUTUBE_ENABLED`
-- Writing new product/ingestion data to Supabase. Accepted incoming ingestion/product-data paths are Tiger/R2-primary; Supabase is retained only for auth/session/reference/legacy/product surfaces not proven Tiger-backed.
-- Creating tests (no test framework configured; use `pnpm build` + `pnpm check-types`)
+- Writing new product/ingestion data to Supabase. Accepted incoming ingestion/product-data paths are Tiger/R2-primary; Supabase is retained for auth/session/user-control/reference/legacy exceptions and routes explicitly documented as retained.
+- Assuming there is no test runner. The admin package has `node:test` coverage; use targeted `pnpm --filter @publisheriq/admin test -- <paths>` when tests exist.
 
 ---
 
@@ -86,9 +86,9 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 
 Do not describe PublisherIQ as a single Postgres app anymore.
 
-- **TigerData / Timescale** is primary for accepted incoming ingestion and product-data writes, and is the contract-serving read plane behind `apps/query-api`.
+- **TigerData / Timescale** is primary for accepted incoming ingestion and product-data writes, documented admin product reads, and the contract-serving read plane behind `apps/query-api`.
 - **Cloudflare R2** is the primary object archive for accepted change-intel/product payloads that are stored outside relational Tiger tables.
-- **Supabase** remains for auth/session, reference data, legacy compatibility, and product surfaces not yet proven Tiger-backed. Do not add new product/ingestion writes to Supabase.
+- **Supabase** remains for auth/session, user-control data, reference data, legacy compatibility, and documented retained exceptions. Do not add new product/ingestion writes to Supabase.
 - **Legacy `query_analytics` compatibility** is Tiger-backed through `apps/query-api`; Cube.js is no longer the production `/chat` analytics read path.
 
 Current high-level ownership:
@@ -99,7 +99,10 @@ Current high-level ownership:
 | `/chat` supported contract families | `apps/query-api` -> TigerData |
 | `/chat` per-game YouTube coverage | `apps/query-api` -> TigerData |
 | auth, sessions, credits, chat logs | Supabase |
-| `/apps`, `/companies`, `/changes`, `/admin` product surfaces not proven Tiger-backed | Supabase RPCs/tables/views |
+| `/apps` | admin server -> TigerData (`metrics.apps_page_projection` when present) |
+| `/companies` | admin server -> TigerData |
+| `/unreleased` | admin server -> TigerData (`metrics.unreleased_games_projection`) |
+| `/changes`, `/insights`, `/admin` retained surfaces | Supabase RPCs/tables/views unless separately documented |
 | legacy analytics compatibility | `apps/query-api` -> TigerData |
 
 Recent accepted state:
@@ -143,6 +146,7 @@ All paths relative to `apps/admin/src/` unless fully qualified.
 Each page has its **own** filter system (NOT shared):
 - Games: `app/(main)/apps/lib/filter-registry.ts` + `app/(main)/apps/components/command-palette/`
 - Companies: `app/(main)/companies/lib/filter-registry.ts` + `app/(main)/companies/components/command-palette/`
+- Unreleased: `app/(main)/unreleased/lib/unreleased-columns.ts` + page-local filters in `UnreleasedPageClient.tsx`
 
 ### Non-obvious File Mappings
 - Cube models: 27 cubes across 9 files in `packages/cube/model/`
@@ -153,6 +157,9 @@ Each page has its **own** filter system (NOT shared):
 - Tiger chat routing and YouTube prompt handling live in `apps/admin/src/lib/chat/tiger-shadow.ts`
 - Direct-to-Tiger YouTube ingestion lives in `packages/youtube/`
 - Tiger/R2 ingestion writer code lives primarily in `packages/database/src/tiger-writer.ts`, `packages/ingestion/src/workers/`, and `packages/ingestion/src/change-intel/`
+- Unreleased Games UI lives in `apps/admin/src/app/(main)/unreleased/`
+- Unreleased Games APIs live in `apps/admin/src/app/api/unreleased/`
+- Unreleased Games Tiger projection is `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql`
 - When modifying cubes, always update `cube-system-prompt.ts` too
 - Change Feed SQL read surfaces are created by:
   - `20260315114500_add_change_feed_read_surfaces.sql`

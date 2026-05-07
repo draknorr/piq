@@ -7,6 +7,7 @@ Next.js 15 dashboard for PublisherIQ.
 The dashboard provides:
 
 - game and company analytics
+- the `/unreleased` upcoming games tracker
 - the `/changes` Change Feed
 - Insights and personalization surfaces
 - admin system-status pages, catalog control, and CCU quality
@@ -74,6 +75,7 @@ pnpm chat-evals:full-blended-ui
 | `/insights` | Top, newest, trending, and personalized insights |
 | `/changes` | Steam Activity and Steam news |
 | `/apps` | Games analytics |
+| `/unreleased` | Unreleased games tracker and opportunity workflow |
 | `/companies` | Unified publisher/developer browse surface |
 | `/publishers/[id]` | Publisher detail page |
 | `/developers/[id]` | Developer detail page |
@@ -92,6 +94,7 @@ src/
 │   ├── (auth)/                  # Login + waitlist
 │   ├── (main)/                  # Signed-in routes
 │   │   ├── apps/                # Games page
+│   │   ├── unreleased/          # Unreleased games tracker
 │   │   ├── changes/             # Change Feed UI + server helpers
 │   │   ├── companies/           # Unified companies page
 │   │   ├── insights/            # Insights dashboard
@@ -130,6 +133,8 @@ Notes:
 ## Related Documentation
 
 - [Documentation Index](../../docs/README.md)
+- [Unreleased Games User Guide](../../docs/user-guide/unreleased-games.md)
+- [Unreleased Games Developer Guide](../../docs/developer-guide/features/unreleased-games.md)
 - [Change Feed User Guide](../../docs/user-guide/change-feed.md)
 - [Change Feed Developer Guide](../../docs/developer-guide/features/change-feed.md)
 - [YouTube Chat Interface](../../docs/user-guide/chat-interface.md)

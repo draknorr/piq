@@ -33,6 +33,7 @@ If your email is not approved yet, use `/waitlist`.
 | `/insights` | Top, newest, trending, and personalized views |
 | `/changes` | Unified Steam change feed and news activity |
 | `/apps` | Games analytics |
+| `/unreleased` | Upcoming games and publisher opportunity tracker |
 | `/companies` | Unified publishers/developers analytics |
 | `/account` | Profile and credit balance |
 | `/admin` | Admin-only system status |
@@ -65,6 +66,7 @@ If you want the newest change-intelligence surfaces to stay current, keep both `
 After the app is running and you have data:
 
 - open `/apps` and confirm games load
+- open `/unreleased` and confirm upcoming games load when the Tiger projection is present
 - open `/companies` and confirm company metrics load
 - open `/changes` and confirm the feed and news tabs populate when the change-intel surfaces are present
 - open `/chat` and ask a simple warehouse question
@@ -73,6 +75,7 @@ After the app is running and you have data:
 
 - [Change Feed](./change-feed.md)
 - [Games Page](./games-page.md)
+- [Unreleased Games](./unreleased-games.md)
 - [Companies Page](./companies-page.md)
 - [Chat Interface](./chat-interface.md)
 - [Account](./account.md)

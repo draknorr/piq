@@ -9,7 +9,7 @@ PublisherIQ documentation is organized by audience and aligned with the current 
 These docs describe the live May 2026 operating model and should be treated as canonical:
 
 - **[System Overview](developer-guide/architecture/overview.md)** - high-level architecture and load sharing
-- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current Supabase/TigerData/R2/Cube split and operational flow
+- **[TigerData Operating Model](developer-guide/architecture/tigerdata-operating-model.md)** - current TigerData/R2/Supabase/Cube split and operational flow
 - **[Query API README](../apps/query-api/README.md)** - live contract service, environments, and contract ownership
 - **[YouTube Collector README](../packages/youtube/README.md)** - current Steam-scoped YouTube ingestion and rollup surface
 - **[Tiger Chat Production](developer-guide/deployment/tiger-chat-production.md)** - preview/production deployment and refresh topology
@@ -36,12 +36,12 @@ Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are
 
 ## Latest Release
 
-**[v2.13 - Tiger Primary Ingestion](releases/v2.13-tiger-primary-ingestion.md)** (May 1, 2026)
+**[v2.14 - Unreleased Games Tracker](releases/v2.14-unreleased-games.md)** (May 7, 2026)
 
 Highlights:
-- Tiger/R2 are primary for accepted incoming ingestion and product-data paths
-- Supabase is retained for auth/session/reference/legacy/product surfaces not proven Tiger-backed; no new product/ingestion writes should be added there
-- PR #8/#9/#10 landed the Tiger change-intel startup fix, review claim fix, and embedding candidate repair, with successful embedding smoke runs on commit `7be82955`
+- new `/unreleased` workspace for upcoming Steam games, launch signals, media, news, timelines, and watchlist workflows
+- Tiger projection `metrics.unreleased_games_projection` serves fast filtering, sorting, and export
+- `/apps`, `/companies`, and `/unreleased` are Tiger-backed admin product reads; Supabase remains for auth/session/user-control surfaces and documented exceptions
 
 ---
 
@@ -53,6 +53,7 @@ Highlights:
 - **[Keyboard Shortcuts](user-guide/keyboard-shortcuts.md)** - All keyboard shortcuts
 - **[Insights Page](user-guide/insights-page.md)** - Top games, newest releases, trending, and personalized tabs
 - **[Games Page](user-guide/games-page.md)** - Game discovery and analytics
+- **[Unreleased Games](user-guide/unreleased-games.md)** - Upcoming game tracker and opportunity workflow
 - **[Companies Page](user-guide/companies-page.md)** - Unified publishers and developers
 - **[Chat Interface](user-guide/chat-interface.md)** - Natural language queries
 - **[Chat Query Examples](user-guide/chat-query-examples.md)** - Example prompts
@@ -95,6 +96,7 @@ Highlights:
 
 - **[Change Feed](developer-guide/features/change-feed.md)** - `/changes` feature internals
 - **[Games Page](developer-guide/features/games-page.md)** - Technical details
+- **[Unreleased Games](developer-guide/features/unreleased-games.md)** - `/unreleased` feature internals
 - **[Companies Page](developer-guide/features/companies-page.md)** - Implementation
 - **[Admin Dashboard](developer-guide/features/admin-dashboard.md)** - Architecture
 - **[Personalization](developer-guide/features/personalization.md)** - Pins and alerts
@@ -141,6 +143,7 @@ Highlights:
 
 ## Previous Releases
 
+- **[v2.13 - Tiger Primary Ingestion](releases/v2.13-tiger-primary-ingestion.md)** - Tiger/R2 primary ingestion baseline
 - **[v2.12 - YouTube Coverage, Tiger Recovery, and Price Reliability](releases/v2.12-youtube-tiger-price-refresh.md)** - per-game YouTube chat coverage and Tiger recovery/pricing docs
 - **[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** - contract-first Tiger/query-api cutover baseline
 - **[v2.10 - Chat News, CCU Quality, and Ops Refresh](releases/v2.10-chat-news-ops-refresh.md)** - recent-news and ops baseline before the broader contract cutover doc refresh

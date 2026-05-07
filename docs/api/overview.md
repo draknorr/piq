@@ -8,6 +8,7 @@ This section covers the product-facing internal APIs and the external data sourc
 |-----|---------|-----------------|
 | Chat JSON and streaming | AI responses, contract execution, follow-up context, YouTube coverage, and turn metadata | Query API + Tiger-backed contracts |
 | Dashboard internals | Pins, alerts, auth validation, and user state | Supabase session + tables/RPCs |
+| Unreleased Games internals | Upcoming-game list, filter counts, drawer detail, and timeline | Admin server -> TigerData projections |
 | Change Feed internals | Activity, detail, news, and status surfaces | Supabase RPCs and read surfaces |
 
 ## External Source APIs
@@ -34,6 +35,7 @@ Common failure response:
 
 - `/api/chat/*` is the system contract boundary for chat and related query workflows.
 - `/api/chat/youtube-coverage` is the authenticated helper route for the YouTube coverage subflow.
+- `/api/unreleased/*` is Tiger-backed through admin server route handlers and serves the `/unreleased` workspace.
 - `/api/change-feed/*` is Supabase-backed and serves the `/changes` experience.
 - `/api/pins/*`, `/api/alerts/*`, and admin data routes remain Supabase-backed.
 

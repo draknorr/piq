@@ -7,6 +7,7 @@ This guide covers deploying the PublisherIQ admin dashboard to Vercel.
 - GitHub repository with PublisherIQ code
 - Vercel account ([vercel.com](https://vercel.com))
 - Supabase project set up
+- TigerData service set up for admin product reads
 - LLM API key (Anthropic or OpenAI)
 
 ## Quick Start
@@ -51,6 +52,7 @@ Navigate to **Settings > Environment Variables** and add:
 |----------|-------|-------------|
 | `SUPABASE_URL` | `https://xxx.supabase.co` | All |
 | `SUPABASE_SERVICE_KEY` | `eyJ...` | All |
+| `TIGER_PRIMARY_URL` | Production or preview Tiger Postgres URL | All |
 | `QUERY_API_BASE_URL` | `https://publisheriq-production.up.railway.app` | All |
 | `QUERY_API_BEARER_TOKEN` | Shared bearer token for query-api | All |
 | `CHAT_TIGER_PRIMARY_MODE` | `all` | All |
@@ -77,8 +79,8 @@ Or if using OpenAI:
 | `NEXT_PUBLIC_CHAT_TIGER_DEBUG` | `true` | Preview / Development only |
 
 For a split preview/production TigerData rollout, do not reuse the same query-api
-base URL and bearer token across environments. Use the dedicated Railway/TigerData
-pairing described in [Tiger Chat Production](./tiger-chat-production.md).
+base URL, bearer token, or Tiger database URL across environments. Use the
+dedicated Railway/TigerData pairing described in [Tiger Chat Production](./tiger-chat-production.md).
 
 ### 4. Deploy
 
@@ -130,6 +132,7 @@ Preview deployments use the same environment variables by default. For different
 1. Create variables with **Preview** environment only
 2. Use a separate Supabase project for staging
 3. Point `QUERY_API_BASE_URL` and `QUERY_API_BEARER_TOKEN` at the preview Railway service, not production
+4. Point `TIGER_PRIMARY_URL` at the preview TigerData service for `/apps`, `/companies`, and `/unreleased`
 
 If `QUERY_API_BASE_URL` is not set in a deployed Vercel preview or production
 environment, the admin app now treats that as a configuration error instead of

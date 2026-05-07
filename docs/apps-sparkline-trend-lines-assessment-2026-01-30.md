@@ -4,6 +4,8 @@ Date: 2026-01-30
 Area: `apps/admin` → `/apps` (Games list) sparkline column
 Request: troubleshoot + document; **no code changes/fixes in this doc**
 
+> Historical note: this assessment describes the old Supabase sparkline path. The current `/apps` product-data read path is Tiger-backed through server-side `runTigerQuery`.
+
 ---
 
 > **RESOLVED (2026-01-31):** This issue was fixed in commit `3c2dda3` by changing the Supabase client pattern in `useSparklineLoader` from `getSupabase()` to `createBrowserClient()`. The fix ensures the RPC call uses session-aware cookies. A follow-up fix in commit `dc8dbd8` applied the same pattern to the Companies page. See [v2.8 Release Notes](./releases/v2.8-security-fixes.md) for details.
@@ -14,7 +16,7 @@ Request: troubleshoot + document; **no code changes/fixes in this doc**
 
 On production (`publisheriq.app`), the Sparkline column on `/apps` renders an em‑dash (`—`) instead of a chart.
 
-The `/apps` table data is fetched server-side, but sparklines are fetched client-side via a Supabase RPC (`get_app_sparkline_data`) triggered by an `IntersectionObserver`. Any failure in that client-side path (auth/session mismatch, missing env, RPC error, observer not firing) is currently **silently converted into “no data”** because the sparkline loader caches empty results on error and does not log.
+At the time of this assessment, the `/apps` table data was fetched server-side while sparklines were fetched client-side via a Supabase RPC (`get_app_sparkline_data`) triggered by an `IntersectionObserver`. Any failure in that client-side path (auth/session mismatch, missing env, RPC error, observer not firing) was silently converted into “no data” because the sparkline loader cached empty results on error and did not log.
 
 The repo contains a very recent commit explicitly titled “Fix sparkline trend lines not loading on /apps page” (`3c2dda3`, 2026-01-29). Given the timing (“recently broke”) and the symptom (“always `—`”), the most likely explanation is that production is still running a build prior to that change (or an equivalent regression reintroduced the pre-fix behavior).
 
@@ -142,5 +144,4 @@ How to confirm:
 ## Notes / Footguns
 
 - The sparkline loader’s “cache empty on error” behavior makes debugging difficult because it is indistinguishable from real “no data”.
-- The `/apps` page can look “mostly fine” even if client-side Supabase calls are broken, because the primary table data path is server/service-role based.
-
+- In the old path, the `/apps` page could look “mostly fine” even if client-side Supabase calls were broken, because the primary table data path was server/service-role based.

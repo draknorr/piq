@@ -2,7 +2,7 @@
 
 PublisherIQ combines official Steam APIs, SteamSpy, Steam news, and PICS-derived metadata, then serves those inputs through two different data planes.
 
-**Last Updated:** May 1, 2026
+**Last Updated:** May 7, 2026
 
 ## Source Hierarchy
 
@@ -28,6 +28,7 @@ TigerData and R2 are primary for accepted and tested incoming ingestion/product-
 - archived normalized snapshots and evidence payloads where object storage is configured
 - YouTube coverage, channel, match, and rollup tables written by `@publisheriq/youtube`
 - hot contract-serving slices for chat/search/discovery
+- admin product projections and queries for `/apps`, `/companies`, and `/unreleased`
 
 ### Supabase
 
@@ -35,12 +36,12 @@ Supabase remains the retained target/source for:
 
 - auth and user/session state
 - credits, logs, and user-control data
-- reference data and operational state not proven Tiger-backed
+- reference data and retained operational state
 - legacy warehouse surfaces and compatibility reads
-- page-serving RPCs and views for `/apps`, `/companies`, `/changes`, and `/admin`
+- retained page-serving RPCs and views for routes that are still explicitly Supabase-backed, such as `/changes`, `/insights`, and `/admin`
 - retained/default ingestion paths where Tiger/R2 has not been enabled and verified
 
-TigerData is therefore both the contract-serving target and the primary product-data target for accepted cutover paths, but it is not a blanket replacement for Supabase.
+TigerData is therefore the contract-serving target, the primary product-data target for accepted cutover paths, and the source for documented Tiger-backed admin product reads. It is not a replacement for Supabase auth/session/user-control storage.
 
 ## Authority Rules
 

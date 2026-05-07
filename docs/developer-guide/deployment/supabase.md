@@ -2,7 +2,7 @@
 
 This guide covers setting up the Supabase side of PublisherIQ.
 
-Current state: Supabase is retained for auth/session/reference data, legacy reads, and product surfaces not yet proven Tiger-backed. Accepted incoming ingestion and product-data writer paths are Tiger/R2-primary where their runtime sets `DATA_WRITE_TARGET=tiger`, `CHANGE_INTEL_WRITE_TARGET=tiger`, `PICS_CHANGE_HISTORY_TARGET=tiger`, or `PICS_LATEST_STATE_TARGET=tiger`.
+Current state: Supabase is retained for auth/session/user-control/reference data, legacy reads, and explicitly documented route exceptions. Accepted incoming ingestion and product-data writer paths are Tiger/R2-primary where their runtime sets `DATA_WRITE_TARGET=tiger`, `CHANGE_INTEL_WRITE_TARGET=tiger`, `PICS_CHANGE_HISTORY_TARGET=tiger`, or `PICS_LATEST_STATE_TARGET=tiger`.
 
 ## Prerequisites
 
@@ -131,9 +131,9 @@ Supabase remains responsible for:
 - service-role auth/reference operations that are explicitly marked with `SUPABASE_SERVICE_CLIENT_PURPOSE`
 - source/reference reads for Tiger bootstrap, parity, preview mirror, and legacy validation
 - page and admin reads that still execute directly against Supabase RPCs and materialized views
-- legacy product surfaces that have not been proven Tiger-backed
+- retained product surfaces that are explicitly documented as Supabase-backed
 
-TigerData owns the accepted contract-serving query plane and Tiger/R2 owns accepted incoming ingestion/product-data writes documented in [Tiger Chat Production](./tiger-chat-production.md), [GitHub Actions Configuration](./github-actions.md), and [Query API](../../../apps/query-api/README.md).
+TigerData owns the accepted contract-serving query plane, documented admin product reads, and accepted incoming ingestion/product-data writes documented in [Tiger Chat Production](./tiger-chat-production.md), [GitHub Actions Configuration](./github-actions.md), and [Query API](../../../apps/query-api/README.md).
 
 Do not describe Supabase as the universal live product write authority anymore. It remains required, but it is now a retained control/reference/legacy system for many paths.
 

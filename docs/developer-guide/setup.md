@@ -70,15 +70,16 @@ Legacy `query_analytics` chat requests route through the Tiger Query API. New lo
 | `QUERY_API_BASE_URL` | Yes for deployed admin chat | Base URL for the Tiger query-api |
 | `QUERY_API_BEARER_TOKEN` | Yes for protected query-api routes | Shared bearer token between admin and query-api |
 | `CHAT_TIGER_YOUTUBE_ENABLED` | No | Enables the YouTube chat coverage family in the admin app |
-| `TIGER_PRIMARY_URL` | Yes for query-api | TigerData / Timescale Postgres connection string |
+| `TIGER_PRIMARY_URL` | Yes for query-api and Tiger-backed admin pages | TigerData / Timescale Postgres connection string |
 | `DATA_PLANE_SOURCE_URL` | No for local serving, yes for source-side workflows | Source database used by backfill, baseline, and preview mirror flows |
 | `DATABASE_URL` | Yes for Supabase/source scripts | Supabase source fallback used by workers and repair scripts |
 
 **Notes:**
-- `/chat` and the Tiger-backed discovery routes use the Tiger query-api for contract execution.
+- `/chat` and contract-backed discovery workflows use the Tiger query-api for contract execution.
+- `/apps`, `/companies`, and `/unreleased` use server-side admin `runTigerQuery` reads and also need `TIGER_PRIMARY_URL`.
 - `QUERY_API_BASE_URL` / `QUERY_API_BEARER_TOKEN` belong in `apps/admin/.env.local`.
 - `CHAT_TIGER_YOUTUBE_ENABLED=true` enables the public one-game YouTube coverage prompts in `/chat`.
-- `TIGER_PRIMARY_URL` belongs in the query-api / data-plane runtime environment.
+- `TIGER_PRIMARY_URL` belongs in the query-api / data-plane runtime environment and in `apps/admin` server environments that serve Tiger-backed pages. Do not expose it as `NEXT_PUBLIC_*`.
 - `DATA_PLANE_SOURCE_URL` is reserved for source-side baseline/backfill reads.
 - `DATABASE_URL` is the Supabase source fallback used by worker and repair scripts.
 - The YouTube collector has its own source-side envs such as `YOUTUBE_API_KEY`, `YOUTUBE_WRITE_TARGET`, and `YOUTUBE_MIRROR_SOURCE_URL`; see `packages/youtube/README.md`.

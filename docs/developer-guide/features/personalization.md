@@ -2,7 +2,7 @@
 
 This document provides a complete technical specification for the PublisherIQ personalized dashboard feature, including database schema, alert detection system, API routes, and UI components.
 
-**Last Updated:** January 12, 2026
+**Last Updated:** May 7, 2026
 
 **Status:** Implemented (v2.4)
 
@@ -32,7 +32,7 @@ PublisherIQ has 70K+ games with constantly updating metrics. Users (BI analysts,
 
 ### Solution
 
-Let users **pin** entities (games, publishers, developers) to create a personalized dashboard. The system watches pinned entities and **surfaces changes automatically** via smart alerts.
+Let users **pin** entities (games, publishers, developers) to create a personalized dashboard. The system watches pinned entities and **surfaces changes automatically** via smart alerts. The `/unreleased` page uses the same `game` pins for its Watch button.
 
 ### Architecture Diagram
 
@@ -48,7 +48,7 @@ Let users **pin** entities (games, publishers, developers) to create a personali
           ▼                ▼                ▼                ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              API LAYER                                       │
-│  POST /api/pins    GET /api/pins    GET /api/alerts    PATCH /api/prefs     │
+│  POST /api/pins    GET /api/pins/check    GET /api/alerts    PATCH /api/prefs│
 └──────────────────────────────────┬──────────────────────────────────────────┘
                                    │
                                    ▼

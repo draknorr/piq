@@ -2,7 +2,7 @@
 
 > **Steam Data Analytics Platform with AI Chat Interface**
 
-PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, PICS, and matched Steam-scoped YouTube coverage into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, a TigerData-backed query-api, and a direct-to-Tiger YouTube collector, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, market shifts, and creator pickup.
+PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, PICS, and matched Steam-scoped YouTube coverage into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, unreleased-game opportunity tracking, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, TigerData/R2 product-data paths, a TigerData-backed query-api, and a direct-to-Tiger YouTube collector, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, market shifts, creator pickup, and upcoming launch opportunities.
 
 ---
 
@@ -45,14 +45,15 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 - **AI-Powered Analysis**: Ask natural language questions and receive structured, data-backed answers across analytics, discovery, change-intel tools, and per-game YouTube coverage
 - **Creator Signal**: Inspect matched YouTube uploads, creator coverage, fastest-growing videos, content mix, and upload cadence for a tracked game
 - **Deep Discovery**: 12 preset views, 40+ filter parameters, and 6 computed insight metrics for finding hidden gems, tracking trends, and comparing games
+- **Unreleased Opportunity Tracking**: Identify upcoming games by release timing, media readiness, Steam news, change activity, publisher fit, and Opportunity Score
 - **Personalized Monitoring**: Pin games and companies, receive alerts on CCU spikes, trend reversals, review surges, and more
 
 ### Current Serving Model
 
 PublisherIQ now runs with a split serving model:
 
-- **Supabase** remains the write authority and control plane for ingestion, queues, auth, operational state, and the current page-serving RPCs
-- **TigerData (Timescale)** powers the contract-serving read plane through `query-api`
+- **TigerData (Timescale) + R2** are primary for accepted product-data writes, contract-serving reads, and documented admin product reads
+- **Supabase** remains the auth/session/user-control authority plus retained reference, queue, and legacy exceptions
 - **Cube.js** remains in the stack for compatibility and legacy analytics reads that have not yet moved onto typed Tiger-backed contracts
 
 This means the system should be understood as a multi-plane runtime, not a single-database application.
@@ -62,7 +63,8 @@ This means the system should be understood as a multi-plane runtime, not a singl
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 15, React 19, TailwindCSS |
-| Write / Control Plane | Supabase (PostgreSQL) with materialized views and RPC read surfaces |
+| Product Data Plane | TigerData (Timescale) + R2 for product-data writes, admin projections, and contract-serving slices |
+| Control Plane | Supabase (PostgreSQL) for auth, sessions, user-control data, reference data, and retained legacy exceptions |
 | Semantic Layer | Cube.js (27 cubes across 9 model files, now primarily compatibility-focused) |
 | Contract Read Plane | TigerData-backed `query-api` contracts for chat, semantic retrieval, momentum, change/news, user context, and continuation |
 | YouTube Collector | `@publisheriq/youtube` direct-to-Tiger discovery, refresh, and daily rollups for chat coverage |
@@ -191,7 +193,22 @@ Save up to 10 named filter/column/sort configurations per browser. Saved views p
 
 ---
 
-### 2.2 Companies Page
+### 2.2 Unreleased Games Page
+
+The Unreleased Games page (`/unreleased`) is the upcoming-game opportunity workspace. It focuses on games that are not out yet and helps users find promising publisher, BD, marketing, and investment targets before launch.
+
+Key capabilities:
+
+- Tiger-backed list of unreleased, upcoming, undated, and stale-date Steam games
+- Opportunity Score combining release timing, recent activity, store completeness, media readiness, and publisher fit
+- filters for adult content, release status, publisher status, release window, taxonomy, platforms, media, news, changes, and commercial flags
+- detail drawer with overview, screenshots, trailers, merged event/news timeline, and Steam news links
+- Watch button that uses the existing pins system
+- customizable data columns whose order controls CSV export fields
+
+---
+
+### 2.3 Companies Page
 
 The Companies page (`/companies`) provides a unified view of publishers and developers with portfolio-level analytics.
 
@@ -264,7 +281,7 @@ Color-coded growth display:
 
 ---
 
-### 2.3 Insights Dashboard
+### 2.4 Insights Dashboard
 
 The Insights page (`/insights`) provides a curated analytics overview with four tabs.
 
@@ -312,7 +329,7 @@ Columns hide progressively on smaller screens:
 
 ---
 
-### 2.4 Change Feed
+### 2.5 Change Feed
 
 The Change Feed (`/changes`) is a unified Steam Activity surface that combines grouped bursts, announcement cards, and news drill-downs in one place.
 
@@ -349,7 +366,7 @@ Each activity card can expand into:
 
 ---
 
-### 2.5 Command Palette & Search
+### 2.6 Command Palette & Search
 
 #### Command Palette
 
@@ -400,7 +417,7 @@ Open with `Cmd+K` / `Ctrl+K` from any page:
 
 ---
 
-### 2.6 AI Chat Interface
+### 2.7 AI Chat Interface
 
 The AI chat interface (`/chat`) enables natural language querying of all platform data.
 
@@ -469,13 +486,13 @@ Two complementary features assist users:
 
 ---
 
-### 2.7 Personalization & Alerts
+### 2.8 Personalization & Alerts
 
 #### Pin System
 
 Pin any game, publisher, or developer from its detail page to track it on your personalized dashboard:
 - Optimistic UI with rollback on error
-- Pin button available on `/apps/{appid}`, `/publishers/{id}`, `/developers/{id}`
+- Pin/Watch controls available on `/apps/{appid}`, `/unreleased`, `/publishers/{id}`, and `/developers/{id}`
 
 #### 8 Alert Types
 
@@ -504,7 +521,7 @@ Pin any game, publisher, or developer from its detail page to track it on your p
 
 ---
 
-### 2.8 Credit System
+### 2.9 Credit System
 
 The credit system manages AI chat usage with transparent cost tracking.
 
@@ -549,7 +566,7 @@ Credits are reserved before chat execution and finalized after completion. If a 
 
 ---
 
-### 2.9 Account & Authentication
+### 2.10 Account & Authentication
 
 #### OTP-First Authentication with Compatibility Callbacks
 
@@ -579,7 +596,7 @@ New users apply via a waitlist form. Administrators review and approve applicati
 
 ---
 
-### 2.10 Admin Dashboard
+### 2.11 Admin Dashboard
 
 The admin dashboard provides system health monitoring and user management across four pages.
 
@@ -923,7 +940,8 @@ Query API             ───────────────────�
 | Frontend Framework | Next.js 15 | App Router with React Server Components |
 | UI Framework | React 19 | Component rendering |
 | Styling | TailwindCSS | Utility-first CSS |
-| Write / Control Plane | Supabase (PostgreSQL) | primary write target, auth, queues, projections, and page reads |
+| Product Data Plane | TigerData (Timescale) + R2 | accepted product-data writes, admin product projections, and contract-serving slices |
+| Control Plane | Supabase (PostgreSQL) | auth, sessions, user-control data, queues, reference data, and retained legacy exceptions |
 | Semantic Layer | Cube.js | analytics compatibility layer over Supabase-backed models |
 | Query API | Railway-hosted `query-api` | TigerData-backed typed contracts and continuation |
 | Embeddings | OpenAI text-embedding-3-small | Stored in Tiger-backed retrieval tables |
@@ -935,12 +953,12 @@ Query API             ───────────────────�
 
 ### 5.3 Database
 
-PublisherIQ now uses two database roles:
+PublisherIQ now uses split database/storage roles:
 
-- **Supabase** for writes, operational state, auth, product RPCs, and current page-serving data
-- **TigerData** for selected contract-serving read slices
+- **TigerData/R2** for accepted product-data writes, admin product reads, and contract-serving read slices
+- **Supabase** for auth, user-control data, queues, reference data, and retained legacy exceptions
 
-The scale table below still reflects the main Supabase warehouse footprint because Supabase remains the write/control plane.
+The scale table below still reflects the historical Supabase warehouse footprint where those tables remain part of the retained source or compatibility plane.
 
 #### Scale
 
@@ -1033,8 +1051,9 @@ Semantic similarity and concept search now flow through the Tiger query-api rath
 | Dashboard | Vercel | Next.js frontend + API routes |
 | PICS Service | Railway | Python microservice for Steam product data |
 | Cube.js | Fly.io | Semantic analytics layer |
-| Supabase | Supabase | write/control plane, auth, queues, and page-serving RPCs |
+| Supabase | Supabase | auth/session/user-control plane, queues, reference data, and retained legacy exceptions |
 | Query API + TigerData | Railway + Tiger | contract-serving read plane for chat and discovery |
+| Admin TigerData reads | Vercel + Tiger | `/apps`, `/companies`, and `/unreleased` product reads |
 | CI/CD | GitHub Actions | 15+ scheduled workflows |
 
 ---
