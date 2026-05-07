@@ -1761,6 +1761,7 @@ function GamesTable({
                   {!allSelected && selectedSome && <span className="h-0.5 w-2 bg-white" />}
                 </button>
               </th>
+              <th className="min-w-[150px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
               <th className="min-w-[270px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">
                 <button
                   onClick={() => onSort('name')}
@@ -1771,7 +1772,6 @@ function GamesTable({
                 </button>
               </th>
               {columns.map((columnId) => header(columnId))}
-              <th className="min-w-[150px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1789,6 +1789,24 @@ function GamesTable({
                   >
                     {selectedIds.has(game.appid) && <Check className="h-3 w-3" />}
                   </button>
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <div className="flex items-center gap-2">
+                    <WatchButton
+                      compact
+                      watched={pinnedIds.has(game.appid)}
+                      loading={pinningIds.has(game.appid)}
+                      onClick={() => onPin(game)}
+                    />
+                    <button
+                      onClick={() => onOpenDetail(game.appid, 'overview')}
+                      className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary"
+                      title="Open details"
+                    >
+                      <Eye className="h-4 w-4" />
+                      Details
+                    </button>
+                  </div>
                 </td>
                 <td className="px-3 py-3 align-top">
                   <div className="min-w-0">
@@ -1829,24 +1847,6 @@ function GamesTable({
                     </td>
                   );
                 })}
-                <td className="px-3 py-3 align-top">
-                  <div className="flex items-center gap-2">
-                    <WatchButton
-                      compact
-                      watched={pinnedIds.has(game.appid)}
-                      loading={pinningIds.has(game.appid)}
-                      onClick={() => onPin(game)}
-                    />
-                    <button
-                      onClick={() => onOpenDetail(game.appid, 'overview')}
-                      className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary"
-                      title="Open details"
-                    >
-                      <Eye className="h-4 w-4" />
-                      Details
-                    </button>
-                  </div>
-                </td>
               </tr>
             ))}
           </tbody>
