@@ -247,8 +247,11 @@ async function hasUnreleasedProjection(): Promise<boolean> {
     `SELECT to_regclass('metrics.unreleased_games_projection') IS NOT NULL AS exists`,
     []
   );
-  projectionAvailable = rows[0]?.exists === true;
-  return projectionAvailable;
+  const exists = rows[0]?.exists === true;
+  if (exists) {
+    projectionAvailable = true;
+  }
+  return exists;
 }
 
 async function hasUnreleasedFilterCounts(): Promise<boolean> {
@@ -257,8 +260,11 @@ async function hasUnreleasedFilterCounts(): Promise<boolean> {
     `SELECT to_regclass('metrics.unreleased_filter_counts') IS NOT NULL AS exists`,
     []
   );
-  filterCountProjectionAvailable = rows[0]?.exists === true;
-  return filterCountProjectionAvailable;
+  const exists = rows[0]?.exists === true;
+  if (exists) {
+    filterCountProjectionAvailable = true;
+  }
+  return exists;
 }
 
 function assertArrayParam(field: 'genres' | 'tags' | 'categories' | 'platforms' | 'signalFamilies'): void {
