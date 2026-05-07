@@ -26,11 +26,19 @@ import {
 } from 'lucide-react';
 import { Badge, Button, Card, Popover, SearchInput, UnderlineTabs } from '@/components/ui';
 import { useAuthReady } from '@/hooks/useAuthReady';
+import { UnreleasedColumnSelector } from './UnreleasedColumnSelector';
 import {
   downloadCsv,
   generateUnreleasedCsv,
   unreleasedCsvFilename,
 } from '../lib/unreleased-export';
+import {
+  DEFAULT_UNRELEASED_COLUMNS,
+  UNRELEASED_COLUMN_DEFINITIONS,
+  parseUnreleasedColumnsParam,
+  serializeUnreleasedColumnsParam,
+  type UnreleasedColumnId,
+} from '../lib/unreleased-columns';
 import type {
   AdultFilter,
   FilterOption,
@@ -203,6 +211,16 @@ const DEFAULT_FILTERS: UnreleasedFilters = {
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return value.toLocaleString();
+}
+
+function formatPriceCents(value: number | null | undefined, isFree: boolean): string {
+  if (isFree) return 'Free';
+  if (value === null || value === undefined) return '-';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(value / 100);
 }
 
 function formatCompact(value: number | null | undefined): string {
@@ -500,6 +518,10 @@ function OpportunityBadge({ score }: { score: number }) {
   return <Badge variant={variant}>{score}</Badge>;
 }
 
+function BooleanBadge({ value, trueLabel = 'Yes', falseLabel = 'No' }: { value: boolean; trueLabel?: string; falseLabel?: string }) {
+  return <Badge variant={value ? 'success' : 'default'}>{value ? trueLabel : falseLabel}</Badge>;
+}
+
 function ReleaseBadge({ status }: { status: ReleaseStatus }) {
   const variant = status === 'dated_future' ? 'success' : status === 'stale_past_date' ? 'warning' : 'info';
   return <Badge variant={variant}>{RELEASE_STATUS_LABELS[status]}</Badge>;
@@ -572,6 +594,44 @@ function EntityLinks({ game }: { game: UnreleasedGame }) {
       ) : (
         <div className="text-caption text-text-muted">No developer</div>
       )}
+    </div>
+  );
+}
+
+function EntitySingleLink({
+  kind,
+  id,
+  name,
+  vanityUrl,
+}: {
+  kind: 'publisher' | 'developer';
+  id: number | null;
+  name: string | null;
+  vanityUrl: string | null;
+}) {
+  if (!name) return <span className="text-body-sm text-text-muted">-</span>;
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-body-sm">
+      {id ? (
+        <Link
+          href={`/${kind === 'publisher' ? 'publishers' : 'developers'}/${id}`}
+          className="truncate text-text-secondary hover:text-accent-primary"
+          title={name}
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className="truncate text-text-secondary" title={name}>{name}</span>
+      )}
+      <a
+        href={steamEntityUrl(kind, name, vanityUrl)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-text-muted hover:text-accent-primary"
+        title={`Open ${kind} on Steam`}
+      >
+        <ExternalLink className="h-3 w-3" />
+      </a>
     </div>
   );
 }
@@ -1467,8 +1527,159 @@ function FiltersPanel({
   );
 }
 
+function renderUnreleasedColumnCell(
+  columnId: UnreleasedColumnId,
+  game: UnreleasedGame,
+  {
+    onOpenDetail,
+  }: {
+    onOpenDetail: (appid: number, tab?: DetailTab) => void;
+  }
+) {
+  switch (columnId) {
+    case 'opportunity_score':
+      return <OpportunityBadge score={game.opportunity_score} />;
+    case 'release':
+      return (
+        <div className="space-y-1">
+          <ReleaseBadge status={game.release_status} />
+          <div className="text-body-sm text-text-secondary">{formatDate(game.release_date)}</div>
+          <div className="text-caption text-text-muted">{formatReleaseLead(game)}</div>
+        </div>
+      );
+    case 'latest_added':
+      return <span className="text-body-sm text-text-secondary">{formatRelative(game.latest_added_at)}</span>;
+    case 'publisher_developer':
+      return <EntityLinks game={game} />;
+    case 'latest_update':
+      return (
+        <button
+          type="button"
+          onClick={() => onOpenDetail(game.appid, 'timeline')}
+          className="max-w-[220px] text-left hover:text-accent-primary"
+          title="Open timeline"
+        >
+          <div className="text-body-sm text-text-primary">
+            {game.latest_change_type ? cleanLabel(game.latest_change_type) : 'No captured change'}
+          </div>
+          <div className="truncate text-caption text-text-muted" title={game.latest_change_summary ?? undefined}>
+            {game.latest_change_summary ?? formatRelative(game.latest_change_at)}
+          </div>
+          <div className="mt-1 text-caption text-text-tertiary">
+            {game.change_count_30d} changes / {game.announcement_count_30d} news
+          </div>
+        </button>
+      );
+    case 'latest_news':
+      return steamNewsUrl(game.appid, game.latest_news_url) ? (
+        <a
+          href={steamNewsUrl(game.appid, game.latest_news_url) ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block max-w-[200px] text-body-sm text-text-primary hover:text-accent-primary"
+        >
+          <span className="line-clamp-2">{game.latest_news_title ?? 'Steam news'}</span>
+          <span className="mt-1 block text-caption text-text-muted">{formatRelative(game.latest_news_at)}</span>
+        </a>
+      ) : (
+        <span className="text-body-sm text-text-muted">No news</span>
+      );
+    case 'taxonomy':
+      return (
+        <div className="space-y-1.5">
+          <TaxonomyPills labels={game.tag_names} />
+          <TaxonomyPills labels={game.category_names} limit={2} />
+        </div>
+      );
+    case 'media':
+      return (
+        <button
+          type="button"
+          onClick={() => onOpenDetail(game.appid, 'media')}
+          className="flex items-center gap-2 rounded-md px-1 py-0.5 text-body-sm text-text-secondary hover:bg-surface-elevated hover:text-accent-primary"
+          title="Open media"
+        >
+          <span className="inline-flex items-center gap-1"><ImageIcon className="h-3.5 w-3.5" />{game.screenshot_count}</span>
+          <span className="inline-flex items-center gap-1"><Film className="h-3.5 w-3.5" />{game.movie_count}</span>
+        </button>
+      );
+    case 'adult_content':
+      return game.is_adult_content ? <Badge variant="error">Adult</Badge> : <Badge variant="default">No</Badge>;
+    case 'genres':
+      return <TaxonomyPills labels={game.genre_names} limit={4} />;
+    case 'tags':
+      return <TaxonomyPills labels={game.tag_names} limit={5} />;
+    case 'categories':
+      return <TaxonomyPills labels={game.category_names} limit={5} />;
+    case 'platforms':
+      return <TaxonomyPills labels={game.platform_array} limit={4} />;
+    case 'pricing':
+      return (
+        <div className="space-y-1 text-body-sm">
+          <div className="text-text-primary">{formatPriceCents(game.current_price_cents, game.is_free)}</div>
+          {game.current_discount_percent > 0 && (
+            <Badge variant="success" size="sm">-{game.current_discount_percent}%</Badge>
+          )}
+        </div>
+      );
+    case 'free_status':
+      return <BooleanBadge value={game.is_free} trueLabel="Free" falseLabel="Paid" />;
+    case 'purchase_packages':
+      return <BooleanBadge value={game.has_purchase_packages} trueLabel="Packages" falseLabel="None" />;
+    case 'workshop':
+      return <BooleanBadge value={game.has_workshop} trueLabel="Workshop" falseLabel="No" />;
+    case 'publisher_status':
+      return <PublisherStatusBadge status={game.publisher_status} />;
+    case 'publisher_name':
+      return (
+        <EntitySingleLink
+          kind="publisher"
+          id={game.publisher_id}
+          name={game.publisher_name}
+          vanityUrl={game.publisher_steam_vanity_url}
+        />
+      );
+    case 'developer_name':
+      return (
+        <EntitySingleLink
+          kind="developer"
+          id={game.developer_id}
+          name={game.developer_name}
+          vanityUrl={game.developer_steam_vanity_url}
+        />
+      );
+    case 'publisher_game_count':
+      return (
+        <div className="text-body-sm text-text-secondary">
+          <div>{formatNumber(game.publisher_game_count)} known</div>
+          <div className="text-caption text-text-muted">{formatNumber(game.publisher_released_game_count)} released</div>
+        </div>
+      );
+    case 'publisher_owners':
+      return <span className="text-body-sm text-text-secondary">{formatCompact(game.publisher_total_owners)}</span>;
+    case 'signal_families':
+      return <TaxonomyPills labels={game.signal_families_30d} limit={4} />;
+    case 'activity_counts':
+      return (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-caption text-text-secondary">
+          <span>{game.change_count_30d} changes</span>
+          <span>{game.announcement_count_30d} news</span>
+          <span>{game.store_page_count_30d} store</span>
+          <span>{game.media_count_30d} media</span>
+        </div>
+      );
+    case 'release_state':
+      return <span className="text-body-sm text-text-secondary">{game.release_state ?? '-'}</span>;
+    case 'app_state':
+      return <span className="text-body-sm text-text-secondary">{game.app_state ?? '-'}</span>;
+    default:
+      return null;
+  }
+}
+
 function GamesTable({
   games,
+  visibleColumns,
   selectedIds,
   pinnedIds,
   pinningIds,
@@ -1481,6 +1692,7 @@ function GamesTable({
   onPin,
 }: {
   games: UnreleasedGame[];
+  visibleColumns: UnreleasedColumnId[];
   selectedIds: Set<number>;
   pinnedIds: Set<number>;
   pinningIds: Set<number>;
@@ -1492,21 +1704,38 @@ function GamesTable({
   onOpenDetail: (appid: number, tab?: DetailTab) => void;
   onPin: (game: UnreleasedGame) => void;
 }) {
+  const columns = visibleColumns.length > 0 ? visibleColumns : DEFAULT_UNRELEASED_COLUMNS;
   const allSelected = games.length > 0 && games.every((game) => selectedIds.has(game.appid));
   const selectedSome = games.some((game) => selectedIds.has(game.appid));
-  const header = (field: UnreleasedSortField, label: string, className = '', showHelp = false) => {
-    const active = sort === field;
+  const tableMinWidth = 460 + columns.reduce((sum, columnId) => {
+    return sum + (UNRELEASED_COLUMN_DEFINITIONS[columnId]?.width ?? 120);
+  }, 0);
+  const header = (columnId: UnreleasedColumnId) => {
+    const column = UNRELEASED_COLUMN_DEFINITIONS[columnId];
+    const sortField = column.sortField;
+    const sortable = column.sortable && sortField;
+    const active = sortField ? sort === sortField : false;
+    const label = column.shortLabel ?? column.label;
+    const help = columnId === 'opportunity_score';
     return (
-      <th className={`px-3 py-2 text-left text-caption font-medium text-text-tertiary ${className}`}>
+      <th
+        key={columnId}
+        className="px-3 py-2 text-left text-caption font-medium text-text-tertiary"
+        style={{ minWidth: column.width, width: column.width }}
+      >
         <div className="inline-flex items-center gap-1">
-          <button
-            onClick={() => onSort(field)}
-            className={`inline-flex items-center gap-1 whitespace-nowrap hover:text-text-primary ${active ? 'text-accent-primary' : ''}`}
-          >
-            {label}
-            {active ? (order === 'asc' ? '↑' : '↓') : <ArrowUpDown className="h-3 w-3" />}
-          </button>
-          {showHelp && <OpportunityScoreTooltip />}
+          {sortable ? (
+            <button
+              onClick={() => onSort(sortField)}
+              className={`inline-flex items-center gap-1 whitespace-nowrap hover:text-text-primary ${active ? 'text-accent-primary' : ''}`}
+            >
+              {label}
+              {active ? (order === 'asc' ? '↑' : '↓') : <ArrowUpDown className="h-3 w-3" />}
+            </button>
+          ) : (
+            <span className="whitespace-nowrap">{label}</span>
+          )}
+          {help && <OpportunityScoreTooltip />}
         </div>
       </th>
     );
@@ -1515,7 +1744,7 @@ function GamesTable({
   return (
     <div className="overflow-hidden border border-border-subtle bg-surface-raised">
       <div className="overflow-x-auto">
-        <table className="min-w-[1320px] w-full border-collapse">
+        <table className="w-full border-collapse" style={{ minWidth: tableMinWidth }}>
           <thead className="border-b border-border-subtle bg-surface-elevated">
             <tr>
               <th className="w-10 px-3 py-2">
@@ -1532,15 +1761,16 @@ function GamesTable({
                   {!allSelected && selectedSome && <span className="h-0.5 w-2 bg-white" />}
                 </button>
               </th>
-              {header('opportunity_score', 'Opp Score', 'w-28', true)}
-              {header('name', 'Game', 'min-w-[270px]')}
-              {header('release_date', 'Release', 'min-w-[150px]')}
-              {header('latest_added_at', 'Added', 'min-w-[110px]')}
-              {header('publisher_name', 'Publisher / Developer', 'min-w-[230px]')}
-              {header('latest_change_at', 'Latest Update', 'min-w-[230px]')}
-              {header('latest_news_at', 'News', 'min-w-[210px]')}
-              {header('primary_tag_name', 'Tags / Features', 'min-w-[250px]')}
-              {header('screenshot_count', 'Media', 'w-24')}
+              <th className="min-w-[270px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">
+                <button
+                  onClick={() => onSort('name')}
+                  className={`inline-flex items-center gap-1 hover:text-text-primary ${sort === 'name' ? 'text-accent-primary' : ''}`}
+                >
+                  Game
+                  {sort === 'name' ? (order === 'asc' ? '↑' : '↓') : <ArrowUpDown className="h-3 w-3" />}
+                </button>
+              </th>
+              {columns.map((columnId) => header(columnId))}
               <th className="min-w-[150px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
             </tr>
           </thead>
@@ -1559,9 +1789,6 @@ function GamesTable({
                   >
                     {selectedIds.has(game.appid) && <Check className="h-3 w-3" />}
                   </button>
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <OpportunityBadge score={game.opportunity_score} />
                 </td>
                 <td className="px-3 py-3 align-top">
                   <div className="min-w-0">
@@ -1590,69 +1817,18 @@ function GamesTable({
                     </div>
                   </div>
                 </td>
-                <td className="px-3 py-3 align-top">
-                  <div className="space-y-1">
-                    <ReleaseBadge status={game.release_status} />
-                    <div className="text-body-sm text-text-secondary">{formatDate(game.release_date)}</div>
-                    <div className="text-caption text-text-muted">{formatReleaseLead(game)}</div>
-                  </div>
-                </td>
-                <td className="px-3 py-3 align-top text-body-sm text-text-secondary">
-                  {formatRelative(game.latest_added_at)}
-                </td>
-                <td className="px-3 py-3 align-top text-body-sm">
-                  <EntityLinks game={game} />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <button
-                    type="button"
-                    onClick={() => onOpenDetail(game.appid, 'timeline')}
-                    className="max-w-[220px] text-left hover:text-accent-primary"
-                    title="Open timeline"
-                  >
-                    <div className="text-body-sm text-text-primary">
-                      {game.latest_change_type ? cleanLabel(game.latest_change_type) : 'No captured change'}
-                    </div>
-                    <div className="truncate text-caption text-text-muted" title={game.latest_change_summary ?? undefined}>
-                      {game.latest_change_summary ?? formatRelative(game.latest_change_at)}
-                    </div>
-                    <div className="mt-1 text-caption text-text-tertiary">
-                      {game.change_count_30d} changes / {game.announcement_count_30d} news
-                    </div>
-                  </button>
-                </td>
-                <td className="px-3 py-3 align-top">
-                  {steamNewsUrl(game.appid, game.latest_news_url) ? (
-                    <a
-                      href={steamNewsUrl(game.appid, game.latest_news_url) ?? undefined}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block max-w-[200px] text-body-sm text-text-primary hover:text-accent-primary"
+                {columns.map((columnId) => {
+                  const column = UNRELEASED_COLUMN_DEFINITIONS[columnId];
+                  return (
+                    <td
+                      key={columnId}
+                      className="px-3 py-3 align-top"
+                      style={{ minWidth: column.width, width: column.width }}
                     >
-                      <span className="line-clamp-2">{game.latest_news_title ?? 'Steam news'}</span>
-                      <span className="mt-1 block text-caption text-text-muted">{formatRelative(game.latest_news_at)}</span>
-                    </a>
-                  ) : (
-                    <span className="text-body-sm text-text-muted">No news</span>
-                  )}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <div className="space-y-1.5">
-                    <TaxonomyPills labels={game.tag_names} />
-                    <TaxonomyPills labels={game.category_names} limit={2} />
-                  </div>
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <button
-                    type="button"
-                    onClick={() => onOpenDetail(game.appid, 'media')}
-                    className="flex items-center gap-2 rounded-md px-1 py-0.5 text-body-sm text-text-secondary hover:bg-surface-elevated hover:text-accent-primary"
-                    title="Open media"
-                  >
-                    <span className="inline-flex items-center gap-1"><ImageIcon className="h-3.5 w-3.5" />{game.screenshot_count}</span>
-                    <span className="inline-flex items-center gap-1"><Film className="h-3.5 w-3.5" />{game.movie_count}</span>
-                  </button>
-                </td>
+                      {renderUnreleasedColumnCell(columnId, game, { onOpenDetail })}
+                    </td>
+                  );
+                })}
                 <td className="px-3 py-3 align-top">
                   <div className="flex items-center gap-2">
                     <WatchButton
@@ -1695,9 +1871,18 @@ export function UnreleasedPageClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const authReady = useAuthReady();
+  const filterSearchKey = useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('columns');
+    return params.toString();
+  }, [searchParams]);
   const filters = useMemo(
-    () => filtersFromSearchParams(new URLSearchParams(searchParams.toString()), initialFilters),
-    [searchParams, initialFilters]
+    () => filtersFromSearchParams(new URLSearchParams(filterSearchKey), initialFilters),
+    [filterSearchKey, initialFilters]
+  );
+  const visibleColumns = useMemo(
+    () => parseUnreleasedColumnsParam(searchParams.get('columns')),
+    [searchParams]
   );
   const [games, setGames] = useState(initialData);
   const [stats, setStats] = useState(initialStats);
@@ -1718,6 +1903,12 @@ export function UnreleasedPageClient({
     [games, selectedIds]
   );
 
+  const applyColumnsParam = useCallback((params: URLSearchParams, columns: readonly UnreleasedColumnId[] = visibleColumns) => {
+    const serialized = serializeUnreleasedColumnsParam(columns);
+    if (serialized) params.set('columns', serialized);
+    return params;
+  }, [visibleColumns]);
+
   const updateFilters = useCallback((updates: Partial<UnreleasedFilters>) => {
     const next: UnreleasedFilters = {
       ...filters,
@@ -1725,12 +1916,14 @@ export function UnreleasedPageClient({
       offset: 0,
     };
     const params = buildSearchParams(next);
+    applyColumnsParam(params);
     router.push(params.toString() ? `/unreleased?${params.toString()}` : '/unreleased', { scroll: false });
-  }, [filters, router]);
+  }, [applyColumnsParam, filters, router]);
 
   const clearFilters = useCallback(() => {
-    router.push('/unreleased', { scroll: false });
-  }, [router]);
+    const params = applyColumnsParam(new URLSearchParams());
+    router.push(params.toString() ? `/unreleased?${params.toString()}` : '/unreleased', { scroll: false });
+  }, [applyColumnsParam, router]);
 
   const fetchData = useCallback(async (currentFilters: UnreleasedFilters, showInitialLoading = false) => {
     const params = buildSearchParams(currentFilters);
@@ -1812,8 +2005,9 @@ export function UnreleasedPageClient({
       ...preset.params,
     };
     const params = buildSearchParams(next);
+    applyColumnsParam(params);
     router.push(params.toString() ? `/unreleased?${params.toString()}` : '/unreleased', { scroll: false });
-  }, [router]);
+  }, [applyColumnsParam, router]);
 
   const toggleSelected = useCallback((appid: number) => {
     setSelectedIds((prev) => {
@@ -1841,10 +2035,16 @@ export function UnreleasedPageClient({
   const exportSelected = useCallback(() => {
     const rows = selectedGames.length > 0 ? selectedGames : games;
     downloadCsv(
-      generateUnreleasedCsv(rows),
+      generateUnreleasedCsv(rows, visibleColumns),
       unreleasedCsvFilename(selectedGames.length > 0 ? 'selected' : 'visible')
     );
-  }, [games, selectedGames]);
+  }, [games, selectedGames, visibleColumns]);
+
+  const updateVisibleColumns = useCallback((columns: UnreleasedColumnId[]) => {
+    const params = buildSearchParams(filters);
+    applyColumnsParam(params, columns);
+    router.push(params.toString() ? `/unreleased?${params.toString()}` : '/unreleased', { scroll: false });
+  }, [applyColumnsParam, filters, router]);
 
   useEffect(() => {
     if (!authReady || games.length === 0) {
@@ -1978,6 +2178,11 @@ export function UnreleasedPageClient({
               <SlidersHorizontal className="h-4 w-4" />
               Filters {activeCount > 0 ? `(${activeCount})` : ''}
             </Button>
+            <UnreleasedColumnSelector
+              visibleColumns={visibleColumns}
+              onChange={updateVisibleColumns}
+              disabled={isFetching}
+            />
             {activeCount > 0 && (
               <Button variant="ghost" size="sm" onClick={clearFilters}>
                 Clear
@@ -2051,6 +2256,7 @@ export function UnreleasedPageClient({
         )}
         <GamesTable
           games={games}
+          visibleColumns={visibleColumns}
           selectedIds={selectedIds}
           pinnedIds={pinnedIds}
           pinningIds={pinningIds}

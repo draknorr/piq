@@ -1,4 +1,11 @@
 import type { UnreleasedGame } from './unreleased-types';
+import {
+  DEFAULT_UNRELEASED_COLUMNS,
+  UNRELEASED_COLUMN_DEFINITIONS,
+  sanitizeUnreleasedColumns,
+  type UnreleasedColumnExportField,
+  type UnreleasedColumnId,
+} from './unreleased-columns';
 
 export function escapeCsvValue(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -17,74 +24,34 @@ export function publisheriqAppUrl(appid: number): string {
   return `/apps/${appid}`;
 }
 
-export function generateUnreleasedCsv(games: UnreleasedGame[]): string {
-  const headers = [
-    'appid',
-    'name',
-    'release_date',
-    'release_date_raw',
-    'release_status',
-    'days_until_release',
-    'publisher',
-    'developer',
-    'publisher_status',
-    'opportunity_score',
-    'latest_added_at',
-    'latest_change_at',
-    'latest_change_type',
-    'latest_change_summary',
-    'latest_news_at',
-    'latest_news_title',
-    'change_count_30d',
-    'announcement_count_30d',
-    'media_count_30d',
-    'taxonomy_count_30d',
-    'screenshots',
-    'trailers',
-    'adult_content',
-    'genres',
-    'tags',
-    'categories',
-    'platforms',
-    'is_free',
-    'has_purchase_packages',
-    'steam_url',
-    'publisheriq_url',
+function uniqueExportFields(columns: readonly UnreleasedColumnId[]): UnreleasedColumnExportField[] {
+  const fields: UnreleasedColumnExportField[] = [
+    { header: 'appid', getValue: (game) => game.appid },
+    { header: 'name', getValue: (game) => game.name },
+    { header: 'steam_url', getValue: (game) => steamAppUrl(game.appid) },
+    { header: 'publisheriq_url', getValue: (game) => publisheriqAppUrl(game.appid) },
   ];
+  const seen = new Set(fields.map((field) => field.header));
 
-  const rows = games.map((game) => [
-    game.appid,
-    game.name,
-    game.release_date,
-    game.release_date_raw,
-    game.release_status,
-    game.days_until_release,
-    game.publisher_name,
-    game.developer_name,
-    game.publisher_status,
-    game.opportunity_score,
-    game.latest_added_at,
-    game.latest_change_at,
-    game.latest_change_type,
-    game.latest_change_summary,
-    game.latest_news_at,
-    game.latest_news_title,
-    game.change_count_30d,
-    game.announcement_count_30d,
-    game.media_count_30d,
-    game.taxonomy_count_30d,
-    game.screenshot_count,
-    game.movie_count,
-    game.is_adult_content ? 'yes' : 'no',
-    game.genre_names,
-    game.tag_names,
-    game.category_names,
-    game.platform_array,
-    game.is_free ? 'yes' : 'no',
-    game.has_purchase_packages ? 'yes' : 'no',
-    steamAppUrl(game.appid),
-    publisheriqAppUrl(game.appid),
-  ]);
+  for (const columnId of sanitizeUnreleasedColumns(columns)) {
+    const definition = UNRELEASED_COLUMN_DEFINITIONS[columnId];
+    for (const field of definition.exportFields) {
+      if (seen.has(field.header)) continue;
+      seen.add(field.header);
+      fields.push(field);
+    }
+  }
+
+  return fields;
+}
+
+export function generateUnreleasedCsv(
+  games: UnreleasedGame[],
+  visibleColumns: readonly UnreleasedColumnId[] = DEFAULT_UNRELEASED_COLUMNS
+): string {
+  const fields = uniqueExportFields(visibleColumns);
+  const headers = fields.map((field) => field.header);
+  const rows = games.map((game) => fields.map((field) => field.getValue(game)));
 
   return [headers, ...rows]
     .map((row) => row.map(escapeCsvValue).join(','))
