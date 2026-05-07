@@ -16,6 +16,8 @@ import type {
   UnreleasedSearchParams,
   UnreleasedSortField,
   UnreleasedStats,
+  UnreleasedTimelineItem,
+  UnreleasedTimelineResult,
 } from './unreleased-types';
 
 type SqlValue = string | number | boolean | readonly number[] | readonly string[];
@@ -730,7 +732,7 @@ export async function getUnreleasedGameDetail(appid: number): Promise<Unreleased
           SELECT
             n.gid,
             sp.title,
-            n.url,
+            format('https://store.steampowered.com/news/app/%s/view/%s', n.appid, n.gid) AS url,
             n.published_at,
             n.first_seen_at,
             n.feedlabel,
@@ -784,5 +786,99 @@ export async function getUnreleasedGameDetail(appid: number): Promise<Unreleased
     hero_assets: toRecord(row.hero_assets),
     recent_changes: changes,
     recent_news: news,
+  };
+}
+
+export async function getUnreleasedGameTimeline(
+  appid: number,
+  params: { limit?: number; offset?: number } = {}
+): Promise<UnreleasedTimelineResult> {
+  if (!(await hasUnreleasedProjection())) {
+    throw new Error('Tiger projection metrics.unreleased_games_projection is not available.');
+  }
+
+  const limit = Math.min(Math.max(Math.floor(params.limit ?? 40), 1), 100);
+  const offset = Math.max(Math.floor(params.offset ?? 0), 0);
+  const { rows } = await runTigerQuery<Record<string, unknown>>(
+    `
+      WITH timeline AS (
+        SELECT
+          ('change:' || e.id::text) AS id,
+          'change'::text AS item_type,
+          e.id AS event_id,
+          NULL::text AS gid,
+          e.source,
+          e.change_type,
+          NULL::text AS title,
+          COALESCE(
+            e.context ->> 'headline',
+            e.context ->> 'summary',
+            replace(e.change_type, '_', ' ')
+          ) AS summary,
+          e.occurred_at,
+          NULL::text AS url,
+          e.before_value,
+          e.after_value,
+          e.context,
+          NULL::text AS feedlabel
+        FROM events.app_change_events e
+        WHERE e.appid = $1
+
+        UNION ALL
+
+        SELECT
+          ('news:' || n.gid::text) AS id,
+          'news'::text AS item_type,
+          NULL::bigint AS event_id,
+          n.gid::text AS gid,
+          'news'::text AS source,
+          'steam_news'::text AS change_type,
+          sp.title,
+          COALESCE(sp.title, 'Steam news') AS summary,
+          COALESCE(n.published_at, n.first_seen_at) AS occurred_at,
+          format('https://store.steampowered.com/news/app/%s/view/%s', n.appid, n.gid) AS url,
+          NULL::jsonb AS before_value,
+          NULL::jsonb AS after_value,
+          jsonb_build_object(
+            'feedlabel', n.feedlabel,
+            'feedname', n.feedname,
+            'first_seen_at', n.first_seen_at,
+            'published_at', n.published_at,
+            'raw_url', n.url
+          ) AS context,
+          n.feedlabel
+        FROM docs.steam_news_items n
+        LEFT JOIN docs.steam_news_search_projection sp ON sp.gid = n.gid
+        WHERE n.appid = $1
+      )
+      SELECT *
+      FROM timeline
+      ORDER BY occurred_at DESC NULLS LAST, id DESC
+      LIMIT $2
+      OFFSET $3
+    `,
+    [appid, limit + 1, offset]
+  );
+
+  const items = rows.slice(0, limit).map((row) => ({
+    id: String(row.id ?? ''),
+    item_type: row.item_type === 'news' ? 'news' : 'change',
+    event_id: toNumber(row.event_id),
+    gid: typeof row.gid === 'string' ? row.gid : null,
+    source: String(row.source ?? ''),
+    change_type: typeof row.change_type === 'string' ? row.change_type : null,
+    title: typeof row.title === 'string' ? row.title : null,
+    summary: typeof row.summary === 'string' ? row.summary : null,
+    occurred_at: toIsoDate(row.occurred_at) ?? '',
+    url: typeof row.url === 'string' ? row.url : null,
+    before_value: row.before_value,
+    after_value: row.after_value,
+    context: toRecord(row.context),
+    feedlabel: typeof row.feedlabel === 'string' ? row.feedlabel : null,
+  } satisfies UnreleasedTimelineItem));
+
+  return {
+    items,
+    next_offset: rows.length > limit ? offset + limit : null,
   };
 }

@@ -207,3 +207,27 @@ export interface UnreleasedGameDetail {
   recent_changes: RecentChange[];
   recent_news: RecentNews[];
 }
+
+export type UnreleasedTimelineItemType = 'change' | 'news';
+
+export interface UnreleasedTimelineItem {
+  id: string;
+  item_type: UnreleasedTimelineItemType;
+  event_id: number | null;
+  gid: string | null;
+  source: string;
+  change_type: string | null;
+  title: string | null;
+  summary: string | null;
+  occurred_at: string;
+  url: string | null;
+  before_value: unknown;
+  after_value: unknown;
+  context: Record<string, unknown>;
+  feedlabel: string | null;
+}
+
+export interface UnreleasedTimelineResult {
+  items: UnreleasedTimelineItem[];
+  next_offset: number | null;
+}

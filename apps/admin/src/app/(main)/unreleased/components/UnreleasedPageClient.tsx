@@ -8,19 +8,23 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
+  Clock3,
   Download,
+  Eye,
   ExternalLink,
   Film,
   ImageIcon,
+  Info,
   Loader2,
   Newspaper,
   Pin,
+  Play,
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
   X,
 } from 'lucide-react';
-import { Badge, Button, Card, SearchInput } from '@/components/ui';
+import { Badge, Button, Card, SearchInput, UnderlineTabs } from '@/components/ui';
 import { useAuthReady } from '@/hooks/useAuthReady';
 import {
   downloadCsv,
@@ -38,6 +42,8 @@ import type {
   UnreleasedGameDetail,
   UnreleasedSortField,
   UnreleasedStats,
+  UnreleasedTimelineItem,
+  UnreleasedTimelineResult,
 } from '../lib/unreleased-types';
 
 interface UnreleasedPageClientProps {
@@ -53,6 +59,21 @@ interface UnreleasedApiResponse {
 
 interface DetailApiResponse {
   data: UnreleasedGameDetail;
+}
+
+interface TimelineApiResponse {
+  data: UnreleasedTimelineResult;
+}
+
+interface PinCheckBulkResponse {
+  pinnedIds?: number[];
+}
+
+type DetailTab = 'overview' | 'media' | 'timeline' | 'news';
+
+interface DetailTarget {
+  appid: number;
+  tab: DetailTab;
 }
 
 const SORT_OPTIONS: Array<{ value: UnreleasedSortField; label: string; defaultOrder: SortOrder }> = [
@@ -235,6 +256,21 @@ function steamAppUrl(appid: number): string {
   return `https://store.steampowered.com/app/${appid}`;
 }
 
+function steamAnnouncementsUrl(appid: number): string {
+  return `https://steamcommunity.com/games/${appid}/announcements`;
+}
+
+function extractSteamNewsGid(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const match = url.match(/(\d+)(?:[/?#].*)?$/);
+  return match?.[1] ?? null;
+}
+
+function steamNewsUrl(appid: number, url: string | null | undefined, gid?: string | null): string | null {
+  const resolvedGid = gid ?? extractSteamNewsGid(url);
+  return resolvedGid ? `https://store.steampowered.com/news/app/${appid}/view/${resolvedGid}` : url ?? null;
+}
+
 function steamEntityUrl(kind: 'publisher' | 'developer', name: string, vanityUrl: string | null): string {
   if (vanityUrl) {
     if (vanityUrl.startsWith('http://') || vanityUrl.startsWith('https://')) return vanityUrl;
@@ -405,8 +441,8 @@ function MetricStrip({ stats }: { stats: UnreleasedStats }) {
     { label: 'Dated', value: formatNumber(stats.dated_future_count), tone: 'text-accent-green' },
     { label: 'Undated', value: formatNumber(stats.undated_count), tone: 'text-accent-blue' },
     { label: 'Active 30d', value: formatNumber(stats.active_30d_count), tone: 'text-accent-primary' },
-    { label: 'No publisher', value: formatNumber(stats.no_publisher_count), tone: 'text-accent-orange' },
-    { label: 'Avg score', value: stats.avg_opportunity_score === null ? '-' : Math.round(stats.avg_opportunity_score).toString(), tone: 'text-accent-purple' },
+    { label: 'Self Published', value: formatNumber(stats.self_published_count), tone: 'text-accent-purple' },
+    { label: 'Avg score', value: stats.avg_opportunity_score === null ? '-' : Math.round(stats.avg_opportunity_score).toString(), tone: 'text-accent-cyan' },
   ];
 
   return (
@@ -531,6 +567,10 @@ function getMediaUrl(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const candidates = [
+    record.fullUrl,
+    record.thumbnailUrl,
+    record.webmUrl,
+    record.mp4Url,
     record.path_full,
     record.path_thumbnail,
     record.thumbnail,
@@ -541,24 +581,188 @@ function getMediaUrl(value: unknown): string | null {
   return candidates.find((item): item is string => typeof item === 'string' && item.length > 0) ?? null;
 }
 
-function DetailInspector({
-  appid,
-  onClose,
+function getHeroAssetUrl(assets: Record<string, unknown>): string | null {
+  const candidates = [assets.header, assets.capsule, assets.background];
+  return candidates.find((item): item is string => typeof item === 'string' && item.length > 0) ?? null;
+}
+
+function formatAbsoluteTime(timestamp: string | null | undefined): string {
+  const date = parseDate(timestamp);
+  if (!date) return 'Unknown';
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return 'None';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return 'Unserializable';
+  }
+}
+
+function sourceVariant(source: string): 'info' | 'purple' | 'orange' | 'pink' {
+  switch (source) {
+    case 'news':
+      return 'pink';
+    case 'pics':
+      return 'purple';
+    case 'media':
+      return 'orange';
+    default:
+      return 'info';
+  }
+}
+
+function WatchButton({
+  watched,
+  loading,
+  onClick,
+  compact = false,
 }: {
-  appid: number | null;
+  watched: boolean;
+  loading: boolean;
+  onClick: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={watched || loading}
+      className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-body-sm font-medium transition-colors ${
+        watched
+          ? 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary'
+          : 'border-border-muted bg-surface-elevated text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary'
+      } disabled:cursor-default`}
+      title={watched ? 'Watching in Insights' : 'Watch game'}
+      aria-label={watched ? 'Watching game' : 'Watch game'}
+    >
+      {loading ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Pin className={`h-4 w-4 ${watched ? 'fill-current' : ''}`} />
+      )}
+      {!compact && <span>{watched ? 'Watching' : 'Watch'}</span>}
+    </button>
+  );
+}
+
+function TimelineItemCard({ item }: { item: UnreleasedTimelineItem }) {
+  const isNews = item.item_type === 'news';
+  const label = isNews ? 'Steam News' : cleanLabel(item.change_type ?? 'change');
+  const title = item.title || item.summary || label;
+
+  return (
+    <Card padding="md" className="space-y-3 rounded-lg">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={sourceVariant(item.source)} size="sm">
+          {item.source === 'pics' ? 'PICS' : cleanLabel(item.source)}
+        </Badge>
+        <Badge variant="default" size="sm">{label}</Badge>
+        {item.feedlabel && <Badge variant="purple" size="sm">{item.feedlabel}</Badge>}
+        <span className="text-caption text-text-muted">
+          {formatAbsoluteTime(item.occurred_at)} • {formatRelative(item.occurred_at)}
+        </span>
+      </div>
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-body-sm font-medium text-text-primary">{title}</div>
+          {item.summary && item.summary !== title && (
+            <p className="mt-1 text-body-sm text-text-secondary">{item.summary}</p>
+          )}
+        </div>
+        {item.url && (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-primary hover:border-border-prominent hover:bg-surface-overlay"
+          >
+            Open
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
+      </div>
+
+      {!isNews && (
+        <details className="group">
+          <summary className="cursor-pointer text-caption text-text-muted transition-colors hover:text-text-secondary">
+            Raw evidence
+          </summary>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <div>
+              <p className="text-caption uppercase tracking-wide text-text-tertiary">Before</p>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-elevated px-3 py-2 text-[11px] text-text-secondary">
+                {formatValue(item.before_value)}
+              </pre>
+            </div>
+            <div>
+              <p className="text-caption uppercase tracking-wide text-text-tertiary">After</p>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-elevated px-3 py-2 text-[11px] text-text-secondary">
+                {formatValue(item.after_value)}
+              </pre>
+            </div>
+          </div>
+          {Object.keys(item.context).length > 0 && (
+            <div className="mt-3">
+              <p className="text-caption uppercase tracking-wide text-text-tertiary">Context</p>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-elevated px-3 py-2 text-[11px] text-text-secondary">
+                {formatValue(item.context)}
+              </pre>
+            </div>
+          )}
+        </details>
+      )}
+    </Card>
+  );
+}
+
+function DetailInspector({
+  target,
+  onClose,
+  pinnedIds,
+  pinningIds,
+  onPin,
+}: {
+  target: DetailTarget | null;
   onClose: () => void;
+  pinnedIds: Set<number>;
+  pinningIds: Set<number>;
+  onPin: (game: UnreleasedGame) => void;
 }) {
   const [detail, setDetail] = useState<UnreleasedGameDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
+  const [timelineItems, setTimelineItems] = useState<UnreleasedTimelineItem[]>([]);
+  const [timelineNextOffset, setTimelineNextOffset] = useState<number | null>(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+
+  const appid = target?.appid ?? null;
 
   useEffect(() => {
     if (!appid) {
       setDetail(null);
+      setTimelineItems([]);
+      setTimelineNextOffset(null);
       return;
     }
 
     const controller = new AbortController();
+    setActiveTab(target?.tab ?? 'overview');
+    setTimelineItems([]);
+    setTimelineNextOffset(null);
+    setTimelineError(null);
     setLoading(true);
     setError(null);
     fetch(`/api/unreleased/${appid}/detail`, { signal: controller.signal })
@@ -577,47 +781,156 @@ function DetailInspector({
       .finally(() => setLoading(false));
 
     return () => controller.abort();
-  }, [appid]);
+  }, [appid, target?.tab]);
+
+  useEffect(() => {
+    if (!appid) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [appid, onClose]);
+
+  const loadTimeline = useCallback(async (reset = false) => {
+    if (!appid) return;
+    const offset = reset ? 0 : timelineNextOffset ?? timelineItems.length;
+    setTimelineLoading(true);
+    setTimelineError(null);
+    try {
+      const response = await fetch(`/api/unreleased/${appid}/timeline?limit=40&offset=${offset}`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      const payload = await response.json() as TimelineApiResponse;
+      setTimelineItems((prev) => reset ? payload.data.items : [...prev, ...payload.data.items]);
+      setTimelineNextOffset(payload.data.next_offset);
+    } catch (fetchError) {
+      setTimelineError(fetchError instanceof Error ? fetchError.message : 'Failed to load timeline');
+    } finally {
+      setTimelineLoading(false);
+    }
+  }, [appid, timelineItems.length, timelineNextOffset]);
+
+  useEffect(() => {
+    if (activeTab !== 'timeline' || timelineItems.length > 0 || timelineLoading) return;
+    void loadTimeline(true);
+  }, [activeTab, loadTimeline, timelineItems.length, timelineLoading]);
 
   if (!appid) return null;
 
   const game = detail?.game;
   const screenshotUrls = detail?.screenshots.map(getMediaUrl).filter((item): item is string => Boolean(item)).slice(0, 6) ?? [];
   const trailerUrls = detail?.trailers.map(getMediaUrl).filter((item): item is string => Boolean(item)).slice(0, 3) ?? [];
+  const heroUrl = detail ? getHeroAssetUrl(detail.hero_assets) : null;
+  const watched = game ? pinnedIds.has(game.appid) : false;
+  const watching = game ? pinningIds.has(game.appid) : false;
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'media', label: 'Media', count: (game?.screenshot_count ?? 0) + (game?.movie_count ?? 0) },
+    { id: 'timeline', label: 'Timeline', count: timelineItems.length || undefined },
+    { id: 'news', label: 'News', count: detail?.recent_news.length ?? 0 },
+  ];
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl border-l border-border-subtle bg-surface-raised shadow-xl md:top-0">
-      <div className="flex h-full flex-col">
-        <div className="flex items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
-          <div className="min-w-0">
-            <div className="text-caption uppercase tracking-[0.08em] text-text-tertiary">Unreleased detail</div>
-            <h2 className="mt-1 truncate text-heading-md text-text-primary">
-              {game?.name ?? `App ${appid}`}
-            </h2>
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+        aria-label="Close unreleased game detail"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unreleased-detail-title"
+        className="relative z-10 flex h-full w-full max-w-3xl flex-col overflow-hidden border-l border-border-subtle bg-surface-raised shadow-lg"
+      >
+        <div className="border-b border-border-subtle bg-surface-elevated px-5 py-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-caption uppercase tracking-wide text-text-tertiary">Unreleased Detail</div>
+              <h2 id="unreleased-detail-title" className="mt-1 truncate text-heading-sm text-text-primary">
+                {game?.name ?? `App ${appid}`}
+              </h2>
+              {game && (
+                <p className="mt-1 text-body-sm text-text-secondary">
+                  {formatDate(game.release_date)} • {formatReleaseLead(game)} • Score {game.opportunity_score}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {game && (
+                <>
+                  <WatchButton
+                    watched={watched}
+                    loading={watching}
+                    onClick={() => onPin(game)}
+                  />
+                  <Link
+                    href={`/apps/${game.appid}`}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-primary hover:border-border-prominent hover:bg-surface-overlay"
+                  >
+                    App
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
+                  <a
+                    href={steamAppUrl(game.appid)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-primary hover:border-border-prominent hover:bg-surface-overlay"
+                  >
+                    Steam
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg p-2 transition-colors hover:bg-surface-overlay"
+                aria-label="Close unreleased game detail"
+              >
+                <X className="h-5 w-5 text-text-muted" />
+              </button>
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 text-text-muted hover:bg-surface-overlay hover:text-text-primary"
-            aria-label="Close detail"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <UnderlineTabs
+            tabs={tabs}
+            activeTab={activeTab}
+            onChange={(value) => setActiveTab(value as DetailTab)}
+            className="mt-4"
+          />
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto px-5 py-5">
           {loading && (
-            <div className="flex items-center gap-2 text-text-secondary">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading evidence
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
             </div>
           )}
-          {error && (
-            <div className="rounded-md border border-accent-red/30 bg-accent-red/10 p-3 text-body-sm text-accent-red">
-              {error}
-            </div>
+          {!loading && error && (
+            <Card className="rounded-lg border-accent-red/30 bg-accent-red/10">
+              <p className="text-body-sm text-accent-red">{error}</p>
+            </Card>
           )}
-          {detail && game && (
-            <div className="space-y-6">
+          {!loading && !error && detail && game && activeTab === 'overview' && (
+            <div className="space-y-5">
+              {heroUrl && (
+                <img
+                  src={heroUrl}
+                  alt=""
+                  className="h-32 w-full rounded-lg border border-border-subtle object-cover"
+                />
+              )}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <div className="border border-border-subtle bg-surface px-3 py-2">
                   <div className="text-caption text-text-tertiary">Score</div>
@@ -628,90 +941,228 @@ function DetailInspector({
                   <div className="text-body-sm text-text-primary">{formatReleaseLead(game)}</div>
                 </div>
                 <div className="border border-border-subtle bg-surface px-3 py-2">
-                  <div className="text-caption text-text-tertiary">Changes</div>
+                  <div className="text-caption text-text-tertiary">30d Changes</div>
                   <div className="text-heading-md text-text-primary">{game.change_count_30d}</div>
                 </div>
                 <div className="border border-border-subtle bg-surface px-3 py-2">
                   <div className="text-caption text-text-tertiary">Media</div>
-                  <div className="text-body-sm text-text-primary">{game.screenshot_count} / {game.movie_count}</div>
+                  <div className="text-body-sm text-text-primary">{game.screenshot_count} screenshots / {game.movie_count} trailers</div>
                 </div>
               </div>
 
-              <section>
-                <h3 className="mb-2 text-subheading text-text-primary">Media</h3>
-                {screenshotUrls.length === 0 && trailerUrls.length === 0 ? (
-                  <p className="text-body-sm text-text-muted">No captured media payload available.</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2">
-                    {screenshotUrls.map((url) => (
-                      <img
-                        key={url}
-                        src={url}
-                        alt=""
-                        className="aspect-video w-full border border-border-subtle object-cover"
-                      />
-                    ))}
-                    {trailerUrls.map((url) => (
-                      <a
-                        key={url}
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex aspect-video items-center justify-center border border-border-subtle bg-surface text-text-secondary hover:text-accent-primary"
-                      >
-                        <Film className="mr-2 h-4 w-4" />
-                        Trailer
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <section>
-                <h3 className="mb-2 text-subheading text-text-primary">Recent Changes</h3>
-                <div className="space-y-2">
-                  {detail.recent_changes.length === 0 ? (
-                    <p className="text-body-sm text-text-muted">No captured changes yet.</p>
-                  ) : detail.recent_changes.slice(0, 12).map((change) => (
-                    <div key={`${change.event_id}-${change.occurred_at}`} className="border border-border-subtle bg-surface px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-body-sm font-medium text-text-primary">{cleanLabel(change.change_type)}</span>
-                        <span className="text-caption text-text-muted">{formatRelative(change.occurred_at)}</span>
-                      </div>
-                      {Object.keys(change.context).length > 0 && (
-                        <pre className="mt-2 max-h-32 overflow-auto rounded bg-surface-elevated p-2 text-[11px] text-text-tertiary">
-                          {JSON.stringify(change.context, null, 2)}
-                        </pre>
-                      )}
-                    </div>
-                  ))}
+              <Card padding="md" className="space-y-4 rounded-lg">
+                <div className="flex flex-wrap items-center gap-2">
+                  <PublisherStatusBadge status={game.publisher_status} />
+                  <ReleaseBadge status={game.release_status} />
+                  {game.is_adult_content && <Badge variant="error" size="sm">Adult</Badge>}
+                  {game.is_free && <Badge variant="success" size="sm">Free</Badge>}
                 </div>
-              </section>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-caption uppercase tracking-wide text-text-tertiary">Publisher / Developer</div>
+                    <EntityLinks game={game} />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-caption uppercase tracking-wide text-text-tertiary">Tags / Features</div>
+                    <div className="space-y-1.5">
+                      <TaxonomyPills labels={game.tag_names} limit={5} />
+                      <TaxonomyPills labels={game.category_names} limit={4} />
+                    </div>
+                  </div>
+                </div>
+              </Card>
 
-              <section>
-                <h3 className="mb-2 text-subheading text-text-primary">Recent News</h3>
-                <div className="space-y-2">
-                  {detail.recent_news.length === 0 ? (
-                    <p className="text-body-sm text-text-muted">No Steam news captured yet.</p>
-                  ) : detail.recent_news.map((news) => (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('media')}
+                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3 text-left hover:border-border-muted hover:bg-surface-overlay"
+                >
+                  <ImageIcon className="h-5 w-5 text-accent-primary" />
+                  <span>
+                    <span className="block text-body-sm font-medium text-text-primary">Review media</span>
+                    <span className="text-caption text-text-muted">{game.screenshot_count + game.movie_count} assets</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('timeline')}
+                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3 text-left hover:border-border-muted hover:bg-surface-overlay"
+                >
+                  <Clock3 className="h-5 w-5 text-accent-primary" />
+                  <span>
+                    <span className="block text-body-sm font-medium text-text-primary">Open timeline</span>
+                    <span className="text-caption text-text-muted">{formatRelative(game.latest_activity_at)}</span>
+                  </span>
+                </button>
+                <a
+                  href={steamAnnouncementsUrl(game.appid)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3 hover:border-border-muted hover:bg-surface-overlay"
+                >
+                  <Newspaper className="h-5 w-5 text-accent-primary" />
+                  <span>
+                    <span className="block text-body-sm font-medium text-text-primary">Announcements</span>
+                    <span className="text-caption text-text-muted">Steam community</span>
+                  </span>
+                </a>
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && detail && game && activeTab === 'media' && (
+            <div className="space-y-5">
+              {heroUrl && (
+                <img
+                  src={heroUrl}
+                  alt=""
+                  className="h-40 w-full rounded-lg border border-border-subtle object-cover"
+                />
+              )}
+              {screenshotUrls.length === 0 && trailerUrls.length === 0 ? (
+                <Card padding="md" className="rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <Info className="mt-0.5 h-5 w-5 text-text-muted" />
+                    <div>
+                      <div className="text-body-sm font-medium text-text-primary">No media payload available</div>
+                      <p className="mt-1 text-body-sm text-text-secondary">
+                        Tiger has no screenshot or trailer URLs for this game yet.
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              ) : (
+                <>
+                  <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-subheading text-text-primary">Screenshots</h3>
+                      <Badge variant="default" size="sm">{game.screenshot_count}</Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {screenshotUrls.map((url) => (
+                        <a key={url} href={url} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={url}
+                            alt=""
+                            className="aspect-video w-full rounded-lg border border-border-subtle object-cover transition-opacity hover:opacity-90"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-subheading text-text-primary">Trailers</h3>
+                      <Badge variant="default" size="sm">{game.movie_count}</Badge>
+                    </div>
+                    {trailerUrls.length === 0 ? (
+                      <Card padding="md" className="rounded-lg text-body-sm text-text-secondary">
+                        Trailer count exists, but no playable URL was captured in the latest media payload.
+                      </Card>
+                    ) : (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {trailerUrls.map((url) => (
+                          <a
+                            key={url}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex aspect-video items-center justify-center rounded-lg border border-border-subtle bg-surface text-text-secondary hover:border-border-muted hover:bg-surface-overlay hover:text-accent-primary"
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Open trailer
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
+            </div>
+          )}
+
+          {!loading && !error && detail && game && activeTab === 'timeline' && (
+            <div className="space-y-4">
+              {timelineError && (
+                <Card className="rounded-lg border-accent-red/30 bg-accent-red/10">
+                  <p className="text-body-sm text-accent-red">{timelineError}</p>
+                </Card>
+              )}
+              {timelineItems.length === 0 && timelineLoading && (
+                <div className="flex items-center gap-2 text-body-sm text-text-secondary">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading timeline
+                </div>
+              )}
+              {timelineItems.length === 0 && !timelineLoading && !timelineError && (
+                <Card padding="md" className="rounded-lg text-body-sm text-text-secondary">
+                  No event or news history has been captured for this game yet.
+                </Card>
+              )}
+              {timelineItems.map((item) => (
+                <TimelineItemCard key={item.id} item={item} />
+              ))}
+              {timelineNextOffset !== null && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void loadTimeline(false)}
+                  disabled={timelineLoading}
+                >
+                  {timelineLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
+                  Load more
+                </Button>
+              )}
+            </div>
+          )}
+
+          {!loading && !error && detail && game && activeTab === 'news' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-subheading text-text-primary">Steam News</h3>
+                <a
+                  href={steamAnnouncementsUrl(game.appid)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-primary hover:border-border-prominent hover:bg-surface-overlay"
+                >
+                  Announcements
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+              {detail.recent_news.length === 0 ? (
+                <Card padding="md" className="rounded-lg text-body-sm text-text-secondary">
+                  No Steam news captured yet.
+                </Card>
+              ) : detail.recent_news.map((news) => (
+                <Card key={news.gid} padding="md" className="rounded-lg">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-body-sm font-medium text-text-primary">{news.title || 'Untitled news item'}</div>
+                      <div className="mt-1 text-caption text-text-muted">
+                        {formatAbsoluteTime(news.published_at ?? news.first_seen_at)} • {formatRelative(news.published_at ?? news.first_seen_at)}
+                      </div>
+                      {news.feedlabel && <Badge variant="purple" size="sm" className="mt-2">{news.feedlabel}</Badge>}
+                    </div>
                     <a
-                      key={news.gid}
-                      href={news.url}
+                      href={steamNewsUrl(game.appid, news.url, news.gid) ?? news.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="block border border-border-subtle bg-surface px-3 py-2 hover:border-border-muted"
+                      className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-primary hover:border-border-prominent hover:bg-surface-overlay"
                     >
-                      <div className="text-body-sm font-medium text-text-primary">{news.title || 'Untitled news item'}</div>
-                      <div className="mt-1 text-caption text-text-muted">{formatRelative(news.published_at ?? news.first_seen_at)}</div>
+                      Open
+                      <ExternalLink className="h-3.5 w-3.5" />
                     </a>
-                  ))}
-                </div>
-              </section>
+                  </div>
+                </Card>
+              ))}
             </div>
           )}
         </div>
-      </div>
-    </aside>
+      </aside>
+    </div>
   );
 }
 
@@ -925,7 +1376,7 @@ function GamesTable({
   onSort: (field: UnreleasedSortField) => void;
   onToggleSelected: (appid: number) => void;
   onToggleAll: () => void;
-  onOpenDetail: (appid: number) => void;
+  onOpenDetail: (appid: number, tab?: DetailTab) => void;
   onPin: (game: UnreleasedGame) => void;
 }) {
   const allSelected = games.length > 0 && games.every((game) => selectedIds.has(game.appid));
@@ -974,7 +1425,7 @@ function GamesTable({
               {header('latest_news_at', 'News', 'min-w-[210px]')}
               {header('primary_tag_name', 'Tags / Features', 'min-w-[250px]')}
               {header('screenshot_count', 'Media', 'w-24')}
-              <th className="px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
+              <th className="min-w-[150px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1037,7 +1488,12 @@ function GamesTable({
                   <EntityLinks game={game} />
                 </td>
                 <td className="px-3 py-3 align-top">
-                  <div className="max-w-[220px]">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetail(game.appid, 'timeline')}
+                    className="max-w-[220px] text-left hover:text-accent-primary"
+                    title="Open timeline"
+                  >
                     <div className="text-body-sm text-text-primary">
                       {game.latest_change_type ? cleanLabel(game.latest_change_type) : 'No captured change'}
                     </div>
@@ -1047,12 +1503,12 @@ function GamesTable({
                     <div className="mt-1 text-caption text-text-tertiary">
                       {game.change_count_30d} changes / {game.announcement_count_30d} news
                     </div>
-                  </div>
+                  </button>
                 </td>
                 <td className="px-3 py-3 align-top">
-                  {game.latest_news_url ? (
+                  {steamNewsUrl(game.appid, game.latest_news_url) ? (
                     <a
-                      href={game.latest_news_url}
+                      href={steamNewsUrl(game.appid, game.latest_news_url) ?? undefined}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="block max-w-[200px] text-body-sm text-text-primary hover:text-accent-primary"
@@ -1071,33 +1527,31 @@ function GamesTable({
                   </div>
                 </td>
                 <td className="px-3 py-3 align-top">
-                  <div className="flex items-center gap-2 text-body-sm text-text-secondary">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetail(game.appid, 'media')}
+                    className="flex items-center gap-2 rounded-md px-1 py-0.5 text-body-sm text-text-secondary hover:bg-surface-elevated hover:text-accent-primary"
+                    title="Open media"
+                  >
                     <span className="inline-flex items-center gap-1"><ImageIcon className="h-3.5 w-3.5" />{game.screenshot_count}</span>
                     <span className="inline-flex items-center gap-1"><Film className="h-3.5 w-3.5" />{game.movie_count}</span>
-                  </div>
+                  </button>
                 </td>
                 <td className="px-3 py-3 align-top">
-                  <div className="flex items-center gap-1">
-                    <button
+                  <div className="flex items-center gap-2">
+                    <WatchButton
+                      compact
+                      watched={pinnedIds.has(game.appid)}
+                      loading={pinningIds.has(game.appid)}
                       onClick={() => onPin(game)}
-                      disabled={pinningIds.has(game.appid)}
-                      className={`rounded-md p-1.5 transition-colors ${
-                        pinnedIds.has(game.appid)
-                          ? 'bg-accent-primary/10 text-accent-primary'
-                          : 'text-text-muted hover:bg-surface-elevated hover:text-accent-primary'
-                      }`}
-                      title={pinnedIds.has(game.appid) ? 'Pinned' : 'Pin game'}
-                    >
-                      {pinningIds.has(game.appid)
-                        ? <Loader2 className="h-4 w-4 animate-spin" />
-                        : <Pin className={`h-4 w-4 ${pinnedIds.has(game.appid) ? 'fill-current' : ''}`} />}
-                    </button>
+                    />
                     <button
-                      onClick={() => onOpenDetail(game.appid)}
-                      className="rounded-md p-1.5 text-text-muted hover:bg-surface-elevated hover:text-accent-primary"
-                      title="Open detail"
+                      onClick={() => onOpenDetail(game.appid, 'overview')}
+                      className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary"
+                      title="Open details"
                     >
-                      <ChevronDown className="h-4 w-4 -rotate-90" />
+                      <Eye className="h-4 w-4" />
+                      Details
                     </button>
                   </div>
                 </td>
@@ -1138,7 +1592,7 @@ export function UnreleasedPageClient({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [pinnedIds, setPinnedIds] = useState<Set<number>>(new Set());
   const [pinningIds, setPinningIds] = useState<Set<number>>(new Set());
-  const [detailAppid, setDetailAppid] = useState<number | null>(null);
+  const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [genreOptions, setGenreOptions] = useState<FilterOption[]>([]);
   const [tagOptions, setTagOptions] = useState<FilterOption[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<FilterOption[]>([]);
@@ -1276,6 +1730,30 @@ export function UnreleasedPageClient({
     );
   }, [games, selectedGames]);
 
+  useEffect(() => {
+    if (!authReady || games.length === 0) {
+      setPinnedIds(new Set());
+      return;
+    }
+
+    const ids = games.map((game) => game.appid).join(',');
+    const controller = new AbortController();
+    fetch(`/api/pins/check?entityType=game&entityIds=${ids}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json() as Promise<PinCheckBulkResponse>;
+      })
+      .then((payload) => {
+        if (!payload?.pinnedIds) return;
+        setPinnedIds(new Set(payload.pinnedIds));
+      })
+      .catch((fetchError: unknown) => {
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') return;
+      });
+
+    return () => controller.abort();
+  }, [authReady, games]);
+
   const pinGame = useCallback(async (game: UnreleasedGame) => {
     if (pinnedIds.has(game.appid)) return;
     setPinningIds((prev) => new Set(prev).add(game.appid));
@@ -1300,6 +1778,10 @@ export function UnreleasedPageClient({
       });
     }
   }, [pinnedIds]);
+
+  const openDetail = useCallback((appid: number, tab: DetailTab = 'overview') => {
+    setDetailTarget({ appid, tab });
+  }, []);
 
   const activeCount = activeFilterCount(filters);
   const currentSort = SORT_OPTIONS.find((item) => item.value === filters.sort);
@@ -1461,12 +1943,18 @@ export function UnreleasedPageClient({
           onSort={handleSort}
           onToggleSelected={toggleSelected}
           onToggleAll={toggleAll}
-          onOpenDetail={setDetailAppid}
+          onOpenDetail={openDetail}
           onPin={pinGame}
         />
       </div>
 
-      <DetailInspector appid={detailAppid} onClose={() => setDetailAppid(null)} />
+      <DetailInspector
+        target={detailTarget}
+        pinnedIds={pinnedIds}
+        pinningIds={pinningIds}
+        onPin={pinGame}
+        onClose={() => setDetailTarget(null)}
+      />
     </div>
   );
 }

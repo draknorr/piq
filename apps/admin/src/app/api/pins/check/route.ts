@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 // Types will be available after running: pnpm --filter database generate
 
 // GET /api/pins/check?entityType=game&entityId=123 - Check if entity is pinned
+// GET /api/pins/check?entityType=game&entityIds=123,456 - Bulk check visible rows
 export async function GET(request: NextRequest) {
   try {
     const result = await requireAuthOrThrow();
@@ -15,11 +16,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const entityType = searchParams.get('entityType');
     const entityId = searchParams.get('entityId');
+    const entityIds = searchParams.get('entityIds');
 
     // Validate required params
-    if (!entityType || !entityId) {
+    if (!entityType || (!entityId && !entityIds)) {
       return NextResponse.json(
-        { error: 'entityType and entityId are required' },
+        { error: 'entityType and entityId or entityIds are required' },
         { status: 400 }
       );
     }
@@ -33,6 +35,47 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = await createServerClient();
+
+    if (entityIds) {
+      const ids = Array.from(new Set(
+        entityIds
+          .split(',')
+          .map((value) => Number.parseInt(value.trim(), 10))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )).slice(0, 250);
+
+      if (ids.length === 0) {
+        return NextResponse.json({ pins: [], pinnedIds: [], pinIdsByEntityId: {} });
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
+        .from('user_pins')
+        .select('id, entity_id')
+        .eq('user_id', result.user.id)
+        .eq('entity_type', entityType)
+        .in('entity_id', ids);
+
+      if (error) {
+        console.error('Error checking pins:', error);
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      const pins = (data ?? []).map((pin: { id: string; entity_id: number }) => ({
+        pinId: pin.id,
+        entityId: pin.entity_id,
+      }));
+      const pinIdsByEntityId = Object.fromEntries(
+        pins.map((pin: { pinId: string; entityId: number }) => [String(pin.entityId), pin.pinId])
+      );
+
+      return NextResponse.json({
+        pins,
+        pinnedIds: pins.map((pin: { entityId: number }) => pin.entityId),
+        pinIdsByEntityId,
+      });
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from('user_pins')
