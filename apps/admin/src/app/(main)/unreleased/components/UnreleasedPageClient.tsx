@@ -208,6 +208,11 @@ const DEFAULT_FILTERS: UnreleasedFilters = {
   adult: 'exclude',
 };
 
+const SELECT_COLUMN_WIDTH = 40;
+const ACTIONS_COLUMN_WIDTH = 96;
+const GAME_COLUMN_WIDTH = 240;
+const FALLBACK_DATA_COLUMN_WIDTH = 120;
+
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return value.toLocaleString();
@@ -543,56 +548,56 @@ function EntityLinks({ game }: { game: UnreleasedGame }) {
   return (
     <div className="space-y-1">
       {game.publisher_name ? (
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 text-body-sm">
           {game.publisher_id ? (
             <Link
               href={`/publishers/${game.publisher_id}`}
-              className="truncate text-text-secondary hover:text-accent-primary"
+              className="min-w-0 flex-1 truncate text-text-secondary hover:text-accent-primary"
               title={game.publisher_name}
             >
               {game.publisher_name}
             </Link>
           ) : (
-            <span className="truncate text-text-secondary">{game.publisher_name}</span>
+            <span className="min-w-0 flex-1 truncate text-text-secondary" title={game.publisher_name}>{game.publisher_name}</span>
           )}
           <a
             href={steamEntityUrl('publisher', game.publisher_name, game.publisher_steam_vanity_url)}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-text-muted hover:text-accent-primary"
+            className="shrink-0 text-text-muted hover:text-accent-primary"
             title="Open publisher on Steam"
           >
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
       ) : (
-        <div className="text-text-muted">No publisher</div>
+        <div className="text-body-sm text-text-muted">No publisher</div>
       )}
       {game.developer_name ? (
-        <div className="flex min-w-0 items-center gap-1.5 text-caption">
+        <div className="flex min-w-0 items-center gap-1.5 text-body-sm">
           {game.developer_id ? (
             <Link
               href={`/developers/${game.developer_id}`}
-              className="truncate text-text-tertiary hover:text-accent-primary"
+              className="min-w-0 flex-1 truncate text-text-tertiary hover:text-accent-primary"
               title={game.developer_name}
             >
               {game.developer_name}
             </Link>
           ) : (
-            <span className="truncate text-text-tertiary">{game.developer_name}</span>
+            <span className="min-w-0 flex-1 truncate text-text-tertiary" title={game.developer_name}>{game.developer_name}</span>
           )}
           <a
             href={steamEntityUrl('developer', game.developer_name, game.developer_steam_vanity_url)}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-text-muted hover:text-accent-primary"
+            className="shrink-0 text-text-muted hover:text-accent-primary"
             title="Open developer on Steam"
           >
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
       ) : (
-        <div className="text-caption text-text-muted">No developer</div>
+        <div className="text-body-sm text-text-muted">No developer</div>
       )}
     </div>
   );
@@ -615,19 +620,19 @@ function EntitySingleLink({
       {id ? (
         <Link
           href={`/${kind === 'publisher' ? 'publishers' : 'developers'}/${id}`}
-          className="truncate text-text-secondary hover:text-accent-primary"
+          className="min-w-0 flex-1 truncate text-text-secondary hover:text-accent-primary"
           title={name}
         >
           {name}
         </Link>
       ) : (
-        <span className="truncate text-text-secondary" title={name}>{name}</span>
+        <span className="min-w-0 flex-1 truncate text-text-secondary" title={name}>{name}</span>
       )}
       <a
         href={steamEntityUrl(kind, name, vanityUrl)}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-text-muted hover:text-accent-primary"
+        className="shrink-0 text-text-muted hover:text-accent-primary"
         title={`Open ${kind} on Steam`}
       >
         <ExternalLink className="h-3 w-3" />
@@ -641,9 +646,13 @@ function TaxonomyPills({ labels, limit = 3 }: { labels: string[]; limit?: number
   const visible = labels.slice(0, limit);
   const hidden = labels.length - visible.length;
   return (
-    <div className="flex max-w-[260px] flex-wrap gap-1">
+    <div className="flex min-w-0 max-w-full flex-wrap gap-1">
       {visible.map((label) => (
-        <span key={label} className="rounded bg-surface-elevated px-1.5 py-0.5 text-[10px] text-text-secondary">
+        <span
+          key={label}
+          className="min-w-0 max-w-full truncate rounded bg-surface-elevated px-1.5 py-0.5 text-[10px] text-text-secondary"
+          title={label}
+        >
           {label}
         </span>
       ))}
@@ -790,7 +799,9 @@ function WatchButton({
       type="button"
       onClick={onClick}
       disabled={watched || loading}
-      className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-body-sm font-medium transition-colors ${
+      className={`inline-flex h-8 items-center justify-center rounded-md border text-body-sm font-medium transition-colors ${
+        compact ? 'w-8 px-0' : 'gap-1.5 px-2.5'
+      } ${
         watched
           ? 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary'
           : 'border-border-muted bg-surface-elevated text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary'
@@ -1556,7 +1567,7 @@ function renderUnreleasedColumnCell(
         <button
           type="button"
           onClick={() => onOpenDetail(game.appid, 'timeline')}
-          className="max-w-[220px] text-left hover:text-accent-primary"
+          className="block w-full max-w-full text-left hover:text-accent-primary"
           title="Open timeline"
         >
           <div className="text-body-sm text-text-primary">
@@ -1576,7 +1587,7 @@ function renderUnreleasedColumnCell(
           href={steamNewsUrl(game.appid, game.latest_news_url) ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
-          className="block max-w-[200px] text-body-sm text-text-primary hover:text-accent-primary"
+          className="block max-w-full text-body-sm text-text-primary hover:text-accent-primary"
         >
           <span className="line-clamp-2">{game.latest_news_title ?? 'Steam news'}</span>
           <span className="mt-1 block text-caption text-text-muted">{formatRelative(game.latest_news_at)}</span>
@@ -1707,8 +1718,8 @@ function GamesTable({
   const columns = visibleColumns.length > 0 ? visibleColumns : DEFAULT_UNRELEASED_COLUMNS;
   const allSelected = games.length > 0 && games.every((game) => selectedIds.has(game.appid));
   const selectedSome = games.some((game) => selectedIds.has(game.appid));
-  const tableMinWidth = 460 + columns.reduce((sum, columnId) => {
-    return sum + (UNRELEASED_COLUMN_DEFINITIONS[columnId]?.width ?? 120);
+  const tableMinWidth = SELECT_COLUMN_WIDTH + ACTIONS_COLUMN_WIDTH + GAME_COLUMN_WIDTH + columns.reduce((sum, columnId) => {
+    return sum + (UNRELEASED_COLUMN_DEFINITIONS[columnId]?.width ?? FALLBACK_DATA_COLUMN_WIDTH);
   }, 0);
   const header = (columnId: UnreleasedColumnId) => {
     const column = UNRELEASED_COLUMN_DEFINITIONS[columnId];
@@ -1747,7 +1758,7 @@ function GamesTable({
         <table className="w-full border-collapse" style={{ minWidth: tableMinWidth }}>
           <thead className="border-b border-border-subtle bg-surface-elevated">
             <tr>
-              <th className="w-10 px-3 py-2">
+              <th className="px-3 py-2" style={{ minWidth: SELECT_COLUMN_WIDTH, width: SELECT_COLUMN_WIDTH }}>
                 <button
                   onClick={onToggleAll}
                   className={`flex h-4 w-4 items-center justify-center rounded-sm border ${
@@ -1761,8 +1772,16 @@ function GamesTable({
                   {!allSelected && selectedSome && <span className="h-0.5 w-2 bg-white" />}
                 </button>
               </th>
-              <th className="min-w-[150px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">Actions</th>
-              <th className="min-w-[270px] px-3 py-2 text-left text-caption font-medium text-text-tertiary">
+              <th
+                className="px-3 py-2 text-left text-caption font-medium text-text-tertiary"
+                style={{ minWidth: ACTIONS_COLUMN_WIDTH, width: ACTIONS_COLUMN_WIDTH }}
+              >
+                Actions
+              </th>
+              <th
+                className="px-3 py-2 text-left text-caption font-medium text-text-tertiary"
+                style={{ minWidth: GAME_COLUMN_WIDTH, width: GAME_COLUMN_WIDTH }}
+              >
                 <button
                   onClick={() => onSort('name')}
                   className={`inline-flex items-center gap-1 hover:text-text-primary ${sort === 'name' ? 'text-accent-primary' : ''}`}
@@ -1777,7 +1796,10 @@ function GamesTable({
           <tbody>
             {games.map((game) => (
               <tr key={game.appid} className="border-b border-border-subtle hover:bg-surface-overlay">
-                <td className="px-3 py-3 align-top">
+                <td
+                  className="px-3 py-3 align-top"
+                  style={{ minWidth: SELECT_COLUMN_WIDTH, width: SELECT_COLUMN_WIDTH }}
+                >
                   <button
                     onClick={() => onToggleSelected(game.appid)}
                     className={`flex h-4 w-4 items-center justify-center rounded-sm border ${
@@ -1790,7 +1812,10 @@ function GamesTable({
                     {selectedIds.has(game.appid) && <Check className="h-3 w-3" />}
                   </button>
                 </td>
-                <td className="px-3 py-3 align-top">
+                <td
+                  className="px-3 py-3 align-top"
+                  style={{ minWidth: ACTIONS_COLUMN_WIDTH, width: ACTIONS_COLUMN_WIDTH }}
+                >
                   <div className="flex items-center gap-2">
                     <WatchButton
                       compact
@@ -1799,21 +1824,25 @@ function GamesTable({
                       onClick={() => onPin(game)}
                     />
                     <button
+                      type="button"
                       onClick={() => onOpenDetail(game.appid, 'overview')}
-                      className="inline-flex h-8 items-center gap-1 rounded-md border border-border-muted bg-surface-elevated px-2.5 text-body-sm text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border-muted bg-surface-elevated text-text-secondary hover:border-border-prominent hover:bg-surface-overlay hover:text-accent-primary"
                       title="Open details"
+                      aria-label={`Open details for ${game.name}`}
                     >
                       <Eye className="h-4 w-4" />
-                      Details
                     </button>
                   </div>
                 </td>
-                <td className="px-3 py-3 align-top">
+                <td
+                  className="px-3 py-3 align-top"
+                  style={{ minWidth: GAME_COLUMN_WIDTH, width: GAME_COLUMN_WIDTH }}
+                >
                   <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       <Link
                         href={`/apps/${game.appid}`}
-                        className="max-w-[220px] truncate text-body-sm font-medium text-text-primary hover:text-accent-primary"
+                        className="min-w-0 flex-1 truncate text-body-sm font-medium text-text-primary hover:text-accent-primary"
                         title={game.name}
                       >
                         {game.name}
