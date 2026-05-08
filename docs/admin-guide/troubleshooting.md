@@ -39,8 +39,9 @@ SUPABASE_SERVICE_KEY=eyJ...
 
 1. Confirm the environment has server-side `TIGER_PRIMARY_URL` set.
 2. Apply `packages/data-plane/sql/tiger-bootstrap/0084_unreleased_games_page_projection.sql` during an approved Tiger maintenance window.
-3. Refresh `metrics.unreleased_games_projection` and `metrics.unreleased_filter_counts`.
-4. Reload `/unreleased`.
+3. For stale projections, run the `Unreleased Projection Refresh` GitHub Action manually, or run the two concurrent materialized-view refreshes against the target Tiger database.
+4. Enable `ENABLE_UNRELEASED_PROJECTION_REFRESH=true` so the scheduled 4-hour refresh keeps the page fresh.
+5. Reload `/unreleased`.
 
 ### "Invalid API key"
 

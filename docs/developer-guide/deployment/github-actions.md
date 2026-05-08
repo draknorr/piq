@@ -40,6 +40,7 @@ Repository variables gate scheduled writers:
 | `ENABLE_TIGER_CATALOG_WRITERS=true` | Allows scheduled catalog/storefront/app-list Tiger writers. Manual dispatch still works without this variable. |
 | `ENABLE_TIGER_METRICS_WRITERS=true` | Allows scheduled reviews, price, SteamSpy, CCU, trends, velocity, interpolation, and priority Tiger writers. |
 | `ENABLE_TIGER_EMBEDDING_WRITER=true` | Allows scheduled embedding writer. Manual dispatch is the preferred smoke path. |
+| `ENABLE_UNRELEASED_PROJECTION_REFRESH=true` | Allows the scheduled `/unreleased` projection refresh. Manual dispatch still works without this variable. |
 | `ENABLE_LEGACY_SUPABASE_WRITERS=true` | Allows explicitly legacy Supabase writer workflows such as old view refresh/cleanup repair jobs. Keep off unless there is an approved legacy operation. |
 
 ### 2. Enable Actions
@@ -60,6 +61,7 @@ All times are UTC:
 | App List Sync           | `applist-sync.yml`            | 00:15 daily                    | Master app list, Tiger writer gated by `ENABLE_TIGER_CATALOG_WRITERS` |
 | App Change Hints        | `app-change-hints.yml`        | :10 hourly                     | Steam changed-app hints into Tiger queue state |
 | Storefront Sync         | `storefront-sync.yml`         | :00 every 2h                   | Storefront latest state and change-intel archives into Tiger/R2, gated by `ENABLE_TIGER_CATALOG_WRITERS` |
+| Unreleased Projection Refresh | `unreleased-projection-refresh.yml` | :50 every 4h             | Refreshes `/unreleased` Tiger materialized views, gated by `ENABLE_UNRELEASED_PROJECTION_REFRESH` |
 | Steam News Hot Refresh  | `news-hot-refresh.yml`        | every 10 minutes               | Hot news queue refresh into Tiger/R2 |
 | SteamSpy Sync           | `steamspy-sync.yml`           | 02:15 daily                    | Owners, playtime, tags, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
 | Embedding Sync          | `embedding-sync.yml`          | 03:00 daily                    | Embeddings, Tiger status writer gated by `ENABLE_TIGER_EMBEDDING_WRITER` |

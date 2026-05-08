@@ -2,7 +2,7 @@
 
 This document describes the implementation of the `/unreleased` feature.
 
-**Last Updated:** May 7, 2026
+**Last Updated:** May 8, 2026
 
 ## Overview
 
@@ -33,7 +33,13 @@ That bootstrap SQL creates:
 
 Apply this SQL only during an approved Tiger maintenance window. The initial refresh scans multiple large slices and the page intentionally returns a clear missing-projection error instead of falling back to a slow raw query.
 
-Follow-up refreshes can use:
+Follow-up refreshes are scheduled every 4 hours by
+`.github/workflows/unreleased-projection-refresh.yml` when
+`ENABLE_UNRELEASED_PROJECTION_REFRESH=true`. The workflow runs against
+`TIGER_PRODUCTION_URL`, refreshes the main projection first, then refreshes the
+dependent filter-count projection.
+
+Manual follow-up refreshes can use the same dependency order:
 
 ```sql
 REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.unreleased_games_projection;

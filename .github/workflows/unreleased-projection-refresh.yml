@@ -1,0 +1,65 @@
+name: Unreleased Projection Refresh
+
+on:
+  schedule:
+    # Run every 4 hours, offset from storefront sync jobs that start at :00.
+    - cron: '50 */4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: unreleased-projection-refresh
+  cancel-in-progress: false
+
+env:
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+
+jobs:
+  refresh:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_UNRELEASED_PROJECTION_REFRESH == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Refresh unreleased games projections
+        run: |
+          set -euo pipefail
+
+          snapshot_sql="
+            SELECT
+              COUNT(*)::int AS row_count,
+              MAX(projection_refreshed_at) AS projection_refreshed_at,
+              MAX(data_updated_at) AS latest_source_update_at
+            FROM metrics.unreleased_games_projection;
+          "
+
+          echo "Before refresh:" >> "$GITHUB_STEP_SUMMARY"
+          psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 -c "$snapshot_sql" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          start_time=$(date +%s)
+
+          psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 \
+            -c "SET temp_buffers TO '512MB'" \
+            -c "SET work_mem TO '128MB'" \
+            -c "SET statement_timeout TO '30min'" \
+            -c "SET lock_timeout TO '15s'" \
+            -c "REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.unreleased_games_projection;"
+
+          psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 \
+            -c "SET temp_buffers TO '512MB'" \
+            -c "SET work_mem TO '128MB'" \
+            -c "SET statement_timeout TO '10min'" \
+            -c "SET lock_timeout TO '15s'" \
+            -c "REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.unreleased_filter_counts;"
+
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "After refresh:" >> "$GITHUB_STEP_SUMMARY"
+          psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 -c "$snapshot_sql" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Duration: ${duration}s" >> "$GITHUB_STEP_SUMMARY"
