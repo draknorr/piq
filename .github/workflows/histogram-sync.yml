@@ -11,6 +11,10 @@ on:
         required: false
         default: '100'
 
+concurrency:
+  group: histogram-sync
+  cancel-in-progress: false
+
 env:
   DATA_READ_TARGET: tiger
   DATA_WRITE_TARGET: tiger

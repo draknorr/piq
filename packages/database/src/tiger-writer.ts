@@ -1941,7 +1941,38 @@ export class TigerMetricsRepository {
   }
 
   async upsertReviewHistogram(rows: ReviewHistogramUpsert[]): Promise<number> {
-    return this.upsertMetricsTable('review_histogram', rows as unknown as JsonRecord[], 'appid, month_start');
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const result = await runQuery(
+      this.pool,
+      'metrics.upsert.review_histogram',
+      `
+        INSERT INTO metrics.review_histogram (
+          appid,
+          month_start,
+          recommendations_up,
+          recommendations_down,
+          fetched_at
+        )
+        SELECT
+          appid,
+          month_start,
+          recommendations_up,
+          recommendations_down,
+          COALESCE(fetched_at, now()) AS fetched_at
+        FROM jsonb_populate_recordset(NULL::metrics.review_histogram, $1::jsonb) AS rows
+        ON CONFLICT (appid, month_start)
+        DO UPDATE SET
+          recommendations_up = EXCLUDED.recommendations_up,
+          recommendations_down = EXCLUDED.recommendations_down,
+          fetched_at = EXCLUDED.fetched_at
+      `,
+      [jsonRows(rows)]
+    );
+
+    return result.rowCount ?? 0;
   }
 
   async upsertAppTrends(rows: AppTrendUpsert[]): Promise<number> {
@@ -2260,13 +2291,30 @@ export class TigerReviewsRepository {
           s.last_known_total_reviews,
           s.consecutive_errors,
           s.reviews_interval_hours,
-          m.total_reviews,
-          m.positive_reviews
+          COALESCE(m.total_reviews, rd.total_reviews) AS total_reviews,
+          COALESCE(m.positive_reviews, rd.positive_reviews) AS positive_reviews
         FROM ops.sync_status s
-        LEFT JOIN metrics.daily_metrics m
-          ON m.appid = s.appid
+        LEFT JOIN LATERAL (
+          SELECT m.total_reviews, m.positive_reviews
+          FROM metrics.daily_metrics m
+          WHERE m.appid = s.appid
+            AND (
+              m.total_reviews IS NOT NULL
+              OR m.positive_reviews IS NOT NULL
+            )
+          ORDER BY m.metric_date DESC
+          LIMIT 1
+        ) m ON true
+        LEFT JOIN LATERAL (
+          SELECT rd.total_reviews, rd.positive_reviews
+          FROM metrics.review_deltas rd
+          WHERE rd.appid = s.appid
+            AND rd.is_interpolated = false
+          ORDER BY rd.delta_date DESC
+          LIMIT 1
+        ) rd ON true
         WHERE s.appid = ANY($1::integer[])
-        ORDER BY s.appid, m.metric_date DESC NULLS LAST
+        ORDER BY s.appid
       `,
       [appIds]
     );

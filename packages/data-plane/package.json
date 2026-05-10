@@ -21,6 +21,7 @@
     "capture-target-baseline": "tsx src/scripts/capture-target-baseline.ts",
     "backfill-legacy-compatibility": "tsx src/scripts/backfill-legacy-compatibility.ts",
     "backfill-metrics-daily-metrics": "tsx src/scripts/backfill-metrics-daily-metrics.ts",
+    "backfill-metrics-review-deltas": "tsx src/scripts/backfill-metrics-review-deltas.ts",
     "backfill-events-news": "tsx src/scripts/backfill-events-news.ts",
     "reconcile-events-news": "tsx src/scripts/reconcile-events-news.ts"
   },

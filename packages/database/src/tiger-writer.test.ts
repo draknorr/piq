@@ -86,6 +86,28 @@ test('updateSyncJob can persist metadata on ops.sync_jobs', async () => {
   ]);
 });
 
+test('abandonStaleSyncJobs marks old running jobs failed by job type', async () => {
+  const pool = new CapturingPool([result([], 2)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.ops.abandonStaleSyncJobs({
+    errorMessage: 'abandoned_as_stale_by_new_histogram_run',
+    jobTypes: ['histogram'],
+    startedBeforeIso: '2026-05-10T00:00:00.000Z',
+  });
+
+  assert.equal(updated, 2);
+  assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.sync_jobs/);
+  assert.match(pool.calls[0]?.sql ?? '', /job_type = ANY\(\$1::text\[\]\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /status = 'running'/);
+  assert.match(pool.calls[0]?.sql ?? '', /started_at < \$2::timestamptz/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    ['histogram'],
+    '2026-05-10T00:00:00.000Z',
+    'abandoned_as_stale_by_new_histogram_run',
+  ]);
+});
+
 test('syncStatus.updateFields only writes allowlisted defined columns', async () => {
   const pool = new CapturingPool([result([], 1)]);
   const writer = createTigerWriterForPool(pool);
@@ -199,6 +221,41 @@ test('reviews.promoteReviewsSyncBatch calls Tiger promotion RPC in bulk', async 
       until_at: '2026-04-29T13:00:00.000Z',
     },
   ]);
+});
+
+test('reviews.loadPreviousSyncData ignores latest CCU-only daily metric rows', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        appid: 2416450,
+        consecutive_errors: '0',
+        last_known_total_reviews: '9795',
+        last_reviews_sync: new Date('2026-05-07T04:06:39.000Z'),
+        positive_reviews: '7418',
+        reviews_interval_hours: '4',
+        total_reviews: '7794',
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const { neverSyncedSet, previousSyncData } = await writer.reviews.loadPreviousSyncData([
+    2416450,
+  ]);
+  const previous = previousSyncData.get(2416450);
+
+  assert.equal(neverSyncedSet.has(2416450), false);
+  assert.equal(previous?.lastSync?.toISOString(), '2026-05-07T04:06:39.000Z');
+  assert.equal(previous?.totalReviews, 7794);
+  assert.equal(previous?.positiveReviews, 7418);
+  assert.equal(previous?.intervalHours, 4);
+  assert.match(pool.calls[0]?.sql ?? '', /LEFT JOIN LATERAL/);
+  assert.match(pool.calls[0]?.sql ?? '', /metrics\.review_deltas/);
+  assert.match(pool.calls[0]?.sql ?? '', /COALESCE\(m\.positive_reviews, rd\.positive_reviews\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /m\.total_reviews IS NOT NULL/);
+  assert.match(pool.calls[0]?.sql ?? '', /m\.positive_reviews IS NOT NULL/);
+  assert.match(pool.calls[0]?.sql ?? '', /ORDER BY m\.metric_date DESC/);
+  assert.deepEqual(pool.calls[0]?.values, [[2416450]]);
 });
 
 test('catalog.replaceAppRelations rejects unsupported relation tables', async () => {
@@ -476,6 +533,33 @@ test('metrics.listReviewHistogramEntries normalizes dates and numeric values', a
   ]);
   assert.match(pool.calls[0]?.sql ?? '', /ORDER BY appid ASC, month_start DESC/);
   assert.deepEqual(pool.calls[0]?.values, [[10]]);
+});
+
+test('metrics.upsertReviewHistogram refreshes fetched_at on conflict', async () => {
+  const pool = new CapturingPool([result([], 1)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.metrics.upsertReviewHistogram([
+    {
+      appid: 10,
+      month_start: '2026-04-01',
+      recommendations_down: 2,
+      recommendations_up: 20,
+    },
+  ]);
+
+  assert.equal(updated, 1);
+  assert.match(pool.calls[0]?.sql ?? '', /INSERT INTO metrics\.review_histogram/);
+  assert.match(pool.calls[0]?.sql ?? '', /COALESCE\(fetched_at, now\(\)\) AS fetched_at/);
+  assert.match(pool.calls[0]?.sql ?? '', /fetched_at = EXCLUDED\.fetched_at/);
+  assert.deepEqual(JSON.parse(String(pool.calls[0]?.values?.[0])), [
+    {
+      appid: 10,
+      month_start: '2026-04-01',
+      recommendations_down: 2,
+      recommendations_up: 20,
+    },
+  ]);
 });
 
 test('metrics.countReviewDeltas counts interpolated review deltas by date', async () => {

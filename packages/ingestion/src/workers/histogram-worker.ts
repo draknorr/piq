@@ -23,6 +23,7 @@ const log = logger.child({ worker: 'histogram-sync' });
 // Process this many apps concurrently
 // Rate limiter handles API throttling, this controls DB operation parallelism
 const CONCURRENCY = 15;
+const DEFAULT_STALE_HISTOGRAM_JOB_MINUTES = 45;
 
 interface SyncStats {
   processed: number;
@@ -34,6 +35,11 @@ interface SyncStats {
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 type HistogramDbClient = SupabaseClient | null;
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 async function updateSyncJob(
   jobId: string | null,
@@ -55,6 +61,42 @@ async function updateSyncJob(
   }
 
   await supabase.from('sync_jobs').update(values).eq('id', jobId);
+}
+
+async function abandonStaleHistogramJobs(
+  supabase: HistogramDbClient,
+  tiger: TigerWriter | null,
+  staleBeforeIso: string
+): Promise<number> {
+  if (tiger) {
+    return tiger.ops.abandonStaleSyncJobs({
+      errorMessage: 'abandoned_as_stale_by_new_histogram_run',
+      jobTypes: ['histogram'],
+      startedBeforeIso: staleBeforeIso,
+    });
+  }
+
+  if (!supabase) {
+    throw new Error('Supabase client is required for legacy histogram stale job cleanup');
+  }
+
+  const { data, error } = await supabase
+    .from('sync_jobs')
+    .update({
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: 'abandoned_as_stale_by_new_histogram_run',
+    })
+    .eq('job_type', 'histogram')
+    .eq('status', 'running')
+    .lt('started_at', staleBeforeIso)
+    .select('id');
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.length ?? 0;
 }
 
 /**
@@ -138,11 +180,30 @@ async function main(): Promise<void> {
   const useTiger = readDataWriteTarget(env) === 'tiger';
   const tiger = useTiger ? getTigerWriter(env) : null;
   const githubRunId = env.GITHUB_RUN_ID;
-  const batchSize = parseInt(env.BATCH_SIZE || String(BATCH_SIZES.HISTOGRAM_BATCH), 10);
+  const batchSize = parsePositiveInteger(env.BATCH_SIZE, BATCH_SIZES.HISTOGRAM_BATCH);
+  const staleJobMinutes = parsePositiveInteger(
+    env.HISTOGRAM_STALE_JOB_MINUTES,
+    DEFAULT_STALE_HISTOGRAM_JOB_MINUTES
+  );
 
-  log.info('Starting Histogram sync', { githubRunId, batchSize });
+  log.info('Starting Histogram sync', { githubRunId, batchSize, staleJobMinutes });
 
   const supabase: HistogramDbClient = tiger ? null : getServiceClient();
+
+  try {
+    const staleBeforeIso = new Date(Date.now() - staleJobMinutes * 60 * 1000).toISOString();
+    const abandonedCount = await abandonStaleHistogramJobs(supabase, tiger, staleBeforeIso);
+
+    if (abandonedCount > 0) {
+      log.warn('Abandoned stale histogram jobs before starting new run', {
+        abandonedCount,
+        staleBeforeIso,
+      });
+    }
+  } catch (error) {
+    log.warn('Failed to abandon stale histogram jobs', { error });
+  }
+
   const jobId = tiger
     ? await tiger.ops.createSyncJob({
         jobType: 'histogram',

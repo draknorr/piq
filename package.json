@@ -17,6 +17,7 @@
     "tiger:target-baseline": "pnpm --filter @publisheriq/data-plane capture-target-baseline",
     "tiger:backfill-legacy": "pnpm --filter @publisheriq/data-plane backfill-legacy-compatibility",
     "tiger:backfill-daily-metrics": "pnpm --filter @publisheriq/data-plane backfill-metrics-daily-metrics",
+    "tiger:backfill-review-deltas": "pnpm --filter @publisheriq/data-plane backfill-metrics-review-deltas",
     "tiger:backfill-events-news": "pnpm --filter @publisheriq/data-plane backfill-events-news",
     "tiger:reconcile-events-news": "pnpm --filter @publisheriq/data-plane reconcile-events-news",
     "youtube:seed-routing": "pnpm --filter @publisheriq/youtube seed-routing",
