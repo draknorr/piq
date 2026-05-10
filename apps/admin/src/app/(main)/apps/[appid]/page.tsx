@@ -94,9 +94,14 @@ interface DailyMetric {
   metric_date: string;
   review_score: number | null;
   review_score_desc: string | null;
+  review_score_is_carried_forward: boolean;
   total_reviews: number | null;
   positive_reviews: number | null;
   negative_reviews: number | null;
+  reviews_added: number | null;
+  positive_added: number | null;
+  negative_added: number | null;
+  is_review_interpolated: boolean;
   owners_min: number | null;
   owners_max: number | null;
   ccu_peak: number | null;
@@ -187,6 +192,21 @@ function toIso(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+function toDateOnly(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  const valueString = String(value);
+  const match = valueString.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
 }
 
 async function getAppSummary(appid: number): Promise<AppSummary | null> {
@@ -355,33 +375,93 @@ async function getAppProfileBundle(appid: number): Promise<AppProfileBundle> {
 async function getDailyMetrics(appid: number): Promise<DailyMetric[]> {
   const { rows } = await runTigerQuery<DailyMetric>(
     `
+      WITH metric_days AS (
+        SELECT metric_date
+        FROM metrics.daily_metrics
+        WHERE appid = $1
+        UNION
+        SELECT delta_date AS metric_date
+        FROM metrics.review_deltas
+        WHERE appid = $1
+      ),
+      recent_days AS (
+        SELECT metric_date
+        FROM metric_days
+        ORDER BY metric_date DESC
+        LIMIT 30
+      )
       SELECT
-        metric_date,
-        review_score,
-        review_score_desc,
-        total_reviews,
-        positive_reviews,
-        negative_reviews,
-        owners_min,
-        owners_max,
-        ccu_peak,
-        ccu_source,
-        average_playtime_forever,
-        average_playtime_2weeks,
-        price_cents,
-        discount_percent
-      FROM metrics.daily_metrics
-      WHERE appid = $1
-      ORDER BY metric_date DESC
-      LIMIT 30
+        d.metric_date,
+        CASE
+          WHEN dm.review_score IS NOT NULL THEN dm.review_score
+          WHEN rd.review_score IS NOT NULL THEN rd.review_score
+          WHEN rd.is_interpolated IS TRUE THEN carried.review_score
+          ELSE NULL
+        END AS review_score,
+        CASE
+          WHEN dm.review_score_desc IS NOT NULL THEN dm.review_score_desc
+          WHEN rd.review_score_desc IS NOT NULL THEN rd.review_score_desc
+          WHEN rd.is_interpolated IS TRUE THEN carried.review_score_desc
+          ELSE NULL
+        END AS review_score_desc,
+        CASE
+          WHEN COALESCE(dm.review_score_desc, rd.review_score_desc) IS NULL
+            AND rd.is_interpolated IS TRUE
+            AND carried.review_score_desc IS NOT NULL
+          THEN true
+          ELSE false
+        END AS review_score_is_carried_forward,
+        COALESCE(rd.total_reviews, dm.total_reviews) AS total_reviews,
+        COALESCE(rd.positive_reviews, dm.positive_reviews) AS positive_reviews,
+        CASE
+          WHEN COALESCE(rd.total_reviews, dm.total_reviews) IS NOT NULL
+            AND COALESCE(rd.positive_reviews, dm.positive_reviews) IS NOT NULL
+          THEN GREATEST(
+            COALESCE(rd.total_reviews, dm.total_reviews) - COALESCE(rd.positive_reviews, dm.positive_reviews),
+            0
+          )
+          ELSE dm.negative_reviews
+        END AS negative_reviews,
+        rd.reviews_added,
+        rd.positive_added,
+        rd.negative_added,
+        COALESCE(rd.is_interpolated, false) AS is_review_interpolated,
+        dm.owners_min,
+        dm.owners_max,
+        dm.ccu_peak,
+        dm.ccu_source,
+        dm.average_playtime_forever,
+        dm.average_playtime_2weeks,
+        dm.price_cents,
+        dm.discount_percent
+      FROM recent_days d
+      LEFT JOIN metrics.daily_metrics dm
+        ON dm.appid = $1
+       AND dm.metric_date = d.metric_date
+      LEFT JOIN metrics.review_deltas rd
+        ON rd.appid = $1
+       AND rd.delta_date = d.metric_date
+      LEFT JOIN LATERAL (
+        SELECT actual.review_score, actual.review_score_desc
+        FROM metrics.review_deltas actual
+        WHERE actual.appid = $1
+          AND actual.delta_date <= d.metric_date
+          AND actual.is_interpolated = false
+          AND actual.review_score_desc IS NOT NULL
+        ORDER BY actual.delta_date DESC
+        LIMIT 1
+      ) carried ON true
+      ORDER BY d.metric_date DESC
     `,
     [appid]
   );
 
   return rows.map((row) => ({
     ...row,
-    metric_date: toIso(row.metric_date) ?? '',
+    metric_date: toDateOnly(row.metric_date) ?? '',
     ccu_source: row.ccu_source as DailyMetric['ccu_source'],
+    review_score_is_carried_forward: toBoolean(row.review_score_is_carried_forward),
+    is_review_interpolated: toBoolean(row.is_review_interpolated),
   }));
 }
 
@@ -788,7 +868,7 @@ export default async function AppDetailPage({
           lastSyncedAt: syncStatus?.last_steamspy_sync ?? null,
           staleAfterDays: 14,
         }),
-        source: 'Daily metrics',
+        source: 'Daily metrics + review deltas',
         detail: `rows: ${metrics.length} · latest: ${metrics[0]?.metric_date ?? '—'} · last_steamspy_sync: ${syncStatus?.last_steamspy_sync ?? '—'} · last_reviews_sync: ${syncStatus?.last_reviews_sync ?? '—'}`,
       },
       {

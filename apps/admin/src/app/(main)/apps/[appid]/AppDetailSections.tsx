@@ -95,9 +95,14 @@ interface DailyMetric {
   metric_date: string;
   review_score: number | null;
   review_score_desc: string | null;
+  review_score_is_carried_forward: boolean;
   total_reviews: number | null;
   positive_reviews: number | null;
   negative_reviews: number | null;
+  reviews_added: number | null;
+  positive_added: number | null;
+  negative_added: number | null;
+  is_review_interpolated: boolean;
   owners_min: number | null;
   owners_max: number | null;
   ccu_peak: number | null;
@@ -977,10 +982,10 @@ function MetricsSection({
   }) {
   const chartData = [...metrics].reverse().map((m) => ({
     date: formatShortDateLabel(m.metric_date),
-    reviews: m.total_reviews ?? 0,
-    ccu: m.ccu_peak ?? 0,
-    positive: m.positive_reviews ?? 0,
-    negative: m.negative_reviews ?? 0,
+    reviews: m.total_reviews,
+    ccu: m.ccu_peak,
+    positive: m.positive_reviews,
+    negative: m.negative_reviews,
   }));
 
   return (
@@ -999,6 +1004,7 @@ function MetricsSection({
                 height={140}
                 color="blue"
                 formatYAxis={(val) => val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val.toString()}
+                tooltipLabel="Reviews"
               />
             </div>
             <div className="p-3 rounded-md border border-border-subtle bg-surface-raised">
@@ -1010,6 +1016,7 @@ function MetricsSection({
                 height={140}
                 color="cyan"
                 formatYAxis={(val) => val >= 1000 ? `${(val / 1000).toFixed(0)}k` : val.toString()}
+                tooltipLabel="Peak CCU"
               />
             </div>
           </div>
@@ -1028,14 +1035,17 @@ function MetricsSection({
                       m.review_score_desc === 'Mixed' ? 'text-accent-yellow' : 'text-text-muted'
                     }`}>
                       {m.review_score_desc ?? '—'}
+                      {m.review_score_is_carried_forward && (
+                        <span className="ml-1 text-text-tertiary">est.</span>
+                      )}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-caption">
                     <div>
-                      <span className="text-text-tertiary">Reviews: </span>
-                      <span className="text-accent-green">{formatNumber(m.positive_reviews)}</span>
+                      <span className="text-text-tertiary">Daily +/-: </span>
+                      <span className="text-accent-green">{formatNumber(m.positive_added)}</span>
                       <span className="text-text-muted">/</span>
-                      <span className="text-accent-red">{formatNumber(m.negative_reviews)}</span>
+                      <span className="text-accent-red">{formatNumber(m.negative_added)}</span>
                     </div>
                     <div>
                       <span className="text-text-tertiary">CCU: </span>
@@ -1065,7 +1075,7 @@ function MetricsSection({
                   <th className="px-3 py-2 text-left text-caption font-medium text-text-tertiary">Date</th>
                   <th className="px-3 py-2 text-left text-caption font-medium text-text-tertiary">Score</th>
                   <th className="px-3 py-2 text-right text-caption font-medium text-text-tertiary">Total</th>
-                  <th className="px-3 py-2 text-right text-caption font-medium text-text-tertiary">+/-</th>
+                  <th className="px-3 py-2 text-right text-caption font-medium text-text-tertiary">Daily +/-</th>
                   <th className="px-3 py-2 text-right text-caption font-medium text-text-tertiary">CCU</th>
                   <th className="px-3 py-2 text-right text-caption font-medium text-text-tertiary">Price</th>
                 </tr>
@@ -1081,13 +1091,16 @@ function MetricsSection({
                         m.review_score_desc === 'Mixed' ? 'text-accent-yellow' : 'text-text-muted'
                       }`}>
                         {m.review_score_desc ?? '—'}
+                        {m.review_score_is_carried_forward && (
+                          <span className="ml-1 text-text-tertiary">est.</span>
+                        )}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right text-caption text-text-secondary">{formatNumber(m.total_reviews)}</td>
                     <td className="px-3 py-2 text-right text-caption">
-                      <span className="text-accent-green">{formatNumber(m.positive_reviews)}</span>
+                      <span className="text-accent-green">{formatNumber(m.positive_added)}</span>
                       <span className="text-text-muted">/</span>
-                      <span className="text-accent-red">{formatNumber(m.negative_reviews)}</span>
+                      <span className="text-accent-red">{formatNumber(m.negative_added)}</span>
                     </td>
                     <td className="px-3 py-2 text-right text-caption text-text-secondary">{formatNumber(m.ccu_peak)}</td>
                     <td className="px-3 py-2 text-right text-caption text-text-secondary">

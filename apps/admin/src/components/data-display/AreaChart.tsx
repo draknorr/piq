@@ -11,8 +11,15 @@ import {
 } from 'recharts';
 import { useTheme } from '@/contexts/ThemeContext';
 
+type ChartValue = string | number | null | undefined;
+
 interface DataPoint {
-  [key: string]: string | number;
+  [key: string]: ChartValue;
+}
+
+interface TooltipPayloadItem {
+  value?: ChartValue;
+  name?: string | number;
 }
 
 // Chart color type
@@ -30,6 +37,7 @@ interface AreaChartProps {
   formatXAxis?: (value: string | number) => string;
   formatYAxis?: (value: number) => string;
   formatTooltip?: (value: number) => string;
+  tooltipLabel?: string;
   className?: string;
 }
 
@@ -94,6 +102,7 @@ export function AreaChartComponent({
   formatXAxis,
   formatYAxis,
   formatTooltip,
+  tooltipLabel,
   className = '',
 }: AreaChartProps) {
   const { resolvedTheme } = useTheme();
@@ -113,6 +122,45 @@ export function AreaChartComponent({
   }
 
   const { stroke, fill } = colorMap[color] || colorMap.coral;
+  const formatTooltipValue = (value: ChartValue) => {
+    if (value === null || value === undefined) return '—';
+    const numericValue = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numericValue)) return '—';
+    return formatTooltip ? formatTooltip(numericValue) : numericValue.toLocaleString();
+  };
+  const renderTooltip = ({
+    active,
+    payload,
+    label,
+  }: {
+    active?: boolean;
+    payload?: TooltipPayloadItem[];
+    label?: string | number;
+  }) => {
+    if (!active || !payload || payload.length === 0) return null;
+
+    const item = payload[0];
+    const seriesLabel = tooltipLabel ?? String(item.name || yKey);
+
+    return (
+      <div
+        style={{
+          backgroundColor: theme.tooltipBg,
+          border: `1px solid ${theme.tooltipBorder}`,
+          borderRadius: '8px',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          padding: '8px 10px',
+        }}
+      >
+        <div style={{ color: theme.tooltipLabel, marginBottom: '4px' }}>
+          {label}
+        </div>
+        <div style={{ color: theme.tooltipText }}>
+          {seriesLabel}: {formatTooltipValue(item.value)}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={className} style={{ height }}>
@@ -154,21 +202,7 @@ export function AreaChartComponent({
             />
           )}
           <Tooltip
-            contentStyle={{
-              backgroundColor: theme.tooltipBg,
-              border: `1px solid ${theme.tooltipBorder}`,
-              borderRadius: '8px',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-            }}
-            labelStyle={{ color: theme.tooltipLabel, marginBottom: '4px' }}
-            itemStyle={{ color: theme.tooltipText }}
-            formatter={(value: number | undefined) => {
-              if (value === undefined) return ['—', ''];
-              return [
-                formatTooltip ? formatTooltip(value) : value.toLocaleString(),
-                '',
-              ];
-            }}
+            content={renderTooltip}
           />
           <Area
             type="monotone"
