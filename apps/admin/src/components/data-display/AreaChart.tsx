@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { useTheme } from '@/contexts/ThemeContext';
 
-type ChartValue = string | number | null | undefined;
+type ChartValue = string | number | readonly (string | number)[] | null | undefined;
 
 interface DataPoint {
   [key: string]: ChartValue;
@@ -124,6 +124,7 @@ export function AreaChartComponent({
   const { stroke, fill } = colorMap[color] || colorMap.coral;
   const formatTooltipValue = (value: ChartValue) => {
     if (value === null || value === undefined) return '—';
+    if (Array.isArray(value)) return value.join(' - ');
     const numericValue = typeof value === 'number' ? value : Number(value);
     if (!Number.isFinite(numericValue)) return '—';
     return formatTooltip ? formatTooltip(numericValue) : numericValue.toLocaleString();
@@ -134,7 +135,7 @@ export function AreaChartComponent({
     label,
   }: {
     active?: boolean;
-    payload?: TooltipPayloadItem[];
+    payload?: ReadonlyArray<TooltipPayloadItem>;
     label?: string | number;
   }) => {
     if (!active || !payload || payload.length === 0) return null;
