@@ -5,6 +5,9 @@ const distDir = process.env.PUBLISHERIQ_NEXT_DIST_DIR?.trim();
 
 const nextConfig = {
   ...(distDir ? { distDir } : {}),
+  outputFileTracingIncludes: {
+    '/reports/[slug]': ['./src/app/reports/content/**/*.html'],
+  },
   transpilePackages: ['@publisheriq/database'],
 };
 

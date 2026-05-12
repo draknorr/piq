@@ -16,6 +16,7 @@ const LOCAL_BYPASS_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0
 const PUBLIC_PATHS = [
   '/login',
   '/waitlist',
+  '/reports',
   '/auth/callback',
   '/auth/confirm',
   '/api/auth/callback',
@@ -30,6 +31,7 @@ const ADMIN_PATHS = ['/admin'];
 const STATIC_PATTERNS = [
   '/_next',
   '/favicon.ico',
+  '/report-assets',
   '/robots.txt',
   '/sitemap.xml',
 ];
