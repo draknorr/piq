@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import { AlertCircle, Bug, CheckCircle2, Loader2, Send, X } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import {
   ISSUE_TYPES,
   type IssueType,
@@ -125,6 +126,12 @@ export function useReportIssueContext(source: string, context: JsonObject | null
 }
 
 export function ReportIssueRoot({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+
+  if (pathname?.startsWith('/reports')) {
+    return <>{children}</>;
+  }
+
   return (
     <ReportIssueProvider>
       {children}
