@@ -1,0 +1,2126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MOUSE: P.I. For Hire - Current Status and Post-Launch Strategy</title>
+    <style>
+      @font-face {
+        font-family: "DM Sans Variable";
+        src: url("/report-assets/fonts/dm-sans-latin-opsz-normal.woff2")
+          format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "JetBrains Mono Variable";
+        src: url("/report-assets/fonts/jetbrains-mono-latin-wght-normal.woff2")
+          format("woff2");
+        font-weight: 100 800;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        color-scheme: light;
+        --surface: #f7f5ee;
+        --sheet: #fffdf8;
+        --sheet-soft: #faf7ef;
+        --ink: #11130f;
+        --ink-soft: #34342e;
+        --muted: rgba(23, 24, 20, 0.62);
+        --quiet: rgba(23, 24, 20, 0.42);
+        --line: #d7d2c9;
+        --line-strong: #171814;
+        --green: #2e7654;
+        --coral: #c76760;
+        --coral-dark: #9a332c;
+        --coral-soft: #fbf0ef;
+        --gold: #9a7428;
+        --blue: #3e6874;
+        --shadow: 0 18px 48px rgba(45, 42, 38, 0.11);
+        --sans:
+          "DM Sans Variable", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+        --mono:
+          "JetBrains Mono Variable", "SFMono-Regular", Menlo, Consolas,
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 15.5px;
+        line-height: 1.6;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0 auto 0 clamp(2rem, 5vw, 4.35rem);
+        width: 1px;
+        background: var(--line);
+        pointer-events: none;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1240px, calc(100vw - 36px));
+        margin: 0 auto;
+        padding: 42px 0 58px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 28px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 12px;
+        text-decoration: none;
+      }
+
+      .wordmark {
+        font-size: clamp(1.4rem, 1.8vw, 1.8rem);
+        line-height: 0.92;
+        letter-spacing: 0.022em;
+        font-weight: 420;
+      }
+
+      .wordmark .iq {
+        color: var(--green);
+      }
+
+      .brand-line {
+        width: clamp(80px, 13vw, 180px);
+        height: 1px;
+        background: var(--line);
+      }
+
+      .report-date {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.055em;
+        color: var(--muted);
+        text-align: right;
+      }
+
+      main {
+        background: var(--sheet);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: block;
+        padding: clamp(28px, 3vw, 44px) 0 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-head {
+        padding: 0 clamp(28px, 3vw, 44px) clamp(24px, 2.6vw, 36px);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-summary {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+        gap: 1px;
+        background: var(--line);
+      }
+
+      .summary-col {
+        background: var(--sheet);
+        padding: 22px clamp(20px, 2vw, 28px);
+      }
+
+      .summary-sources {
+        background: var(--sheet-soft);
+      }
+
+      .summary-col .mini-label {
+        margin-bottom: 10px;
+      }
+
+      .summary-col p {
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .summary-col p + p {
+        margin-top: 8px;
+      }
+
+      .verdict-line strong {
+        color: var(--ink);
+        font-weight: 560;
+      }
+
+      .summary-col .confidence-strip.compact {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+
+      .taxonomy {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .taxonomy-col {
+        background: var(--sheet-soft);
+        padding: 18px clamp(20px, 2vw, 28px);
+      }
+
+      .taxonomy-col .taxonomy-label {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        line-height: 1.2;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+
+      .taxonomy-col.high .taxonomy-label {
+        color: var(--green);
+      }
+
+      .taxonomy-col.directional .taxonomy-label {
+        color: var(--blue);
+      }
+
+      .taxonomy-col.inference .taxonomy-label {
+        color: var(--gold);
+      }
+
+      .taxonomy-col p {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .eyebrow,
+      .section-kicker,
+      .mini-label,
+      th,
+      .tag {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        line-height: 1.3;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        color: var(--coral-dark);
+        margin-bottom: 14px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        max-width: 22ch;
+        font-size: clamp(1.9rem, 2.8vw, 2.6rem);
+        line-height: 1.1;
+        letter-spacing: -0.01em;
+        font-weight: 560;
+      }
+
+      .dek {
+        max-width: 60ch;
+        margin-top: 16px;
+        color: var(--ink-soft);
+        font-size: clamp(1rem, 1.15vw, 1.1rem);
+        line-height: 1.55;
+      }
+
+      .confidence-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin-top: 10px;
+      }
+
+      .confidence-strip.compact {
+        margin-top: 8px;
+      }
+
+      .confidence-badge {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        border: 0;
+        border-bottom: 1px dotted currentColor;
+        background: transparent;
+        color: var(--ink-soft);
+        padding: 1px 0;
+        font-family: var(--mono);
+        font-size: 0.56rem;
+        line-height: 1.1;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: help;
+      }
+
+      .confidence-badge.high {
+        color: var(--green);
+      }
+
+      .confidence-badge.directional {
+        color: var(--blue);
+      }
+
+      .confidence-badge.inference {
+        color: var(--gold);
+      }
+
+      .confidence-badge:focus-visible {
+        outline: 2px solid var(--coral-dark);
+        outline-offset: 2px;
+      }
+
+      .confidence-badge::after {
+        content: attr(data-evidence);
+        position: absolute;
+        left: 0;
+        bottom: calc(100% + 8px);
+        z-index: 10;
+        width: min(300px, calc(100vw - 42px));
+        padding: 10px 12px;
+        background: var(--ink);
+        color: var(--sheet);
+        box-shadow: 0 14px 32px rgba(24, 23, 20, 0.18);
+        font-family: var(--sans);
+        font-size: 0.8rem;
+        font-weight: 450;
+        line-height: 1.42;
+        letter-spacing: 0;
+        text-transform: none;
+        white-space: normal;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(4px);
+        transition:
+          opacity 150ms ease,
+          transform 150ms ease;
+      }
+
+      .confidence-badge::before {
+        content: "";
+        position: absolute;
+        left: 14px;
+        bottom: calc(100% + 2px);
+        z-index: 11;
+        border: 6px solid transparent;
+        border-top: 0;
+        border-bottom-color: var(--ink);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(4px);
+        transition:
+          opacity 150ms ease,
+          transform 150ms ease;
+      }
+
+      .confidence-badge:hover::after,
+      .confidence-badge:hover::before,
+      .confidence-badge:focus-visible::after,
+      .confidence-badge:focus-visible::before {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: 230px minmax(0, 1fr);
+      }
+
+      .rail {
+        border-right: 1px solid var(--line);
+        padding: 28px 22px;
+      }
+
+      .rail-inner {
+        position: sticky;
+        top: 22px;
+      }
+
+      .rail-title {
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        text-transform: uppercase;
+        margin-bottom: 14px;
+      }
+
+      .rail a {
+        display: block;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.875rem;
+        text-decoration: none;
+      }
+
+      .rail a:hover {
+        color: var(--ink);
+      }
+
+      .article {
+        min-width: 0;
+      }
+
+      section {
+        padding: clamp(28px, 4vw, 48px);
+        border-bottom: 1px solid var(--line);
+      }
+
+      section:last-child {
+        border-bottom: 0;
+      }
+
+      .section-head {
+        display: block;
+        margin-bottom: 22px;
+      }
+
+      .section-kicker {
+        display: inline-block;
+        color: var(--coral-dark);
+        border-top: 1px solid var(--coral-dark);
+        padding-top: 6px;
+        margin-bottom: 14px;
+        white-space: nowrap;
+      }
+
+      h2 {
+        max-width: 28ch;
+        font-size: clamp(1.5rem, 2.2vw, 2rem);
+        line-height: 1.15;
+        letter-spacing: -0.01em;
+        font-weight: 560;
+      }
+
+      h3 {
+        font-size: clamp(1.05rem, 1.4vw, 1.2rem);
+        line-height: 1.3;
+        font-weight: 560;
+      }
+
+      .lead {
+        max-width: 78ch;
+        color: var(--ink-soft);
+        font-size: 1rem;
+        line-height: 1.6;
+      }
+
+      .lead + .lead {
+        margin-top: 12px;
+      }
+
+      .rec-list {
+        display: grid;
+        gap: 1px;
+        margin-top: 26px;
+        border-top: 1px solid var(--line-strong);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .rec {
+        display: grid;
+        grid-template-columns: 80px minmax(0, 1fr) 160px;
+        gap: 22px;
+        padding: 18px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .rec:last-child {
+        border-bottom: 0;
+      }
+
+      .rank {
+        font-family: var(--mono);
+        color: var(--coral-dark);
+        font-size: 0.78rem;
+      }
+
+      .rec p {
+        margin-top: 6px;
+        color: var(--muted);
+      }
+
+      .rec p + p {
+        margin-top: 8px;
+      }
+
+      .rec .consequence {
+        color: var(--ink-soft);
+      }
+
+      .rec .consequence strong {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        color: var(--coral-dark);
+        text-transform: uppercase;
+        font-weight: 500;
+        margin-right: 6px;
+      }
+
+      .rec .confidence-strip {
+        margin-top: 8px;
+      }
+
+      .impact {
+        justify-self: end;
+        align-self: start;
+        min-width: 132px;
+        border: 1px solid var(--line);
+        padding: 7px 10px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.055em;
+        text-align: center;
+      }
+
+      .impact.high {
+        color: var(--coral-dark);
+        background: var(--coral-soft);
+      }
+
+      .impact.medium {
+        color: #785513;
+        background: #f5ecd4;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 26px;
+        margin-top: 26px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 26px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .panel {
+        background: var(--sheet);
+        padding: 22px;
+        min-width: 0;
+      }
+
+      .panel.alt {
+        background: var(--sheet-soft);
+      }
+
+      .panel p,
+      .table-note {
+        margin-top: 9px;
+        color: var(--muted);
+      }
+
+      .panel .consequence {
+        color: var(--ink-soft);
+      }
+
+      .panel .consequence strong {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        color: var(--coral-dark);
+        text-transform: uppercase;
+        font-weight: 500;
+        margin-right: 6px;
+      }
+
+      .mini-label {
+        color: var(--coral-dark);
+        margin-bottom: 10px;
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        padding: 6px 9px;
+        color: var(--ink-soft);
+        background: var(--sheet-soft);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 24px;
+        font-size: 0.95rem;
+      }
+
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 10px 14px 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      th {
+        color: var(--quiet);
+        border-bottom-color: var(--line-strong);
+        white-space: nowrap;
+      }
+
+      td {
+        color: var(--ink-soft);
+      }
+
+      td strong {
+        color: var(--ink);
+      }
+
+      .confidence {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.055em;
+        text-transform: uppercase;
+        color: var(--green);
+        white-space: nowrap;
+      }
+
+      .signal-confidence {
+        display: flex;
+        margin-top: 6px;
+      }
+
+      .quote-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 26px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .quote-card {
+        padding: 24px;
+        background: var(--sheet-soft);
+      }
+
+      .quote-card.interpretive {
+        background: var(--sheet);
+      }
+
+      .quote-card p {
+        color: var(--ink-soft);
+        font-size: 1.02rem;
+        line-height: 1.45;
+      }
+
+      .quote-card.interpretive p {
+        font-size: 1.05rem;
+      }
+
+      .quote-card small {
+        display: block;
+        margin-top: 14px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.055em;
+        text-transform: uppercase;
+      }
+
+      .timeline {
+        margin-top: 26px;
+        border-top: 1px solid var(--line-strong);
+      }
+
+      .time-row {
+        display: grid;
+        grid-template-columns: 140px minmax(0, 1fr);
+        gap: 22px;
+        padding: 18px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .date {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--coral-dark);
+      }
+
+      .time-row p {
+        margin-top: 4px;
+        color: var(--muted);
+      }
+
+      .time-row p + p {
+        margin-top: 6px;
+      }
+
+      .time-row .consequence {
+        color: var(--ink-soft);
+      }
+
+      .time-row .consequence strong {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        color: var(--coral-dark);
+        text-transform: uppercase;
+        font-weight: 500;
+        margin-right: 6px;
+      }
+
+      @media (max-width: 960px) {
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-summary,
+        .taxonomy {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .rail-inner {
+          position: static;
+        }
+
+        .rail a {
+          display: inline-block;
+          margin-right: 16px;
+          border-bottom: 0;
+        }
+
+        .rec {
+          grid-template-columns: 56px minmax(0, 1fr);
+        }
+
+        .impact {
+          grid-column: 2;
+          justify-self: start;
+        }
+
+        .grid-2,
+        .grid-3,
+        .quote-strip {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        body::before,
+        body::after {
+          display: none;
+        }
+
+        .shell {
+          width: min(100vw - 22px, 1240px);
+          padding-top: 20px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 14px;
+        }
+
+        .report-date {
+          text-align: left;
+        }
+
+        section {
+          padding: 26px 22px;
+        }
+
+        .hero {
+          padding: 22px 0 0;
+        }
+
+        .hero-head {
+          padding: 0 22px 22px;
+        }
+
+        .summary-col,
+        .taxonomy-col {
+          padding: 16px 22px;
+        }
+
+        h1 {
+          font-size: 1.8rem;
+        }
+
+        h2 {
+          font-size: 1.45rem;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: normal;
+        }
+
+        th,
+        td {
+          min-width: 170px;
+        }
+
+        .confidence-badge::after {
+          left: auto;
+          right: 0;
+        }
+
+        .time-row {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+      }
+
+      @media print {
+        body {
+          background: white;
+        }
+
+        body::before,
+        body::after,
+        .rail {
+          display: none;
+        }
+
+        .shell {
+          width: auto;
+          margin: 0;
+          padding: 0;
+        }
+
+        .topbar {
+          padding: 0.28in 0.42in 0.18in;
+        }
+
+        main {
+          border: 0;
+          box-shadow: none;
+        }
+
+        .hero,
+        .content,
+        .article {
+          display: block;
+        }
+
+        .hero,
+        section {
+          padding: 0.35in 0.42in;
+          min-height: auto;
+        }
+
+        .taxonomy {
+          padding: 0.22in 0.42in;
+        }
+
+        .rec,
+        .panel,
+        .quote-card,
+        tr {
+          break-inside: avoid;
+        }
+
+        .confidence-badge::before,
+        .confidence-badge::after {
+          display: none;
+        }
+
+        @page {
+          size: letter;
+          margin: 0.28in;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar" aria-label="PublisherIQ report header">
+        <a class="brand" href="https://publisheriq.app" aria-label="PublisherIQ">
+          <span class="wordmark">Publisher<span class="iq">IQ</span></span>
+          <span class="brand-line" aria-hidden="true"></span>
+        </a>
+        <div class="report-date">
+          External strategy brief — revised draft v2<br />
+          May 17, 2026
+        </div>
+      </header>
+
+      <main>
+        <section class="hero" id="top">
+          <div class="hero-head">
+            <div class="eyebrow">Post-launch strategy — revised draft v2</div>
+            <h1>MOUSE: P.I. For Hire</h1>
+            <p class="dek">
+              The visual identity is doing all the commercial heavy lifting.
+              Players who bought on style are recommending conditionally, and
+              every conditional review is a future buyer reading it and passing.
+              The next 90 days are about breaking the caveat.
+            </p>
+          </div>
+          <div class="hero-summary" aria-label="Executive read">
+            <div class="summary-col summary-verdict">
+              <div class="mini-label">Verdict</div>
+              <p class="verdict-line">
+                <strong>The hook converted. The follow-through hasn't.</strong>
+              </p>
+              <p>
+                Positive reviews and negative reviews name the same product.
+                Buyers praise style, noir setup, jazz score, and combat pace.
+                Then they list four friction clusters — controls, bugs, quest
+                handling, late-game cleanup — and recommend with caveats. Fix
+                those clusters and the recommendation language loses its "but."
+                Sell DLC before fixing them and you confirm the suspicion that
+                you're monetizing an unfinished product.
+              </p>
+              <div class="confidence-strip compact" aria-label="Confidence in this read">
+                <span
+                  class="confidence-badge high"
+                  tabindex="0"
+                  role="note"
+                  aria-label="High confidence: public sentiment, progression behavior, and visible support cadence all point the same direction."
+                  data-evidence="High confidence: public sentiment, progression behavior, and visible support cadence all point the same direction."
+                  >High confidence</span
+                >
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: the patch-first sequence is PublisherIQ's commercial read on how to break the caveat."
+                  data-evidence="Strategic inference: the patch-first sequence is PublisherIQ's commercial read on how to break the caveat."
+                  >Strategic inference</span
+                >
+              </div>
+            </div>
+            <div class="summary-col summary-sources">
+              <div class="mini-label">Sources</div>
+              <p>
+                Findings draw on the public Steam review corpus, Steam
+                community and Discord discussion, creator coverage, store-page
+                positioning review, achievement progression patterns, and
+                competitive release calendar context. Sample sizes and channel
+                breakdowns available on request.
+              </p>
+            </div>
+          </div>
+          <div class="taxonomy" aria-label="Confidence taxonomy">
+            <div class="taxonomy-col high">
+              <div class="taxonomy-label">High confidence</div>
+              <p>
+                Multiple independent signal types — review language,
+                progression behavior, and store-positioning review — point the
+                same direction.
+              </p>
+            </div>
+            <div class="taxonomy-col directional">
+              <div class="taxonomy-label">Directional signal</div>
+              <p>
+                One signal type indicates the pattern. Useful for
+                prioritization; not a deterministic forecast.
+              </p>
+            </div>
+            <div class="taxonomy-col inference">
+              <div class="taxonomy-label">Strategic inference</div>
+              <p>
+                PublisherIQ's commercial read connecting the observed signals
+                into a recommended sequence.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <div class="content">
+          <nav class="rail" aria-label="Report sections">
+            <div class="rail-inner">
+              <div class="rail-title">Contents</div>
+              <a href="#recommendations">Recommendations</a>
+              <a href="#status">Current Read</a>
+              <a href="#resonance">USP Resonance</a>
+              <a href="#marketing">Marketing Signals</a>
+              <a href="#store">Store Page</a>
+              <a href="#timing">Launch Timing</a>
+              <a href="#publisheriq">What PublisherIQ Uncovered</a>
+            </div>
+          </nav>
+
+          <article class="article">
+            <section id="recommendations">
+              <div class="section-head">
+                <div class="section-kicker">01 — Highest impact</div>
+                <h2>What should happen next</h2>
+              </div>
+              <p class="lead">
+                Players have named the same four friction clusters — controls,
+                bugs, quest handling, late-game cleanup — across reviews,
+                community threads, and creator coverage. The next public beat
+                should answer all four. DLC is a separate, later message.
+              </p>
+              <p class="lead">
+                Each recommendation below names the failure mode, the
+                consequence of sequencing it wrong, and how much of the read
+                rests on observed signal versus inferred sequence.
+              </p>
+              <div class="confidence-strip" aria-label="Recommendation confidence">
+                <span
+                  class="confidence-badge high"
+                  tabindex="0"
+                  role="note"
+                  aria-label="High confidence: multiple independent signal types support the order of moves."
+                  data-evidence="High confidence: multiple independent signal types support the order of moves."
+                  >High confidence</span
+                >
+                <span
+                  class="confidence-badge directional"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Directional signal: timing and attention reads guide prioritization; they are not deterministic forecasts."
+                  data-evidence="Directional signal: timing and attention reads guide prioritization; they are not deterministic forecasts."
+                  >Directional signal</span
+                >
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: PublisherIQ turns the observed signals into a recommended sequencing plan."
+                  data-evidence="Strategic inference: PublisherIQ turns the observed signals into a recommended sequencing plan."
+                  >Strategic inference</span
+                >
+              </div>
+
+              <div class="rec-list">
+                <article class="rec">
+                  <div class="rank">01</div>
+                  <div>
+                    <h3>The next patch has to clear all four friction clusters players have already named.</h3>
+                    <p>
+                      Across the public Steam review corpus and community
+                      threads, negative and mixed language clusters tightly on
+                      four areas: input feel and controls, bugs (heavier in the
+                      back half of the campaign), post-case progression
+                      clarity, and perceived value relative to price. These
+                      same four surface inside positive reviews as caveats —
+                      the "great style, but..." pattern. The patch needs to
+                      answer all four, framed as a response to feedback, not a
+                      version changelog.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you skip one:</strong> the conditional-praise
+                      pattern doesn't break. Every subsequent sales beat lands
+                      inside the same caveat, and the next quarter's
+                      conversion rate keeps tracking the launch curve instead
+                      of bending.
+                    </p>
+                    <div class="confidence-strip" aria-label="Evidence confidence">
+                      <span
+                        class="confidence-badge high"
+                        tabindex="0"
+                        role="note"
+                        aria-label="High confidence: review-language clusters, progression behavior, and visible support cadence all support a patch-led reset."
+                        data-evidence="High confidence: review-language clusters, progression behavior, and visible support cadence all support a patch-led reset."
+                        >High confidence</span
+                      >
+                    </div>
+                  </div>
+                  <div class="impact high">Highest impact</div>
+                </article>
+
+                <article class="rec">
+                  <div class="rank">02</div>
+                  <div>
+                    <h3>Don't sell more game until the conditional praise breaks.</h3>
+                    <p>
+                      The Deluxe edition and announced Story DLC are already
+                      listed on the store page. Right now, players are actively
+                      posting about bugs and controls. Running DLC promotional
+                      weight alongside unresolved friction creates a specific
+                      perception problem: "they're selling me more game before
+                      they finished the first one." Sequence: ship the
+                      substantive patch → watch review language shift from
+                      conditional to clean over two to three weeks → then
+                      activate DLC messaging. The store page can keep DLC
+                      visible. Move the promotional weight, not the listing.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you collapse the beats:</strong> the patch
+                      message and the DLC message blunt each other.
+                      Owners who needed the support proof read DLC promotion
+                      as evasion, and wishlisters who needed the DLC pitch
+                      hear it through unresolved-friction noise.
+                    </p>
+                    <div class="confidence-strip" aria-label="Evidence confidence">
+                      <span
+                        class="confidence-badge inference"
+                        tabindex="0"
+                        role="note"
+                        aria-label="Strategic inference: support-first sequencing is the commercial read on public trust signals and current future-content ambiguity."
+                        data-evidence="Strategic inference: support-first sequencing is the commercial read on public trust signals and current future-content ambiguity."
+                        >Strategic inference</span
+                      >
+                    </div>
+                  </div>
+                  <div class="impact high">High impact</div>
+                </article>
+
+                <article class="rec">
+                  <div class="rank">03</div>
+                  <div>
+                    <h3>Lead the store page with the 1930s rubberhose noir hook — before any retro-shooter framing.</h3>
+                    <p>
+                      Positive advocacy language links four elements together:
+                      the rubberhose visual style, the noir detective setup,
+                      the jazz score, and the combat pace. Players who
+                      recommend MOUSE recommend the gestalt — those four named
+                      together far more often than any one of them named alone.
+                      The store page currently buries that gestalt under
+                      generic FPS framing. That drops MOUSE into the
+                      boomer-shooter comparison set, where the conversation
+                      becomes gunfeel-vs-gunfeel against the cohort's
+                      established leaders. Lead with what makes MOUSE the only
+                      game in the noir-cartoon-FPS space, then prove the
+                      combat underneath sustains it.
+                    </p>
+                    <p class="consequence">
+                      <strong>If the page keeps the current order:</strong>
+                      the conversion model keeps recruiting novelty visitors
+                      and missing the longer-tail buyer who needs playability
+                      proof before they wishlist.
+                    </p>
+                    <div class="confidence-strip" aria-label="Evidence confidence">
+                      <span
+                        class="confidence-badge high"
+                        tabindex="0"
+                        role="note"
+                        aria-label="High confidence: positive advocacy language clusters around the four-element identity and store-positioning review supports the reorder."
+                        data-evidence="High confidence: positive advocacy language clusters around the four-element identity and store-positioning review supports the reorder."
+                        >High confidence</span
+                      >
+                    </div>
+                  </div>
+                  <div class="impact high">High impact</div>
+                </article>
+
+                <article class="rec">
+                  <div class="rank">04</div>
+                  <div>
+                    <h3>Give players who finished the main case an equivalent hook to come back for.</h3>
+                    <p>
+                      Achievement and progression patterns show a concentrated
+                      drop-off around main-case completion. Players who loved
+                      the investigation loop during the main case have no
+                      equivalent pull bringing them back into post-case
+                      cleanup. Collectible systems exist but lack a visible
+                      completion tracker or a meaningful reward arc. A tracked
+                      case log, a visible collectibles board, or a short
+                      standalone detective vignette would give completionists
+                      a reason to return — and would generate the post-launch
+                      engagement data that supports a DLC sales message later.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you skip the reactivation beat:</strong>
+                      the DLC announcement in August lands on a quieter player
+                      base. The DLC message then has to recruit returning
+                      players from scratch instead of speaking to a base
+                      already in motion.
+                    </p>
+                    <div class="confidence-strip" aria-label="Evidence confidence">
+                      <span
+                        class="confidence-badge directional"
+                        tabindex="0"
+                        role="note"
+                        aria-label="Directional signal: progression and attention patterns indicate where a return beat is most likely to feel relevant."
+                        data-evidence="Directional signal: progression and attention patterns indicate where a return beat is most likely to feel relevant."
+                        >Directional signal</span
+                      >
+                    </div>
+                  </div>
+                  <div class="impact medium">Medium impact</div>
+                </article>
+
+                <article class="rec">
+                  <div class="rank">05</div>
+                  <div>
+                    <h3>Watch caveats drop out of positive reviews — that's the success signal, not the headline score.</h3>
+                    <p>
+                      A single review score won't tell the story cleanly enough
+                      to bet sequencing on. The cleaner signal is the shape of
+                      advocacy language: fewer "but..." clauses, more clean
+                      recommendations, more reviewers naming a concrete reason
+                      to come back. Track that shift across the two to three
+                      weeks after the patch. Only after the shift visibly
+                      lands should DLC messaging activate.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you read the headline score instead:</strong>
+                      it lags the language shift by weeks and is more easily
+                      moved by review-bombing, sale spikes, or sentiment
+                      noise. False confidence triggers a premature DLC pivot.
+                    </p>
+                    <div class="confidence-strip" aria-label="Evidence confidence">
+                      <span
+                        class="confidence-badge inference"
+                        tabindex="0"
+                        role="note"
+                        aria-label="Strategic inference: signal clusters are the clearest way to evaluate movement without overstating one metric."
+                        data-evidence="Strategic inference: signal clusters are the clearest way to evaluate movement without overstating one metric."
+                        >Strategic inference</span
+                      >
+                    </div>
+                  </div>
+                  <div class="impact medium">Medium impact</div>
+                </article>
+              </div>
+            </section>
+
+            <section id="status">
+              <div class="section-head">
+                <div class="section-kicker">02 — Current read</div>
+                <h2>Where MOUSE stands now</h2>
+              </div>
+              <p class="lead">
+                The launch window is still live. Positive and negative reviews
+                describe the same product from opposite ends of the same
+                experience — they agree on the four things that work and the
+                four things that don't.
+              </p>
+              <div class="confidence-strip" aria-label="Current-read confidence">
+                <span
+                  class="confidence-badge high"
+                  tabindex="0"
+                  role="note"
+                  aria-label="High confidence: review language, progression behavior, and visible support cadence all support this current-state read."
+                  data-evidence="High confidence: review language, progression behavior, and visible support cadence all support this current-state read."
+                  >High confidence</span
+                >
+              </div>
+
+              <div class="grid-3">
+                <article class="panel">
+                  <div class="mini-label">Product strength</div>
+                  <h3>Four elements move together in advocacy language.</h3>
+                  <p>
+                    Positive language across the public Steam review corpus
+                    clusters tightly on the same four elements: the rubberhose
+                    visual style, the noir detective setup, the jazz score,
+                    and the combat pace. These appear linked together in
+                    advocacy quotes far more often than any one of them
+                    appears alone. When a player recommends MOUSE, they
+                    recommend the gestalt.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: positive language consistently links style, noir setup, jazz score, and combat pace as one identity."
+                      data-evidence="High confidence: positive language consistently links style, noir setup, jazz score, and combat pace as one identity."
+                      >High confidence</span
+                    >
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Product weakness</div>
+                  <h3>Four friction clusters surface inside positive reviews as caveats.</h3>
+                  <p>
+                    Negative and mixed reviews cluster on a parallel set of
+                    four: input feel and controls, bugs (heavier in the back
+                    half of the campaign), post-case progression clarity, and
+                    perceived value relative to price. The same four also
+                    surface inside positive reviews as "but..." clauses — the
+                    conditional-praise pattern that turns every recommendation
+                    into a qualified one.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: the four-cluster friction set recurs across reviews, forums, and creator coverage."
+                      data-evidence="High confidence: the four-cluster friction set recurs across reviews, forums, and creator coverage."
+                      >High confidence</span
+                    >
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Commercial implication</div>
+                  <h3>This is a sequencing problem, not a diagnosis problem.</h3>
+                  <p>
+                    The diagnosis is settled. The unresolved question is
+                    order: patch the four friction clusters → refresh the
+                    store page to lead with the four-element identity →
+                    activate DLC messaging only after the review-language
+                    shift lands. Collapsed into a single beat, each move
+                    blunts the others.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge inference"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Strategic inference: the commercial sequence is PublisherIQ's read on how the observed signals connect."
+                      data-evidence="Strategic inference: the commercial sequence is PublisherIQ's read on how the observed signals connect."
+                      >Strategic inference</span
+                    >
+                  </div>
+                </article>
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>Signal</th>
+                    <th>Read</th>
+                    <th>Strategy implication</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Public sentiment</strong></td>
+                    <td>
+                      Favorable but conditional. Positive reviews name style,
+                      noir setup, jazz score, and combat pace as the reason to
+                      buy. Most also list at least one of the four friction
+                      clusters before recommending.
+                      <span
+                        class="confidence-badge high signal-confidence"
+                        tabindex="0"
+                        role="note"
+                        aria-label="High confidence: review and community language repeatedly combines enthusiasm for the four-element identity with friction caveats."
+                        data-evidence="High confidence: review and community language repeatedly combines enthusiasm for the four-element identity with friction caveats."
+                        >High confidence</span
+                      >
+                    </td>
+                    <td>
+                      The conditional clause is the conversion problem.
+                      Removing it is the patch's job; celebrating it isn't.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Progression behavior</strong></td>
+                    <td>
+                      Achievement drop-off concentrates around main-case
+                      completion and the optional cleanup that follows. Median
+                      playtime sits below where post-case engagement would
+                      indicate the loop is sticky.
+                      <span
+                        class="confidence-badge high signal-confidence"
+                        tabindex="0"
+                        role="note"
+                        aria-label="High confidence: achievement and public playtime patterns support the late-handoff read."
+                        data-evidence="High confidence: achievement and public playtime patterns support the late-handoff read."
+                        >High confidence</span
+                      >
+                    </td>
+                    <td>
+                      The post-case loop needs an equivalent hook to the
+                      investigation loop, or completionists keep dropping off
+                      before the DLC beat arrives.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Support visibility</strong></td>
+                    <td>
+                      Patches are landing. The framing around them still reads
+                      as reactive — fix lists rather than a response to the
+                      named friction clusters.
+                      <span
+                        class="confidence-badge directional signal-confidence"
+                        tabindex="0"
+                        role="note"
+                        aria-label="Directional signal: visible public updates show activity; the roadmap-led framing recommendation is a messaging read."
+                        data-evidence="Directional signal: visible public updates show activity; the roadmap-led framing recommendation is a messaging read."
+                        >Directional signal</span
+                      >
+                    </td>
+                    <td>
+                      Switch to a recurring "what's fixed / what's known /
+                      what's targeted next" frame so the work doubles as
+                      purchase reassurance on the store page.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Attention movement</strong></td>
+                    <td>
+                      Attention dissipates into general Steam habit, not into
+                      a single competing release. No lookalike FPS is
+                      absorbing the audience; the audience is just resuming
+                      libraries.
+                      <span
+                        class="confidence-badge directional signal-confidence"
+                        tabindex="0"
+                        role="note"
+                        aria-label="Directional signal: attention movement is useful context, not causal churn proof."
+                        data-evidence="Directional signal: attention movement is useful context, not causal churn proof."
+                        >Directional signal</span
+                      >
+                    </td>
+                    <td>
+                      The reactivation beat competes against habit and
+                      novelty, not against the boomer-shooter cohort. Lead
+                      with reason-to-return, not comparison framing.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section id="resonance">
+              <div class="section-head">
+                <div class="section-kicker">03 — USP resonance</div>
+                <h2>What is working and what is not</h2>
+              </div>
+              <p class="lead">
+                MOUSE's promise is genuinely distinct — the only 1930s
+                rubberhose noir FPS on the market. The job for the store page
+                and the campaign is to keep that distinction in view before
+                generic genre labels start doing the talking.
+              </p>
+              <div class="confidence-strip" aria-label="USP confidence">
+                <span
+                  class="confidence-badge high"
+                  tabindex="0"
+                  role="note"
+                  aria-label="High confidence: public language consistently separates the distinctive hook from crowded genre framing."
+                  data-evidence="High confidence: public language consistently separates the distinctive hook from crowded genre framing."
+                  >High confidence</span
+                >
+              </div>
+
+              <div class="grid-2">
+                <article class="panel alt">
+                  <div class="mini-label">Resonating</div>
+                  <h3>The four-element identity moves as one in advocacy language.</h3>
+                  <p>
+                    Positive advocacy language links the four elements —
+                    rubberhose style, noir setup, jazz score, combat pace —
+                    together far more often than any one element appears
+                    alone. The linkage is the durable part of the positive
+                    response and the answer to "what should we lead with?"
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: positive advocacy language consistently clusters around the four-element identity."
+                      data-evidence="High confidence: positive advocacy language consistently clusters around the four-element identity."
+                      >High confidence</span
+                    >
+                  </div>
+                  <div class="tag-row" aria-label="Resonating USP themes">
+                    <span class="tag">1930s rubberhose FPS</span>
+                    <span class="tag">noir detective fantasy</span>
+                    <span class="tag">jazz/audio identity</span>
+                    <span class="tag">combat pace</span>
+                    <span class="tag">style-led word of mouth</span>
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Under-delivering</div>
+                  <h3>The four friction clusters recur in every public channel reviewed.</h3>
+                  <p>
+                    Mixed and negative reviews cluster on the same set —
+                    controls, bugs, post-case clarity, and value — across
+                    Steam reviews, community forums, creator coverage, and
+                    Discord discussion. The pattern shows up inside positive
+                    reviews too, as the conditional clause that turns a
+                    recommendation into a qualified one.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: the four-cluster friction set recurs across every public channel reviewed."
+                      data-evidence="High confidence: the four-cluster friction set recurs across every public channel reviewed."
+                      >High confidence</span
+                    >
+                  </div>
+                  <div class="tag-row" aria-label="Under-delivering themes">
+                    <span class="tag">generic shooter framing</span>
+                    <span class="tag">post-case drop-off</span>
+                    <span class="tag">repetition concerns</span>
+                    <span class="tag">input feel</span>
+                    <span class="tag">value uncertainty</span>
+                  </div>
+                </article>
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>USP</th>
+                    <th>Likely state</th>
+                    <th>How to use it</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Rubberhose visual identity</strong></td>
+                    <td><span class="confidence">Strong</span></td>
+                    <td>
+                      Lead with it everywhere — paid, store, trailer, social.
+                      It's what advocacy language remembers first.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Noir detective fantasy</strong></td>
+                    <td><span class="confidence">Strong, under-leveraged</span></td>
+                    <td>
+                      Anchor reactivation, patch language, and DLC framing in
+                      it. The detective premise is what makes a return beat
+                      feel native, not promotional.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Boomer-shooter action</strong></td>
+                    <td><span class="confidence">Comparison trap</span></td>
+                    <td>
+                      Players already tag MOUSE in the boomer-shooter
+                      conversation. Inside that frame, MOUSE is judged on
+                      gunfeel against the cohort's established leaders and
+                      loses on like-for-like terms. Where MOUSE wins is the
+                      combination — noir identity plus fast combat — that
+                      nothing else in the space offers. Lead with the
+                      combination, not the category.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Side content and collectibles</strong></td>
+                    <td><span class="confidence">Mixed</span></td>
+                    <td>
+                      Hold off promoting until the post-case loop has a
+                      visible completion arc. Without it, the side content
+                      reads as grind.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Deluxe / future DLC</strong></td>
+                    <td><span class="confidence">Trust-sensitive</span></td>
+                    <td>
+                      State what Deluxe includes, what the Story DLC actually
+                      covers, and when the next timing update lands. Don't
+                      add purchase urgency until the patch shifts review
+                      language.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section id="marketing">
+              <div class="section-head">
+                <div class="section-kicker">04 — Signal plan</div>
+                <h2>Marketing signals to correlate</h2>
+              </div>
+              <p class="lead">
+                Measurement here is correlational, not causal. The useful
+                question is whether what changed publicly lined up with what
+                players said, and whether attention moved in the same window.
+              </p>
+              <div class="confidence-strip" aria-label="Signal-plan confidence">
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: correlation is the right frame because the report observes public signals, not a controlled campaign experiment."
+                  data-evidence="Strategic inference: correlation is the right frame because the report observes public signals, not a controlled campaign experiment."
+                  >Strategic inference</span
+                >
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>Signal cluster</th>
+                    <th>Correlation question</th>
+                    <th>Decision it supports</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Announcements and patch posts</strong></td>
+                    <td>
+                      Do posts that lead with player outcomes ("controls now
+                      feel like X") produce stronger discussion than posts led
+                      by version details and fix lists?
+                    </td>
+                    <td>Support-post structure and cadence.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Store-page copy and media changes</strong></td>
+                    <td>
+                      Do refreshes that lead with the four-element identity
+                      before genre framing line up with stronger review
+                      language and wishlist growth?
+                    </td>
+                    <td>First-screen order, trailer cut, screenshot mix.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>USP language in reviews and forums</strong></td>
+                    <td>
+                      Are caveats dropping out of positive reviews? Are
+                      players naming a concrete reason to come back? Are
+                      friction-cluster phrases dropping in frequency?
+                    </td>
+                    <td>
+                      Whether DLC messaging is safe to activate, and what
+                      message hierarchy supports it.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Competitive release pressure</strong></td>
+                    <td>
+                      Are support and reactivation beats landing in weeks
+                      where the competing FPS calendar and Summer Game Fest
+                      coverage are quieter?
+                    </td>
+                    <td>Patch, discount, and DLC timing.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Community support themes</strong></td>
+                    <td>
+                      Does clearer known-issue and roadmap language reduce
+                      repeat frustration threads on the four friction
+                      clusters?
+                    </td>
+                    <td>Community management and public issue tracking.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Campaign context</strong></td>
+                    <td>
+                      Which channel beats came right before store visits,
+                      wishlists, sales, or review-language shifts?
+                    </td>
+                    <td>
+                      Interpretation context — needs campaign data from the
+                      publishing team.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div class="quote-strip">
+                <article class="quote-card">
+                  <p>
+                    "Honestly, the art and the soundtrack are incredible. If
+                    they fix the controls and the late-game bugs this is an
+                    easy 9/10. Right now I have to recommend with caveats."
+                  </p>
+                  <small>Representative pattern — composite, not verbatim</small>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge directional"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Directional signal: representative composite of the conditional-praise pattern observed across the review corpus."
+                      data-evidence="Directional signal: representative composite of the conditional-praise pattern observed across the review corpus."
+                      >Directional signal</span
+                    >
+                  </div>
+                </article>
+                <article class="quote-card">
+                  <p>
+                    "Best noir FPS I've ever played, but the second half feels
+                    rushed. Spent six hours on the main case and then there's
+                    nothing pulling me back. Hope DLC adds something to do."
+                  </p>
+                  <small>Representative pattern — composite, not verbatim</small>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge directional"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Directional signal: representative composite of post-case drop-off language."
+                      data-evidence="Directional signal: representative composite of post-case drop-off language."
+                      >Directional signal</span
+                    >
+                  </div>
+                </article>
+                <article class="quote-card interpretive">
+                  <p>
+                    Watch caveats drop out of positive reviews after the
+                    patch. Watch "but..." clauses thin out. Watch "I'll come
+                    back when..." turn into "I'm playing again because...".
+                    The shape of that movement is the success signal — not
+                    the headline score.
+                  </p>
+                  <small>Recommended success definition</small>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge inference"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Strategic inference: this success definition follows from the observed mix of enthusiasm, caveats, and support needs."
+                      data-evidence="Strategic inference: this success definition follows from the observed mix of enthusiasm, caveats, and support needs."
+                      >Strategic inference</span
+                    >
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section id="store">
+              <div class="section-head">
+                <div class="section-kicker">05 — Store page</div>
+                <h2>Optimization options</h2>
+              </div>
+              <p class="lead">
+                Two jobs for the store page: clarify the promise and make the
+                support story credible. The page has the words already — it's
+                the order of proof that's off, and the DLC listing currently
+                competes with unresolved friction rather than reinforcing the
+                support story.
+              </p>
+              <div class="confidence-strip" aria-label="Store-page confidence">
+                <span
+                  class="confidence-badge high"
+                  tabindex="0"
+                  role="note"
+                  aria-label="High confidence: public USP language and store-positioning review both support sharper first-screen proof."
+                  data-evidence="High confidence: public USP language and store-positioning review both support sharper first-screen proof."
+                  >High confidence</span
+                >
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: the specific page order is a conversion recommendation derived from those signals."
+                  data-evidence="Strategic inference: the specific page order is a conversion recommendation derived from those signals."
+                  >Strategic inference</span
+                >
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>Area</th>
+                    <th>Recommended change</th>
+                    <th>Why it matters</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>First-screen promise</strong></td>
+                    <td>
+                      Open with "1930s rubberhose noir FPS" and a concrete
+                      action promise — before any broader genre framing.
+                    </td>
+                    <td>
+                      The identity is what differentiates MOUSE. Generic
+                      retro-shooter framing drops the page into a comparison
+                      set MOUSE doesn't win on gunfeel-vs-gunfeel terms.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Trailer and screenshot order</strong></td>
+                    <td>
+                      Order the cut so style lands first, then combat pace,
+                      then the detective hook, then mission variety. End on
+                      something that proves the game underneath sustains the
+                      visual hook.
+                    </td>
+                    <td>
+                      Visitors arrive sold on the look. The conversion gap is
+                      whether the game holds up. The trailer's job is to
+                      answer that, not to sell the look again.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Post-launch support block</strong></td>
+                    <td>
+                      Refresh the copy around the major patch — name the four
+                      friction clusters by player-facing outcome (controls,
+                      bugs, quest handling, post-case loop) and what the
+                      patch did about each.
+                    </td>
+                    <td>
+                      Lets the support work double as purchase reassurance.
+                      Hesitant buyers reading reviews see the patch
+                      acknowledging the same friction they're reading about.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Deluxe / DLC clarity</strong></td>
+                    <td>
+                      State what Deluxe includes and what the Story DLC
+                      actually covers, and when the next timing update lands.
+                      Move the promotional weight to post-patch — keep the
+                      listing visible, drop the urgency until the review
+                      language shifts.
+                    </td>
+                    <td>
+                      Keeps the ambiguity from turning into a trust issue.
+                      Active DLC promotion right now reads as "selling more
+                      game before finishing the first one."
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Review and quote selection</strong></td>
+                    <td>
+                      Pull quotes that pair identity with playability. Praise
+                      for the look alone leaves the gameplay question open —
+                      and "great style, but..." quotes do active damage.
+                    </td>
+                    <td>
+                      The conversion gap is the playability question. The
+                      look is already doing its work; the game underneath
+                      needs the same proof on-page.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div class="grid-3">
+                <article class="panel alt">
+                  <div class="mini-label">Evaluation lens A</div>
+                  <h3>Style-first positioning</h3>
+                  <p>
+                    Test whether the page's first impression makes the
+                    1930s rubberhose noir identity unmistakable before any
+                    genre framing kicks in.
+                  </p>
+                </article>
+                <article class="panel alt">
+                  <div class="mini-label">Evaluation lens B</div>
+                  <h3>Case-first motivation</h3>
+                  <p>
+                    Check whether the page gives players a concrete reason
+                    to care about the detective premise once the visual hook
+                    has done its job — and whether the post-case loop is
+                    legible enough to read as content, not grind.
+                  </p>
+                </article>
+                <article class="panel alt">
+                  <div class="mini-label">Evaluation lens C</div>
+                  <h3>Support-first reassurance</h3>
+                  <p>
+                    Check whether post-launch responsiveness is visible
+                    enough on the page to reassure both owners and hesitant
+                    buyers — and whether the support block specifically
+                    addresses the four friction clusters players cite.
+                  </p>
+                </article>
+              </div>
+            </section>
+
+            <section id="timing">
+              <div class="section-head">
+                <div class="section-kicker">06 — Timing</div>
+                <h2>Post-launch beat sequence</h2>
+              </div>
+              <p class="lead">
+                Three public beats, in order: patch → reactivation → DLC
+                roadmap. The windows below are sized around the competing FPS
+                calendar and the Summer Game Fest attention compression in
+                mid-June. They shouldn't collapse into one message.
+              </p>
+              <div class="confidence-strip" aria-label="Timing confidence">
+                <span
+                  class="confidence-badge directional"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Directional signal: recommended windows are based on launch-window and audience-overlap context, not a guaranteed forecast."
+                  data-evidence="Directional signal: recommended windows are based on launch-window and audience-overlap context, not a guaranteed forecast."
+                  >Directional signal</span
+                >
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: separating patch, reactivation, and DLC reduces message conflict across different audience jobs."
+                  data-evidence="Strategic inference: separating patch, reactivation, and DLC reduces message conflict across different audience jobs."
+                  >Strategic inference</span
+                >
+              </div>
+
+              <div class="timeline">
+                <article class="time-row">
+                  <div class="date">May 18-20</div>
+                  <div>
+                    <h3>Primary patch window</h3>
+                    <p>
+                      Ship the substantive patch — all four friction
+                      clusters answered (controls, bugs, quest handling,
+                      post-case loop). The May 18–20 window holds clear air
+                      before Summer Game Fest coverage and competing FPS
+                      preview cycles compress attention in early-to-mid
+                      June.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you slip past late May:</strong>
+                      the patch post has to compete with SGF preview
+                      coverage and AAA reveals for surface area. The same
+                      patch lands with measurably less reach.
+                    </p>
+                  </div>
+                </article>
+                <article class="time-row">
+                  <div class="date">Jun 2-4</div>
+                  <div>
+                    <h3>Backup patch window</h3>
+                    <p>
+                      Hold this slot only if the patch isn't ready in May.
+                      SGF coverage is already ramping by this point; expect
+                      noisier signal and weaker discussion. Same message
+                      hierarchy — don't let the update read as a changelog.
+                    </p>
+                    <p class="consequence">
+                      <strong>If the patch isn't substantive:</strong>
+                      shipping the backup window with thin content burns
+                      both the May and June moments. Better to delay one
+                      week than to land underweight.
+                    </p>
+                  </div>
+                </article>
+                <article class="time-row">
+                  <div class="date">Jun 15-17</div>
+                  <div>
+                    <h3>Reactivation beat</h3>
+                    <p>
+                      Give players who finished the main case a specific
+                      reason to come back — a tracked case log, a visible
+                      collectibles completion board, or a short standalone
+                      detective vignette. Post-SGF, the attention market is
+                      clearer again. Lead with the detective premise, not
+                      with patch notes.
+                    </p>
+                    <p class="consequence">
+                      <strong>If you skip this beat:</strong>
+                      the DLC announcement in August lands on a quieter
+                      base, and the DLC message has to recruit returning
+                      players instead of speaking to a base already
+                      reactivated.
+                    </p>
+                  </div>
+                </article>
+                <article class="time-row">
+                  <div class="date">Aug 10-11</div>
+                  <div>
+                    <h3>DLC roadmap window</h3>
+                    <p>
+                      Spell out what's included in Deluxe, what the Story
+                      DLC actually covers, and roughly when. This window
+                      sits before gamescom mid-to-late August, so the
+                      roadmap surfaces before fall release pressure begins
+                      to compete for attention. Tone here is reassurance,
+                      not urgency.
+                    </p>
+                    <p class="consequence">
+                      <strong>If the patch hasn't shifted review language by then:</strong>
+                      hold the roadmap. Activating DLC messaging while the
+                      conditional-praise pattern is still intact converts
+                      the trust problem into a backlash problem.
+                    </p>
+                  </div>
+                </article>
+              </div>
+
+              <p class="table-note">
+                Avoid the most crowded release weeks — competing boomer-style
+                FPS launches and attention-adjacent releases will make a
+                support or DLC message harder to land. Take the earliest
+                patch slot only if the update genuinely includes the
+                player-facing improvements named in the four friction
+                clusters.
+              </p>
+            </section>
+
+            <section id="publisheriq">
+              <div class="section-head">
+                <div class="section-kicker">07 — Commercial read</div>
+                <h2>What PublisherIQ uncovered</h2>
+              </div>
+              <p class="lead">
+                The useful part of this is the sequence, not the diagnosis.
+                Stabilize trust first by answering the four friction clusters.
+                Sharpen the public promise by leading the store page with the
+                four-element identity. Reactivate the base before activating
+                DLC messaging.
+              </p>
+              <div class="confidence-strip" aria-label="Commercial-read confidence">
+                <span
+                  class="confidence-badge inference"
+                  tabindex="0"
+                  role="note"
+                  aria-label="Strategic inference: this section translates the evidence-backed findings into a partner-facing commercial sequence."
+                  data-evidence="Strategic inference: this section translates the evidence-backed findings into a partner-facing commercial sequence."
+                  >Strategic inference</span
+                >
+              </div>
+
+              <div class="grid-2">
+                <article class="panel">
+                  <div class="mini-label">Move one</div>
+                  <h3>The patch has to clear all four friction clusters or the caveat doesn't break.</h3>
+                  <p>
+                    Player friction and visible support cadence both point
+                    the same direction: the next public beat has to land as
+                    a substantive patch answering the named clusters.
+                    Partial answers leave the conditional-praise pattern
+                    intact, which means every downstream beat — store
+                    refresh, reactivation, DLC — lands inside the same
+                    caveat.
+                  </p>
+                  <p class="consequence">
+                    <strong>What happens if you collapse it:</strong>
+                    the patch reads as maintenance, not as response.
+                    Review language doesn't shift, and the support story
+                    can't carry the store page.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: player friction themes and visible support cadence both support a support-led next beat."
+                      data-evidence="High confidence: player friction themes and visible support cadence both support a support-led next beat."
+                      >High confidence</span
+                    >
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Move two</div>
+                  <h3>The four-element identity is still resonating — the question is whether the game underneath proves out.</h3>
+                  <p>
+                    Positive public language continues to cluster on the
+                    same four elements. That's the durable strength and the
+                    answer to "what should the store page lead with?". The
+                    unresolved commercial question is whether the game
+                    underneath sustains the visual promise — the patch and
+                    the store refresh have to make that case together.
+                  </p>
+                  <p class="consequence">
+                    <strong>What happens if you lead with the wrong frame:</strong>
+                    the page keeps recruiting novelty visitors and missing
+                    the longer-tail buyer who needs playability proof.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge high"
+                      tabindex="0"
+                      role="note"
+                      aria-label="High confidence: positive public language continues to center on the four-element identity."
+                      data-evidence="High confidence: positive public language continues to center on the four-element identity."
+                      >High confidence</span
+                    >
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Move three</div>
+                  <h3>Patch, reactivation, and DLC each speak to a different audience.</h3>
+                  <p>
+                    Owners hearing the patch beat are not the same audience
+                    as wishlisters hearing the DLC announce, and neither is
+                    the same as completionists deciding whether the
+                    post-case loop is worth their time. Collapsed into one
+                    message, the beats blunt each other. Separated, each
+                    one is easier for its audience to evaluate on its own
+                    terms.
+                  </p>
+                  <p class="consequence">
+                    <strong>What happens if you bundle:</strong>
+                    the support message reads as DLC pre-promotion, and
+                    the DLC message reads as evasion of unresolved
+                    friction. Both audiences lose confidence at the same
+                    time.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge inference"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Strategic inference: the sequence is designed to reduce trust risk and make each message easier to evaluate."
+                      data-evidence="Strategic inference: the sequence is designed to reduce trust risk and make each message easier to evaluate."
+                      >Strategic inference</span
+                    >
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="mini-label">Move four</div>
+                  <h3>Sequencing is the deliverable. Support, store proof, timing, and DLC expectation-setting sit on one line.</h3>
+                  <p>
+                    Other readouts would surface the same diagnosis.
+                    PublisherIQ's value is connecting support cadence,
+                    store proof, timing context, and DLC expectation-setting
+                    into a single execution sequence rather than four
+                    parallel conversations. The sequence is what makes the
+                    diagnosis actionable.
+                  </p>
+                  <p class="consequence">
+                    <strong>What happens if you run them in parallel:</strong>
+                    each track gets touched, none of them land. The four
+                    friction clusters stay visible inside positive reviews,
+                    and the August DLC roadmap arrives without the trust
+                    runway it needs.
+                  </p>
+                  <div class="confidence-strip compact">
+                    <span
+                      class="confidence-badge inference"
+                      tabindex="0"
+                      role="note"
+                      aria-label="Strategic inference: PublisherIQ's value is connecting separate signals into a practical execution sequence."
+                      data-evidence="Strategic inference: PublisherIQ's value is connecting separate signals into a practical execution sequence."
+                      >Strategic inference</span
+                    >
+                  </div>
+                </article>
+              </div>
+            </section>
+
+          </article>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
