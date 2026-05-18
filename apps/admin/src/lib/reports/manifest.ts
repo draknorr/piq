@@ -9,6 +9,15 @@ export interface PublishedReport {
 
 export const PUBLISHED_REPORTS: PublishedReport[] = [
   {
+    slug: "mouse-pi-for-hire-post-launch-strategy-revised-v4",
+    title: "MOUSE: P.I. For Hire",
+    eyebrow: "Post-launch strategy — revised draft v4",
+    date: "May 18, 2026",
+    description:
+      "Revised external strategy brief — evidence-first v4 combining player-language proof, store-page gap analysis, named calendar pressure, and commercial sequencing.",
+    fileName: "mouse-pi-current-status-post-launch-strategy-revised-v4-2026-05-18.html",
+  },
+  {
     slug: "mouse-pi-for-hire-post-launch-strategy-revised-v3",
     title: "MOUSE: P.I. For Hire",
     eyebrow: "Post-launch strategy — revised draft v3",
