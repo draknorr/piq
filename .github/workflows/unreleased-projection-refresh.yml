@@ -2,8 +2,8 @@ name: Unreleased Projection Refresh
 
 on:
   schedule:
-    # Run every 4 hours, offset from storefront sync jobs that start at :00.
-    - cron: '50 */4 * * *'
+    # Daily while compute is being contained; manual dispatch is available after large storefront batches.
+    - cron: '50 3 * * *'
   workflow_dispatch:
 
 concurrency:

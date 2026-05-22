@@ -1,9 +1,6 @@
 name: Review Histogram Sync
 
 on:
-  schedule:
-    # Run every 30 minutes (offset +7) for aggressive first-pass completion
-    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       batch_size:

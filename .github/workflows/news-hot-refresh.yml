@@ -2,21 +2,22 @@ name: Steam News Hot Refresh
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    # Hourly while compute is being contained; full catch-up remains manual.
+    - cron: '5 * * * *'
   workflow_dispatch:
     inputs:
       claim_limit:
         description: 'Queue claim size for each news batch'
         required: false
-        default: '50'
+        default: '25'
       refresh_limit:
         description: 'How many hot news refresh jobs to seed when the worker is idle'
         required: false
-        default: '150'
+        default: '50'
       max_idle_polls:
         description: 'Exit after this many idle polls so the job finishes cleanly'
         required: false
-        default: '3'
+        default: '2'
 
 env:
   CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID: ${{ secrets.CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID }}
@@ -60,11 +61,11 @@ jobs:
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           QUEUE_SOURCES: news
-          CLAIM_LIMIT: ${{ github.event.inputs.claim_limit || '50' }}
-          HOT_NEWS_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '150' }}
+          CLAIM_LIMIT: ${{ github.event.inputs.claim_limit || '25' }}
+          HOT_NEWS_REFRESH_LIMIT: ${{ github.event.inputs.refresh_limit || '50' }}
           HOT_NEWS_MAX_SEED_BATCHES: '1'
           NEWS_CATCHUP_SEED_LIMIT: '0'
           HOT_NEWS_ACTIVE_STALE_MINUTES: '30'
           HOT_NEWS_MODERATE_STALE_HOURS: '2'
-          MAX_IDLE_POLLS: ${{ github.event.inputs.max_idle_polls || '3' }}
+          MAX_IDLE_POLLS: ${{ github.event.inputs.max_idle_polls || '2' }}
           POLL_INTERVAL_MS: '1000'
