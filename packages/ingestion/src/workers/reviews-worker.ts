@@ -36,12 +36,13 @@ import {
 
 const log = logger.child({ worker: 'reviews-sync' });
 
-const CONCURRENCY = 8;
+const DEFAULT_CONCURRENCY = 1;
 const DEFAULT_CLAIM_BATCH_SIZE = 100;
 const DEFAULT_CLAIM_TTL_MINUTES = 15;
 const DEFAULT_MAX_RUNTIME_MINUTES = 45;
 const DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD = 3;
 const DEFAULT_IDLE_DELAY_MS = 1500;
+const DEFAULT_RATE_TOKEN_DENIED_MIN_WAIT_MS = 1000;
 const DEFAULT_LAUNCH_LIMIT = 25;
 const DEFAULT_CHANGE_LIMIT = 20;
 const DEFAULT_ACTIVE_LIMIT = 35;
@@ -77,6 +78,16 @@ function getDb(supabase: SupabaseClient): any {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function formatUnknownError(error: unknown): string {
@@ -142,7 +153,8 @@ async function releaseReviewClaims(
 
 async function waitForReviewRateToken(
   workerId: string,
-  stats: SyncStats
+  stats: SyncStats,
+  deniedMinWaitMs: number
 ): Promise<void> {
   while (true) {
     const result = await acquireSharedApiRateToken({
@@ -154,7 +166,7 @@ async function waitForReviewRateToken(
       return;
     }
 
-    const waitMs = Math.max(1, result.waitMs || 1000);
+    const waitMs = Math.max(1, deniedMinWaitMs, result.waitMs || deniedMinWaitMs);
     stats.rateTokenSleeps += 1;
     stats.tokenWaitMs += waitMs;
     await sleep(waitMs);
@@ -234,13 +246,14 @@ async function processApp(
   neverSyncedSet: Set<number>,
   stats: SyncStats,
   env: NodeJS.ProcessEnv,
-  tiger: TigerWriter | null
+  tiger: TigerWriter | null,
+  rateTokenDeniedMinWaitMs: number
 ): Promise<void> {
   const appid = app.appid;
   stats.appsProcessed += 1;
 
   try {
-    await waitForReviewRateToken(workerId, stats);
+    await waitForReviewRateToken(workerId, stats, rateTokenDeniedMinWaitMs);
 
     const summary = await fetchReviewSummary(appid);
     if (!summary) {
@@ -306,42 +319,32 @@ async function main(): Promise<void> {
   const tiger = useTiger ? getTigerWriter(env) : null;
   const githubRunId = env.GITHUB_RUN_ID;
   const workerId = env.WORKER_ID || `reviews-${randomUUID()}`;
-  const maxAppsToProcess = parseInt(
-    env.BATCH_SIZE || String(BATCH_SIZES.REVIEWS_BATCH),
-    10
+  const maxAppsToProcess = parsePositiveInteger(env.BATCH_SIZE, BATCH_SIZES.REVIEWS_BATCH);
+  const claimBatchSize = parsePositiveInteger(env.CLAIM_BATCH_SIZE, DEFAULT_CLAIM_BATCH_SIZE);
+  const claimTtlMinutes = parsePositiveInteger(env.CLAIM_TTL_MINUTES, DEFAULT_CLAIM_TTL_MINUTES);
+  const maxRuntimeMinutes = parsePositiveInteger(
+    env.MAX_RUNTIME_MINUTES,
+    DEFAULT_MAX_RUNTIME_MINUTES
   );
-  const claimBatchSize = parseInt(
-    env.CLAIM_BATCH_SIZE || `${DEFAULT_CLAIM_BATCH_SIZE}`,
-    10
+  const concurrency = parsePositiveInteger(env.REVIEWS_CONCURRENCY, DEFAULT_CONCURRENCY);
+  const rateTokenDeniedMinWaitMs = parsePositiveInteger(
+    env.REVIEW_TOKEN_DENIED_MIN_WAIT_MS,
+    DEFAULT_RATE_TOKEN_DENIED_MIN_WAIT_MS
   );
-  const claimTtlMinutes = parseInt(
-    env.CLAIM_TTL_MINUTES || `${DEFAULT_CLAIM_TTL_MINUTES}`,
-    10
+  const launchLimit = parseNonNegativeInteger(env.REVIEWS_LAUNCH_LIMIT, DEFAULT_LAUNCH_LIMIT);
+  const changeLimit = parseNonNegativeInteger(env.REVIEWS_CHANGE_LIMIT, DEFAULT_CHANGE_LIMIT);
+  const activeLimit = parseNonNegativeInteger(env.REVIEWS_ACTIVE_LIMIT, DEFAULT_ACTIVE_LIMIT);
+  const backfillLimit = parseNonNegativeInteger(env.REVIEWS_BACKFILL_LIMIT, DEFAULT_BACKFILL_LIMIT);
+  const unknownLimit = parseNonNegativeInteger(env.REVIEWS_UNKNOWN_LIMIT, DEFAULT_UNKNOWN_LIMIT);
+  const claimTimeoutRetries = parseNonNegativeInteger(
+    env.CLAIM_TIMEOUT_RETRIES,
+    DEFAULT_CLAIM_TIMEOUT_RETRIES
   );
-  const maxRuntimeMinutes = parseInt(
-    env.MAX_RUNTIME_MINUTES || `${DEFAULT_MAX_RUNTIME_MINUTES}`,
-    10
+  const emptyClaimExitThreshold = parsePositiveInteger(
+    env.EMPTY_CLAIM_EXIT_THRESHOLD,
+    DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD
   );
-  const launchLimit = parseInt(env.REVIEWS_LAUNCH_LIMIT || `${DEFAULT_LAUNCH_LIMIT}`, 10);
-  const changeLimit = parseInt(env.REVIEWS_CHANGE_LIMIT || `${DEFAULT_CHANGE_LIMIT}`, 10);
-  const activeLimit = parseInt(env.REVIEWS_ACTIVE_LIMIT || `${DEFAULT_ACTIVE_LIMIT}`, 10);
-  const backfillLimit = parseInt(
-    env.REVIEWS_BACKFILL_LIMIT || `${DEFAULT_BACKFILL_LIMIT}`,
-    10
-  );
-  const unknownLimit = parseInt(
-    env.REVIEWS_UNKNOWN_LIMIT || `${DEFAULT_UNKNOWN_LIMIT}`,
-    10
-  );
-  const claimTimeoutRetries = parseInt(
-    env.CLAIM_TIMEOUT_RETRIES || `${DEFAULT_CLAIM_TIMEOUT_RETRIES}`,
-    10
-  );
-  const emptyClaimExitThreshold = parseInt(
-    env.EMPTY_CLAIM_EXIT_THRESHOLD || `${DEFAULT_EMPTY_CLAIM_EXIT_THRESHOLD}`,
-    10
-  );
-  const idleDelayMs = parseInt(env.IDLE_DELAY_MS || `${DEFAULT_IDLE_DELAY_MS}`, 10);
+  const idleDelayMs = parsePositiveInteger(env.IDLE_DELAY_MS, DEFAULT_IDLE_DELAY_MS);
   const deadline = startTime + maxRuntimeMinutes * 60 * 1000;
 
   log.info('Starting Reviews sync', {
@@ -350,6 +353,8 @@ async function main(): Promise<void> {
     maxAppsToProcess,
     claimBatchSize,
     claimTtlMinutes,
+    concurrency,
+    rateTokenDeniedMinWaitMs,
     laneLimits: {
       launch: launchLimit,
       change: changeLimit,
@@ -507,7 +512,7 @@ async function main(): Promise<void> {
         refresh: claimedApps.length - neverSyncedSet.size,
       });
 
-      const limit = pLimit(CONCURRENCY);
+      const limit = pLimit(concurrency);
       await Promise.all(
         claimedApps.map((app) =>
           limit(() =>
@@ -520,7 +525,8 @@ async function main(): Promise<void> {
               neverSyncedSet,
               stats,
               env,
-              tiger
+              tiger,
+              rateTokenDeniedMinWaitMs
             )
           )
         )
