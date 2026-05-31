@@ -13,9 +13,9 @@ export interface McpResourceDefinition {
 
 export const MCP_RESOURCES: McpResourceDefinition[] = [
   {
-    description: 'PublisherIQ report writing standards, report-shape guidance, and anti-slop rules.',
+    description: 'Optional PublisherIQ writing guidance for users who want a house style.',
     mimeType: 'text/markdown',
-    name: 'Report Writing Instructions',
+    name: 'Optional Writing Guidance',
     uri: 'publisheriq://instructions/report-writing/v1',
   },
   {
@@ -25,19 +25,19 @@ export const MCP_RESOURCES: McpResourceDefinition[] = [
     uri: 'publisheriq://instructions/evidence-standards/v1',
   },
   {
-    description: 'Searchable catalog of committed PublisherIQ reports and evidence artifacts.',
+    description: 'Optional prior-work catalog when archive indexing is enabled.',
     mimeType: 'application/json',
-    name: 'Report Catalog',
+    name: 'Prior-Work Catalog',
     uri: 'publisheriq://reports/catalog',
   },
   {
-    description: 'JSON shape returned by all PublisherIQ report evidence pack tools.',
+    description: 'JSON shape returned by PublisherIQ research evidence pack tools.',
     mimeType: 'application/json',
     name: 'Evidence Pack Schema',
     uri: 'publisheriq://schemas/evidence-pack/v1',
   },
   {
-    description: 'High-level Tiger/query-api read-plane dictionary for report-writing agents.',
+    description: 'High-level Tiger/query-api read-plane dictionary for research agents.',
     mimeType: 'text/markdown',
     name: 'Tiger Read Plane Data Dictionary',
     uri: 'publisheriq://data-dictionary/tiger-read-plane/v1',
@@ -52,7 +52,7 @@ const budgetSchema = {
 export const MCP_TOOLS: McpToolDefinition[] = [
   {
     description:
-      'Return PublisherIQ report-writing instructions, confidence rules, and recommended shape guidance.',
+      'Return optional PublisherIQ writing guidance, confidence rules, and source-use guidance.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -66,7 +66,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Search committed PublisherIQ reports, SQL evidence, CSV artifacts, HTML/Markdown reports, and static audit outputs.',
+      'Search optional indexed prior work, SQL evidence, CSV artifacts, HTML/Markdown reports, and static audit outputs when available.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -80,7 +80,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Build a report-grade game research pack with snapshot, metric history, news/change evidence, peers, YouTube, and related artifacts.',
+      'Build a format-neutral game evidence pack with snapshot, metric history, news/change evidence, peers, and YouTube.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -112,7 +112,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Build a genre/tag growth evidence pack from archived movement artifacts and available market caveats.',
+      'Build a genre/tag growth evidence pack with available movement rows, market context, and caveats.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -147,7 +147,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Build a company diligence pack with portfolio, target games, available community artifacts, and investment caveats.',
+      'Build a company diligence evidence pack with portfolio, target games, community signals when available, and caveats.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -163,7 +163,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Build an unreleased opportunity pack with candidate rows, release-window evidence, archived opportunity CSVs, and signability caveats.',
+      'Build an unreleased opportunity evidence pack with candidate rows, release-window evidence, and signability caveats.',
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -181,7 +181,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Build a fixed-artifact recreation pack for an existing PublisherIQ report from the committed reports archive.',
+      'Build an optional prior-work recreation pack from indexed PublisherIQ archive metadata when available.',
     inputSchema: {
       additionalProperties: false,
       properties: {

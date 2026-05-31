@@ -137,7 +137,7 @@ export class PublisherIQResearchService {
   getReportInstructions(
     request: GetReportInstructionsRequest = {}
   ): GetReportInstructionsResponse {
-    const shape = request.shape?.trim() || 'PublisherIQ evidence-backed report';
+    const shape = request.shape?.trim() || 'user-selected research output';
     const audience = request.audience?.trim() || 'internal operator or research reader';
     const depth = request.depth ?? 'standard';
 
@@ -146,7 +146,7 @@ export class PublisherIQResearchService {
       depth,
       resources: [
         {
-          title: 'PublisherIQ report writing instructions',
+          title: 'Optional PublisherIQ writing guidance',
           uri: 'publisheriq://instructions/report-writing/v1',
         },
         {
@@ -161,21 +161,25 @@ export class PublisherIQResearchService {
           rows: [
             {
               rule: 'Open with source counts, dates, and confidence taxonomy.',
-              reason: 'Reports must show the work before making commercial claims.',
+              reason: 'Research outputs should show the work before making commercial claims.',
             },
             {
               rule: 'Every analytical claim needs a source, sample size when available, and a named data point.',
-              reason: 'This keeps GPT/Claude report prose anchored to evidence packs.',
+              reason: 'This keeps GPT/Claude/Codex output anchored to evidence packs regardless of final format.',
+            },
+            {
+              rule: 'Final format belongs to the user prompt.',
+              reason: 'MCP provides data, provenance, and caveats; the connected LLM writes Markdown, HTML, CSV, JSON, memo, or another requested format.',
             },
           ],
           sourceTables: [],
           summary:
-            'Use the evidence pack source block near the top and keep confidence labels visible.',
-          title: 'Source And Confidence Rules',
+            'Use these only when the user wants PublisherIQ-style writing. Evidence packs are format-neutral by default.',
+          title: 'Optional Source And Confidence Rules',
         }),
         section({
           confidence: 'strategic_inference',
-          id: 'instructions-report-shape',
+          id: 'instructions-output-shape',
           rows: [
             {
               audience,
@@ -185,8 +189,8 @@ export class PublisherIQResearchService {
           ],
           sourceTables: [],
           summary:
-            'Choose the report structure from the job: diligence, post-launch strategy, market scan, launch read, or lightweight decision memo.',
-          title: 'Report Shape',
+            'Let the user prompt determine the output shape: memo, table, HTML, Markdown, JSON, deck outline, CSV summary, or another requested format.',
+          title: 'Output Shape',
         }),
       ],
       shape,
@@ -237,7 +241,7 @@ export class PublisherIQResearchService {
         {
           confidence: 'high_confidence',
           reason:
-            'Archive recreation packs use fixed report artifacts already committed under docs/reports or data-audit.',
+            'Archive recreation packs use optional indexed prior-work artifacts when an archive source is enabled.',
         },
       ],
       entities: matched
@@ -245,10 +249,14 @@ export class PublisherIQResearchService {
         : [],
       limitations: matched
         ? [
-            'This recreates the archived evidence state, not a fresh live-data rerun.',
+            'This recreates the indexed prior-work evidence state, not a fresh live-data rerun.',
             'Use current-equivalent recipe sections before making claims about today.',
           ]
-        : ['No matching archived report was found for the requested reportId.'],
+        : [
+            shouldScanArchiveFilesystem()
+              ? 'No matching prior-work evidence bundle was found for the requested reportId.'
+              : 'Prior-work archive scanning is disabled in this environment; use live evidence-pack tools for current data access.',
+          ],
       packType: 'report_recreation',
       request: { ...request },
       sections: [
@@ -260,7 +268,7 @@ export class PublisherIQResearchService {
           sourceTables: [],
           summary: matched
             ? `Matched archived report "${matched.title}" with ${artifacts.length} linked artifacts.`
-            : 'No archived report matched the requested identifier.',
+            : 'No indexed prior-work bundle matched the requested identifier.',
           title: 'Archive Match',
         }),
         section({
@@ -270,8 +278,8 @@ export class PublisherIQResearchService {
           sampleSize: rows.length,
           sourceTables: [],
           summary:
-            'Use these artifacts as the fixed source bundle for reproducing the prior report.',
-          title: 'Evidence Artifacts',
+            'Optional prior-work artifacts. These are reference handles, not required inputs for custom output generation.',
+          title: 'Prior-Work Artifacts',
         }),
         section({
           confidence: 'strategic_inference',
@@ -284,12 +292,12 @@ export class PublisherIQResearchService {
               step: 'Rebuild current snapshot, metric history, review histogram/deltas, change/news activity, YouTube coverage, and available community/achievement summaries.',
             },
             {
-              step: 'Write an unpublished draft using the PublisherIQ report instructions resource; do not publish to /reports through MCP.',
+              step: 'Have the connected LLM write the output in the user-requested format; do not publish to /reports through MCP.',
             },
           ],
           sourceTables: [],
           summary:
-            'The current-equivalent rerun should use deterministic evidence-pack tools before report prose.',
+            'The current-equivalent rerun should use deterministic evidence-pack tools before synthesis.',
           title: 'Current Equivalent Recipe',
         }),
       ],
@@ -314,7 +322,7 @@ export class PublisherIQResearchService {
     const entities = resolved ? [entityFromResolved(resolved)] : [];
     const artifacts = await this.findRelatedArtifacts(request.game);
     const limitations: string[] = [
-      'This pack is an evidence bundle for unpublished report drafting, not a published report.',
+      'This pack is a format-neutral evidence bundle for the connected LLM; final output shape is user-controlled.',
     ];
 
     if (!resolved) {
@@ -487,7 +495,7 @@ export class PublisherIQResearchService {
           },
         ],
         sourceTables: [],
-        summary: 'Caveats that should travel with every genre growth report.',
+        summary: 'Caveats that should travel with every genre growth output.',
         title: 'Interpretation Caveats',
       }),
     ];
@@ -498,7 +506,7 @@ export class PublisherIQResearchService {
       confidenceHints: defaultConfidenceHints(),
       entities: [{ displayName: `Genre growth ${year}`, entityKind: 'topic' }],
       limitations: [
-        'The v1 genre growth pack uses committed report artifacts when available.',
+        'The v1 genre growth pack uses optional prior-work artifacts when an archive source is enabled.',
         'Do not treat taxonomy movement as a causal demand forecast without supporting review, owner, CCU, and release-supply evidence.',
       ],
       packType: 'genre_growth',
@@ -784,7 +792,7 @@ export class PublisherIQResearchService {
         },
       ],
       limitations: [
-        'Ad hoc SQL is an expert escape hatch. Prefer deterministic evidence-pack tools for standard reports.',
+        'Ad hoc SQL is an expert escape hatch. Prefer deterministic evidence-pack tools for standard research prompts.',
         'Results are capped and should not be treated as exhaustive unless the query was written to aggregate explicitly.',
       ],
       packType: 'readonly_analysis',
@@ -848,6 +856,10 @@ export class PublisherIQResearchService {
   }
 
   private async getArchiveCatalog(): Promise<ReportArchiveItem[]> {
+    if (!shouldScanArchiveFilesystem()) {
+      return [];
+    }
+
     const reportDir = path.join(this.repoRoot, 'docs', 'reports');
     if (!existsSync(reportDir)) {
       return [];
@@ -933,8 +945,8 @@ export class PublisherIQResearchService {
         estimatedOutputTokens: budget === 'lite' ? 1200 : budget === 'standard' ? 3000 : 6500,
         estimatedRows,
         notes: [
-          'Deterministic evidence assembly runs before report prose.',
-          'Use lite packs for outline/rewrite passes and full packs for final diligence synthesis.',
+          'Deterministic evidence assembly runs before user-facing synthesis.',
+          'Use lite packs for outline/rewrite passes and full packs for final high-stakes synthesis.',
         ],
       },
       entities: params.entities ?? [],
@@ -1061,6 +1073,10 @@ function findRepoRoot(startDir: string): string {
   return startDir;
 }
 
+function shouldScanArchiveFilesystem(): boolean {
+  return process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM === 'true';
+}
+
 function normalizeBudget(value: ResearchPackBudget | null | undefined): ResearchPackBudget {
   return value === 'full' || value === 'lite' || value === 'standard' ? value : 'standard';
 }
@@ -1101,7 +1117,7 @@ function artifactSection(artifacts: ReportEvidenceArtifact[], query: string): Re
     rows: artifacts.map((artifact) => compactRecord(artifact)),
     sampleSize: artifacts.length,
     sourceTables: [],
-    summary: `Related committed report/archive artifacts found for "${query}".`,
+    summary: `Related optional prior-work artifacts found for "${query}".`,
     title: 'Related Archive Artifacts',
   });
 }
@@ -1131,7 +1147,7 @@ function defaultConfidenceHints(): ReportEvidencePack['confidenceHints'] {
   return [
     {
       confidence: 'high_confidence',
-      reason: 'Use for direct query-api counts, source freshness, current snapshots, and fixed archived artifacts.',
+      reason: 'Use for direct query-api counts, source freshness, current snapshots, and indexed prior-work artifacts.',
     },
     {
       confidence: 'directional_signal',
@@ -1139,7 +1155,7 @@ function defaultConfidenceHints(): ReportEvidencePack['confidenceHints'] {
     },
     {
       confidence: 'strategic_inference',
-      reason: 'Use for the commercial sequence the report writer derives from multiple evidence sections.',
+      reason: 'Use for the commercial sequence the connected LLM derives from multiple evidence sections.',
     },
   ];
 }

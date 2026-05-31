@@ -192,11 +192,13 @@ function jsonResource(uri: string, value: unknown): Record<string, unknown> {
   };
 }
 
-const REPORT_WRITING_RESOURCE = `# PublisherIQ Report Writing
+const REPORT_WRITING_RESOURCE = `# PublisherIQ Optional Writing Guidance
 
-Write like an operator with evidence, not a consultant with a framework.
+PublisherIQ MCP tools provide data, provenance, and caveats. The connected LLM should write in whatever format the user requests: memo, Markdown, HTML, table, JSON, CSV summary, deck outline, or another shape.
 
-Required opening:
+Use this guidance only when the user wants PublisherIQ house style.
+
+Recommended opening for house-style outputs:
 - Game- or market-specific headline.
 - Verdict that names the mechanism.
 - Source block with counts and dates.
@@ -206,7 +208,8 @@ Rules:
 - Every analytical claim needs a source, sample size when available, and a number or named data point.
 - Recommendations need consequence blocks: "If [wrong move]: [specific commercial/player outcome]."
 - Do not publish to /reports through MCP. Treat outputs as unpublished drafts unless a human separately approves publication.
-- Use evidence packs first; prose comes after evidence assembly.
+- Use evidence packs first; synthesis comes after evidence assembly.
+- The final output format belongs to the user's prompt, not to MCP.
 `;
 
 const EVIDENCE_STANDARDS_RESOURCE = `# PublisherIQ Evidence Standards
@@ -227,16 +230,16 @@ Raw community, profile, and public-player evidence should default to aggregate o
 
 const TIGER_READ_PLANE_RESOURCE = `# Tiger / Query-API Read Plane
 
-Use query-api contracts and evidence packs for report work. Current contract families include entity resolution, entity overview, catalog search, momentum, similarity, metric history, change/news evidence, comparison, continuation, and YouTube coverage.
+Use query-api contracts and evidence packs for governed PublisherIQ research data access. Current contract families include entity resolution, entity overview, catalog search, momentum, similarity, metric history, change/news evidence, comparison, continuation, and YouTube coverage.
 
-Primary report-grade source families:
+Primary research source families:
 - legacy apps/company/taxonomy relations.
 - metrics daily metrics, monthly playtime, review velocity, review deltas, review histograms, YouTube rollups.
 - docs Steam news, source snapshots, YouTube channels/videos/matches.
 - events app change events, change bursts, and pattern windows.
 - core entities, aliases, external IDs, and relationships.
 
-Do not expose Tiger or Supabase database credentials to users or model clients. Ad hoc SQL must go through the governed readonly-analysis tool.
+Do not expose Tiger or Supabase database credentials to users or model clients. Ad hoc SQL must go through the governed readonly-analysis tool. MCP does not choose or publish the final user-facing format.
 `;
 
 const EVIDENCE_PACK_SCHEMA = {

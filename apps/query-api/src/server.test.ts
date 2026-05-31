@@ -192,32 +192,42 @@ test('query-api routes semantic-search requests to the data-plane service', asyn
   );
 });
 
-test('query-api exposes research archive search behind existing auth', async () => {
-  await withServer(createDataPlaneStub(), 'secret-token', async (origin) => {
-    const unauthorized = await fetch(`${origin}/v1/research/report-archive/search`, {
-      body: JSON.stringify({ query: 'tag genre market shifts' }),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
-    });
-    assert.equal(unauthorized.status, 401);
+test('query-api exposes optional research archive search behind existing auth', async () => {
+  const previousArchiveScan = process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  try {
+    await withServer(createDataPlaneStub(), 'secret-token', async (origin) => {
+      const unauthorized = await fetch(`${origin}/v1/research/report-archive/search`, {
+        body: JSON.stringify({ query: 'tag genre market shifts' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      assert.equal(unauthorized.status, 401);
 
-    const response = await fetch(`${origin}/v1/research/report-archive/search`, {
-      body: JSON.stringify({ query: 'tag genre market shifts', limit: 2 }),
-      headers: {
-        authorization: 'Bearer secret-token',
-        'content-type': 'application/json',
-      },
-      method: 'POST',
-    });
+      const response = await fetch(`${origin}/v1/research/report-archive/search`, {
+        body: JSON.stringify({ query: 'tag genre market shifts', limit: 2 }),
+        headers: {
+          authorization: 'Bearer secret-token',
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      });
 
-    assert.equal(response.status, 200);
-    const payload = await response.json() as {
-      items: Array<{ artifactCount: number }>;
-      totalMatches: number;
-    };
-    assert.ok(payload.totalMatches >= 1);
-    assert.ok(payload.items[0].artifactCount >= 1);
-  });
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        items: Array<{ artifactCount: number }>;
+        totalMatches: number;
+      };
+      assert.equal(payload.totalMatches, 0);
+      assert.deepEqual(payload.items, []);
+    });
+  } finally {
+    if (previousArchiveScan === undefined) {
+      delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+    } else {
+      process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM = previousArchiveScan;
+    }
+  }
 });
 
 test('query-api keeps readonly research SQL disabled unless explicitly enabled', async () => {

@@ -1,10 +1,15 @@
 # PublisherIQ Research MCP
 
-Internal MCP gateway for report-grade PublisherIQ research tools.
+Internal MCP gateway for governed PublisherIQ research data access.
 
 The gateway does not connect to TigerData or Supabase directly. It forwards MCP
 tool calls to `apps/query-api` research endpoints, which in turn use the
 existing `@publisheriq/data-plane` read contracts and guardrails.
+
+The MCP server is format-neutral. It returns structured evidence, provenance,
+freshness, caveats, and bounded rows. The connected LLM writes whatever output
+the user asks for: Markdown, HTML, tables, memo, JSON, CSV summary, deck outline,
+or another format.
 
 ## Runtime
 
@@ -19,6 +24,10 @@ Optional environment:
 - `RESEARCH_MCP_DEFAULT_ROLE`: `internal`, `researcher`, or `admin`.
 - `RESEARCH_MCP_HOST`: default `0.0.0.0`.
 - `RESEARCH_MCP_PORT`: default `4320`.
+
+Optional query-api/data-plane environment:
+
+- `RESEARCH_ARCHIVE_SCAN_FILESYSTEM=true`: opt into local `docs/reports` prior-work scanning. Leave unset in production unless the full archive is intentionally packaged with query-api.
 
 ## Commands
 
@@ -91,5 +100,9 @@ curl -s https://<research-mcp-domain>/mcp \
 curl -s https://<research-mcp-domain>/mcp \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer <RESEARCH_MCP_BEARER_TOKEN>' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_report_archive","arguments":{"query":"tag genre market shifts","limit":2}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"build_game_research_pack","arguments":{"game":"Mortal Sin","budget":"lite","peerMode":"similarity","include":["metric_history","change_activity","youtube"]}}}'
 ```
+
+`search_report_archive` is optional prior-work discovery. It returns an empty
+catalog unless query-api is configured with `RESEARCH_ARCHIVE_SCAN_FILESYSTEM=true`
+or a future archive index provider.

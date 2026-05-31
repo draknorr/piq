@@ -3,29 +3,61 @@ import test from 'node:test';
 
 import { PublisherIQResearchService, validateReadonlySql } from './research-service.js';
 
-test('research archive search finds committed report artifacts', async () => {
-  const service = new PublisherIQResearchService({});
-  const result = await service.searchReportArchive({
-    query: 'tag genre market shifts',
-    limit: 3,
-  });
+test('research archive search is optional and disabled by default', async () => {
+  await withArchiveFilesystem(false, async () => {
+    const service = new PublisherIQResearchService({});
+    const result = await service.searchReportArchive({
+      query: 'tag genre market shifts',
+      limit: 3,
+    });
 
-  assert.ok(result.totalMatches >= 1);
-  assert.match(result.items[0].title.toLowerCase(), /tag|genre|market/);
-  assert.ok(result.items[0].artifactCount >= 1);
+    assert.equal(result.totalMatches, 0);
+    assert.deepEqual(result.items, []);
+  });
 });
 
-test('report recreation pack carries source artifacts and limitations', async () => {
-  const service = new PublisherIQResearchService({});
-  const pack = await service.buildReportRecreationPack({
-    budget: 'lite',
-    reportId: 'tag genre market shifts 2026 04 06',
-  });
+test('research archive search can scan local prior-work artifacts when explicitly enabled', async () => {
+  await withArchiveFilesystem(true, async () => {
+    const service = new PublisherIQResearchService({});
+    const result = await service.searchReportArchive({
+      query: 'tag genre market shifts',
+      limit: 3,
+    });
 
-  assert.equal(pack.packType, 'report_recreation');
-  assert.equal(pack.costEstimate.budget, 'lite');
-  assert.ok(pack.sections.some((section) => section.id === 'archive-artifacts'));
-  assert.ok(pack.limitations.some((limitation) => limitation.includes('archived evidence')));
+    assert.ok(result.totalMatches >= 1);
+    assert.match(result.items[0].title.toLowerCase(), /tag|genre|market/);
+    assert.ok(result.items[0].artifactCount >= 1);
+  });
+});
+
+test('report recreation pack degrades when prior-work archive scanning is disabled', async () => {
+  await withArchiveFilesystem(false, async () => {
+    const service = new PublisherIQResearchService({});
+    const pack = await service.buildReportRecreationPack({
+      budget: 'lite',
+      reportId: 'tag genre market shifts 2026 04 06',
+    });
+
+    assert.equal(pack.packType, 'report_recreation');
+    assert.equal(pack.costEstimate.budget, 'lite');
+    assert.equal(pack.artifacts.length, 0);
+    assert.ok(pack.limitations.some((limitation) => limitation.includes('disabled')));
+  });
+});
+
+test('report recreation pack carries prior-work artifacts when explicitly enabled', async () => {
+  await withArchiveFilesystem(true, async () => {
+    const service = new PublisherIQResearchService({});
+    const pack = await service.buildReportRecreationPack({
+      budget: 'lite',
+      reportId: 'tag genre market shifts 2026 04 06',
+    });
+
+    assert.equal(pack.packType, 'report_recreation');
+    assert.equal(pack.costEstimate.budget, 'lite');
+    assert.ok(pack.sections.some((section) => section.id === 'archive-artifacts'));
+    assert.ok(pack.limitations.some((limitation) => limitation.includes('indexed prior-work')));
+  });
 });
 
 test('research packs preserve the requested budget in cost metadata', async () => {
@@ -117,3 +149,25 @@ test('game research pack handles unresolved games without database access', asyn
   assert.equal(pack.packType, 'game_research');
   assert.ok(pack.limitations.some((limitation) => limitation.includes('could not be resolved')));
 });
+
+async function withArchiveFilesystem<T>(
+  enabled: boolean,
+  callback: () => Promise<T>
+): Promise<T> {
+  const previous = process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  if (enabled) {
+    process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM = 'true';
+  } else {
+    delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  }
+
+  try {
+    return await callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+    } else {
+      process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM = previous;
+    }
+  }
+}
