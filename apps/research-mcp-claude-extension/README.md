@@ -55,6 +55,6 @@ table plus caveats.
 
 ```text
 Use PublisherIQ Research to tell me the top 10 indie games. Use the default
-PublisherIQ ranking if I do not specify a metric, and include the SQL provenance
-and caveats.
+PublisherIQ ranking if I do not specify a metric. Call the PublisherIQ data
+dictionary first if you need table names, then include SQL provenance and caveats.
 ```

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "publisheriq-research",
   "display_name": "PublisherIQ Research",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Claude Desktop connector for governed PublisherIQ research evidence packs.",
   "long_description": "Connects Claude Desktop to the hosted PublisherIQ Research MCP gateway. Claude can request format-neutral evidence packs, current snapshots, YouTube coverage, market/genre evidence, optional prior-work search, and governed read-only analysis without direct database credentials.",
   "author": {
@@ -56,8 +56,12 @@
       "description": "Build an optional prior-work recreation pack when archive metadata is available."
     },
     {
+      "name": "get_publisheriq_data_dictionary",
+      "description": "Return allowed schemas, common tables, ranking defaults, key columns, and safe SQL templates for SQL-backed PublisherIQ questions."
+    },
+    {
       "name": "query_publisheriq_data",
-      "description": "Answer arbitrary PublisherIQ data questions with governed read-only SQL."
+      "description": "Answer arbitrary PublisherIQ data questions with governed read-only SQL. For broad released-game rankings use metrics.apps_page_projection; for Steam tag filters such as indie join legacy.app_steam_tags to legacy.steam_tags."
     },
     {
       "name": "run_readonly_analysis",

@@ -90,6 +90,9 @@ const ALLOWED_OPS_RELATIONS = new Set([
   'ops.sync_status',
 ]);
 
+const READONLY_SQL_SCHEMA_GUIDANCE =
+  'Allowed schemas: legacy, metrics, docs, events, core; ops only allows status/work-state relations. Common starts: metrics.apps_page_projection for released-game rankings, legacy.app_steam_tags plus legacy.steam_tags for Steam tag filters, metrics.unreleased_games_projection for unreleased opportunities. Do not use information_schema, tiger, read, publisheriq, or analytics. Use get_publisheriq_data_dictionary before query_publisheriq_data when schema names are unclear.';
+
 const DENIED_READONLY_RELATION_PATTERNS = [
   /\bauth\./i,
   /\bchat_(messages|sessions|threads)\b/i,
@@ -1020,10 +1023,14 @@ export function validateReadonlySql(
   const schemaRefs = detectSchemaRefs(cleaned);
   for (const ref of schemaRefs) {
     if (!ALLOWED_READONLY_SCHEMAS.has(ref.schema)) {
-      rejectedReasons.push(`schema ${ref.schema} is not allowlisted`);
+      rejectedReasons.push(
+        `schema ${ref.schema} is not allowlisted. ${READONLY_SQL_SCHEMA_GUIDANCE}`
+      );
     }
     if (ref.schema === 'ops' && !ALLOWED_OPS_RELATIONS.has(`${ref.schema}.${ref.table}`)) {
-      rejectedReasons.push(`ops relation ${ref.schema}.${ref.table} is not allowlisted`);
+      rejectedReasons.push(
+        `ops relation ${ref.schema}.${ref.table} is not allowlisted. ${READONLY_SQL_SCHEMA_GUIDANCE}`
+      );
     }
   }
   if (schemaRefs.length > 0) {

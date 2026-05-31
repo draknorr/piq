@@ -130,6 +130,8 @@ async function invokeQueryApiTool(
       return context.queryApi.post('/v1/research/evidence-packs/unreleased-opportunity', args, context.role);
     case 'build_report_recreation_pack':
       return context.queryApi.post('/v1/research/evidence-packs/report-recreation', args, context.role);
+    case 'get_publisheriq_data_dictionary':
+      return buildPublisherIqDataDictionary(args);
     case 'query_publisheriq_data':
       return context.queryApi.post(
         '/v1/research/readonly-analysis',
@@ -149,6 +151,112 @@ function normalizeReadonlyAnalysisArgs(args: Record<string, unknown>): Record<st
   return {
     ...args,
     purpose,
+  };
+}
+
+function buildPublisherIqDataDictionary(args: Record<string, unknown>): Record<string, unknown> {
+  const topic = typeof args.topic === 'string' && args.topic.trim() ? args.topic.trim() : null;
+
+  return {
+    allowedSchemas: [
+      {
+        commonRelations: [
+          'legacy.apps',
+          'legacy.app_steam_tags',
+          'legacy.steam_tags',
+          'legacy.app_genres',
+          'legacy.steam_genres',
+        ],
+        purpose: 'Steam app identity, catalog, company, genre, and tag bridge tables.',
+        schema: 'legacy',
+      },
+      {
+        commonRelations: [
+          'metrics.apps_page_projection',
+          'metrics.unreleased_games_projection',
+          'metrics.daily_metrics',
+          'metrics.ccu_snapshots',
+          'metrics.review_deltas',
+          'metrics.youtube_game_daily',
+        ],
+        purpose:
+          'Governed projections, rankings, current metrics, and time-series evidence. Large history tables require date bounds.',
+        schema: 'metrics',
+      },
+      {
+        commonRelations: ['docs.steam_news', 'docs.youtube_channels', 'docs.youtube_videos'],
+        purpose: 'Steam news, source documents, and YouTube metadata/coverage evidence.',
+        schema: 'docs',
+      },
+      {
+        commonRelations: ['events.app_change_events', 'events.change_bursts'],
+        purpose: 'Steam app change activity and launch/update event signals.',
+        schema: 'events',
+      },
+      {
+        commonRelations: ['core.entities', 'core.entity_aliases', 'core.external_ids'],
+        purpose: 'Canonical entity identity, aliases, and cross-platform IDs.',
+        schema: 'core',
+      },
+      {
+        commonRelations: [
+          'ops.app_capture_work_state',
+          'ops.ccu_tier_assignments',
+          'ops.change_intel_sync_jobs',
+          'ops.sync_jobs',
+          'ops.sync_status',
+        ],
+        purpose: 'Limited status and freshness views only.',
+        schema: 'ops',
+      },
+    ],
+    commonQuestions: [
+      {
+        question: 'Top released games, including indie-tagged games',
+        startFrom: 'metrics.apps_page_projection',
+        joins: ['legacy.app_steam_tags', 'legacy.steam_tags'],
+      },
+      {
+        question: 'Upcoming or unreleased opportunity candidates',
+        startFrom: 'metrics.unreleased_games_projection',
+      },
+      {
+        question: 'Steam tag or genre cohorts',
+        startFrom: 'legacy.app_steam_tags or legacy.app_genres',
+        joins: ['legacy.steam_tags', 'legacy.steam_genres'],
+      },
+      {
+        question: 'YouTube attention over time',
+        startFrom: 'metrics.youtube_game_daily',
+        requirement: 'Always bound metric_date.',
+      },
+      {
+        question: 'Metric history',
+        startFrom: 'metrics.daily_metrics, metrics.ccu_snapshots, or metrics.review_deltas',
+        requirement: 'Always include metric_date, captured_at, snapshot_at, observed_at, or delta_date bounds.',
+      },
+    ],
+    defaultRanking: {
+      rule: 'When the user asks for top games without naming a metric, use released, non-delisted games ordered by total_reviews DESC NULLS LAST, owners_midpoint DESC NULLS LAST, ccu_peak DESC NULLS LAST.',
+      sourceTable: 'metrics.apps_page_projection',
+      stateInAnswer: true,
+    },
+    disallowedSchemas: ['information_schema', 'tiger', 'read', 'publisheriq', 'analytics'],
+    notes: [
+      'query_publisheriq_data only accepts one SELECT/WITH statement.',
+      'Use LIMIT and set expectedRows to the intended returned row count.',
+      'Do not query raw profile/player identifiers; use aggregate evidence unless a privileged audited workflow exists.',
+      'Do not use database credentials directly. All SQL must go through query_publisheriq_data.',
+    ],
+    topic,
+    templates: {
+      top_indie_games: {
+        description:
+          'Default top-indie list using released, non-delisted Steam games and the Indie Steam tag.',
+        sql:
+          "SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name\nFROM metrics.apps_page_projection p\nJOIN legacy.app_steam_tags ast ON ast.appid = p.appid\nJOIN legacy.steam_tags st ON st.tag_id = ast.tag_id\nWHERE p.type = 'game'\n  AND p.is_released = true\n  AND p.is_delisted = false\n  AND lower(st.name) = 'indie'\nORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST\nLIMIT 10",
+      },
+    },
   };
 }
 

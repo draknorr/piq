@@ -52,6 +52,8 @@ The read-only SQL sandbox is controlled by query-api with
 The broad `query_publisheriq_data` MCP tool uses this sandbox and is intended
 for arbitrary top-N, ranking, cohort, filtering, and exploratory questions that
 do not fit a deterministic evidence-pack tool.
+Use `get_publisheriq_data_dictionary` before SQL when the model needs allowed
+schemas, common tables, ranking defaults, or safe query templates.
 
 ## Local Smoke Test
 
@@ -120,7 +122,12 @@ curl -s https://<research-mcp-domain>/mcp \
 curl -s https://<research-mcp-domain>/mcp \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer <RESEARCH_MCP_BEARER_TOKEN>' \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_publisheriq_data","arguments":{"question":"Top 10 indie games by review count","expectedRows":10,"sql":"SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name FROM metrics.apps_page_projection p JOIN legacy.app_steam_tags ast ON ast.appid = p.appid JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id WHERE p.type = '\''game'\'' AND p.is_released = true AND p.is_delisted = false AND lower(st.name) = '\''indie'\'' ORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST LIMIT 10"}}}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_publisheriq_data_dictionary","arguments":{"topic":"top indie games"}}}'
+
+curl -s https://<research-mcp-domain>/mcp \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <RESEARCH_MCP_BEARER_TOKEN>' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"query_publisheriq_data","arguments":{"question":"Top 10 indie games by review count","expectedRows":10,"sql":"SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name FROM metrics.apps_page_projection p JOIN legacy.app_steam_tags ast ON ast.appid = p.appid JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id WHERE p.type = '\''game'\'' AND p.is_released = true AND p.is_delisted = false AND lower(st.name) = '\''indie'\'' ORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST LIMIT 10"}}}'
 ```
 
 `search_report_archive` is optional prior-work discovery. It returns an empty

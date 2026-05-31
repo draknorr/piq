@@ -49,6 +49,12 @@ const budgetSchema = {
   type: 'string',
 };
 
+const READ_PLANE_SQL_GUIDANCE =
+  'Allowed Tiger read-plane schemas are legacy, metrics, docs, events, and core; ops is limited to status/work-state relations. For broad released-game rankings, start from metrics.apps_page_projection. For Steam tag filters such as indie, join legacy.app_steam_tags to legacy.steam_tags. Default top-game ranking is total_reviews DESC NULLS LAST, owners_midpoint DESC NULLS LAST, ccu_peak DESC NULLS LAST. Do not use information_schema, tiger, read, publisheriq, or analytics schemas.';
+
+const TOP_INDIE_SQL_GUIDANCE =
+  "Top indie template: SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name FROM metrics.apps_page_projection p JOIN legacy.app_steam_tags ast ON ast.appid = p.appid JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id WHERE p.type = 'game' AND p.is_released = true AND p.is_delisted = false AND lower(st.name) = 'indie' ORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST LIMIT 10.";
+
 export const MCP_TOOLS: McpToolDefinition[] = [
   {
     description:
@@ -195,7 +201,23 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Answer arbitrary PublisherIQ data questions by running bounded read-only SQL through query-api. Use this for top-N lists, rankings, filters, cohorts, comparisons, exploratory reads, and questions that do not fit a specific evidence-pack tool. The SQL must be a single SELECT/WITH statement with LIMIT and safe time bounds for large metric tables.',
+      'Return the PublisherIQ read-plane data dictionary for SQL-backed questions: allowed schemas, common tables, ranking defaults, key columns, and safe SQL templates. Call this before query_publisheriq_data when table names or ranking rules are unclear.',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        topic: {
+          description:
+            'Optional focus such as top games, indie games, released rankings, unreleased opportunities, YouTube, tags, genres, companies, or metric history.',
+          type: 'string',
+        },
+      },
+      type: 'object',
+    },
+    name: 'get_publisheriq_data_dictionary',
+  },
+  {
+    description:
+      `Answer arbitrary PublisherIQ data questions by running bounded read-only SQL through query-api. Use this for top-N lists, rankings, filters, cohorts, comparisons, exploratory reads, and questions that do not fit a specific evidence-pack tool. The SQL must be a single SELECT/WITH statement with LIMIT and safe time bounds for large metric tables. ${READ_PLANE_SQL_GUIDANCE} ${TOP_INDIE_SQL_GUIDANCE}`,
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -207,7 +229,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
         },
         sql: {
           description:
-            'Single read-only SELECT/WITH SQL statement. Include LIMIT and use allowlisted Tiger read-plane schemas.',
+            `Single read-only SELECT/WITH SQL statement. Include LIMIT and use allowlisted Tiger read-plane schemas. ${READ_PLANE_SQL_GUIDANCE} ${TOP_INDIE_SQL_GUIDANCE}`,
           type: 'string',
         },
       },

@@ -73,7 +73,7 @@ test('answers initialize locally without calling the hosted server', async () =>
       protocolVersion: '2025-11-25',
       serverInfo: {
         name: 'publisheriq-research',
-        version: '0.1.1',
+        version: '0.1.2',
       },
     },
   });
@@ -93,6 +93,7 @@ test('answers tools/list locally without requiring config', async () => {
   assert.equal(payload.id, 2);
   assert.equal(payload.jsonrpc, '2.0');
   assert.ok(payload.result.tools.some((tool) => tool.name === 'build_game_research_pack'));
+  assert.ok(payload.result.tools.some((tool) => tool.name === 'get_publisheriq_data_dictionary'));
   assert.ok(payload.result.tools.some((tool) => tool.name === 'query_publisheriq_data'));
 });
 

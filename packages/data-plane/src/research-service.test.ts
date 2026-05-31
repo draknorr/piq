@@ -119,6 +119,22 @@ test('readonly analysis can use a separate sandbox database url', () => {
   assert.equal(config.statementTimeoutMs, 9000);
 });
 
+test('readonly sql validation explains allowed schemas after bad schema guesses', () => {
+  const result = validateReadonlySql('SELECT table_name FROM information_schema.tables LIMIT 10', {
+    expectedRows: 10,
+    role: 'researcher',
+  });
+
+  assert.ok(
+    result.rejectedReasons.some(
+      (reason) =>
+        reason.includes('Allowed schemas: legacy, metrics, docs, events, core')
+        && reason.includes('get_publisheriq_data_dictionary')
+        && reason.includes('metrics.apps_page_projection')
+    )
+  );
+});
+
 test('readonly sql validation accepts top indie ranking shape', () => {
   const sql = `
     SELECT p.appid, p.name, p.total_reviews

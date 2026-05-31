@@ -15,6 +15,7 @@ test('research MCP lists tools and resources', async () => {
   assert.equal(tools?.jsonrpc, '2.0');
   const listedTools = (tools?.result as { tools?: Array<{ name: string }> }).tools ?? [];
   assert.ok(Array.isArray(listedTools));
+  assert.ok(listedTools.some((tool) => tool.name === 'get_publisheriq_data_dictionary'));
   assert.ok(listedTools.some((tool) => tool.name === 'query_publisheriq_data'));
 
   const resources = await dispatchMcpRequest(
@@ -22,6 +23,32 @@ test('research MCP lists tools and resources', async () => {
     { queryApi, role: 'internal' }
   );
   assert.ok(Array.isArray((resources?.result as { resources?: unknown[] }).resources));
+});
+
+test('research MCP returns local data dictionary for SQL-backed questions', async () => {
+  const queryApi = {
+    post: async () => {
+      throw new Error('should not be called');
+    },
+  };
+
+  const response = await dispatchMcpRequest(
+    {
+      id: 'dictionary',
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        arguments: { topic: 'top indie games' },
+        name: 'get_publisheriq_data_dictionary',
+      },
+    },
+    { queryApi, role: 'researcher' }
+  );
+
+  const text = (((response?.result as { content: Array<{ text: string }> }).content[0]).text);
+  assert.match(text, /metrics\.apps_page_projection/);
+  assert.match(text, /legacy\.steam_tags/);
+  assert.match(text, /lower\(st\.name\) = 'indie'/);
 });
 
 test('research MCP dispatches tool calls to query-api', async () => {
