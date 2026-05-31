@@ -195,14 +195,14 @@ test('query-api routes semantic-search requests to the data-plane service', asyn
 test('query-api exposes research archive search behind existing auth', async () => {
   await withServer(createDataPlaneStub(), 'secret-token', async (origin) => {
     const unauthorized = await fetch(`${origin}/v1/research/report-archive/search`, {
-      body: JSON.stringify({ query: 'mortal sin' }),
+      body: JSON.stringify({ query: 'tag genre market shifts' }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
     assert.equal(unauthorized.status, 401);
 
     const response = await fetch(`${origin}/v1/research/report-archive/search`, {
-      body: JSON.stringify({ query: 'mortal sin', limit: 2 }),
+      body: JSON.stringify({ query: 'tag genre market shifts', limit: 2 }),
       headers: {
         authorization: 'Bearer secret-token',
         'content-type': 'application/json',

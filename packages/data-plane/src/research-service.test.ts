@@ -6,12 +6,12 @@ import { PublisherIQResearchService, validateReadonlySql } from './research-serv
 test('research archive search finds committed report artifacts', async () => {
   const service = new PublisherIQResearchService({});
   const result = await service.searchReportArchive({
-    query: 'mortal sin investor diligence',
+    query: 'tag genre market shifts',
     limit: 3,
   });
 
   assert.ok(result.totalMatches >= 1);
-  assert.match(result.items[0].title.toLowerCase(), /mortal sin|investor/);
+  assert.match(result.items[0].title.toLowerCase(), /tag|genre|market/);
   assert.ok(result.items[0].artifactCount >= 1);
 });
 
