@@ -79,6 +79,7 @@ Deploy this app as a separate Railway service from query-api. Use
 Set these variables on the research MCP service:
 
 ```text
+PUBLISHERIQ_SERVICE=research-mcp
 QUERY_API_BASE_URL=https://publisheriq-query-api-prod-production.up.railway.app
 QUERY_API_BEARER_TOKEN=<same token configured on query-api>
 RESEARCH_MCP_BEARER_TOKEN=<long random token for MCP clients>
