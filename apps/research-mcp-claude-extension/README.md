@@ -52,3 +52,9 @@ current snapshot, YouTube evidence, freshness, and limitations.
 Use PublisherIQ to build a genre growth pack for 2026 and return the result as a
 table plus caveats.
 ```
+
+```text
+Use PublisherIQ Research to tell me the top 10 indie games. Use the default
+PublisherIQ ranking if I do not specify a metric, and include the SQL provenance
+and caveats.
+```

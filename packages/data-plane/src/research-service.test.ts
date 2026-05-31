@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { loadReadonlyAnalysisConfig } from './config.js';
 import { PublisherIQResearchService, validateReadonlySql } from './research-service.js';
 
 test('research archive search is optional and disabled by default', async () => {
@@ -103,6 +104,41 @@ test('readonly sql validation rejects writes and sensitive schemas', () => {
     role: 'researcher',
   });
   assert.ok(userControl.rejectedReasons.some((reason) => reason.includes('sensitive relation')));
+});
+
+test('readonly analysis can use a separate sandbox database url', () => {
+  const config = loadReadonlyAnalysisConfig({
+    DATA_PLANE_MAX_POOL_SIZE: '3',
+    DATA_PLANE_STATEMENT_TIMEOUT_MS: '9000',
+    RESEARCH_SQL_DATABASE_URL: 'postgres://readonly.example/publisheriq',
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(config.connectionString, 'postgres://readonly.example/publisheriq');
+  assert.equal(config.maxPoolSize, 3);
+  assert.equal(config.source, 'tiger');
+  assert.equal(config.statementTimeoutMs, 9000);
+});
+
+test('readonly sql validation accepts top indie ranking shape', () => {
+  const sql = `
+    SELECT p.appid, p.name, p.total_reviews
+    FROM metrics.apps_page_projection p
+    JOIN legacy.app_steam_tags ast ON ast.appid = p.appid
+    JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id
+    WHERE p.type = 'game'
+      AND p.is_released = true
+      AND p.is_delisted = false
+      AND lower(st.name) = 'indie'
+    ORDER BY p.total_reviews DESC NULLS LAST
+    LIMIT 10
+  `;
+
+  const result = validateReadonlySql(sql, {
+    expectedRows: 10,
+    role: 'researcher',
+  });
+
+  assert.deepEqual(result.rejectedReasons, []);
 });
 
 test('readonly sql validation requires role and large-table time bounds', () => {

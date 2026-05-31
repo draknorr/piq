@@ -92,6 +92,17 @@ export function loadTigerConfig(
   return buildConfig(connectionString, 'tiger', env);
 }
 
+export function loadReadonlyAnalysisConfig(
+  env: NodeJS.ProcessEnv = process.env
+): DataPlaneConfig {
+  const connectionString = env.RESEARCH_SQL_DATABASE_URL?.trim();
+  if (!connectionString) {
+    return loadDataPlaneConfig(env);
+  }
+
+  return buildConfig(connectionString, 'tiger', env);
+}
+
 export function loadQueryApiConfig(
   env: NodeJS.ProcessEnv = process.env
 ): QueryApiConfig {

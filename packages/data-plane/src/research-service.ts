@@ -26,6 +26,7 @@ import type {
   TraceMetricHistoryRequest,
   TraceMetricHistoryResponse,
 } from './contracts.js';
+import { loadReadonlyAnalysisConfig } from './config.js';
 import { withClient } from './pg.js';
 import type {
   CompanyDiligencePackRequest,
@@ -709,6 +710,7 @@ export class PublisherIQResearchService {
     role: ResearchRole
   ): Promise<ReadonlyAnalysisResponse> {
     const budget = normalizeBudget(request.budget);
+    const purpose = normalizeReadonlyPurpose(request);
     const validation = validateReadonlySql(request.sql, {
       expectedRows: request.expectedRows ?? null,
       role,
@@ -733,37 +735,40 @@ export class PublisherIQResearchService {
     const sql = stripTrailingSemicolon(request.sql);
     const wrappedSql = `SELECT * FROM (${sql}) AS publisheriq_readonly_analysis LIMIT ${rowCap}`;
     const startedAt = new Date().toISOString();
-    const result = await withClient(async (client) => {
-      await client.query('BEGIN READ ONLY');
-      try {
-        await client.query("SET LOCAL statement_timeout = '8000ms'");
-        await client.query("SET LOCAL lock_timeout = '1000ms'");
-        await client.query('SET LOCAL search_path = legacy, metrics, docs, events, core, ops');
-        const explain = await client.query<{ 'QUERY PLAN': unknown }>(
-          `EXPLAIN (FORMAT JSON) ${wrappedSql}`
-        );
-        const planCost = extractPlanCost(explain.rows[0]?.['QUERY PLAN']);
-        const maxPlanCost = getMaxReadonlyPlanCost();
-        if (planCost !== null && planCost > maxPlanCost) {
-          await client.query('ROLLBACK');
+    const result = await withClient(
+      async (client) => {
+        await client.query('BEGIN READ ONLY');
+        try {
+          await client.query("SET LOCAL statement_timeout = '8000ms'");
+          await client.query("SET LOCAL lock_timeout = '1000ms'");
+          await client.query('SET LOCAL search_path = legacy, metrics, docs, events, core, ops');
+          const explain = await client.query<{ 'QUERY PLAN': unknown }>(
+            `EXPLAIN (FORMAT JSON) ${wrappedSql}`
+          );
+          const planCost = extractPlanCost(explain.rows[0]?.['QUERY PLAN']);
+          const maxPlanCost = getMaxReadonlyPlanCost();
+          if (planCost !== null && planCost > maxPlanCost) {
+            await client.query('ROLLBACK');
+            return {
+              planCost,
+              rejectedReason: `estimated plan cost ${planCost} exceeds configured maximum ${maxPlanCost}`,
+              rows: null,
+            };
+          }
+          const rows = await client.query<JsonRecord>(wrappedSql);
+          await client.query('COMMIT');
           return {
             planCost,
-            rejectedReason: `estimated plan cost ${planCost} exceeds configured maximum ${maxPlanCost}`,
-            rows: null,
+            rejectedReason: null,
+            rows: rows.rows,
           };
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
         }
-        const rows = await client.query<JsonRecord>(wrappedSql);
-        await client.query('COMMIT');
-        return {
-          planCost,
-          rejectedReason: null,
-          rows: rows.rows,
-        };
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
+      },
+      loadReadonlyAnalysisConfig()
+    );
 
     if (result.rejectedReason) {
       return {
@@ -799,7 +804,8 @@ export class PublisherIQResearchService {
       provenance: [provenance],
       request: {
         expectedRows: request.expectedRows ?? null,
-        purpose: request.purpose,
+        purpose,
+        question: request.question ?? null,
         sqlHash: hashSql(request.sql),
       },
       sections: [
@@ -809,7 +815,7 @@ export class PublisherIQResearchService {
           rows: result.rows ?? [],
           sampleSize: result.rows?.length ?? 0,
           sourceTables: validation.detectedRelations,
-          summary: request.purpose,
+          summary: purpose,
           title: 'Read-Only Analysis Result',
           truncated: (result.rows?.length ?? 0) >= rowCap,
         }),
@@ -1079,6 +1085,10 @@ function shouldScanArchiveFilesystem(): boolean {
 
 function normalizeBudget(value: ResearchPackBudget | null | undefined): ResearchPackBudget {
   return value === 'full' || value === 'lite' || value === 'standard' ? value : 'standard';
+}
+
+function normalizeReadonlyPurpose(request: ReadonlyAnalysisRequest): string {
+  return request.purpose?.trim() || request.question?.trim() || 'PublisherIQ read-only analysis';
 }
 
 function getMaxReadonlyPlanCost(): number {
@@ -1516,7 +1526,7 @@ function hashSql(sql: string): string {
 
 function detectSchemaRefs(sql: string): Array<{ schema: string; table: string }> {
   const refs: Array<{ schema: string; table: string }> = [];
-  const regex = /\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b/gi;
+  const regex = /\b(?:from|join)\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b/gi;
   for (const match of sql.matchAll(regex)) {
     refs.push({ schema: match[1].toLowerCase(), table: match[2].toLowerCase() });
   }

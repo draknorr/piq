@@ -130,11 +130,26 @@ async function invokeQueryApiTool(
       return context.queryApi.post('/v1/research/evidence-packs/unreleased-opportunity', args, context.role);
     case 'build_report_recreation_pack':
       return context.queryApi.post('/v1/research/evidence-packs/report-recreation', args, context.role);
+    case 'query_publisheriq_data':
+      return context.queryApi.post(
+        '/v1/research/readonly-analysis',
+        normalizeReadonlyAnalysisArgs(args),
+        context.role
+      );
     case 'run_readonly_analysis':
       return context.queryApi.post('/v1/research/readonly-analysis', args, context.role);
     default:
       throw new Error(`Unknown PublisherIQ research tool: ${name}`);
   }
+}
+
+function normalizeReadonlyAnalysisArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const question = typeof args.question === 'string' ? args.question.trim() : '';
+  const purpose = typeof args.purpose === 'string' && args.purpose.trim() ? args.purpose : question;
+  return {
+    ...args,
+    purpose,
+  };
 }
 
 async function readResource(
@@ -239,7 +254,28 @@ Primary research source families:
 - events app change events, change bursts, and pattern windows.
 - core entities, aliases, external IDs, and relationships.
 
-Do not expose Tiger or Supabase database credentials to users or model clients. Ad hoc SQL must go through the governed readonly-analysis tool. MCP does not choose or publish the final user-facing format.
+For broad questions, use query_publisheriq_data and write a bounded SELECT query. Prefer projection tables when possible:
+- Released game rankings: metrics.apps_page_projection. Useful columns include appid, name, type, is_released, is_delisted, owners_midpoint, total_reviews, review_score, positive_percentage, ccu_peak, release_date, publisher_name, developer_name, genre_ids, tag_ids, metric_date.
+- Steam tags and genres: legacy.app_steam_tags, legacy.steam_tags, legacy.app_genres, legacy.steam_genres. For "indie", join legacy.steam_tags where lower(name) = 'indie'.
+- Unreleased opportunities: metrics.unreleased_games_projection. Useful columns include appid, name, release_date, release_status, publisher_status, opportunity_score, publisher_name, developer_name, genre_names, tag_names, latest_news_at, latest_change_at.
+- YouTube market attention: metrics.youtube_game_daily joined to legacy.apps. Always bound metric_date.
+- Large history tables such as metrics.daily_metrics, metrics.ccu_snapshots, and metrics.review_deltas require date bounds.
+
+Default "top games" ranking when the user does not specify a metric: released, non-delisted games ranked by total_reviews DESC, then owners_midpoint DESC, then ccu_peak DESC. State this choice in the answer.
+
+Example top indie SQL:
+SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name
+FROM metrics.apps_page_projection p
+JOIN legacy.app_steam_tags ast ON ast.appid = p.appid
+JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id
+WHERE p.type = 'game'
+  AND p.is_released = true
+  AND p.is_delisted = false
+  AND lower(st.name) = 'indie'
+ORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST
+LIMIT 10;
+
+Do not expose Tiger or Supabase database credentials to users or model clients. Ad hoc SQL must go through query_publisheriq_data or the governed readonly-analysis alias. MCP does not choose or publish the final user-facing format.
 `;
 
 const EVIDENCE_PACK_SCHEMA = {

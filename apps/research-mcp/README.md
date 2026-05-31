@@ -28,6 +28,9 @@ Optional environment:
 Optional query-api/data-plane environment:
 
 - `RESEARCH_ARCHIVE_SCAN_FILESYSTEM=true`: opt into local `docs/reports` prior-work scanning. Leave unset in production unless the full archive is intentionally packaged with query-api.
+- `RESEARCH_SQL_SANDBOX_ENABLED=true`: enable governed read-only SQL for `researcher`/`admin` MCP roles.
+- `RESEARCH_SQL_DATABASE_URL`: optional read-only Tiger connection string used only by the SQL sandbox. Recommended for production.
+- `RESEARCH_SQL_MAX_PLAN_COST`: optional EXPLAIN plan-cost ceiling; defaults to `500000`.
 
 ## Commands
 
@@ -44,8 +47,11 @@ HTTP MCP endpoint:
 POST /mcp
 ```
 
-The read-only SQL sandbox is still controlled by query-api with
+The read-only SQL sandbox is controlled by query-api with
 `RESEARCH_SQL_SANDBOX_ENABLED=true` and role gating. It is disabled by default.
+The broad `query_publisheriq_data` MCP tool uses this sandbox and is intended
+for arbitrary top-N, ranking, cohort, filtering, and exploratory questions that
+do not fit a deterministic evidence-pack tool.
 
 ## Local Smoke Test
 
@@ -83,7 +89,15 @@ PUBLISHERIQ_SERVICE=research-mcp
 QUERY_API_BASE_URL=https://publisheriq-query-api-prod-production.up.railway.app
 QUERY_API_BEARER_TOKEN=<same token configured on query-api>
 RESEARCH_MCP_BEARER_TOKEN=<long random token for MCP clients>
-RESEARCH_MCP_DEFAULT_ROLE=internal
+RESEARCH_MCP_DEFAULT_ROLE=researcher
+```
+
+Set these variables on query-api when enabling broad SQL analysis:
+
+```text
+RESEARCH_SQL_SANDBOX_ENABLED=true
+RESEARCH_SQL_DATABASE_URL=<read-only Tiger connection string>
+RESEARCH_SQL_MAX_PLAN_COST=500000
 ```
 
 Do not set `RESEARCH_MCP_PORT` on Railway; Railway provides `PORT`.
@@ -102,6 +116,11 @@ curl -s https://<research-mcp-domain>/mcp \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer <RESEARCH_MCP_BEARER_TOKEN>' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"build_game_research_pack","arguments":{"game":"Mortal Sin","budget":"lite","peerMode":"similarity","include":["metric_history","change_activity","youtube"]}}}'
+
+curl -s https://<research-mcp-domain>/mcp \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <RESEARCH_MCP_BEARER_TOKEN>' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_publisheriq_data","arguments":{"question":"Top 10 indie games by review count","expectedRows":10,"sql":"SELECT p.appid, p.name, p.total_reviews, p.review_score, p.owners_midpoint, p.ccu_peak, p.release_date, p.developer_name, p.publisher_name FROM metrics.apps_page_projection p JOIN legacy.app_steam_tags ast ON ast.appid = p.appid JOIN legacy.steam_tags st ON st.tag_id = ast.tag_id WHERE p.type = '\''game'\'' AND p.is_released = true AND p.is_delisted = false AND lower(st.name) = '\''indie'\'' ORDER BY p.total_reviews DESC NULLS LAST, p.owners_midpoint DESC NULLS LAST, p.ccu_peak DESC NULLS LAST LIMIT 10"}}}'
 ```
 
 `search_report_archive` is optional prior-work discovery. It returns an empty

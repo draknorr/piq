@@ -191,7 +191,8 @@ export interface ReportRecreationPackRequest {
 export interface ReadonlyAnalysisRequest {
   budget?: ResearchPackBudget | null;
   expectedRows?: number | null;
-  purpose: string;
+  purpose?: string | null;
+  question?: string | null;
   sql: string;
 }
 

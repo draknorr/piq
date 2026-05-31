@@ -195,7 +195,30 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   },
   {
     description:
-      'Run a governed read-only SQL analysis through query-api. Requires researcher/admin role and server-side sandbox enablement.',
+      'Answer arbitrary PublisherIQ data questions by running bounded read-only SQL through query-api. Use this for top-N lists, rankings, filters, cohorts, comparisons, exploratory reads, and questions that do not fit a specific evidence-pack tool. The SQL must be a single SELECT/WITH statement with LIMIT and safe time bounds for large metric tables.',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        budget: budgetSchema,
+        expectedRows: { maximum: 500, minimum: 1, type: 'number' },
+        question: {
+          description: 'The user-facing analysis question this SQL is meant to answer.',
+          type: 'string',
+        },
+        sql: {
+          description:
+            'Single read-only SELECT/WITH SQL statement. Include LIMIT and use allowlisted Tiger read-plane schemas.',
+          type: 'string',
+        },
+      },
+      required: ['question', 'sql'],
+      type: 'object',
+    },
+    name: 'query_publisheriq_data',
+  },
+  {
+    description:
+      'Backward-compatible alias for governed read-only SQL analysis. Prefer query_publisheriq_data for arbitrary PublisherIQ questions.',
     inputSchema: {
       additionalProperties: false,
       properties: {

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "publisheriq-research",
   "display_name": "PublisherIQ Research",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Desktop connector for governed PublisherIQ research evidence packs.",
   "long_description": "Connects Claude Desktop to the hosted PublisherIQ Research MCP gateway. Claude can request format-neutral evidence packs, current snapshots, YouTube coverage, market/genre evidence, optional prior-work search, and governed read-only analysis without direct database credentials.",
   "author": {
@@ -54,6 +54,10 @@
     {
       "name": "build_report_recreation_pack",
       "description": "Build an optional prior-work recreation pack when archive metadata is available."
+    },
+    {
+      "name": "query_publisheriq_data",
+      "description": "Answer arbitrary PublisherIQ data questions with governed read-only SQL."
     },
     {
       "name": "run_readonly_analysis",

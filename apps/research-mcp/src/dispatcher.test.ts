@@ -13,7 +13,9 @@ test('research MCP lists tools and resources', async () => {
     { queryApi, role: 'internal' }
   );
   assert.equal(tools?.jsonrpc, '2.0');
-  assert.ok(Array.isArray((tools?.result as { tools?: unknown[] }).tools));
+  const listedTools = (tools?.result as { tools?: Array<{ name: string }> }).tools ?? [];
+  assert.ok(Array.isArray(listedTools));
+  assert.ok(listedTools.some((tool) => tool.name === 'query_publisheriq_data'));
 
   const resources = await dispatchMcpRequest(
     { id: 2, jsonrpc: '2.0', method: 'resources/list' },
@@ -50,6 +52,38 @@ test('research MCP dispatches tool calls to query-api', async () => {
     (((response?.result as { content: Array<{ text: string }> }).content[0]).text),
     /"ok": true/
   );
+});
+
+test('research MCP maps broad data questions to readonly analysis', async () => {
+  const calls: Array<{ body: Record<string, unknown>; path: string; role: string | undefined }> = [];
+  const queryApi = {
+    post: async (path: string, body: unknown, role?: string) => {
+      calls.push({ body: body as Record<string, unknown>, path, role });
+      return { ok: true };
+    },
+  };
+
+  await dispatchMcpRequest(
+    {
+      id: 'call-2',
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        arguments: {
+          expectedRows: 10,
+          question: 'Top 10 indie games',
+          sql: 'SELECT appid, name FROM metrics.apps_page_projection LIMIT 10',
+        },
+        name: 'query_publisheriq_data',
+      },
+    },
+    { queryApi, role: 'researcher' }
+  );
+
+  assert.equal(calls[0].path, '/v1/research/readonly-analysis');
+  assert.equal(calls[0].role, 'researcher');
+  assert.equal(calls[0].body.purpose, 'Top 10 indie games');
+  assert.equal(calls[0].body.question, 'Top 10 indie games');
 });
 
 test('research MCP reads static resources without query-api', async () => {
