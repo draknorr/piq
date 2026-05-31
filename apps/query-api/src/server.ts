@@ -21,14 +21,25 @@ import {
   type GetYoutubeMarketPulseRequest,
   loadQueryApiConfig,
   loadSourceBaselineConfig,
+  type CompanyDiligencePackRequest,
+  type GameResearchPackRequest,
+  type GenreGrowthPackRequest,
+  type GetReportInstructionsRequest,
+  PublisherIQResearchService,
+  type ReadonlyAnalysisRequest,
+  type ReportRecreationPackRequest,
+  type ResearchRole,
   type QueryMonthlyPlaytimeRequest,
   type RankEntitiesRequest,
   type ResolveEntitiesRequest,
   type SearchCatalogRequest,
   type SearchChangeActivityRequest,
   type SearchDocumentsRequest,
+  type SearchReportArchiveRequest,
   type SemanticSearchRequest,
   type TraceMetricHistoryRequest,
+  type UnreleasedOpportunityPackRequest,
+  type YoutubeCreatorPackRequest,
 } from '@publisheriq/data-plane';
 import { logger, PublisherIQError } from '@publisheriq/shared';
 
@@ -309,6 +320,18 @@ function applyRelatedEntitiesFallbackSourceContext(params: {
   };
 }
 
+function resolveResearchRole(request: IncomingMessage): ResearchRole {
+  const header = request.headers['x-publisheriq-research-role'];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value === 'admin' || value === 'researcher' || value === 'internal'
+    ? value
+    : 'internal';
+}
+
+function isResearchSqlSandboxEnabled(): boolean {
+  return process.env.RESEARCH_SQL_SANDBOX_ENABLED === 'true';
+}
+
 export function createQueryApiRequestHandler(params: {
   bearerToken: string | null;
   dataPlane: QueryApiService;
@@ -316,6 +339,7 @@ export function createQueryApiRequestHandler(params: {
   sourceFallback?: QueryApiService | null;
 }): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   const { bearerToken, dataPlane, relatedEntitiesFallback = null, sourceFallback = null } = params;
+  const research = new PublisherIQResearchService(dataPlane);
 
   return async (request, response) => {
     try {
@@ -355,6 +379,67 @@ export function createQueryApiRequestHandler(params: {
           fallbackOperation: sourceFallback ? () => sourceFallback.describeContracts() : null,
           primaryOperation: () => dataPlane.describeContracts(),
         }));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/report-instructions') {
+        const body = await readJsonBody<GetReportInstructionsRequest>(request);
+        sendJson(response, 200, research.getReportInstructions(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/report-archive/search') {
+        const body = await readJsonBody<SearchReportArchiveRequest>(request);
+        sendJson(response, 200, await research.searchReportArchive(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/game') {
+        const body = await readJsonBody<GameResearchPackRequest>(request);
+        sendJson(response, 200, await research.buildGameResearchPack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/genre-growth') {
+        const body = await readJsonBody<GenreGrowthPackRequest>(request);
+        sendJson(response, 200, await research.buildGenreGrowthPack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/youtube-creators') {
+        const body = await readJsonBody<YoutubeCreatorPackRequest>(request);
+        sendJson(response, 200, await research.buildYoutubeCreatorPack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/company-diligence') {
+        const body = await readJsonBody<CompanyDiligencePackRequest>(request);
+        sendJson(response, 200, await research.buildCompanyDiligencePack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/unreleased-opportunity') {
+        const body = await readJsonBody<UnreleasedOpportunityPackRequest>(request);
+        sendJson(response, 200, await research.buildUnreleasedOpportunityPack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/evidence-packs/report-recreation') {
+        const body = await readJsonBody<ReportRecreationPackRequest>(request);
+        sendJson(response, 200, await research.buildReportRecreationPack(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/v1/research/readonly-analysis') {
+        if (!isResearchSqlSandboxEnabled()) {
+          sendJson(response, 403, {
+            code: 'RESEARCH_SQL_SANDBOX_DISABLED',
+            error: 'Read-only research SQL sandbox is disabled for this environment.',
+          });
+          return;
+        }
+        const body = await readJsonBody<ReadonlyAnalysisRequest>(request);
+        sendJson(response, 200, await research.runReadonlyAnalysis(body, resolveResearchRole(request)));
         return;
       }
 

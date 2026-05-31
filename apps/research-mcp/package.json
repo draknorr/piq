@@ -1,0 +1,26 @@
+{
+  "name": "@publisheriq/research-mcp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/http-server.js",
+  "types": "./dist/http-server.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "dev": "tsx watch src/http-server.ts",
+    "lint": "eslint src/",
+    "start": "node dist/http-server.js",
+    "stdio": "node dist/stdio-server.js",
+    "test": "node --import tsx --test $(find src -name '*.test.ts' -type f | sort)"
+  },
+  "dependencies": {
+    "@publisheriq/data-plane": "workspace:*",
+    "@publisheriq/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

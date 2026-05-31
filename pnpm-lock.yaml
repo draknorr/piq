@@ -179,6 +179,25 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  apps/research-mcp:
+    dependencies:
+      '@publisheriq/data-plane':
+        specifier: workspace:*
+        version: link:../../packages/data-plane
+      '@publisheriq/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.3
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/cube:
     dependencies:
       '@cubejs-backend/postgres-driver':
