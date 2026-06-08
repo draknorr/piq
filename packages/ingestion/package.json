@@ -45,6 +45,7 @@
     "interpolate-reviews": "tsx src/workers/interpolation-worker.ts",
     "ccu-sync": "tsx src/workers/ccu-worker.ts",
     "ccu-tiered-sync": "tsx src/workers/ccu-tiered-worker.ts",
+    "ccu-demo-tiered-sync": "tsx src/workers/ccu-demo-tiered-worker.ts",
     "ccu-daily-sync": "tsx src/workers/ccu-daily-worker.ts",
     "alert-detection": "tsx src/workers/alert-detection-worker.ts",
     "test-steamspy-individual": "tsx src/scripts/test-steamspy-individual.ts",
