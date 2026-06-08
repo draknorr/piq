@@ -21,6 +21,10 @@ import {
 } from '../apis/steam-ccu.js';
 import { getSuspiciousZeroAppids } from '../workers-support/ccu-guardrails.js';
 import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
+import {
+  installSyncJobSignalHandlers,
+  startSyncJobHeartbeat,
+} from '../workers-support/ccu-sync-job-guard.js';
 import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-sync' });
@@ -179,6 +183,7 @@ export async function runTigerCcuSync(
   const stats = createStats();
   const startTime = Date.now();
   const supabasePlaceholder = {} as SupabaseClient;
+  let isShuttingDown = false;
 
   log.info('Starting Tiger CCU sync', { githubRunId: env.GITHUB_RUN_ID, ccuLimit });
 
@@ -186,6 +191,18 @@ export async function runTigerCcuSync(
     jobType: 'ccu',
     githubRunId: env.GITHUB_RUN_ID,
     batchSize: ccuLimit,
+  });
+  const heartbeat = startSyncJobHeartbeat({ env, jobId, jobType: 'ccu', logger: log, tiger });
+  const cleanupSignalHandlers = installSyncJobSignalHandlers({
+    getMetadata: () => ({ ...stats }),
+    jobId,
+    jobType: 'ccu',
+    logger: log,
+    onSignal: (signal) => {
+      log.info('Received signal, initiating graceful CCU shutdown', { signal });
+      isShuttingDown = true;
+    },
+    tiger,
   });
 
   try {
@@ -213,7 +230,7 @@ export async function runTigerCcuSync(
     const result = await fetchBatch(
       appids,
       (processed, total) => log.info('CCU fetch progress', { processed, total }),
-      undefined,
+      () => isShuttingDown,
       { suspiciousZeroAppids }
     );
     const validCcuData = extractValidCcuData(result);
@@ -255,6 +272,9 @@ export async function runTigerCcuSync(
       });
     }
     throw error;
+  } finally {
+    heartbeat.stop();
+    cleanupSignalHandlers();
   }
 }
 

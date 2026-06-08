@@ -85,6 +85,7 @@ export {
   type StorefrontSyncStatus,
   type SyncJobCreateParams,
   type SyncJobStatus,
+  type SyncJobTypeCount,
   type SyncJobUpdate,
   type SyncStatusUpsert,
   type Tier3CcuCandidateResult,

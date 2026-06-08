@@ -38,6 +38,11 @@ interface SyncCandidateRow extends QueryResultRow {
   priority_score: number | string | null;
 }
 
+interface SyncJobTypeCountRow extends QueryResultRow {
+  count: number | string | null;
+  job_type: string;
+}
+
 interface StorefrontSyncStatusRow extends QueryResultRow {
   appid: number;
   last_storefront_sync: Date | string | null;
@@ -328,6 +333,11 @@ export interface SyncJobUpdate {
   items_updated?: number | null;
   metadata?: JsonRecord | null;
   status?: SyncJobStatus;
+}
+
+export interface SyncJobTypeCount {
+  count: number;
+  jobType: string;
 }
 
 export interface SyncStatusUpsert {
@@ -1123,6 +1133,22 @@ export class TigerOpsRepository {
     return result.rowCount ?? 0;
   }
 
+  async heartbeatSyncJob(id: string): Promise<number> {
+    const result = await runQuery(
+      this.pool,
+      'ops.heartbeatSyncJob',
+      `
+        UPDATE ops.sync_jobs
+        SET updated_at = now()
+        WHERE id = $1::uuid
+          AND status = 'running'
+      `,
+      [id]
+    );
+
+    return result.rowCount ?? 0;
+  }
+
   async abandonStaleSyncJobs(params: {
     errorMessage?: string;
     jobTypes: string[];
@@ -1146,6 +1172,34 @@ export class TigerOpsRepository {
           AND started_at < $2::timestamptz
       `,
       [params.jobTypes, params.startedBeforeIso, params.errorMessage ?? 'worker_abandoned']
+    );
+
+    return result.rowCount ?? 0;
+  }
+
+  async abandonStaleRunningSyncJobsByTypes(params: {
+    errorMessage?: string;
+    jobTypes: string[];
+    staleBeforeIso: string;
+  }): Promise<number> {
+    if (params.jobTypes.length === 0) {
+      return 0;
+    }
+
+    const result = await runQuery(
+      this.pool,
+      'ops.abandonStaleRunningSyncJobsByTypes',
+      `
+        UPDATE ops.sync_jobs
+        SET status = 'failed',
+            completed_at = now(),
+            error_message = $3,
+            updated_at = now()
+        WHERE job_type = ANY($1::text[])
+          AND status = 'running'
+          AND GREATEST(COALESCE(updated_at, started_at), started_at) < $2::timestamptz
+      `,
+      [params.jobTypes, params.staleBeforeIso, params.errorMessage ?? 'worker_abandoned']
     );
 
     return result.rowCount ?? 0;
@@ -1190,6 +1244,35 @@ export class TigerOpsRepository {
     );
 
     return parseNumber(rows[0]?.count);
+  }
+
+  async countFreshRunningSyncJobsByTypes(
+    jobTypes: string[],
+    freshAfterIso: string
+  ): Promise<SyncJobTypeCount[]> {
+    if (jobTypes.length === 0) {
+      return [];
+    }
+
+    const { rows } = await runQuery<SyncJobTypeCountRow>(
+      this.pool,
+      'ops.countFreshRunningSyncJobsByTypes',
+      `
+        SELECT job_type, count(*)::integer AS count
+        FROM ops.sync_jobs
+        WHERE job_type = ANY($1::text[])
+          AND status = 'running'
+          AND GREATEST(COALESCE(updated_at, started_at), started_at) >= $2::timestamptz
+        GROUP BY job_type
+        ORDER BY job_type ASC
+      `,
+      [jobTypes, freshAfterIso]
+    );
+
+    return rows.map((row) => ({
+      count: parseNumber(row.count),
+      jobType: row.job_type,
+    }));
   }
 
   async refreshDashboardStats(): Promise<void> {
