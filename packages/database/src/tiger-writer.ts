@@ -57,6 +57,11 @@ interface TierAssignmentFreshnessRow extends QueryResultRow {
   updated_at: Date | string | null;
 }
 
+interface DemoCcuTierCountsRow extends QueryResultRow {
+  tier1_count: number | string | null;
+  tier2_count: number | string | null;
+}
+
 interface SuspiciousZeroRow extends QueryResultRow {
   appids: number[] | null;
 }
@@ -453,6 +458,16 @@ export interface CcuTierAssignmentUpsert {
 export interface CcuTierAssignment {
   appid: number;
   ccuTier: number;
+}
+
+export interface DemoCcuTierCounts {
+  tier1Count: number;
+  tier2Count: number;
+}
+
+export interface DemoCcuTierCandidateResult {
+  appids: number[];
+  skippedCount: number;
 }
 
 export interface Tier3CcuCandidateResult {
@@ -1153,6 +1168,30 @@ export class TigerOpsRepository {
     return parseNumber(rows[0]?.count);
   }
 
+  async countRunningSyncJobsByTypes(
+    jobTypes: string[],
+    startedAfterIso: string
+  ): Promise<number> {
+    if (jobTypes.length === 0) {
+      return 0;
+    }
+
+    const { rows } = await runQuery<CountRow>(
+      this.pool,
+      'ops.countRunningSyncJobsByTypes',
+      `
+        SELECT count(*)::integer AS count
+        FROM ops.sync_jobs
+        WHERE job_type = ANY($1::text[])
+          AND status = 'running'
+          AND started_at >= $2::timestamptz
+      `,
+      [jobTypes, startedAfterIso]
+    );
+
+    return parseNumber(rows[0]?.count);
+  }
+
   async refreshDashboardStats(): Promise<void> {
     await runQuery(this.pool, 'ops.refreshDashboardStats', 'SELECT ops.refresh_dashboard_stats()');
   }
@@ -1663,6 +1702,205 @@ export class TigerMetricsRepository {
     }));
   }
 
+  async recalculateDemoCcuTiers(params: {
+    hotLimit: number;
+    newDemoWindowDays: number;
+  }): Promise<DemoCcuTierCounts> {
+    const { rows } = await runQuery<DemoCcuTierCountsRow>(
+      this.pool,
+      'metrics.recalculateDemoCcuTiers',
+      `
+        WITH active_demos AS (
+          SELECT
+            a.appid,
+            a.release_date,
+            a.created_at,
+            COALESCE(ldm.total_reviews, 0)::integer AS total_reviews
+          FROM legacy.apps a
+          LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = a.appid
+          WHERE a.type = 'demo'
+            AND COALESCE(a.is_released, false) = true
+            AND COALESCE(a.is_delisted, false) = false
+        ),
+        recent_snapshot_ccu AS (
+          SELECT cs.appid, max(cs.player_count)::integer AS snapshot_peak_ccu
+          FROM metrics.ccu_snapshots cs
+          JOIN active_demos ad ON ad.appid = cs.appid
+          WHERE cs.snapshot_time >= now() - INTERVAL '7 days'
+          GROUP BY cs.appid
+        ),
+        recent_daily_ccu AS (
+          SELECT dm.appid, max(dm.ccu_peak)::integer AS daily_peak_ccu
+          FROM metrics.daily_metrics dm
+          JOIN active_demos ad ON ad.appid = dm.appid
+          WHERE dm.metric_date >= CURRENT_DATE - 7
+            AND dm.ccu_source = 'steam_api'
+          GROUP BY dm.appid
+        ),
+        ranked AS (
+          SELECT
+            ad.appid,
+            GREATEST(
+              COALESCE(rsc.snapshot_peak_ccu, 0),
+              COALESCE(rdc.daily_peak_ccu, 0)
+            )::integer AS recent_peak_ccu,
+            ad.total_reviews,
+            ad.release_date,
+            (
+              ad.release_date >= CURRENT_DATE - $2::integer
+              OR ad.created_at >= now() - ($2::integer * INTERVAL '1 day')
+            ) AS is_new_demo,
+            row_number() OVER (
+              ORDER BY
+                (
+                  ad.release_date >= CURRENT_DATE - $2::integer
+                  OR ad.created_at >= now() - ($2::integer * INTERVAL '1 day')
+                ) DESC,
+                GREATEST(
+                  COALESCE(rsc.snapshot_peak_ccu, 0),
+                  COALESCE(rdc.daily_peak_ccu, 0)
+                ) DESC,
+                ad.total_reviews DESC NULLS LAST,
+                ad.release_date DESC NULLS LAST,
+                ad.appid ASC
+            ) AS rank_position
+          FROM active_demos ad
+          LEFT JOIN recent_snapshot_ccu rsc ON rsc.appid = ad.appid
+          LEFT JOIN recent_daily_ccu rdc ON rdc.appid = ad.appid
+        ),
+        assignments AS (
+          SELECT
+            appid,
+            CASE WHEN rank_position <= $1::integer THEN 1 ELSE 2 END AS demo_ccu_tier,
+            CASE
+              WHEN rank_position <= $1::integer AND is_new_demo THEN 'new_demo'
+              WHEN rank_position <= $1::integer AND recent_peak_ccu > 0 THEN 'top_demo_ccu'
+              WHEN rank_position <= $1::integer THEN 'bootstrap_demo'
+              ELSE 'demo_tail'
+            END AS tier_reason,
+            rank_position::integer,
+            recent_peak_ccu,
+            total_reviews,
+            release_date,
+            is_new_demo
+          FROM ranked
+        ),
+        upserted AS (
+          INSERT INTO ops.demo_ccu_tier_assignments AS existing (
+            appid,
+            demo_ccu_tier,
+            tier_reason,
+            rank_position,
+            recent_peak_ccu,
+            total_reviews,
+            release_date,
+            is_new_demo,
+            last_tier_change,
+            updated_at
+          )
+          SELECT
+            appid,
+            demo_ccu_tier,
+            tier_reason,
+            rank_position,
+            recent_peak_ccu,
+            total_reviews,
+            release_date,
+            is_new_demo,
+            now(),
+            now()
+          FROM assignments
+          ON CONFLICT (appid)
+          DO UPDATE SET
+            demo_ccu_tier = EXCLUDED.demo_ccu_tier,
+            tier_reason = EXCLUDED.tier_reason,
+            rank_position = EXCLUDED.rank_position,
+            recent_peak_ccu = EXCLUDED.recent_peak_ccu,
+            total_reviews = EXCLUDED.total_reviews,
+            release_date = EXCLUDED.release_date,
+            is_new_demo = EXCLUDED.is_new_demo,
+            last_tier_change = CASE
+              WHEN existing.demo_ccu_tier IS DISTINCT FROM EXCLUDED.demo_ccu_tier THEN now()
+              ELSE existing.last_tier_change
+            END,
+            updated_at = now()
+          RETURNING appid
+        ),
+        upserted_count AS (
+          SELECT count(*)::integer AS count FROM upserted
+        )
+        SELECT
+          count(*) FILTER (WHERE demo_ccu_tier = 1)::integer AS tier1_count,
+          count(*) FILTER (WHERE demo_ccu_tier = 2)::integer AS tier2_count
+        FROM assignments, upserted_count
+      `,
+      [params.hotLimit, params.newDemoWindowDays]
+    );
+
+    return {
+      tier1Count: parseNumber(rows[0]?.tier1_count),
+      tier2Count: parseNumber(rows[0]?.tier2_count),
+    };
+  }
+
+  async listDemoCcuTierAppids(params: {
+    limit: number;
+    nowIso: string;
+    tier: number;
+  }): Promise<DemoCcuTierCandidateResult> {
+    if (params.limit <= 0) {
+      return { appids: [], skippedCount: 0 };
+    }
+
+    const orderBy =
+      params.tier === 1
+        ? 'dcta.rank_position ASC NULLS LAST, dcta.appid ASC'
+        : 'dcta.last_ccu_synced ASC NULLS FIRST, dcta.rank_position ASC NULLS LAST, dcta.appid ASC';
+
+    const [{ rows: skippedRows }, { rows }] = await Promise.all([
+      runQuery<CountRow>(
+        this.pool,
+        'metrics.countSkippedDemoCcuTierAppids',
+        `
+          SELECT count(*)::integer AS count
+          FROM ops.demo_ccu_tier_assignments dcta
+          JOIN legacy.apps a ON a.appid = dcta.appid
+          WHERE dcta.demo_ccu_tier = $1::integer
+            AND a.type = 'demo'
+            AND COALESCE(a.is_released, false) = true
+            AND COALESCE(a.is_delisted, false) = false
+            AND dcta.ccu_skip_until > $2::timestamptz
+        `,
+        [params.tier, params.nowIso]
+      ),
+      runQuery<AppIdRow>(
+        this.pool,
+        'metrics.listDemoCcuTierAppids',
+        `
+          SELECT dcta.appid
+          FROM ops.demo_ccu_tier_assignments dcta
+          JOIN legacy.apps a ON a.appid = dcta.appid
+          WHERE dcta.demo_ccu_tier = $2::integer
+            AND a.type = 'demo'
+            AND COALESCE(a.is_released, false) = true
+            AND COALESCE(a.is_delisted, false) = false
+            AND (
+              dcta.ccu_skip_until IS NULL
+              OR dcta.ccu_skip_until < $3::timestamptz
+            )
+          ORDER BY ${orderBy}
+          LIMIT $1
+        `,
+        [params.limit, params.tier, params.nowIso]
+      ),
+    ]);
+
+    return {
+      appids: rows.map((row) => row.appid),
+      skippedCount: parseNumber(skippedRows[0]?.count),
+    };
+  }
+
   async isCcuTierAssignmentsStale(staleCutoffIso: string): Promise<boolean> {
     const { rows } = await runQuery<TierAssignmentFreshnessRow>(
       this.pool,
@@ -1940,6 +2178,44 @@ export class TigerMetricsRepository {
       this.pool,
       'metrics.updateCcuTierAssignments',
       `UPDATE ops.ccu_tier_assignments SET ${setClauses.join(', ')} WHERE appid = ANY($1::integer[])`,
+      [appids, ...entries.map(([, value]) => value)]
+    );
+
+    return result.rowCount ?? 0;
+  }
+
+  async updateDemoCcuTierAssignments(appids: number[], values: JsonRecord): Promise<number> {
+    if (appids.length === 0) {
+      return 0;
+    }
+
+    const allowed = new Set([
+      'ccu_fetch_status',
+      'ccu_skip_until',
+      'demo_ccu_tier',
+      'is_new_demo',
+      'last_ccu_synced',
+      'last_ccu_validation_at',
+      'last_ccu_validation_state',
+      'last_tier_change',
+      'rank_position',
+      'recent_peak_ccu',
+      'release_date',
+      'tier_reason',
+      'total_reviews',
+      'updated_at',
+    ]);
+    const entries = allowedEntries(values, allowed);
+    if (entries.length === 0) {
+      return 0;
+    }
+
+    const setClauses = entries.map(([column], index) => `${column} = $${index + 2}`);
+    setClauses.push('updated_at = now()');
+    const result = await runQuery(
+      this.pool,
+      'metrics.updateDemoCcuTierAssignments',
+      `UPDATE ops.demo_ccu_tier_assignments SET ${setClauses.join(', ')} WHERE appid = ANY($1::integer[])`,
       [appids, ...entries.map(([, value]) => value)]
     );
 

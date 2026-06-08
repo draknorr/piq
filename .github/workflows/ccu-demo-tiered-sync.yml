@@ -1,0 +1,59 @@
+name: CCU Demo Mini-Tiered Sync
+
+on:
+  schedule:
+    # Six demo CCU passes daily. Hot demos run every pass; tail demos rotate as spare capacity.
+    - cron: "20 3,7,11,15,19,23 * * *"
+  workflow_dispatch:
+    inputs:
+      hot_limit:
+        description: "Number of hot demos to sync every run"
+        required: false
+        default: "300"
+      tail_limit:
+        description: "Max rotating tail demos to sync after the hot tier"
+        required: false
+        default: "500"
+      new_demo_window_days:
+        description: "Days a new demo stays boosted into hot-tier ranking"
+        required: false
+        default: "14"
+
+concurrency:
+  group: ccu-demo-tiered-sync
+  cancel-in-progress: true
+
+env:
+  DATA_READ_TARGET: tiger
+  DATA_WRITE_TARGET: tiger
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+
+jobs:
+  sync:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_DEMO_CCU_WRITER == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run demo mini-tiered CCU sync
+        run: pnpm --filter @publisheriq/ingestion ccu-demo-tiered-sync
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          CCU_DEMO_HOT_LIMIT: ${{ github.event.inputs.hot_limit || '300' }}
+          CCU_DEMO_TAIL_LIMIT: ${{ github.event.inputs.tail_limit || '500' }}
+          CCU_DEMO_NEW_DEMO_WINDOW_DAYS: ${{ github.event.inputs.new_demo_window_days || '14' }}

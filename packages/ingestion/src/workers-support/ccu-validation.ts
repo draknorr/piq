@@ -37,7 +37,8 @@ function getGroupedAppidsByValidationState(
 async function updateTierAssignments(
   appids: number[],
   values: Record<string, string | null>,
-  tiger: TigerWriter
+  tiger: TigerWriter,
+  table: 'game' | 'demo'
 ): Promise<number> {
   let updated = 0;
 
@@ -45,12 +46,16 @@ async function updateTierAssignments(
     const batch = appids.slice(i, i + UPDATE_BATCH_SIZE);
 
     try {
-      updated += await tiger.metrics.updateCcuTierAssignments(batch, values);
+      updated +=
+        table === 'demo'
+          ? await tiger.metrics.updateDemoCcuTierAssignments(batch, values)
+          : await tiger.metrics.updateCcuTierAssignments(batch, values);
     } catch (error) {
       log.warn('Failed to update CCU validation batch', {
         appids: batch.length,
         batchStart: i,
         error: error instanceof Error ? error.message : String(error),
+        table,
         values,
       });
       continue;
@@ -60,12 +65,12 @@ async function updateTierAssignments(
   return updated;
 }
 
-export async function persistOfficialCcuValidationResults(
-  _supabase: unknown,
+async function persistOfficialValidationResults(
   results: Map<number, CCUResultWithStatus>,
   syncTimeIso: string,
   invalidSkipUntilIso: string,
-  tiger: TigerWriter = getTigerWriter()
+  tiger: TigerWriter,
+  table: 'game' | 'demo'
 ): Promise<PersistOfficialCcuValidationResult> {
   const grouped = getGroupedAppidsByValidationState(results);
 
@@ -76,32 +81,32 @@ export async function persistOfficialCcuValidationResults(
       last_ccu_synced: syncTimeIso,
       last_ccu_validation_state: 'confirmed_positive',
       last_ccu_validation_at: syncTimeIso,
-    }, tiger),
+    }, tiger, table),
     updateTierAssignments(grouped.confirmed_zero, {
       ccu_fetch_status: 'valid',
       ccu_skip_until: null,
       last_ccu_synced: syncTimeIso,
       last_ccu_validation_state: 'confirmed_zero',
       last_ccu_validation_at: syncTimeIso,
-    }, tiger),
+    }, tiger, table),
     updateTierAssignments(grouped.suspect_zero, {
       ccu_fetch_status: 'valid',
       ccu_skip_until: null,
       last_ccu_synced: syncTimeIso,
       last_ccu_validation_state: 'suspect_zero',
       last_ccu_validation_at: syncTimeIso,
-    }, tiger),
+    }, tiger, table),
     updateTierAssignments(grouped.invalid, {
       ccu_fetch_status: 'invalid',
       ccu_skip_until: invalidSkipUntilIso,
       last_ccu_synced: syncTimeIso,
       last_ccu_validation_state: 'invalid',
       last_ccu_validation_at: syncTimeIso,
-    }, tiger),
+    }, tiger, table),
     updateTierAssignments(grouped.error, {
       last_ccu_validation_state: 'error',
       last_ccu_validation_at: syncTimeIso,
-    }, tiger),
+    }, tiger, table),
   ]);
 
   return {
@@ -111,4 +116,36 @@ export async function persistOfficialCcuValidationResults(
     invalid,
     error,
   };
+}
+
+export async function persistOfficialCcuValidationResults(
+  _supabase: unknown,
+  results: Map<number, CCUResultWithStatus>,
+  syncTimeIso: string,
+  invalidSkipUntilIso: string,
+  tiger: TigerWriter = getTigerWriter()
+): Promise<PersistOfficialCcuValidationResult> {
+  return persistOfficialValidationResults(
+    results,
+    syncTimeIso,
+    invalidSkipUntilIso,
+    tiger,
+    'game'
+  );
+}
+
+export async function persistOfficialDemoCcuValidationResults(
+  _supabase: unknown,
+  results: Map<number, CCUResultWithStatus>,
+  syncTimeIso: string,
+  invalidSkipUntilIso: string,
+  tiger: TigerWriter = getTigerWriter()
+): Promise<PersistOfficialCcuValidationResult> {
+  return persistOfficialValidationResults(
+    results,
+    syncTimeIso,
+    invalidSkipUntilIso,
+    tiger,
+    'demo'
+  );
 }

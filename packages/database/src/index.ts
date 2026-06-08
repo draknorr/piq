@@ -62,6 +62,8 @@ export {
   type CcuTierAssignmentUpsert,
   type DailyCcuPeakUpsert,
   type DailyMetricUpsert,
+  type DemoCcuTierCandidateResult,
+  type DemoCcuTierCounts,
   type DeveloperEmbeddingCandidate,
   type EmbeddingCandidate,
   type GameEmbeddingCandidate,

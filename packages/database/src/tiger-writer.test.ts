@@ -108,6 +108,24 @@ test('abandonStaleSyncJobs marks old running jobs failed by job type', async () 
   ]);
 });
 
+test('countRunningSyncJobsByTypes counts active jobs across guarded CCU lanes', async () => {
+  const pool = new CapturingPool([result([{ count: '2' }])]);
+  const writer = createTigerWriterForPool(pool);
+
+  const count = await writer.ops.countRunningSyncJobsByTypes(
+    ['ccu', 'ccu-tiered'],
+    '2026-06-07T00:00:00.000Z'
+  );
+
+  assert.equal(count, 2);
+  assert.match(pool.calls[0]?.sql ?? '', /job_type = ANY\(\$1::text\[\]\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /status = 'running'/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    ['ccu', 'ccu-tiered'],
+    '2026-06-07T00:00:00.000Z',
+  ]);
+});
+
 test('syncStatus.updateFields only writes allowlisted defined columns', async () => {
   const pool = new CapturingPool([result([], 1)]);
   const writer = createTigerWriterForPool(pool);
@@ -342,6 +360,83 @@ test('metrics.insertCcuSnapshots uses Tiger table row typing for JSON payloads',
     pool.calls[0]?.sql ?? '',
     /jsonb_populate_recordset\(NULL::metrics\.ccu_snapshots/
   );
+});
+
+test('metrics.recalculateDemoCcuTiers ranks active demos into a demo-only table', async () => {
+  const pool = new CapturingPool([result([{ tier1_count: '300', tier2_count: '10700' }])]);
+  const writer = createTigerWriterForPool(pool);
+
+  const counts = await writer.metrics.recalculateDemoCcuTiers({
+    hotLimit: 300,
+    newDemoWindowDays: 14,
+  });
+
+  assert.deepEqual(counts, { tier1Count: 300, tier2Count: 10700 });
+  assert.match(pool.calls[0]?.sql ?? '', /INSERT INTO ops\.demo_ccu_tier_assignments/);
+  assert.match(pool.calls[0]?.sql ?? '', /a\.type = 'demo'/);
+  assert.match(pool.calls[0]?.sql ?? '', /is_new_demo/);
+  assert.match(pool.calls[0]?.sql ?? '', /metrics\.ccu_snapshots/);
+  assert.match(pool.calls[0]?.sql ?? '', /metrics\.daily_metrics/);
+  assert.deepEqual(pool.calls[0]?.values, [300, 14]);
+});
+
+test('metrics.listDemoCcuTierAppids rotates tail demos by oldest sync state', async () => {
+  const pool = new CapturingPool([
+    result([{ count: '3' }]),
+    result([{ appid: 10 }, { appid: 20 }]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const candidates = await writer.metrics.listDemoCcuTierAppids({
+    limit: 2,
+    nowIso: '2026-06-07T00:00:00.000Z',
+    tier: 2,
+  });
+
+  assert.deepEqual(candidates, { appids: [10, 20], skippedCount: 3 });
+  assert.match(pool.calls[0]?.sql ?? '', /ops\.demo_ccu_tier_assignments/);
+  assert.match(pool.calls[0]?.sql ?? '', /a\.type = 'demo'/);
+  assert.match(pool.calls[1]?.sql ?? '', /ORDER BY dcta\.last_ccu_synced ASC NULLS FIRST/);
+  assert.deepEqual(pool.calls[0]?.values, [2, '2026-06-07T00:00:00.000Z']);
+  assert.deepEqual(pool.calls[1]?.values, [2, 2, '2026-06-07T00:00:00.000Z']);
+});
+
+test('metrics.listDemoCcuTierAppids keeps hot demos in rank order', async () => {
+  const pool = new CapturingPool([
+    result([{ count: 0 }]),
+    result([{ appid: 30 }, { appid: 40 }]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const candidates = await writer.metrics.listDemoCcuTierAppids({
+    limit: 300,
+    nowIso: '2026-06-07T00:00:00.000Z',
+    tier: 1,
+  });
+
+  assert.deepEqual(candidates.appids, [30, 40]);
+  assert.match(pool.calls[1]?.sql ?? '', /ORDER BY dcta\.rank_position ASC NULLS LAST/);
+});
+
+test('metrics.updateDemoCcuTierAssignments only updates demo poll-state table', async () => {
+  const pool = new CapturingPool([result([], 2)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.metrics.updateDemoCcuTierAssignments([10, 20], {
+    ccu_fetch_status: 'valid',
+    bad_column: 'ignored',
+    last_ccu_validation_state: 'confirmed_positive',
+  });
+
+  assert.equal(updated, 2);
+  assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.demo_ccu_tier_assignments/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /ops\.ccu_tier_assignments/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /bad_column/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    [10, 20],
+    'valid',
+    'confirmed_positive',
+  ]);
 });
 
 test('issueReports.createIssueReport inserts into chat.issue_reports with JSON row typing', async () => {
