@@ -24,6 +24,11 @@ import {
 } from '../apis/steam-ccu.js';
 import { getSuspiciousZeroAppids } from '../workers-support/ccu-guardrails.js';
 import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
+import {
+  formatMainCcuCounts,
+  inspectMainCcuActivity,
+  MAIN_CCU_JOB_TYPES,
+} from '../workers-support/ccu-sync-job-guard.js';
 import { persistOfficialDemoCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-demo-tiered-sync' });
@@ -32,15 +37,6 @@ const DEFAULT_TAIL_LIMIT = 500;
 const DEFAULT_NEW_DEMO_WINDOW_DAYS = 14;
 const CHECK_CHUNK_SIZE = 25;
 const INVALID_SKIP_DAYS = 30;
-
-const MAIN_CCU_JOB_GUARDS = [
-  { jobTypes: ['ccu-tiered'], lookbackMinutes: 75 },
-  { jobTypes: ['ccu'], lookbackMinutes: 180 },
-  {
-    jobTypes: ['ccu-daily', 'ccu-daily-p0', 'ccu-daily-p1', 'ccu-daily-p2'],
-    lookbackMinutes: 390,
-  },
-] as const;
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 type FetchSteamCcuBatch = typeof fetchSteamCCUBatchWithStatus;
@@ -185,25 +181,29 @@ function toSnapshotRows(
   }));
 }
 
-function mainCcuStartedAfterIso(lookbackMinutes: number, now: Date): string {
-  return new Date(now.getTime() - lookbackMinutes * 60 * 1000).toISOString();
-}
+async function isMainCcuActive(
+  tiger: TigerWriter,
+  env: NodeJS.ProcessEnv,
+  context: string
+): Promise<boolean> {
+  const activity = await inspectMainCcuActivity({
+    env,
+    staleErrorMessage: 'abandoned_as_stale_before_demo_ccu_guard',
+    tiger,
+  });
 
-async function countActiveMainCcuJobs(tiger: TigerWriter, now: Date = new Date()): Promise<number> {
-  const counts = await Promise.all(
-    MAIN_CCU_JOB_GUARDS.map((guard) =>
-      tiger.ops.countRunningSyncJobsByTypes(
-        [...guard.jobTypes],
-        mainCcuStartedAfterIso(guard.lookbackMinutes, now)
-      )
-    )
-  );
+  if (activity.active) {
+    log.info('Main CCU job detected by demo guard', {
+      blockingCounts: formatMainCcuCounts(activity.countsByType),
+      context,
+      countsByType: activity.countsByType,
+      freshAfterIso: activity.freshAfterIso,
+      staleBeforeIso: activity.staleBeforeIso,
+      total: activity.total,
+    });
+  }
 
-  return counts.reduce((total, count) => total + count, 0);
-}
-
-async function isMainCcuActive(tiger: TigerWriter): Promise<boolean> {
-  return (await countActiveMainCcuJobs(tiger)) > 0;
+  return activity.active;
 }
 
 async function runDemoTierFetch(params: {
@@ -311,7 +311,7 @@ async function persistDemoResults(params: {
 function buildJobMetadata(stats: DemoCcuTieredSyncStats, config: RunConfig): Record<string, unknown> {
   return {
     hotLimit: config.hotLimit,
-    mainCcuGuardJobTypes: MAIN_CCU_JOB_GUARDS.map((guard) => guard.jobTypes),
+    mainCcuGuardJobTypes: [...MAIN_CCU_JOB_TYPES],
     newDemoWindowDays: config.newDemoWindowDays,
     tailLimit: config.tailLimit,
     ...stats,
@@ -345,7 +345,7 @@ export async function runTigerCcuDemoTieredSync(
   });
 
   try {
-    if (await isMainCcuActive(tiger)) {
+    if (await isMainCcuActive(tiger, env, 'before_demo_ranking')) {
       stats.skippedForMainCcu = true;
       log.info('Skipping demo CCU sync because a main CCU job is active');
 
@@ -373,7 +373,7 @@ export async function runTigerCcuDemoTieredSync(
       tier2Count: tierCounts.tier2Count,
     });
 
-    if (await isMainCcuActive(tiger)) {
+    if (await isMainCcuActive(tiger, env, 'after_demo_ranking')) {
       stats.stoppedForMainCcu = true;
       log.info('Main CCU job detected after demo tier recalculation; stopping before polling');
     }
@@ -396,7 +396,7 @@ export async function runTigerCcuDemoTieredSync(
         appids: tier1Appids,
         env,
         fetchBatch,
-        shouldYieldToMainCcu: () => isMainCcuActive(tiger),
+        shouldYieldToMainCcu: () => isMainCcuActive(tiger, env, 'tier1_chunk_guard'),
         supabaseForGuardrails: supabasePlaceholder,
         tier: 1,
         tiger,
@@ -406,7 +406,7 @@ export async function runTigerCcuDemoTieredSync(
     }
 
     if (!stats.stoppedForMainCcu && config.tailLimit > 0) {
-      if (await isMainCcuActive(tiger)) {
+      if (await isMainCcuActive(tiger, env, 'before_tail_polling')) {
         stats.stoppedForMainCcu = true;
         log.info('Main CCU job detected before demo tail polling; leaving tail capacity unused');
       } else {
@@ -422,7 +422,7 @@ export async function runTigerCcuDemoTieredSync(
           appids: tier2Appids,
           env,
           fetchBatch,
-          shouldYieldToMainCcu: () => isMainCcuActive(tiger),
+          shouldYieldToMainCcu: () => isMainCcuActive(tiger, env, 'tier2_chunk_guard'),
           supabaseForGuardrails: supabasePlaceholder,
           tier: 2,
           tiger,

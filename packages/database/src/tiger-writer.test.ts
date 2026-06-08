@@ -86,6 +86,20 @@ test('updateSyncJob can persist metadata on ops.sync_jobs', async () => {
   ]);
 });
 
+test('heartbeatSyncJob updates only running ops.sync_jobs rows', async () => {
+  const pool = new CapturingPool([result([], 1)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.ops.heartbeatSyncJob('00000000-0000-0000-0000-000000000001');
+
+  assert.equal(updated, 1);
+  assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.sync_jobs/);
+  assert.match(pool.calls[0]?.sql ?? '', /SET updated_at = now\(\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /WHERE id = \$1::uuid/);
+  assert.match(pool.calls[0]?.sql ?? '', /status = 'running'/);
+  assert.deepEqual(pool.calls[0]?.values, ['00000000-0000-0000-0000-000000000001']);
+});
+
 test('abandonStaleSyncJobs marks old running jobs failed by job type', async () => {
   const pool = new CapturingPool([result([], 2)]);
   const writer = createTigerWriterForPool(pool);
@@ -108,6 +122,31 @@ test('abandonStaleSyncJobs marks old running jobs failed by job type', async () 
   ]);
 });
 
+test('abandonStaleRunningSyncJobsByTypes uses heartbeat freshness cutoff', async () => {
+  const pool = new CapturingPool([result([], 3)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.ops.abandonStaleRunningSyncJobsByTypes({
+    errorMessage: 'abandoned_as_stale_before_ccu_guard',
+    jobTypes: ['ccu-daily-p0', 'ccu-tiered'],
+    staleBeforeIso: '2026-06-08T07:00:00.000Z',
+  });
+
+  assert.equal(updated, 3);
+  assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.sync_jobs/);
+  assert.match(pool.calls[0]?.sql ?? '', /job_type = ANY\(\$1::text\[\]\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /status = 'running'/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /GREATEST\(COALESCE\(updated_at, started_at\), started_at\) < \$2::timestamptz/
+  );
+  assert.deepEqual(pool.calls[0]?.values, [
+    ['ccu-daily-p0', 'ccu-tiered'],
+    '2026-06-08T07:00:00.000Z',
+    'abandoned_as_stale_before_ccu_guard',
+  ]);
+});
+
 test('countRunningSyncJobsByTypes counts active jobs across guarded CCU lanes', async () => {
   const pool = new CapturingPool([result([{ count: '2' }])]);
   const writer = createTigerWriterForPool(pool);
@@ -123,6 +162,38 @@ test('countRunningSyncJobsByTypes counts active jobs across guarded CCU lanes', 
   assert.deepEqual(pool.calls[0]?.values, [
     ['ccu', 'ccu-tiered'],
     '2026-06-07T00:00:00.000Z',
+  ]);
+});
+
+test('countFreshRunningSyncJobsByTypes returns active counts grouped by job type', async () => {
+  const pool = new CapturingPool([
+    result([
+      { job_type: 'ccu-daily-p0', count: '1' },
+      { job_type: 'ccu-tiered', count: 2 },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const counts = await writer.ops.countFreshRunningSyncJobsByTypes(
+    ['ccu', 'ccu-daily-p0', 'ccu-tiered'],
+    '2026-06-08T07:30:00.000Z'
+  );
+
+  assert.deepEqual(counts, [
+    { jobType: 'ccu-daily-p0', count: 1 },
+    { jobType: 'ccu-tiered', count: 2 },
+  ]);
+  assert.match(pool.calls[0]?.sql ?? '', /SELECT job_type, count\(\*\)::integer AS count/);
+  assert.match(pool.calls[0]?.sql ?? '', /job_type = ANY\(\$1::text\[\]\)/);
+  assert.match(pool.calls[0]?.sql ?? '', /status = 'running'/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /GREATEST\(COALESCE\(updated_at, started_at\), started_at\) >= \$2::timestamptz/
+  );
+  assert.match(pool.calls[0]?.sql ?? '', /GROUP BY job_type/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    ['ccu', 'ccu-daily-p0', 'ccu-tiered'],
+    '2026-06-08T07:30:00.000Z',
   ]);
 });
 

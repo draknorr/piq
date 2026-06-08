@@ -25,6 +25,10 @@ import {
   isTierAssignmentsStale,
 } from '../workers-support/ccu-guardrails.js';
 import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
+import {
+  installSyncJobSignalHandlers,
+  startSyncJobHeartbeat,
+} from '../workers-support/ccu-sync-job-guard.js';
 import { persistOfficialCcuValidationResults } from '../workers-support/ccu-validation.js';
 
 const log = logger.child({ worker: 'ccu-daily-sync' });
@@ -311,18 +315,20 @@ export async function runTigerCcuDailySync(
   const startTime = Date.now();
   const supabasePlaceholder = {} as SupabaseClient;
   let isShuttingDown = false;
+  const jobType = config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily';
 
-  const timeoutId = setTimeout(() => {
-    log.info('Approaching timeout limit, initiating graceful shutdown', {
+  const markShuttingDown = (reason: string, signal?: NodeJS.Signals): void => {
+    log.info('Initiating graceful daily CCU shutdown', {
       elapsedMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(1),
+      reason,
+      ...(signal && { signal }),
     });
     isShuttingDown = true;
-  }, GRACEFUL_TIMEOUT_MS);
+  };
 
-  process.on('SIGTERM', () => {
-    log.info('Received SIGTERM, initiating graceful shutdown');
-    isShuttingDown = true;
-  });
+  const timeoutId = setTimeout(() => {
+    markShuttingDown('timeout');
+  }, GRACEFUL_TIMEOUT_MS);
 
   const tierAssignmentsStale = await isTierAssignmentsStale(
     supabasePlaceholder,
@@ -338,9 +344,18 @@ export async function runTigerCcuDailySync(
   });
 
   const jobId = await tiger.ops.createSyncJob({
-    jobType: config.isPartitioned ? `ccu-daily-p${config.partitionId}` : 'ccu-daily',
+    jobType,
     githubRunId: config.githubRunId,
     batchSize: config.batchLimit,
+  });
+  const heartbeat = startSyncJobHeartbeat({ env, jobId, jobType, logger: log, tiger });
+  const cleanupSignalHandlers = installSyncJobSignalHandlers({
+    getMetadata: () => ({ gracefulShutdown: isShuttingDown, ...stats }),
+    jobId,
+    jobType,
+    logger: log,
+    onSignal: (signal) => markShuttingDown('signal', signal),
+    tiger,
   });
 
   try {
@@ -363,7 +378,6 @@ export async function runTigerCcuDailySync(
     stats.appsSkipped = candidateResult.skippedCount;
 
     if (candidateResult.appids.length === 0) {
-      clearTimeout(timeoutId);
       log.info('No Tier 3 games found for Tiger daily CCU sync');
       if (jobId) {
         await tiger.ops.updateSyncJob(jobId, {
@@ -405,7 +419,6 @@ export async function runTigerCcuDailySync(
 
     stats.appsSucceeded = validCcuData.size;
     stats.appsFailed = result.errorCount;
-    clearTimeout(timeoutId);
 
     if (jobId) {
       await tiger.ops.updateSyncJob(jobId, {
@@ -429,7 +442,6 @@ export async function runTigerCcuDailySync(
     });
     return stats;
   } catch (error) {
-    clearTimeout(timeoutId);
     log.error('Tiger daily CCU sync failed', { error });
     if (jobId) {
       await tiger.ops.updateSyncJob(jobId, {
@@ -442,6 +454,10 @@ export async function runTigerCcuDailySync(
       });
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    heartbeat.stop();
+    cleanupSignalHandlers();
   }
 }
 

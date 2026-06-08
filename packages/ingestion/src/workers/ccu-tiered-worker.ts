@@ -26,6 +26,10 @@ import {
   isTierAssignmentsStale,
 } from "../workers-support/ccu-guardrails.js";
 import { refreshCcuQualityCacheSafely } from "../workers-support/ccu-quality-cache.js";
+import {
+  installSyncJobSignalHandlers,
+  startSyncJobHeartbeat,
+} from "../workers-support/ccu-sync-job-guard.js";
 import { persistOfficialCcuValidationResults } from "../workers-support/ccu-validation.js";
 
 const log = logger.child({ worker: "ccu-tiered-sync" });
@@ -49,6 +53,7 @@ export interface TieredCcuSyncDependencies {
   fetchSteamCCUBatchWithStatus?: FetchSteamCcuBatch;
   getSupabase?: () => SupabaseClient;
   getTiger?: () => TigerWriter;
+  now?: () => Date;
   refreshCcuQualityCache?: typeof refreshCcuQualityCacheSafely;
 }
 
@@ -279,6 +284,7 @@ async function runTieredFetch(params: {
   env?: NodeJS.ProcessEnv;
   fetchBatch: FetchSteamCcuBatch;
   gamesToPoll: number[];
+  shouldStop?: () => boolean;
   supabaseForGuardrails: SupabaseClient;
   tiger?: TigerWriter;
 }): Promise<CCUBatchResultWithStatus> {
@@ -294,7 +300,7 @@ async function runTieredFetch(params: {
         log.info("CCU fetch progress", { processed, total });
       }
     },
-    undefined,
+    params.shouldStop,
     { suspiciousZeroAppids },
   );
 }
@@ -308,7 +314,7 @@ export async function runTigerCcuTieredSync(
     dependencies.fetchSteamCCUBatchWithStatus ?? fetchSteamCCUBatchWithStatus;
   const refreshCcuQualityCache =
     dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
-  const currentHour = new Date().getUTCHours();
+  const currentHour = (dependencies.now?.() ?? new Date()).getUTCHours();
   const isEvenHour = currentHour % 2 === 0;
   const recalcTimeoutMs = parsePositiveInteger(
     env.CCU_TIER_RECALC_TIMEOUT_MS,
@@ -324,6 +330,7 @@ export async function runTigerCcuTieredSync(
   const shouldRecalculateTiers = currentHour === 0 || tierAssignmentsStale;
   const stats = createStats();
   const startTime = Date.now();
+  let isShuttingDown = false;
 
   log.info("Starting Tiger tiered CCU sync", {
     githubRunId: env.GITHUB_RUN_ID,
@@ -336,6 +343,24 @@ export async function runTigerCcuTieredSync(
   const jobId = await tiger.ops.createSyncJob({
     jobType: "ccu-tiered",
     githubRunId: env.GITHUB_RUN_ID,
+  });
+  const heartbeat = startSyncJobHeartbeat({
+    env,
+    jobId,
+    jobType: "ccu-tiered",
+    logger: log,
+    tiger,
+  });
+  const cleanupSignalHandlers = installSyncJobSignalHandlers({
+    getMetadata: () => ({ ...stats }),
+    jobId,
+    jobType: "ccu-tiered",
+    logger: log,
+    onSignal: (signal) => {
+      log.info("Received signal, initiating graceful tiered CCU shutdown", { signal });
+      isShuttingDown = true;
+    },
+    tiger,
   });
 
   try {
@@ -376,6 +401,7 @@ export async function runTigerCcuTieredSync(
       env,
       fetchBatch,
       gamesToPoll,
+      shouldStop: () => isShuttingDown,
       supabaseForGuardrails: supabasePlaceholder,
       tiger,
     });
@@ -430,6 +456,9 @@ export async function runTigerCcuTieredSync(
       });
     }
     throw error;
+  } finally {
+    heartbeat.stop();
+    cleanupSignalHandlers();
   }
 }
 
@@ -442,7 +471,7 @@ export async function runLegacySupabaseCcuTieredSync(
     dependencies.fetchSteamCCUBatchWithStatus ?? fetchSteamCCUBatchWithStatus;
   const refreshCcuQualityCache =
     dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
-  const currentHour = new Date().getUTCHours();
+  const currentHour = (dependencies.now?.() ?? new Date()).getUTCHours();
   const isEvenHour = currentHour % 2 === 0;
   const recalcTimeoutMs = parsePositiveInteger(
     env.CCU_TIER_RECALC_TIMEOUT_MS,

@@ -12,12 +12,20 @@ test('runTigerCcuSync writes official CCU peaks and validation state to Tiger', 
   const dailyRows: DailyCcuPeakUpsert[] = [];
   const validationUpdates: Array<{ appids: number[]; values: Record<string, string | null> }> = [];
   const jobUpdates: SyncJobUpdate[] = [];
+  const sigtermBefore = process.listenerCount('SIGTERM');
+  const sigintBefore = process.listenerCount('SIGINT');
   let refreshTrigger: string | null = null;
   let suspiciousZeroOption: ReadonlySet<number> | undefined;
+  let fetchShouldStopType: string | null = null;
+  let heartbeatCalls = 0;
 
   const tiger = {
     ops: {
       createSyncJob: async () => 'job-1',
+      heartbeatSyncJob: async () => {
+        heartbeatCalls++;
+        return 1;
+      },
       updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
         jobUpdates.push(values);
         return 1;
@@ -58,7 +66,8 @@ test('runTigerCcuSync writes official CCU peaks and validation state to Tiger', 
       GITHUB_RUN_ID: 'run-123',
     } as NodeJS.ProcessEnv,
     getTiger: () => tiger,
-    fetchSteamCCUBatchWithStatus: async (_appids, _onProgress, _shouldStop, options) => {
+    fetchSteamCCUBatchWithStatus: async (_appids, _onProgress, shouldStop, options) => {
+      fetchShouldStopType = typeof shouldStop;
       suspiciousZeroOption = options?.suspiciousZeroAppids;
       return fetchResult;
     },
@@ -73,6 +82,7 @@ test('runTigerCcuSync writes official CCU peaks and validation state to Tiger', 
     appsFailed: 1,
   });
   assert.equal(suspiciousZeroOption?.has(20), true);
+  assert.equal(fetchShouldStopType, 'function');
   assert.deepEqual(
     dailyRows.map((row) => [row.appid, row.ccu_peak, row.ccu_source]),
     [
@@ -92,4 +102,7 @@ test('runTigerCcuSync writes official CCU peaks and validation state to Tiger', 
   );
   assert.equal(refreshTrigger, 'ccu');
   assert.equal(jobUpdates.at(-1)?.status, 'completed');
+  assert.equal(heartbeatCalls, 0);
+  assert.equal(process.listenerCount('SIGTERM'), sigtermBefore);
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore);
 });

@@ -52,7 +52,8 @@ test('runTigerCcuDemoTieredSync writes official demo CCU without touching game t
 
   const tiger = {
     ops: {
-      countRunningSyncJobsByTypes: async () => 0,
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [],
       createSyncJob: async () => 'job-1',
       updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
         jobUpdates.push(values);
@@ -159,7 +160,8 @@ test('runTigerCcuDemoTieredSync skips before ranking when a main CCU job is acti
 
   const tiger = {
     ops: {
-      countRunningSyncJobsByTypes: async () => 1,
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [{ jobType: 'ccu-daily-p0', count: 1 }],
       createSyncJob: async () => 'job-1',
       updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
         jobUpdates.push(values);
@@ -196,19 +198,66 @@ test('runTigerCcuDemoTieredSync skips before ranking when a main CCU job is acti
   assert.equal(jobUpdates.at(-1)?.items_skipped, 3);
 });
 
+test('runTigerCcuDemoTieredSync abandons stale main CCU rows before active checks', async () => {
+  const guardOrder: string[] = [];
+  let recalculateCalled = false;
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => {
+        guardOrder.push('abandon');
+        return 2;
+      },
+      countFreshRunningSyncJobsByTypes: async () => {
+        guardOrder.push('count');
+        return [];
+      },
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async () => 1,
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listDemoCcuTierAppids: async () => ({ appids: [], skippedCount: 0 }),
+      recalculateDemoCcuTiers: async () => {
+        recalculateCalled = true;
+        return { tier1Count: 0, tier2Count: 0 };
+      },
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+    env: {
+      CCU_DEMO_HOT_LIMIT: '2',
+      CCU_DEMO_TAIL_LIMIT: '0',
+      DATA_WRITE_TARGET: 'tiger',
+    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async () => fetchResultFor([]),
+    getTiger: () => tiger,
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(stats.skippedForMainCcu, false);
+  assert.equal(stats.stoppedForMainCcu, false);
+  assert.equal(stats.tierRecalculated, true);
+  assert.equal(recalculateCalled, true);
+  assert.deepEqual(guardOrder.slice(0, 2), ['abandon', 'count']);
+});
+
 test('runTigerCcuDemoTieredSync stops before tail work when a main CCU job appears', async () => {
   const guardResponses = [
-    0, 0, 0, // pre-run guard
-    0, 0, 0, // after recalc guard
-    0, 0, 0, // tier 1 chunk guard
-    1, 0, 0, // before tail guard
+    [], // pre-run guard
+    [], // after recalc guard
+    [], // tier 1 chunk guard
+    [{ jobType: 'ccu-tiered', count: 1 }], // before tail guard
   ];
   let tier2Listed = false;
   const fetchedChunks: number[][] = [];
 
   const tiger = {
     ops: {
-      countRunningSyncJobsByTypes: async () => guardResponses.shift() ?? 0,
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => guardResponses.shift() ?? [],
       createSyncJob: async () => 'job-1',
       updateSyncJob: async () => 1,
     },
@@ -251,17 +300,18 @@ test('runTigerCcuDemoTieredSync stops before tail work when a main CCU job appea
 
 test('runTigerCcuDemoTieredSync re-checks main CCU guards every 25 demo appids', async () => {
   const guardResponses = [
-    0, 0, 0, // pre-run guard
-    0, 0, 0, // after recalc guard
-    0, 0, 0, // first tier 1 chunk guard
-    1, 0, 0, // second tier 1 chunk guard
+    [], // pre-run guard
+    [], // after recalc guard
+    [], // first tier 1 chunk guard
+    [{ jobType: 'ccu-daily-p2', count: 1 }], // second tier 1 chunk guard
   ];
   const tier1Appids = Array.from({ length: 30 }, (_, index) => index + 100);
   const fetchedChunks: number[][] = [];
 
   const tiger = {
     ops: {
-      countRunningSyncJobsByTypes: async () => guardResponses.shift() ?? 0,
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => guardResponses.shift() ?? [],
       createSyncJob: async () => 'job-1',
       updateSyncJob: async () => 1,
     },
