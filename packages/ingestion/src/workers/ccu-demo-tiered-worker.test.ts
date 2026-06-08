@@ -38,6 +38,33 @@ function fetchResultFor(appids: number[]): CCUBatchResultWithStatus {
   return { errorCount, invalidCount, results, validCount };
 }
 
+function fetchResultWithOverrides(
+  appids: number[],
+  overrides: Map<number, CCUResultWithStatus>
+): CCUBatchResultWithStatus {
+  const results = new Map<number, CCUResultWithStatus>();
+  let validCount = 0;
+  let invalidCount = 0;
+  let errorCount = 0;
+
+  for (const appid of appids) {
+    const result =
+      overrides.get(appid) ??
+      ({ status: 'valid', validationState: 'confirmed_positive', playerCount: appid } as const);
+    results.set(appid, result);
+
+    if (result.status === 'valid') {
+      validCount++;
+    } else if (result.status === 'invalid') {
+      invalidCount++;
+    } else {
+      errorCount++;
+    }
+  }
+
+  return { errorCount, invalidCount, results, validCount };
+}
+
 test('runTigerCcuDemoTieredSync writes official demo CCU without touching game tier queues', async () => {
   const dailyRows: DailyCcuPeakUpsert[] = [];
   const snapshots: CcuSnapshotInsert[] = [];
@@ -112,6 +139,8 @@ test('runTigerCcuDemoTieredSync writes official demo CCU without touching game t
   assert.deepEqual(stats, {
     skippedForMainCcu: false,
     stoppedForMainCcu: false,
+    stoppedForSteamBackoff: false,
+    steamBackoffUntilIso: null,
     tier1Processed: 2,
     tier1Skipped: 1,
     tier1Succeeded: 2,
@@ -343,4 +372,170 @@ test('runTigerCcuDemoTieredSync re-checks main CCU guards every 25 demo appids',
   assert.equal(stats.tier1Processed, 25);
   assert.equal(fetchedChunks.length, 1);
   assert.equal(fetchedChunks[0]?.length, 25);
+});
+
+test('runTigerCcuDemoTieredSync hot_independent polls hot demos while main CCU is active', async () => {
+  let recalculateCalled = false;
+  let tier2Listed = false;
+  const fetchedChunks: number[][] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [{ jobType: 'ccu-daily-p0', count: 1 }],
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async () => 1,
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listDemoCcuTierAppids: async ({ tier }: { tier: number }) => {
+        if (tier === 1) {
+          return { appids: [10, 20], skippedCount: 0 };
+        }
+        tier2Listed = true;
+        return { appids: [30], skippedCount: 0 };
+      },
+      listSuspiciousZeroAppids: async () => new Set<number>(),
+      recalculateDemoCcuTiers: async () => {
+        recalculateCalled = true;
+        return { tier1Count: 2, tier2Count: 1 };
+      },
+      updateDemoCcuTierAssignments: async (appids: number[]) => appids.length,
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+    env: {
+      CCU_DEMO_HOT_LIMIT: '2',
+      CCU_DEMO_MAIN_CCU_GUARD_MODE: 'hot_independent',
+      CCU_DEMO_TAIL_LIMIT: '1',
+      DATA_WRITE_TARGET: 'tiger',
+    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async (appids) => {
+      fetchedChunks.push(appids);
+      return fetchResultFor(appids);
+    },
+    getTiger: () => tiger,
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(recalculateCalled, true);
+  assert.equal(stats.skippedForMainCcu, false);
+  assert.equal(stats.stoppedForMainCcu, true);
+  assert.equal(stats.tier1Processed, 2);
+  assert.equal(stats.tier2Processed, 0);
+  assert.equal(tier2Listed, false);
+  assert.deepEqual(fetchedChunks, [[10, 20]]);
+});
+
+test('runTigerCcuDemoTieredSync does not trigger Steam backoff for invalid demo appids', async () => {
+  const tier1Appids = Array.from({ length: 30 }, (_, index) => index + 100);
+  const invalidOverrides = new Map<number, CCUResultWithStatus>(
+    tier1Appids.map((appid) => [appid, { status: 'invalid', validationState: 'invalid' }])
+  );
+  const fetchedChunks: number[][] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [],
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async () => 1,
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listDemoCcuTierAppids: async () => ({ appids: tier1Appids, skippedCount: 0 }),
+      listSuspiciousZeroAppids: async () => new Set<number>(),
+      recalculateDemoCcuTiers: async () => ({ tier1Count: 30, tier2Count: 0 }),
+      updateDemoCcuTierAssignments: async (appids: number[]) => appids.length,
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+    env: {
+      CCU_DEMO_HOT_LIMIT: '30',
+      CCU_DEMO_STEAM_ERROR_RATE_THRESHOLD: '0.2',
+      CCU_DEMO_TAIL_LIMIT: '0',
+      DATA_WRITE_TARGET: 'tiger',
+    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async (appids) => {
+      fetchedChunks.push(appids);
+      return fetchResultWithOverrides(appids, invalidOverrides);
+    },
+    getTiger: () => tiger,
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(stats.stoppedForSteamBackoff, false);
+  assert.equal(stats.steamBackoffUntilIso, null);
+  assert.equal(stats.tier1Processed, 30);
+  assert.equal(stats.totalInvalid, 30);
+  assert.deepEqual(
+    fetchedChunks.map((chunk) => chunk.length),
+    [25, 5]
+  );
+});
+
+test('runTigerCcuDemoTieredSync triggers Steam backoff from chunk error rate', async () => {
+  const tier1Appids = Array.from({ length: 30 }, (_, index) => index + 100);
+  const errorOverrides = new Map<number, CCUResultWithStatus>(
+    tier1Appids
+      .slice(0, 5)
+      .map((appid) => [appid, { status: 'error', validationState: 'error' }])
+  );
+  const fetchedChunks: number[][] = [];
+  const jobUpdates: SyncJobUpdate[] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [],
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
+        jobUpdates.push(values);
+        return 1;
+      },
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listDemoCcuTierAppids: async () => ({ appids: tier1Appids, skippedCount: 0 }),
+      listSuspiciousZeroAppids: async () => new Set<number>(),
+      recalculateDemoCcuTiers: async () => ({ tier1Count: 30, tier2Count: 0 }),
+      updateDemoCcuTierAssignments: async (appids: number[]) => appids.length,
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+    env: {
+      CCU_DEMO_HOT_LIMIT: '30',
+      CCU_DEMO_STEAM_BACKOFF_MINUTES: '30',
+      CCU_DEMO_STEAM_ERROR_RATE_THRESHOLD: '0.2',
+      CCU_DEMO_TAIL_LIMIT: '0',
+      DATA_WRITE_TARGET: 'tiger',
+    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async (appids) => {
+      fetchedChunks.push(appids);
+      return fetchResultWithOverrides(appids, errorOverrides);
+    },
+    getTiger: () => tiger,
+    now: () => new Date('2026-06-08T00:00:00.000Z'),
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(stats.stoppedForSteamBackoff, true);
+  assert.equal(stats.steamBackoffUntilIso, '2026-06-08T00:30:00.000Z');
+  assert.equal(stats.tier1Processed, 25);
+  assert.equal(stats.totalFailed, 5);
+  assert.deepEqual(
+    fetchedChunks.map((chunk) => chunk.length),
+    [25]
+  );
+
+  const metadata = jobUpdates.at(-1)?.metadata as Record<string, unknown>;
+  assert.equal(metadata.stoppedForSteamBackoff, true);
+  assert.equal(metadata.steamBackoffUntilIso, '2026-06-08T00:30:00.000Z');
+  assert.equal(metadata.steamErrorRateThreshold, 0.2);
 });
