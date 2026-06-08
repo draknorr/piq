@@ -446,6 +446,14 @@ test('metrics.recalculateDemoCcuTiers ranks active demos into a demo-only table'
   assert.match(pool.calls[0]?.sql ?? '', /INSERT INTO ops\.demo_ccu_tier_assignments/);
   assert.match(pool.calls[0]?.sql ?? '', /a\.type = 'demo'/);
   assert.match(pool.calls[0]?.sql ?? '', /is_new_demo/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /COALESCE\(ad\.release_date >= CURRENT_DATE - \$2::integer, false\)/
+  );
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /COALESCE\(ad\.created_at >= now\(\) - \(\$2::integer \* INTERVAL '1 day'\), false\)/
+  );
   assert.match(pool.calls[0]?.sql ?? '', /metrics\.ccu_snapshots/);
   assert.match(pool.calls[0]?.sql ?? '', /metrics\.daily_metrics/);
   assert.deepEqual(pool.calls[0]?.values, [300, 14]);
