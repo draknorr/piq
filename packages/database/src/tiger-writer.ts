@@ -1830,14 +1830,14 @@ export class TigerMetricsRepository {
             ad.total_reviews,
             ad.release_date,
             (
-              ad.release_date >= CURRENT_DATE - $2::integer
-              OR ad.created_at >= now() - ($2::integer * INTERVAL '1 day')
+              COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false)
+              OR COALESCE(ad.created_at >= now() - ($2::integer * INTERVAL '1 day'), false)
             ) AS is_new_demo,
             row_number() OVER (
               ORDER BY
                 (
-                  ad.release_date >= CURRENT_DATE - $2::integer
-                  OR ad.created_at >= now() - ($2::integer * INTERVAL '1 day')
+                  COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false)
+                  OR COALESCE(ad.created_at >= now() - ($2::integer * INTERVAL '1 day'), false)
                 ) DESC,
                 GREATEST(
                   COALESCE(rsc.snapshot_peak_ccu, 0),
