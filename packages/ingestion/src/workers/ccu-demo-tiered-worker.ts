@@ -35,15 +35,20 @@ const log = logger.child({ worker: 'ccu-demo-tiered-sync' });
 const DEFAULT_HOT_LIMIT = 300;
 const DEFAULT_TAIL_LIMIT = 500;
 const DEFAULT_NEW_DEMO_WINDOW_DAYS = 14;
+const DEFAULT_STEAM_ERROR_RATE_THRESHOLD = 0.2;
+const DEFAULT_STEAM_BACKOFF_MINUTES = 30;
 const CHECK_CHUNK_SIZE = 25;
 const INVALID_SKIP_DAYS = 30;
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 type FetchSteamCcuBatch = typeof fetchSteamCCUBatchWithStatus;
+export type DemoCcuMainCcuGuardMode = 'strict' | 'hot_independent';
 
 export interface DemoCcuTieredSyncStats {
   skippedForMainCcu: boolean;
   stoppedForMainCcu: boolean;
+  stoppedForSteamBackoff: boolean;
+  steamBackoffUntilIso: string | null;
   tier1Processed: number;
   tier1Skipped: number;
   tier1Succeeded: number;
@@ -59,19 +64,27 @@ export interface DemoCcuTieredSyncDependencies {
   env?: NodeJS.ProcessEnv;
   fetchSteamCCUBatchWithStatus?: FetchSteamCcuBatch;
   getTiger?: () => TigerWriter;
+  now?: () => Date;
   refreshCcuQualityCache?: typeof refreshCcuQualityCacheSafely;
 }
 
 interface RunConfig {
+  guardMode: DemoCcuMainCcuGuardMode;
   githubRunId: string | undefined;
   hotLimit: number;
   newDemoWindowDays: number;
+  runtime: string | null;
+  slotKey: string | null;
+  steamBackoffMinutes: number;
+  steamErrorRateThreshold: number;
   tailLimit: number;
 }
 
 interface TierFetchResult {
   result: CCUBatchResultWithStatus;
   stoppedForMainCcu: boolean;
+  stoppedForSteamBackoff: boolean;
+  steamBackoffUntilIso: string | null;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -98,13 +111,46 @@ function parseNonNegativeInteger(value: string | undefined, fallback: number): n
   return parsed;
 }
 
+function parseFraction(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`Expected a number from 0 to 1 but received "${value}"`);
+  }
+  return parsed;
+}
+
+function readGuardMode(env: NodeJS.ProcessEnv): DemoCcuMainCcuGuardMode {
+  const value = env.CCU_DEMO_MAIN_CCU_GUARD_MODE ?? 'strict';
+  if (value === 'strict' || value === 'hot_independent') {
+    return value;
+  }
+  throw new Error(
+    `Expected CCU_DEMO_MAIN_CCU_GUARD_MODE to be "strict" or "hot_independent" but received "${value}"`
+  );
+}
+
 function readRunConfig(env: NodeJS.ProcessEnv): RunConfig {
   return {
+    guardMode: readGuardMode(env),
     githubRunId: env.GITHUB_RUN_ID,
     hotLimit: parsePositiveInteger(env.CCU_DEMO_HOT_LIMIT, DEFAULT_HOT_LIMIT),
     newDemoWindowDays: parsePositiveInteger(
       env.CCU_DEMO_NEW_DEMO_WINDOW_DAYS,
       DEFAULT_NEW_DEMO_WINDOW_DAYS
+    ),
+    runtime: env.CCU_DEMO_RUNTIME ?? null,
+    slotKey: env.CCU_DEMO_SLOT_KEY ?? null,
+    steamBackoffMinutes: parsePositiveInteger(
+      env.CCU_DEMO_STEAM_BACKOFF_MINUTES,
+      DEFAULT_STEAM_BACKOFF_MINUTES
+    ),
+    steamErrorRateThreshold: parseFraction(
+      env.CCU_DEMO_STEAM_ERROR_RATE_THRESHOLD,
+      DEFAULT_STEAM_ERROR_RATE_THRESHOLD
     ),
     tailLimit: parseNonNegativeInteger(env.CCU_DEMO_TAIL_LIMIT, DEFAULT_TAIL_LIMIT),
   };
@@ -114,6 +160,8 @@ function createStats(): DemoCcuTieredSyncStats {
   return {
     skippedForMainCcu: false,
     stoppedForMainCcu: false,
+    stoppedForSteamBackoff: false,
+    steamBackoffUntilIso: null,
     tier1Processed: 0,
     tier1Skipped: 0,
     tier1Succeeded: 0,
@@ -206,10 +254,16 @@ async function isMainCcuActive(
   return activity.active;
 }
 
+function buildSteamBackoffUntilIso(minutes: number, now: Date): string {
+  return new Date(now.getTime() + minutes * 60 * 1000).toISOString();
+}
+
 async function runDemoTierFetch(params: {
   appids: number[];
+  config: RunConfig;
   env: NodeJS.ProcessEnv;
   fetchBatch: FetchSteamCcuBatch;
+  now: () => Date;
   shouldYieldToMainCcu: () => Promise<boolean>;
   supabaseForGuardrails: SupabaseClient;
   tier: number;
@@ -217,7 +271,12 @@ async function runDemoTierFetch(params: {
 }): Promise<TierFetchResult> {
   const result = createEmptyBatchResult();
   if (params.appids.length === 0) {
-    return { result, stoppedForMainCcu: false };
+    return {
+      result,
+      steamBackoffUntilIso: null,
+      stoppedForMainCcu: false,
+      stoppedForSteamBackoff: false,
+    };
   }
 
   const suspiciousZeroAppids = await getSuspiciousZeroAppids(
@@ -233,7 +292,12 @@ async function runDemoTierFetch(params: {
         processed: result.results.size,
         planned: params.appids.length,
       });
-      return { result, stoppedForMainCcu: true };
+      return {
+        result,
+        steamBackoffUntilIso: null,
+        stoppedForMainCcu: true,
+        stoppedForSteamBackoff: false,
+      };
     }
 
     const chunk = params.appids.slice(offset, offset + CHECK_CHUNK_SIZE);
@@ -254,9 +318,38 @@ async function runDemoTierFetch(params: {
     );
 
     mergeBatchResult(result, chunkResult);
+
+    const chunkProcessed = chunkResult.results.size;
+    const chunkErrorRate = chunkProcessed > 0 ? chunkResult.errorCount / chunkProcessed : 0;
+    if (chunkProcessed > 0 && chunkErrorRate >= params.config.steamErrorRateThreshold) {
+      const steamBackoffUntilIso = buildSteamBackoffUntilIso(
+        params.config.steamBackoffMinutes,
+        params.now()
+      );
+      log.warn('Steam CCU error rate crossed demo backoff threshold', {
+        chunkErrorRate,
+        errorCount: chunkResult.errorCount,
+        processed: result.results.size,
+        steamBackoffUntilIso,
+        steamErrorRateThreshold: params.config.steamErrorRateThreshold,
+        tier: params.tier,
+        total: params.appids.length,
+      });
+      return {
+        result,
+        steamBackoffUntilIso,
+        stoppedForMainCcu: false,
+        stoppedForSteamBackoff: true,
+      };
+    }
   }
 
-  return { result, stoppedForMainCcu: false };
+  return {
+    result,
+    steamBackoffUntilIso: null,
+    stoppedForMainCcu: false,
+    stoppedForSteamBackoff: false,
+  };
 }
 
 async function persistDemoValidation(
@@ -310,9 +403,14 @@ async function persistDemoResults(params: {
 
 function buildJobMetadata(stats: DemoCcuTieredSyncStats, config: RunConfig): Record<string, unknown> {
   return {
+    guardMode: config.guardMode,
     hotLimit: config.hotLimit,
     mainCcuGuardJobTypes: [...MAIN_CCU_JOB_TYPES],
     newDemoWindowDays: config.newDemoWindowDays,
+    runtime: config.runtime,
+    slotKey: config.slotKey,
+    steamBackoffMinutes: config.steamBackoffMinutes,
+    steamErrorRateThreshold: config.steamErrorRateThreshold,
     tailLimit: config.tailLimit,
     ...stats,
   };
@@ -324,6 +422,7 @@ export async function runTigerCcuDemoTieredSync(
   const env = dependencies.env ?? process.env;
   const tiger = dependencies.getTiger?.() ?? getTigerWriter(env);
   const fetchBatch = dependencies.fetchSteamCCUBatchWithStatus ?? fetchSteamCCUBatchWithStatus;
+  const now = dependencies.now ?? (() => new Date());
   const refreshCcuQualityCache =
     dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
   const config = readRunConfig(env);
@@ -332,9 +431,12 @@ export async function runTigerCcuDemoTieredSync(
   const supabasePlaceholder = {} as SupabaseClient;
 
   log.info('Starting Tiger demo mini-tiered CCU sync', {
+    guardMode: config.guardMode,
     githubRunId: config.githubRunId,
     hotLimit: config.hotLimit,
     newDemoWindowDays: config.newDemoWindowDays,
+    runtime: config.runtime,
+    slotKey: config.slotKey,
     tailLimit: config.tailLimit,
   });
 
@@ -345,7 +447,8 @@ export async function runTigerCcuDemoTieredSync(
   });
 
   try {
-    if (await isMainCcuActive(tiger, env, 'before_demo_ranking')) {
+    const mainCcuActiveBeforeRanking = await isMainCcuActive(tiger, env, 'before_demo_ranking');
+    if (mainCcuActiveBeforeRanking && config.guardMode === 'strict') {
       stats.skippedForMainCcu = true;
       log.info('Skipping demo CCU sync because a main CCU job is active');
 
@@ -363,6 +466,12 @@ export async function runTigerCcuDemoTieredSync(
       return stats;
     }
 
+    if (mainCcuActiveBeforeRanking) {
+      log.info('Continuing demo hot tier while main CCU is active', {
+        guardMode: config.guardMode,
+      });
+    }
+
     const tierCounts = await tiger.metrics.recalculateDemoCcuTiers({
       hotLimit: config.hotLimit,
       newDemoWindowDays: config.newDemoWindowDays,
@@ -373,7 +482,8 @@ export async function runTigerCcuDemoTieredSync(
       tier2Count: tierCounts.tier2Count,
     });
 
-    if (await isMainCcuActive(tiger, env, 'after_demo_ranking')) {
+    const mainCcuActiveAfterRanking = await isMainCcuActive(tiger, env, 'after_demo_ranking');
+    if (mainCcuActiveAfterRanking && config.guardMode === 'strict') {
       stats.stoppedForMainCcu = true;
       log.info('Main CCU job detected after demo tier recalculation; stopping before polling');
     }
@@ -386,7 +496,7 @@ export async function runTigerCcuDemoTieredSync(
     if (!stats.stoppedForMainCcu) {
       const tier1Candidates = await tiger.metrics.listDemoCcuTierAppids({
         limit: config.hotLimit,
-        nowIso: new Date().toISOString(),
+        nowIso: now().toISOString(),
         tier: 1,
       });
       tier1Appids = tier1Candidates.appids;
@@ -394,25 +504,32 @@ export async function runTigerCcuDemoTieredSync(
 
       const fetchedTier1 = await runDemoTierFetch({
         appids: tier1Appids,
+        config,
         env,
         fetchBatch,
-        shouldYieldToMainCcu: () => isMainCcuActive(tiger, env, 'tier1_chunk_guard'),
+        now,
+        shouldYieldToMainCcu:
+          config.guardMode === 'strict'
+            ? () => isMainCcuActive(tiger, env, 'tier1_chunk_guard')
+            : async () => false,
         supabaseForGuardrails: supabasePlaceholder,
         tier: 1,
         tiger,
       });
       mergeBatchResult(tier1Result, fetchedTier1.result);
       stats.stoppedForMainCcu = fetchedTier1.stoppedForMainCcu;
+      stats.stoppedForSteamBackoff = fetchedTier1.stoppedForSteamBackoff;
+      stats.steamBackoffUntilIso = fetchedTier1.steamBackoffUntilIso;
     }
 
-    if (!stats.stoppedForMainCcu && config.tailLimit > 0) {
+    if (!stats.stoppedForMainCcu && !stats.stoppedForSteamBackoff && config.tailLimit > 0) {
       if (await isMainCcuActive(tiger, env, 'before_tail_polling')) {
         stats.stoppedForMainCcu = true;
         log.info('Main CCU job detected before demo tail polling; leaving tail capacity unused');
       } else {
         const tier2Candidates = await tiger.metrics.listDemoCcuTierAppids({
           limit: config.tailLimit,
-          nowIso: new Date().toISOString(),
+          nowIso: now().toISOString(),
           tier: 2,
         });
         tier2Appids = tier2Candidates.appids;
@@ -420,8 +537,10 @@ export async function runTigerCcuDemoTieredSync(
 
         const fetchedTier2 = await runDemoTierFetch({
           appids: tier2Appids,
+          config,
           env,
           fetchBatch,
+          now,
           shouldYieldToMainCcu: () => isMainCcuActive(tiger, env, 'tier2_chunk_guard'),
           supabaseForGuardrails: supabasePlaceholder,
           tier: 2,
@@ -429,6 +548,8 @@ export async function runTigerCcuDemoTieredSync(
         });
         mergeBatchResult(tier2Result, fetchedTier2.result);
         stats.stoppedForMainCcu = fetchedTier2.stoppedForMainCcu;
+        stats.stoppedForSteamBackoff = fetchedTier2.stoppedForSteamBackoff;
+        stats.steamBackoffUntilIso = fetchedTier2.steamBackoffUntilIso;
       }
     }
 
