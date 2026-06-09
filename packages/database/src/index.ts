@@ -62,6 +62,8 @@ export {
   type CcuTierAssignmentUpsert,
   type DailyCcuPeakUpsert,
   type DailyMetricUpsert,
+  type DemoCcuAdaptiveCandidateBreakdown,
+  type DemoCcuAdaptiveCandidateResult,
   type DemoCcuTierCandidateResult,
   type DemoCcuTierCounts,
   type DeveloperEmbeddingCandidate,

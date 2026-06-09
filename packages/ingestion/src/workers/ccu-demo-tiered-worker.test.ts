@@ -137,7 +137,16 @@ test('runTigerCcuDemoTieredSync writes official demo CCU without touching game t
   });
 
   assert.deepEqual(stats, {
+    candidateBreakdown: null,
+    dailyBudgetRemaining: null,
+    dailyBudgetResetIso: null,
+    rateLimitedCount: 0,
+    refreshMode: 'tiered',
+    requestCount: 3,
+    rpsFinal: null,
+    rpsInitial: null,
     skippedForMainCcu: false,
+    stoppedForDailyBudget: false,
     stoppedForMainCcu: false,
     stoppedForSteamBackoff: false,
     steamBackoffUntilIso: null,
@@ -538,4 +547,130 @@ test('runTigerCcuDemoTieredSync triggers Steam backoff from chunk error rate', a
   assert.equal(metadata.stoppedForSteamBackoff, true);
   assert.equal(metadata.steamBackoffUntilIso, '2026-06-08T00:30:00.000Z');
   assert.equal(metadata.steamErrorRateThreshold, 0.2);
+});
+
+test('runTigerCcuDemoTieredSync adaptive mode uses priority candidates and ignores main CCU for tail', async () => {
+  const fetchedChunks: number[][] = [];
+  const jobUpdates: SyncJobUpdate[] = [];
+  let oldTierSelectorCalled = false;
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [{ jobType: 'ccu-daily-p0', count: 1 }],
+      countSyncJobMetadataNumberSince: async () => 100,
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
+        jobUpdates.push(values);
+        return 1;
+      },
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listAdaptiveDemoCcuCandidates: async () => ({
+        breakdown: {
+          p0_new_positive: 1,
+          p0_positive: 0,
+          p1_new_never_synced: 0,
+          p1_new_zero: 0,
+          p2_never_synced: 1,
+          p3_zero_refresh: 0,
+        },
+        candidates: [
+          { appid: 10, bucket: 'p0_new_positive', demoCcuTier: 1 },
+          { appid: 20, bucket: 'p2_never_synced', demoCcuTier: 2 },
+        ],
+        skippedCount: 3,
+      }),
+      listDemoCcuTierAppids: async () => {
+        oldTierSelectorCalled = true;
+        return { appids: [], skippedCount: 0 };
+      },
+      listSuspiciousZeroAppids: async () => new Set<number>(),
+      recalculateDemoCcuTiers: async () => ({ tier1Count: 2, tier2Count: 2 }),
+      updateDemoCcuTierAssignments: async (appids: number[]) => appids.length,
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+	    env: {
+	      CCU_DEMO_BATCH_LIMIT: '2',
+	      CCU_DEMO_DAILY_REQUEST_BUDGET: '1000',
+	      CCU_DEMO_MAIN_CCU_GUARD_MODE: 'hot_independent',
+	      CCU_DEMO_REFRESH_MODE: 'adaptive',
+	      CCU_DEMO_RUNTIME: 'railway',
+	      DATA_WRITE_TARGET: 'tiger',
+	    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async (appids) => {
+      fetchedChunks.push(appids);
+      return {
+        ...fetchResultFor(appids),
+        rateLimitedCount: 0,
+        requestCount: appids.length,
+        rpsFinal: 3,
+      };
+    },
+    getTiger: () => tiger,
+    now: () => new Date('2026-06-09T12:00:00.000Z'),
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(oldTierSelectorCalled, false);
+  assert.equal(stats.stoppedForMainCcu, false);
+  assert.equal(stats.tier1Processed, 1);
+  assert.equal(stats.tier2Processed, 1);
+  assert.equal(stats.requestCount, 2);
+  assert.equal(stats.dailyBudgetRemaining, 898);
+  assert.deepEqual(fetchedChunks, [[10], [20]]);
+
+  const metadata = jobUpdates.at(-1)?.metadata as Record<string, unknown>;
+  assert.equal(metadata.refreshMode, 'adaptive');
+  assert.equal(metadata.requestCount, 2);
+  assert.equal(metadata.dailyBudgetRemaining, 898);
+});
+
+test('runTigerCcuDemoTieredSync adaptive mode stops when daily request budget is exhausted', async () => {
+  let candidatesListed = false;
+  const jobUpdates: SyncJobUpdate[] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleRunningSyncJobsByTypes: async () => 0,
+      countFreshRunningSyncJobsByTypes: async () => [],
+      countSyncJobMetadataNumberSince: async () => 1000,
+      createSyncJob: async () => 'job-1',
+      updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
+        jobUpdates.push(values);
+        return 1;
+      },
+    },
+    metrics: {
+      insertCcuSnapshots: async () => 0,
+      listAdaptiveDemoCcuCandidates: async () => {
+        candidatesListed = true;
+        return { breakdown: {}, candidates: [], skippedCount: 0 };
+      },
+      recalculateDemoCcuTiers: async () => ({ tier1Count: 0, tier2Count: 0 }),
+      upsertDailyCcuPeaks: async () => 0,
+    },
+  } as unknown as TigerWriter;
+
+  const stats = await runTigerCcuDemoTieredSync({
+    env: {
+      CCU_DEMO_DAILY_REQUEST_BUDGET: '1000',
+      CCU_DEMO_REFRESH_MODE: 'adaptive',
+      DATA_WRITE_TARGET: 'tiger',
+    } as NodeJS.ProcessEnv,
+    fetchSteamCCUBatchWithStatus: async () => fetchResultFor([]),
+    getTiger: () => tiger,
+    now: () => new Date('2026-06-09T12:00:00.000Z'),
+    refreshCcuQualityCache: async () => {},
+  });
+
+  assert.equal(candidatesListed, false);
+  assert.equal(stats.stoppedForDailyBudget, true);
+  assert.equal(stats.dailyBudgetRemaining, 0);
+  assert.equal(stats.dailyBudgetResetIso, '2026-06-10T00:00:00.000Z');
+  assert.equal(jobUpdates.at(-1)?.items_processed, 0);
 });

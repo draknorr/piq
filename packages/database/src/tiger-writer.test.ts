@@ -197,6 +197,26 @@ test('countFreshRunningSyncJobsByTypes returns active counts grouped by job type
   ]);
 });
 
+test('countSyncJobMetadataNumberSince sums numeric metadata for request budgets', async () => {
+  const pool = new CapturingPool([result([{ count: '1234' }])]);
+  const writer = createTigerWriterForPool(pool);
+
+  const count = await writer.ops.countSyncJobMetadataNumberSince({
+    jobType: 'ccu-demo-tiered',
+    metadataKey: 'requestCount',
+    startedAfterIso: '2026-06-09T00:00:00.000Z',
+  });
+
+  assert.equal(count, 1234);
+  assert.match(pool.calls[0]?.sql ?? '', /metadata ->> \$2/);
+  assert.match(pool.calls[0]?.sql ?? '', /metadata \? \$2/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    'ccu-demo-tiered',
+    'requestCount',
+    '2026-06-09T00:00:00.000Z',
+  ]);
+});
+
 test('syncStatus.updateFields only writes allowlisted defined columns', async () => {
   const pool = new CapturingPool([result([], 1)]);
   const writer = createTigerWriterForPool(pool);
@@ -450,10 +470,7 @@ test('metrics.recalculateDemoCcuTiers ranks active demos into a demo-only table'
     pool.calls[0]?.sql ?? '',
     /COALESCE\(ad\.release_date >= CURRENT_DATE - \$2::integer, false\)/
   );
-  assert.match(
-    pool.calls[0]?.sql ?? '',
-    /COALESCE\(ad\.created_at >= now\(\) - \(\$2::integer \* INTERVAL '1 day'\), false\)/
-  );
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /created_at >= now\(\)/);
   assert.match(pool.calls[0]?.sql ?? '', /metrics\.ccu_snapshots/);
   assert.match(pool.calls[0]?.sql ?? '', /metrics\.daily_metrics/);
   assert.deepEqual(pool.calls[0]?.values, [300, 14]);
@@ -495,6 +512,52 @@ test('metrics.listDemoCcuTierAppids keeps hot demos in rank order', async () => 
 
   assert.deepEqual(candidates.appids, [30, 40]);
   assert.match(pool.calls[1]?.sql ?? '', /ORDER BY dcta\.rank_position ASC NULLS LAST/);
+});
+
+test('metrics.listAdaptiveDemoCcuCandidates prioritizes positive, new, unknown, and zero buckets', async () => {
+  const pool = new CapturingPool([
+    result([{ count: '2' }]),
+    result([
+      { bucket: 'p0_new_positive', count: '1' },
+      { bucket: 'p2_never_synced', count: '4' },
+    ]),
+    result([
+      { appid: 10, bucket: 'p0_new_positive', demo_ccu_tier: 1 },
+      { appid: 20, bucket: 'p2_never_synced', demo_ccu_tier: 2 },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const candidates = await writer.metrics.listAdaptiveDemoCcuCandidates({
+    limit: 2,
+    newDemoWindowDays: 14,
+    newPositiveRefreshMinutes: 30,
+    newZeroRefreshHours: 6,
+    nowIso: '2026-06-09T12:00:00.000Z',
+    positiveRefreshMinutes: 60,
+    zeroRefreshDays: 3,
+  });
+
+  assert.deepEqual(candidates.candidates, [
+    { appid: 10, bucket: 'p0_new_positive', demoCcuTier: 1 },
+    { appid: 20, bucket: 'p2_never_synced', demoCcuTier: 2 },
+  ]);
+  assert.equal(candidates.skippedCount, 2);
+  assert.equal(candidates.breakdown.p0_new_positive, 1);
+  assert.equal(candidates.breakdown.p2_never_synced, 4);
+  assert.match(pool.calls[1]?.sql ?? '', /last_ccu_validation_state = 'confirmed_positive'/);
+  assert.match(pool.calls[1]?.sql ?? '', /last_ccu_synced IS NULL/);
+  assert.match(pool.calls[1]?.sql ?? '', /last_ccu_validation_state = 'confirmed_zero'/);
+  assert.match(pool.calls[2]?.sql ?? '', /WHEN 'p0_new_positive' THEN 0/);
+  assert.deepEqual(pool.calls[2]?.values, [
+    2,
+    '2026-06-09T12:00:00.000Z',
+    14,
+    30,
+    60,
+    6,
+    3,
+  ]);
 });
 
 test('metrics.updateDemoCcuTierAssignments only updates demo poll-state table', async () => {

@@ -67,6 +67,17 @@ interface DemoCcuTierCountsRow extends QueryResultRow {
   tier2_count: number | string | null;
 }
 
+interface DemoCcuAdaptiveCandidateRow extends QueryResultRow {
+  appid: number;
+  bucket: DemoCcuAdaptiveCandidateBucket;
+  demo_ccu_tier: number | string | null;
+}
+
+interface DemoCcuAdaptiveBreakdownRow extends QueryResultRow {
+  bucket: DemoCcuAdaptiveCandidateBucket;
+  count: number | string | null;
+}
+
 interface SuspiciousZeroRow extends QueryResultRow {
   appids: number[] | null;
 }
@@ -477,6 +488,28 @@ export interface DemoCcuTierCounts {
 
 export interface DemoCcuTierCandidateResult {
   appids: number[];
+  skippedCount: number;
+}
+
+export type DemoCcuAdaptiveCandidateBucket =
+  | 'p0_new_positive'
+  | 'p0_positive'
+  | 'p1_new_never_synced'
+  | 'p1_new_zero'
+  | 'p2_never_synced'
+  | 'p3_zero_refresh';
+
+export type DemoCcuAdaptiveCandidateBreakdown = Record<DemoCcuAdaptiveCandidateBucket, number>;
+
+export interface DemoCcuAdaptiveCandidate {
+  appid: number;
+  bucket: DemoCcuAdaptiveCandidateBucket;
+  demoCcuTier: number;
+}
+
+export interface DemoCcuAdaptiveCandidateResult {
+  breakdown: DemoCcuAdaptiveCandidateBreakdown;
+  candidates: DemoCcuAdaptiveCandidate[];
   skippedCount: number;
 }
 
@@ -1275,6 +1308,27 @@ export class TigerOpsRepository {
     }));
   }
 
+  async countSyncJobMetadataNumberSince(params: {
+    jobType: string;
+    metadataKey: string;
+    startedAfterIso: string;
+  }): Promise<number> {
+    const { rows } = await runQuery<CountRow>(
+      this.pool,
+      'ops.countSyncJobMetadataNumberSince',
+      `
+        SELECT COALESCE(sum((metadata ->> $2)::integer), 0)::integer AS count
+        FROM ops.sync_jobs
+        WHERE job_type = $1
+          AND started_at >= $3::timestamptz
+          AND metadata ? $2
+      `,
+      [params.jobType, params.metadataKey, params.startedAfterIso]
+    );
+
+    return parseNumber(rows[0]?.count);
+  }
+
   async refreshDashboardStats(): Promise<void> {
     await runQuery(this.pool, 'ops.refreshDashboardStats', 'SELECT ops.refresh_dashboard_stats()');
   }
@@ -1829,16 +1883,10 @@ export class TigerMetricsRepository {
             )::integer AS recent_peak_ccu,
             ad.total_reviews,
             ad.release_date,
-            (
-              COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false)
-              OR COALESCE(ad.created_at >= now() - ($2::integer * INTERVAL '1 day'), false)
-            ) AS is_new_demo,
+            COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false) AS is_new_demo,
             row_number() OVER (
               ORDER BY
-                (
-                  COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false)
-                  OR COALESCE(ad.created_at >= now() - ($2::integer * INTERVAL '1 day'), false)
-                ) DESC,
+                COALESCE(ad.release_date >= CURRENT_DATE - $2::integer, false) DESC,
                 GREATEST(
                   COALESCE(rsc.snapshot_peak_ccu, 0),
                   COALESCE(rdc.daily_peak_ccu, 0)
@@ -1980,6 +2028,178 @@ export class TigerMetricsRepository {
 
     return {
       appids: rows.map((row) => row.appid),
+      skippedCount: parseNumber(skippedRows[0]?.count),
+    };
+  }
+
+  async listAdaptiveDemoCcuCandidates(params: {
+    limit: number;
+    newDemoWindowDays: number;
+    newPositiveRefreshMinutes: number;
+    newZeroRefreshHours: number;
+    nowIso: string;
+    positiveRefreshMinutes: number;
+    zeroRefreshDays: number;
+  }): Promise<DemoCcuAdaptiveCandidateResult> {
+    const emptyBreakdown: DemoCcuAdaptiveCandidateBreakdown = {
+      p0_new_positive: 0,
+      p0_positive: 0,
+      p1_new_never_synced: 0,
+      p1_new_zero: 0,
+      p2_never_synced: 0,
+      p3_zero_refresh: 0,
+    };
+
+    if (params.limit <= 0) {
+      return {
+        breakdown: emptyBreakdown,
+        candidates: [],
+        skippedCount: 0,
+      };
+    }
+
+    const eligibleCte = `
+      WITH active_demos AS (
+        SELECT
+          dcta.appid,
+          dcta.ccu_fetch_status,
+          dcta.ccu_skip_until,
+          dcta.demo_ccu_tier,
+          dcta.last_ccu_synced,
+          dcta.last_ccu_validation_state,
+          dcta.rank_position,
+          dcta.recent_peak_ccu,
+          dcta.total_reviews,
+          a.created_at,
+          a.release_date,
+          COALESCE(a.release_date >= (($2::timestamptz AT TIME ZONE 'UTC')::date - $3::integer), false) AS is_recent_release
+        FROM ops.demo_ccu_tier_assignments dcta
+        JOIN legacy.apps a ON a.appid = dcta.appid
+        WHERE a.type = 'demo'
+          AND COALESCE(a.is_released, false) = true
+          AND COALESCE(a.is_delisted, false) = false
+      ),
+      classified AS (
+        SELECT
+          *,
+          CASE
+            WHEN ccu_skip_until > $2::timestamptz THEN NULL
+            WHEN last_ccu_validation_state = 'invalid' THEN NULL
+            WHEN (last_ccu_validation_state = 'confirmed_positive' OR COALESCE(recent_peak_ccu, 0) > 0)
+              AND is_recent_release
+              AND (
+                last_ccu_synced IS NULL
+                OR last_ccu_synced <= $2::timestamptz - ($4::integer * INTERVAL '1 minute')
+              )
+            THEN 'p0_new_positive'
+            WHEN (last_ccu_validation_state = 'confirmed_positive' OR COALESCE(recent_peak_ccu, 0) > 0)
+              AND (
+                last_ccu_synced IS NULL
+                OR last_ccu_synced <= $2::timestamptz - ($5::integer * INTERVAL '1 minute')
+              )
+            THEN 'p0_positive'
+            WHEN is_recent_release
+              AND last_ccu_synced IS NULL
+            THEN 'p1_new_never_synced'
+            WHEN is_recent_release
+              AND last_ccu_validation_state = 'confirmed_zero'
+              AND last_ccu_synced <= $2::timestamptz - ($6::integer * INTERVAL '1 hour')
+            THEN 'p1_new_zero'
+            WHEN last_ccu_synced IS NULL
+            THEN 'p2_never_synced'
+            WHEN last_ccu_validation_state = 'confirmed_zero'
+              AND last_ccu_synced <= $2::timestamptz - ($7::integer * INTERVAL '1 day')
+            THEN 'p3_zero_refresh'
+            ELSE NULL
+          END AS bucket
+        FROM active_demos
+      ),
+      eligible AS (
+        SELECT *
+        FROM classified
+        WHERE bucket IS NOT NULL
+      )
+    `;
+
+    const queryValues = [
+      params.limit,
+      params.nowIso,
+      params.newDemoWindowDays,
+      params.newPositiveRefreshMinutes,
+      params.positiveRefreshMinutes,
+      params.newZeroRefreshHours,
+      params.zeroRefreshDays,
+    ];
+
+    const [{ rows: skippedRows }, { rows: breakdownRows }, { rows: candidateRows }] =
+      await Promise.all([
+        runQuery<CountRow>(
+          this.pool,
+          'metrics.countSkippedAdaptiveDemoCcuCandidates',
+          `
+            SELECT count(*)::integer AS count
+            FROM ops.demo_ccu_tier_assignments dcta
+            JOIN legacy.apps a ON a.appid = dcta.appid
+            WHERE a.type = 'demo'
+              AND COALESCE(a.is_released, false) = true
+              AND COALESCE(a.is_delisted, false) = false
+              AND dcta.ccu_skip_until > $1::timestamptz
+          `,
+          [params.nowIso]
+        ),
+        runQuery<DemoCcuAdaptiveBreakdownRow>(
+          this.pool,
+          'metrics.countAdaptiveDemoCcuCandidatesByBucket',
+          `
+            ${eligibleCte}
+            SELECT bucket, count(*)::integer AS count
+            FROM eligible
+            GROUP BY bucket
+            ORDER BY bucket ASC
+          `,
+          queryValues
+        ),
+        runQuery<DemoCcuAdaptiveCandidateRow>(
+          this.pool,
+          'metrics.listAdaptiveDemoCcuCandidates',
+          `
+            ${eligibleCte}
+            SELECT appid, demo_ccu_tier, bucket
+            FROM eligible
+            ORDER BY
+              CASE bucket
+                WHEN 'p0_new_positive' THEN 0
+                WHEN 'p0_positive' THEN 1
+                WHEN 'p1_new_never_synced' THEN 2
+                WHEN 'p1_new_zero' THEN 3
+                WHEN 'p2_never_synced' THEN 4
+                WHEN 'p3_zero_refresh' THEN 5
+                ELSE 99
+              END ASC,
+              COALESCE(recent_peak_ccu, 0) DESC,
+              total_reviews DESC NULLS LAST,
+              release_date DESC NULLS LAST,
+              created_at DESC NULLS LAST,
+              rank_position ASC NULLS LAST,
+              appid ASC
+            LIMIT $1::integer
+          `,
+          queryValues
+        ),
+      ]);
+
+    const breakdown = { ...emptyBreakdown };
+    for (const row of breakdownRows) {
+      breakdown[row.bucket] = parseNumber(row.count);
+    }
+
+    return {
+      breakdown,
+      candidates: candidateRows.map((row) => ({
+        appid: row.appid,
+        bucket: row.bucket,
+        demoCcuTier: parseNumber(row.demo_ccu_tier),
+      })),
       skippedCount: parseNumber(skippedRows[0]?.count),
     };
   }
