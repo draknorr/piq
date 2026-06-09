@@ -14,6 +14,7 @@ import {
   getTigerWriter,
   readDataWriteTarget,
   type DailyCcuPeakUpsert,
+  type DemoCcuAdaptiveCandidateBreakdown,
   type TigerWriter,
 } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
@@ -34,18 +35,40 @@ import { persistOfficialDemoCcuValidationResults } from '../workers-support/ccu-
 const log = logger.child({ worker: 'ccu-demo-tiered-sync' });
 const DEFAULT_HOT_LIMIT = 300;
 const DEFAULT_TAIL_LIMIT = 500;
+const DEFAULT_ADAPTIVE_BATCH_LIMIT = 3000;
+const DEFAULT_DAILY_REQUEST_BUDGET = 75_000;
 const DEFAULT_NEW_DEMO_WINDOW_DAYS = 14;
 const DEFAULT_STEAM_ERROR_RATE_THRESHOLD = 0.2;
+const DEFAULT_ADAPTIVE_STEAM_ERROR_RATE_THRESHOLD = 0.05;
+const DEFAULT_STEAM_CAUTION_ERROR_RATE_THRESHOLD = 0.02;
 const DEFAULT_STEAM_BACKOFF_MINUTES = 30;
+const DEFAULT_NEW_POSITIVE_REFRESH_MINUTES = 30;
+const DEFAULT_POSITIVE_REFRESH_MINUTES = 60;
+const DEFAULT_NEW_ZERO_REFRESH_HOURS = 6;
+const DEFAULT_ZERO_REFRESH_DAYS = 3;
+const DEFAULT_STEAM_CCU_RPS_INITIAL = 3;
+const DEFAULT_STEAM_CCU_RPS_MAX = 4;
+const DEFAULT_STEAM_CCU_RPS_MIN = 0.5;
+const DEFAULT_STEAM_CCU_CONCURRENCY = 6;
 const CHECK_CHUNK_SIZE = 25;
 const INVALID_SKIP_DAYS = 30;
 
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 type FetchSteamCcuBatch = typeof fetchSteamCCUBatchWithStatus;
 export type DemoCcuMainCcuGuardMode = 'strict' | 'hot_independent';
+export type DemoCcuRefreshMode = 'tiered' | 'adaptive';
 
 export interface DemoCcuTieredSyncStats {
+  candidateBreakdown: DemoCcuAdaptiveCandidateBreakdown | null;
+  dailyBudgetRemaining: number | null;
+  dailyBudgetResetIso: string | null;
+  rateLimitedCount: number;
+  refreshMode: DemoCcuRefreshMode;
+  requestCount: number;
+  rpsFinal: number | null;
+  rpsInitial: number | null;
   skippedForMainCcu: boolean;
+  stoppedForDailyBudget: boolean;
   stoppedForMainCcu: boolean;
   stoppedForSteamBackoff: boolean;
   steamBackoffUntilIso: string | null;
@@ -69,15 +92,27 @@ export interface DemoCcuTieredSyncDependencies {
 }
 
 interface RunConfig {
+  batchLimit: number;
+  dailyRequestBudget: number;
   guardMode: DemoCcuMainCcuGuardMode;
   githubRunId: string | undefined;
   hotLimit: number;
   newDemoWindowDays: number;
+  newPositiveRefreshMinutes: number;
+  newZeroRefreshHours: number;
+  positiveRefreshMinutes: number;
+  refreshMode: DemoCcuRefreshMode;
   runtime: string | null;
   slotKey: string | null;
+  steamCcuConcurrency: number;
+  steamCcuRpsInitial: number;
+  steamCcuRpsMax: number;
+  steamCcuRpsMin: number;
   steamBackoffMinutes: number;
+  steamCautionErrorRateThreshold: number;
   steamErrorRateThreshold: number;
   tailLimit: number;
+  zeroRefreshDays: number;
 }
 
 interface TierFetchResult {
@@ -86,6 +121,19 @@ interface TierFetchResult {
   stoppedForSteamBackoff: boolean;
   steamBackoffUntilIso: string | null;
 }
+
+interface SteamFetchState {
+  currentRps: number;
+}
+
+const EMPTY_CANDIDATE_BREAKDOWN: DemoCcuAdaptiveCandidateBreakdown = {
+  p0_new_positive: 0,
+  p0_positive: 0,
+  p1_new_never_synced: 0,
+  p1_new_zero: 0,
+  p2_never_synced: 0,
+  p3_zero_refresh: 0,
+};
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -123,6 +171,18 @@ function parseFraction(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+function parsePositiveNumber(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Expected a positive number but received "${value}"`);
+  }
+  return parsed;
+}
+
 function readGuardMode(env: NodeJS.ProcessEnv): DemoCcuMainCcuGuardMode {
   const value = env.CCU_DEMO_MAIN_CCU_GUARD_MODE ?? 'strict';
   if (value === 'strict' || value === 'hot_independent') {
@@ -133,8 +193,24 @@ function readGuardMode(env: NodeJS.ProcessEnv): DemoCcuMainCcuGuardMode {
   );
 }
 
+function readRefreshMode(env: NodeJS.ProcessEnv): DemoCcuRefreshMode {
+  const value = env.CCU_DEMO_REFRESH_MODE ?? 'tiered';
+  if (value === 'tiered' || value === 'adaptive') {
+    return value;
+  }
+  throw new Error(
+    `Expected CCU_DEMO_REFRESH_MODE to be "tiered" or "adaptive" but received "${value}"`
+  );
+}
+
 function readRunConfig(env: NodeJS.ProcessEnv): RunConfig {
+  const refreshMode = readRefreshMode(env);
   return {
+    batchLimit: parsePositiveInteger(env.CCU_DEMO_BATCH_LIMIT, DEFAULT_ADAPTIVE_BATCH_LIMIT),
+    dailyRequestBudget: parsePositiveInteger(
+      env.CCU_DEMO_DAILY_REQUEST_BUDGET,
+      DEFAULT_DAILY_REQUEST_BUDGET
+    ),
     guardMode: readGuardMode(env),
     githubRunId: env.GITHUB_RUN_ID,
     hotLimit: parsePositiveInteger(env.CCU_DEMO_HOT_LIMIT, DEFAULT_HOT_LIMIT),
@@ -142,23 +218,65 @@ function readRunConfig(env: NodeJS.ProcessEnv): RunConfig {
       env.CCU_DEMO_NEW_DEMO_WINDOW_DAYS,
       DEFAULT_NEW_DEMO_WINDOW_DAYS
     ),
+    newPositiveRefreshMinutes: parsePositiveInteger(
+      env.CCU_DEMO_NEW_POSITIVE_REFRESH_MINUTES,
+      DEFAULT_NEW_POSITIVE_REFRESH_MINUTES
+    ),
+    newZeroRefreshHours: parsePositiveInteger(
+      env.CCU_DEMO_NEW_ZERO_REFRESH_HOURS,
+      DEFAULT_NEW_ZERO_REFRESH_HOURS
+    ),
+    positiveRefreshMinutes: parsePositiveInteger(
+      env.CCU_DEMO_POSITIVE_REFRESH_MINUTES,
+      DEFAULT_POSITIVE_REFRESH_MINUTES
+    ),
+    refreshMode,
     runtime: env.CCU_DEMO_RUNTIME ?? null,
     slotKey: env.CCU_DEMO_SLOT_KEY ?? null,
+    steamCcuConcurrency: parsePositiveInteger(
+      env.STEAM_CCU_CONCURRENCY,
+      DEFAULT_STEAM_CCU_CONCURRENCY
+    ),
+    steamCcuRpsInitial: parsePositiveNumber(
+      env.STEAM_CCU_RPS_INITIAL,
+      DEFAULT_STEAM_CCU_RPS_INITIAL
+    ),
+    steamCcuRpsMax: parsePositiveNumber(env.STEAM_CCU_RPS_MAX, DEFAULT_STEAM_CCU_RPS_MAX),
+    steamCcuRpsMin: parsePositiveNumber(env.STEAM_CCU_RPS_MIN, DEFAULT_STEAM_CCU_RPS_MIN),
     steamBackoffMinutes: parsePositiveInteger(
       env.CCU_DEMO_STEAM_BACKOFF_MINUTES,
       DEFAULT_STEAM_BACKOFF_MINUTES
     ),
+    steamCautionErrorRateThreshold: parseFraction(
+      env.CCU_DEMO_STEAM_CAUTION_ERROR_RATE_THRESHOLD,
+      DEFAULT_STEAM_CAUTION_ERROR_RATE_THRESHOLD
+    ),
     steamErrorRateThreshold: parseFraction(
       env.CCU_DEMO_STEAM_ERROR_RATE_THRESHOLD,
-      DEFAULT_STEAM_ERROR_RATE_THRESHOLD
+      refreshMode === 'adaptive'
+        ? DEFAULT_ADAPTIVE_STEAM_ERROR_RATE_THRESHOLD
+        : DEFAULT_STEAM_ERROR_RATE_THRESHOLD
     ),
     tailLimit: parseNonNegativeInteger(env.CCU_DEMO_TAIL_LIMIT, DEFAULT_TAIL_LIMIT),
+    zeroRefreshDays: parsePositiveInteger(
+      env.CCU_DEMO_ZERO_REFRESH_DAYS,
+      DEFAULT_ZERO_REFRESH_DAYS
+    ),
   };
 }
 
-function createStats(): DemoCcuTieredSyncStats {
+function createStats(refreshMode: DemoCcuRefreshMode): DemoCcuTieredSyncStats {
   return {
+    candidateBreakdown: null,
+    dailyBudgetRemaining: null,
+    dailyBudgetResetIso: null,
+    rateLimitedCount: 0,
+    refreshMode,
+    requestCount: 0,
+    rpsFinal: null,
+    rpsInitial: null,
     skippedForMainCcu: false,
+    stoppedForDailyBudget: false,
     stoppedForMainCcu: false,
     stoppedForSteamBackoff: false,
     steamBackoffUntilIso: null,
@@ -178,6 +296,8 @@ function createEmptyBatchResult(): CCUBatchResultWithStatus {
   return {
     errorCount: 0,
     invalidCount: 0,
+    rateLimitedCount: 0,
+    requestCount: 0,
     results: new Map<number, CCUResultWithStatus>(),
     validCount: 0,
   };
@@ -194,6 +314,9 @@ function mergeBatchResult(
   target.validCount += source.validCount;
   target.invalidCount += source.invalidCount;
   target.errorCount += source.errorCount;
+  target.rateLimitedCount = (target.rateLimitedCount ?? 0) + (source.rateLimitedCount ?? 0);
+  target.requestCount = (target.requestCount ?? 0) + (source.requestCount ?? source.results.size);
+  target.rpsFinal = source.rpsFinal ?? target.rpsFinal;
 }
 
 function extractValidCcuData(result: CCUBatchResultWithStatus): Map<number, number> {
@@ -258,6 +381,18 @@ function buildSteamBackoffUntilIso(minutes: number, now: Date): string {
   return new Date(now.getTime() + minutes * 60 * 1000).toISOString();
 }
 
+function getUtcDayStartIso(now: Date): string {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)
+  ).toISOString();
+}
+
+function getNextUtcDayStartIso(now: Date): string {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0)
+  ).toISOString();
+}
+
 async function runDemoTierFetch(params: {
   appids: number[];
   config: RunConfig;
@@ -265,6 +400,7 @@ async function runDemoTierFetch(params: {
   fetchBatch: FetchSteamCcuBatch;
   now: () => Date;
   shouldYieldToMainCcu: () => Promise<boolean>;
+  steamState: SteamFetchState;
   supabaseForGuardrails: SupabaseClient;
   tier: number;
   tiger: TigerWriter;
@@ -314,10 +450,18 @@ async function runDemoTierFetch(params: {
         }
       },
       undefined,
-      { suspiciousZeroAppids }
+      {
+        cautionErrorRateThreshold: params.config.steamCautionErrorRateThreshold,
+        concurrency: params.config.steamCcuConcurrency,
+        rpsInitial: params.steamState.currentRps,
+        rpsMax: params.config.steamCcuRpsMax,
+        rpsMin: params.config.steamCcuRpsMin,
+        suspiciousZeroAppids,
+      }
     );
 
     mergeBatchResult(result, chunkResult);
+    params.steamState.currentRps = chunkResult.rpsFinal ?? params.steamState.currentRps;
 
     const chunkProcessed = chunkResult.results.size;
     const chunkErrorRate = chunkProcessed > 0 ? chunkResult.errorCount / chunkProcessed : 0;
@@ -403,15 +547,24 @@ async function persistDemoResults(params: {
 
 function buildJobMetadata(stats: DemoCcuTieredSyncStats, config: RunConfig): Record<string, unknown> {
   return {
+    batchLimit: config.batchLimit,
     guardMode: config.guardMode,
     hotLimit: config.hotLimit,
     mainCcuGuardJobTypes: [...MAIN_CCU_JOB_TYPES],
     newDemoWindowDays: config.newDemoWindowDays,
+    newPositiveRefreshMinutes: config.newPositiveRefreshMinutes,
+    newZeroRefreshHours: config.newZeroRefreshHours,
+    positiveRefreshMinutes: config.positiveRefreshMinutes,
     runtime: config.runtime,
     slotKey: config.slotKey,
+    steamCcuConcurrency: config.steamCcuConcurrency,
+    steamCcuRpsMax: config.steamCcuRpsMax,
+    steamCcuRpsMin: config.steamCcuRpsMin,
     steamBackoffMinutes: config.steamBackoffMinutes,
+    steamCautionErrorRateThreshold: config.steamCautionErrorRateThreshold,
     steamErrorRateThreshold: config.steamErrorRateThreshold,
     tailLimit: config.tailLimit,
+    zeroRefreshDays: config.zeroRefreshDays,
     ...stats,
   };
 }
@@ -426,22 +579,42 @@ export async function runTigerCcuDemoTieredSync(
   const refreshCcuQualityCache =
     dependencies.refreshCcuQualityCache ?? refreshCcuQualityCacheSafely;
   const config = readRunConfig(env);
-  const stats = createStats();
+  const stats = createStats(config.refreshMode);
+  stats.rpsInitial = config.refreshMode === 'adaptive' ? config.steamCcuRpsInitial : null;
+  stats.rpsFinal = config.refreshMode === 'adaptive' ? config.steamCcuRpsInitial : null;
   const startTime = Date.now();
   const supabasePlaceholder = {} as SupabaseClient;
+  const currentNow = now();
+  const utcDayStartIso = getUtcDayStartIso(currentNow);
+  const dailyBudgetResetIso = getNextUtcDayStartIso(currentNow);
+  let plannedBatchSize = config.hotLimit + config.tailLimit;
+
+  if (config.refreshMode === 'adaptive') {
+    const requestsUsedToday = await tiger.ops.countSyncJobMetadataNumberSince({
+      jobType: 'ccu-demo-tiered',
+      metadataKey: 'requestCount',
+      startedAfterIso: utcDayStartIso,
+    });
+    stats.dailyBudgetRemaining = Math.max(0, config.dailyRequestBudget - requestsUsedToday);
+    stats.dailyBudgetResetIso = dailyBudgetResetIso;
+    plannedBatchSize = Math.min(config.batchLimit, stats.dailyBudgetRemaining);
+  }
 
   log.info('Starting Tiger demo mini-tiered CCU sync', {
+    batchLimit: config.batchLimit,
+    dailyBudgetRemaining: stats.dailyBudgetRemaining,
     guardMode: config.guardMode,
     githubRunId: config.githubRunId,
     hotLimit: config.hotLimit,
     newDemoWindowDays: config.newDemoWindowDays,
+    refreshMode: config.refreshMode,
     runtime: config.runtime,
     slotKey: config.slotKey,
     tailLimit: config.tailLimit,
   });
 
   const jobId = await tiger.ops.createSyncJob({
-    batchSize: config.hotLimit + config.tailLimit,
+    batchSize: plannedBatchSize,
     githubRunId: config.githubRunId,
     jobType: 'ccu-demo-tiered',
   });
@@ -492,8 +665,75 @@ export async function runTigerCcuDemoTieredSync(
     let tier2Appids: number[] = [];
     const tier1Result = createEmptyBatchResult();
     const tier2Result = createEmptyBatchResult();
+    const steamState: SteamFetchState = { currentRps: config.steamCcuRpsInitial };
 
-    if (!stats.stoppedForMainCcu) {
+    if (config.refreshMode === 'adaptive' && stats.dailyBudgetRemaining === 0) {
+      stats.stoppedForDailyBudget = true;
+      stats.candidateBreakdown = { ...EMPTY_CANDIDATE_BREAKDOWN };
+      log.info('Skipping adaptive demo CCU sync because daily request budget is exhausted', {
+        dailyBudgetResetIso,
+      });
+    } else if (config.refreshMode === 'adaptive' && !stats.stoppedForMainCcu) {
+      const adaptiveCandidates = await tiger.metrics.listAdaptiveDemoCcuCandidates({
+        limit: Math.min(config.batchLimit, stats.dailyBudgetRemaining ?? config.batchLimit),
+        newDemoWindowDays: config.newDemoWindowDays,
+        newPositiveRefreshMinutes: config.newPositiveRefreshMinutes,
+        newZeroRefreshHours: config.newZeroRefreshHours,
+        nowIso: now().toISOString(),
+        positiveRefreshMinutes: config.positiveRefreshMinutes,
+        zeroRefreshDays: config.zeroRefreshDays,
+      });
+      stats.candidateBreakdown = adaptiveCandidates.breakdown;
+      stats.tier2Skipped = adaptiveCandidates.skippedCount;
+      tier1Appids = adaptiveCandidates.candidates
+        .filter((candidate) => candidate.demoCcuTier === 1)
+        .map((candidate) => candidate.appid);
+      tier2Appids = adaptiveCandidates.candidates
+        .filter((candidate) => candidate.demoCcuTier !== 1)
+        .map((candidate) => candidate.appid);
+
+      log.info('Selected adaptive demo CCU candidates', {
+        breakdown: adaptiveCandidates.breakdown,
+        candidates: adaptiveCandidates.candidates.length,
+        skippedCount: adaptiveCandidates.skippedCount,
+        tier1: tier1Appids.length,
+        tier2: tier2Appids.length,
+      });
+
+      const fetchedTier1 = await runDemoTierFetch({
+        appids: tier1Appids,
+        config,
+        env,
+        fetchBatch,
+        now,
+        shouldYieldToMainCcu: async () => false,
+        steamState,
+        supabaseForGuardrails: supabasePlaceholder,
+        tier: 1,
+        tiger,
+      });
+      mergeBatchResult(tier1Result, fetchedTier1.result);
+      stats.stoppedForSteamBackoff = fetchedTier1.stoppedForSteamBackoff;
+      stats.steamBackoffUntilIso = fetchedTier1.steamBackoffUntilIso;
+
+      if (!stats.stoppedForSteamBackoff) {
+        const fetchedTier2 = await runDemoTierFetch({
+          appids: tier2Appids,
+          config,
+          env,
+          fetchBatch,
+          now,
+          shouldYieldToMainCcu: async () => false,
+          steamState,
+          supabaseForGuardrails: supabasePlaceholder,
+          tier: 2,
+          tiger,
+        });
+        mergeBatchResult(tier2Result, fetchedTier2.result);
+        stats.stoppedForSteamBackoff = fetchedTier2.stoppedForSteamBackoff;
+        stats.steamBackoffUntilIso = fetchedTier2.steamBackoffUntilIso;
+      }
+    } else if (!stats.stoppedForMainCcu) {
       const tier1Candidates = await tiger.metrics.listDemoCcuTierAppids({
         limit: config.hotLimit,
         nowIso: now().toISOString(),
@@ -512,6 +752,7 @@ export async function runTigerCcuDemoTieredSync(
           config.guardMode === 'strict'
             ? () => isMainCcuActive(tiger, env, 'tier1_chunk_guard')
             : async () => false,
+        steamState,
         supabaseForGuardrails: supabasePlaceholder,
         tier: 1,
         tiger,
@@ -522,7 +763,12 @@ export async function runTigerCcuDemoTieredSync(
       stats.steamBackoffUntilIso = fetchedTier1.steamBackoffUntilIso;
     }
 
-    if (!stats.stoppedForMainCcu && !stats.stoppedForSteamBackoff && config.tailLimit > 0) {
+    if (
+      config.refreshMode === 'tiered' &&
+      !stats.stoppedForMainCcu &&
+      !stats.stoppedForSteamBackoff &&
+      config.tailLimit > 0
+    ) {
       if (await isMainCcuActive(tiger, env, 'before_tail_polling')) {
         stats.stoppedForMainCcu = true;
         log.info('Main CCU job detected before demo tail polling; leaving tail capacity unused');
@@ -542,6 +788,7 @@ export async function runTigerCcuDemoTieredSync(
           fetchBatch,
           now,
           shouldYieldToMainCcu: () => isMainCcuActive(tiger, env, 'tier2_chunk_guard'),
+          steamState,
           supabaseForGuardrails: supabasePlaceholder,
           tier: 2,
           tiger,
@@ -561,6 +808,13 @@ export async function runTigerCcuDemoTieredSync(
       tier1Result.errorCount +
       tier2Result.invalidCount +
       tier2Result.errorCount;
+    stats.requestCount = (tier1Result.requestCount ?? 0) + (tier2Result.requestCount ?? 0);
+    stats.rateLimitedCount =
+      (tier1Result.rateLimitedCount ?? 0) + (tier2Result.rateLimitedCount ?? 0);
+    stats.rpsFinal = config.refreshMode === 'adaptive' ? steamState.currentRps : null;
+    if (stats.dailyBudgetRemaining !== null) {
+      stats.dailyBudgetRemaining = Math.max(0, stats.dailyBudgetRemaining - stats.requestCount);
+    }
 
     const persisted = await persistDemoResults({
       supabaseForGuardrails: supabasePlaceholder,

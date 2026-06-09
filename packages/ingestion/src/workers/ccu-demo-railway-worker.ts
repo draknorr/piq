@@ -20,18 +20,22 @@ const log = logger.child({ worker: 'ccu-demo-railway-worker' });
 const DEFAULT_HOURS_UTC = [0, 4, 8, 12, 16, 20];
 const DEFAULT_MINUTE_UTC = 20;
 const DEFAULT_WINDOW_MINUTES = 10;
-const DEFAULT_TICK_MS = 30_000;
+const DEFAULT_TICK_MS = 300_000;
 const COMPLETED_SLOT_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+export type DemoCcuRailwayRefreshMode = 'tiered' | 'adaptive';
 
 export interface DemoCcuRailwaySchedulerConfig {
   hoursUtc: number[];
   minuteUtc: number;
+  refreshMode: DemoCcuRailwayRefreshMode;
   tickMs: number;
   windowMinutes: number;
 }
 
 export interface DemoCcuRailwaySchedulerState {
   activeRun: Promise<void> | null;
+  dailyBudgetBackoffUntilMs: number | null;
   completedSlotKeys: Set<string>;
   steamBackoffUntilMs: number | null;
 }
@@ -40,6 +44,7 @@ export type DemoCcuRailwayTickStatus =
   | 'active_run'
   | 'already_completed'
   | 'backoff'
+  | 'daily_budget'
   | 'outside_window'
   | 'started';
 
@@ -101,12 +106,27 @@ function parseHoursUtc(value: string | undefined): number[] {
   return [...new Set(hours)].sort((a, b) => a - b);
 }
 
+function parseRefreshMode(value: string | undefined): DemoCcuRailwayRefreshMode {
+  if (!value) {
+    return 'adaptive';
+  }
+
+  if (value === 'tiered' || value === 'adaptive') {
+    return value;
+  }
+
+  throw new Error(
+    `Expected CCU_DEMO_REFRESH_MODE to be "tiered" or "adaptive" but received "${value}"`
+  );
+}
+
 export function readDemoCcuRailwaySchedulerConfig(
   env: NodeJS.ProcessEnv = process.env
 ): DemoCcuRailwaySchedulerConfig {
   return {
     hoursUtc: parseHoursUtc(env.CCU_DEMO_SCHEDULER_HOURS_UTC),
     minuteUtc: parseMinute(env.CCU_DEMO_SCHEDULER_MINUTE_UTC, DEFAULT_MINUTE_UTC),
+    refreshMode: parseRefreshMode(env.CCU_DEMO_REFRESH_MODE),
     tickMs: parsePositiveInteger(env.CCU_DEMO_SCHEDULER_TICK_MS, DEFAULT_TICK_MS),
     windowMinutes: parsePositiveInteger(
       env.CCU_DEMO_SCHEDULER_WINDOW_MINUTES,
@@ -118,6 +138,7 @@ export function readDemoCcuRailwaySchedulerConfig(
 export function createDemoCcuRailwaySchedulerState(): DemoCcuRailwaySchedulerState {
   return {
     activeRun: null,
+    dailyBudgetBackoffUntilMs: null,
     completedSlotKeys: new Set<string>(),
     steamBackoffUntilMs: null,
   };
@@ -170,11 +191,20 @@ export function pruneCompletedDemoCcuRailwaySlots(
   }
 }
 
-function buildRailwayDemoSyncEnv(env: NodeJS.ProcessEnv, slotKey: string): NodeJS.ProcessEnv {
+function adaptiveSlotKey(now: Date): string {
+  return `adaptive:${now.toISOString()}`;
+}
+
+function buildRailwayDemoSyncEnv(
+  env: NodeJS.ProcessEnv,
+  slotKey: string,
+  refreshMode: DemoCcuRailwayRefreshMode
+): NodeJS.ProcessEnv {
   return {
     ...env,
     CCU_DEMO_MAIN_CCU_GUARD_MODE:
       env.CCU_DEMO_MAIN_CCU_GUARD_MODE ?? 'hot_independent',
+    CCU_DEMO_REFRESH_MODE: env.CCU_DEMO_REFRESH_MODE ?? refreshMode,
     CCU_DEMO_RUNTIME: env.CCU_DEMO_RUNTIME ?? 'railway',
     CCU_DEMO_SLOT_KEY: slotKey,
   };
@@ -195,13 +225,28 @@ export async function runDemoCcuRailwaySchedulerTick(params: {
     return { status: 'active_run' };
   }
 
-  const slotKey = getDueDemoCcuRailwaySlotKey(params.now, params.config);
+  const slotKey =
+    params.config.refreshMode === 'adaptive'
+      ? adaptiveSlotKey(params.now)
+      : getDueDemoCcuRailwaySlotKey(params.now, params.config);
+
   if (!slotKey) {
     return { status: 'outside_window' };
   }
 
-  if (params.state.completedSlotKeys.has(slotKey)) {
+  if (params.config.refreshMode === 'tiered' && params.state.completedSlotKeys.has(slotKey)) {
     return { slotKey, status: 'already_completed' };
+  }
+
+  if (
+    params.state.dailyBudgetBackoffUntilMs !== null &&
+    params.now.getTime() < params.state.dailyBudgetBackoffUntilMs
+  ) {
+    return {
+      backoffUntilIso: new Date(params.state.dailyBudgetBackoffUntilMs).toISOString(),
+      slotKey,
+      status: 'daily_budget',
+    };
   }
 
   if (
@@ -215,12 +260,20 @@ export async function runDemoCcuRailwaySchedulerTick(params: {
     };
   }
 
-  params.state.completedSlotKeys.add(slotKey);
+  if (params.config.refreshMode === 'tiered') {
+    params.state.completedSlotKeys.add(slotKey);
+  }
   params.state.activeRun = Promise.resolve()
     .then(async () => {
       const stats = await runDemoSync({
-        env: buildRailwayDemoSyncEnv(env, slotKey),
+        env: buildRailwayDemoSyncEnv(env, slotKey, params.config.refreshMode),
       });
+      if (stats.stoppedForDailyBudget && stats.dailyBudgetResetIso) {
+        const backoffUntilMs = Date.parse(stats.dailyBudgetResetIso);
+        if (Number.isFinite(backoffUntilMs)) {
+          params.state.dailyBudgetBackoffUntilMs = backoffUntilMs;
+        }
+      }
       if (stats.stoppedForSteamBackoff && stats.steamBackoffUntilIso) {
         const backoffUntilMs = Date.parse(stats.steamBackoffUntilIso);
         if (Number.isFinite(backoffUntilMs)) {
@@ -254,6 +307,7 @@ export async function runDemoCcuRailwayScheduler(params: {
   log.info('Starting Railway demo CCU scheduler', {
     hoursUtc: config.hoursUtc,
     minuteUtc: config.minuteUtc,
+    refreshMode: config.refreshMode,
     tickMs: config.tickMs,
     windowMinutes: config.windowMinutes,
   });
@@ -269,6 +323,12 @@ export async function runDemoCcuRailwayScheduler(params: {
 
     if (result.status === 'backoff') {
       log.info('Skipping Railway demo CCU slot during Steam backoff', {
+        backoffUntilIso: result.backoffUntilIso,
+        slotKey: result.slotKey,
+      });
+    }
+    if (result.status === 'daily_budget') {
+      log.info('Skipping Railway demo CCU slot because daily request budget is exhausted', {
         backoffUntilIso: result.backoffUntilIso,
         slotKey: result.slotKey,
       });

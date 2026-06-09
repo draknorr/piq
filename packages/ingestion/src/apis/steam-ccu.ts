@@ -1,4 +1,5 @@
 import { API_URLS, logger } from '@publisheriq/shared';
+import pLimit from 'p-limit';
 import { rateLimiters } from '../utils/rate-limiter.js';
 
 const log = logger.child({ component: 'SteamCCU' });
@@ -21,9 +22,15 @@ interface SteamCCURequestOptions {
 
 interface CCUFetchOptions {
   confirmSuspiciousZero?: boolean;
+  limiter?: SteamCcuLimiter;
 }
 
 interface BatchCCUFetchOptions {
+  concurrency?: number;
+  cautionErrorRateThreshold?: number;
+  rpsInitial?: number;
+  rpsMax?: number;
+  rpsMin?: number;
   suspiciousZeroAppids?: ReadonlySet<number>;
 }
 
@@ -31,6 +38,77 @@ interface SteamCCUFetchResult {
   data: CCUResponse | null;
   status: number;
   url: string;
+}
+
+interface SteamCcuLimiter {
+  acquire(): Promise<void>;
+}
+
+class AdaptiveSteamCcuLimiter implements SteamCcuLimiter {
+  private lastRefill = Date.now();
+  private tokens: number;
+  private queue: Promise<void> = Promise.resolve();
+  private requestsPerSecond: number;
+
+  constructor(
+    initialRequestsPerSecond: number,
+    private readonly minRequestsPerSecond: number,
+    private readonly maxRequestsPerSecond: number
+  ) {
+    this.requestsPerSecond = Math.min(
+      Math.max(initialRequestsPerSecond, minRequestsPerSecond),
+      maxRequestsPerSecond
+    );
+    this.tokens = Math.max(1, Math.ceil(this.requestsPerSecond));
+  }
+
+  async acquire(): Promise<void> {
+    const previous = this.queue;
+    let release!: () => void;
+    this.queue = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+
+    try {
+      this.refill();
+
+      if (this.tokens >= 1) {
+        this.tokens -= 1;
+        return;
+      }
+
+      const waitTimeMs = ((1 - this.tokens) / this.requestsPerSecond) * 1000;
+      await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
+      this.refill();
+      this.tokens -= 1;
+    } finally {
+      release();
+    }
+  }
+
+  getRequestsPerSecond(): number {
+    return this.requestsPerSecond;
+  }
+
+  halve(): number {
+    this.requestsPerSecond = Math.max(
+      this.minRequestsPerSecond,
+      this.requestsPerSecond / 2
+    );
+    this.tokens = Math.min(this.tokens, Math.max(1, Math.ceil(this.requestsPerSecond)));
+    return this.requestsPerSecond;
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsedSeconds = (now - this.lastRefill) / 1000;
+    this.tokens = Math.min(
+      Math.max(1, Math.ceil(this.maxRequestsPerSecond)),
+      this.tokens + elapsedSeconds * this.requestsPerSecond
+    );
+    this.lastRefill = now;
+  }
 }
 
 function buildSteamCCUUrl(appid: number, options?: SteamCCURequestOptions): string {
@@ -67,8 +145,16 @@ async function requestSteamCCU(
   return { data, status: res.status, url };
 }
 
-async function confirmSuspiciousZero(appid: number): Promise<number | null> {
-  await rateLimiters.steamCCU.acquire();
+async function confirmSuspiciousZero(
+  appid: number,
+  limiter: SteamCcuLimiter
+): Promise<{
+  httpStatus: number;
+  playerCount: number | null;
+  rateLimited: boolean;
+  requestCount: number;
+}> {
+  await limiter.acquire();
 
   const confirmation = await requestSteamCCU(appid, {
     cacheBust: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -82,10 +168,20 @@ async function confirmSuspiciousZero(appid: number): Promise<number | null> {
       result: confirmation.data?.response?.result ?? null,
       url: confirmation.url,
     });
-    return null;
+    return {
+      httpStatus: confirmation.status,
+      playerCount: null,
+      rateLimited: confirmation.status === 429,
+      requestCount: 1,
+    };
   }
 
-  return confirmation.data.response.player_count;
+  return {
+    httpStatus: confirmation.status,
+    playerCount: confirmation.data.response.player_count,
+    rateLimited: confirmation.status === 429,
+    requestCount: 1,
+  };
 }
 
 /**
@@ -140,6 +236,9 @@ export type CCUValidationState =
  * Result from a single CCU fetch with status tracking
  */
 export interface CCUResultWithStatus {
+  httpStatus?: number;
+  rateLimited?: boolean;
+  requestCount?: number;
   status: CCUFetchStatus;
   validationState: CCUValidationState;
   playerCount?: number;
@@ -163,20 +262,26 @@ async function fetchSteamCCUWithStatusOptions(
   appid: number,
   options: CCUFetchOptions
 ): Promise<CCUResultWithStatus> {
-  await rateLimiters.steamCCU.acquire();
+  const limiter = options.limiter ?? rateLimiters.steamCCU;
+  await limiter.acquire();
 
   try {
     const result = await requestSteamCCU(appid);
+    const base = {
+      httpStatus: result.status,
+      rateLimited: result.status === 429,
+      requestCount: 1,
+    };
 
     if (!result.data) {
       log.debug('Failed to parse CCU response body', { appid, status: result.status });
-      return { status: 'error', validationState: 'error' };
+      return { ...base, status: 'error', validationState: 'error' };
     }
 
     // ONLY mark invalid if result === 42 (definitive from Steam)
     if (result.data.response.result === 42) {
       log.debug('Steam CCU returned invalid appid', { appid });
-      return { status: 'invalid', validationState: 'invalid' };
+      return { ...base, status: 'invalid', validationState: 'invalid' };
     }
 
     // Success case
@@ -184,30 +289,37 @@ async function fetchSteamCCUWithStatusOptions(
       let playerCount = result.data.response.player_count;
 
       if (options.confirmSuspiciousZero && playerCount === 0) {
-        const confirmedCount = await confirmSuspiciousZero(appid);
+        const confirmation = await confirmSuspiciousZero(appid, limiter);
 
-        if (confirmedCount !== null) {
-          if (confirmedCount > 0) {
+        if (confirmation.playerCount !== null) {
+          if (confirmation.playerCount > 0) {
             log.warn('Suspicious zero overridden after cache-busting recheck', {
               appid,
               initialPlayerCount: 0,
-              confirmedPlayerCount: confirmedCount,
+              confirmedPlayerCount: confirmation.playerCount,
             });
           } else {
             log.info('Suspicious zero confirmed after cache-busting recheck', { appid });
           }
 
-          playerCount = confirmedCount;
+          playerCount = confirmation.playerCount;
         } else {
           return {
+            httpStatus: confirmation.httpStatus,
+            rateLimited: base.rateLimited || confirmation.rateLimited,
+            requestCount: base.requestCount + confirmation.requestCount,
             status: 'valid',
             validationState: 'suspect_zero',
             playerCount: 0,
           };
         }
+
+        base.rateLimited = base.rateLimited || confirmation.rateLimited;
+        base.requestCount += confirmation.requestCount;
       }
 
       return {
+        ...base,
         status: 'valid',
         validationState: playerCount > 0 ? 'confirmed_positive' : 'confirmed_zero',
         playerCount,
@@ -216,11 +328,11 @@ async function fetchSteamCCUWithStatusOptions(
 
     // Unknown response format - treat as error, NOT invalid
     log.debug('Steam CCU returned unexpected result', { appid, result: result.data.response.result });
-    return { status: 'error', validationState: 'error' };
+    return { ...base, status: 'error', validationState: 'error' };
   } catch (error) {
     // Network error, timeout, etc. - NEVER mark as invalid
     log.debug('CCU fetch failed with network error', { appid, error });
-    return { status: 'error', validationState: 'error' };
+    return { requestCount: 1, status: 'error', validationState: 'error' };
   }
 }
 
@@ -236,6 +348,12 @@ export interface CCUBatchResultWithStatus {
   invalidCount: number;
   /** Number of errors (network/timeout) */
   errorCount: number;
+  /** Number of HTTP 429 results observed */
+  rateLimitedCount?: number;
+  /** Total Steam requests, including suspicious-zero rechecks */
+  requestCount?: number;
+  /** Final adaptive requests-per-second setting for this batch */
+  rpsFinal?: number;
 }
 
 /**
@@ -258,38 +376,79 @@ export async function fetchSteamCCUBatchWithStatus(
   let validCount = 0;
   let invalidCount = 0;
   let errorCount = 0;
+  let rateLimitedCount = 0;
+  let requestCount = 0;
+  let processedCount = 0;
+  let rpsAdjustedForCaution = false;
+  const concurrency = Math.max(1, Math.floor(options?.concurrency ?? 1));
+  const adaptiveLimiter =
+    options?.rpsInitial !== undefined
+      ? new AdaptiveSteamCcuLimiter(
+          options.rpsInitial,
+          options.rpsMin ?? Math.min(options.rpsInitial, 1),
+          options.rpsMax ?? options.rpsInitial
+        )
+      : null;
+  const limiter = adaptiveLimiter ?? rateLimiters.steamCCU;
+  const limit = pLimit(concurrency);
+  let stopRequested = false;
 
-  for (let i = 0; i < appids.length; i++) {
+  await Promise.all(
+    appids.map((appid) =>
+      limit(async () => {
+        if (stopRequested || shouldStop?.()) {
+          stopRequested = true;
+          return;
+        }
+
+        const result = await fetchSteamCCUWithStatusOptions(appid, {
+          confirmSuspiciousZero: options?.suspiciousZeroAppids?.has(appid) ?? false,
+          limiter,
+        });
+
+        results.set(appid, result);
+
+        if (result.status === 'valid') {
+          validCount++;
+        } else if (result.status === 'invalid') {
+          invalidCount++;
+        } else {
+          errorCount++;
+        }
+
+        requestCount += result.requestCount ?? 1;
+        if (result.rateLimited) {
+          rateLimitedCount++;
+          adaptiveLimiter?.halve();
+        }
+
+        processedCount++;
+        const processedErrorRate = processedCount > 0 ? errorCount / processedCount : 0;
+        if (
+          adaptiveLimiter &&
+          !rpsAdjustedForCaution &&
+          (options?.cautionErrorRateThreshold ?? 1) <= processedErrorRate
+        ) {
+          adaptiveLimiter.halve();
+          rpsAdjustedForCaution = true;
+        }
+
+        if (onProgress && processedCount % 100 === 0) {
+          onProgress(processedCount, appids.length);
+        }
+      })
+    )
+  );
+
+  if (stopRequested) {
     // Check for graceful shutdown before each request
-    if (shouldStop?.()) {
-      log.info('Graceful shutdown requested, stopping batch early', {
-        processed: i,
-        total: appids.length,
-        validCount,
-        invalidCount,
-        errorCount,
-      });
-      break;
-    }
-
-    const appid = appids[i];
-    const result = await fetchSteamCCUWithStatusOptions(appid, {
-      confirmSuspiciousZero: options?.suspiciousZeroAppids?.has(appid) ?? false,
+    log.info('Graceful shutdown requested, stopping batch early', {
+      processed: results.size,
+      total: appids.length,
+      validCount,
+      invalidCount,
+      errorCount,
     });
-
-    results.set(appid, result);
-
-    if (result.status === 'valid') {
-      validCount++;
-    } else if (result.status === 'invalid') {
-      invalidCount++;
-    } else {
-      errorCount++;
-    }
-
-    if (onProgress && (i + 1) % 100 === 0) {
-      onProgress(i + 1, appids.length);
-    }
   }
 
   log.info('Batch CCU fetch with status complete', {
@@ -298,9 +457,20 @@ export async function fetchSteamCCUBatchWithStatus(
     validCount,
     invalidCount,
     errorCount,
+    rateLimitedCount,
+    requestCount,
+    rpsFinal: adaptiveLimiter?.getRequestsPerSecond(),
   });
 
-  return { results, validCount, invalidCount, errorCount };
+  return {
+    results,
+    validCount,
+    invalidCount,
+    errorCount,
+    rateLimitedCount,
+    requestCount,
+    rpsFinal: adaptiveLimiter?.getRequestsPerSecond(),
+  };
 }
 
 /**
