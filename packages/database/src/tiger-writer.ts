@@ -2061,6 +2061,7 @@ export class TigerMetricsRepository {
     const eligibleCte = `
       WITH active_demos AS (
         SELECT
+          $1::integer AS candidate_limit,
           dcta.appid,
           dcta.ccu_fetch_status,
           dcta.ccu_skip_until,

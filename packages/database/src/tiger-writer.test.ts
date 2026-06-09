@@ -545,6 +545,7 @@ test('metrics.listAdaptiveDemoCcuCandidates prioritizes positive, new, unknown, 
   assert.equal(candidates.skippedCount, 2);
   assert.equal(candidates.breakdown.p0_new_positive, 1);
   assert.equal(candidates.breakdown.p2_never_synced, 4);
+  assert.match(pool.calls[1]?.sql ?? '', /\$1::integer AS candidate_limit/);
   assert.match(pool.calls[1]?.sql ?? '', /last_ccu_validation_state = 'confirmed_positive'/);
   assert.match(pool.calls[1]?.sql ?? '', /last_ccu_synced IS NULL/);
   assert.match(pool.calls[1]?.sql ?? '', /last_ccu_validation_state = 'confirmed_zero'/);
