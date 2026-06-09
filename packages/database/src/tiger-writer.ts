@@ -2061,7 +2061,6 @@ export class TigerMetricsRepository {
     const eligibleCte = `
       WITH active_demos AS (
         SELECT
-          $1::integer AS candidate_limit,
           dcta.appid,
           dcta.ccu_fetch_status,
           dcta.ccu_skip_until,
@@ -2073,7 +2072,7 @@ export class TigerMetricsRepository {
           dcta.total_reviews,
           a.created_at,
           a.release_date,
-          COALESCE(a.release_date >= (($2::timestamptz AT TIME ZONE 'UTC')::date - $3::integer), false) AS is_recent_release
+          COALESCE(a.release_date >= (($1::timestamptz AT TIME ZONE 'UTC')::date - $2::integer), false) AS is_recent_release
         FROM ops.demo_ccu_tier_assignments dcta
         JOIN legacy.apps a ON a.appid = dcta.appid
         WHERE a.type = 'demo'
@@ -2084,19 +2083,19 @@ export class TigerMetricsRepository {
         SELECT
           *,
           CASE
-            WHEN ccu_skip_until > $2::timestamptz THEN NULL
+            WHEN ccu_skip_until > $1::timestamptz THEN NULL
             WHEN last_ccu_validation_state = 'invalid' THEN NULL
             WHEN (last_ccu_validation_state = 'confirmed_positive' OR COALESCE(recent_peak_ccu, 0) > 0)
               AND is_recent_release
               AND (
                 last_ccu_synced IS NULL
-                OR last_ccu_synced <= $2::timestamptz - ($4::integer * INTERVAL '1 minute')
+                OR last_ccu_synced <= $1::timestamptz - ($3::integer * INTERVAL '1 minute')
               )
             THEN 'p0_new_positive'
             WHEN (last_ccu_validation_state = 'confirmed_positive' OR COALESCE(recent_peak_ccu, 0) > 0)
               AND (
                 last_ccu_synced IS NULL
-                OR last_ccu_synced <= $2::timestamptz - ($5::integer * INTERVAL '1 minute')
+                OR last_ccu_synced <= $1::timestamptz - ($4::integer * INTERVAL '1 minute')
               )
             THEN 'p0_positive'
             WHEN is_recent_release
@@ -2104,12 +2103,12 @@ export class TigerMetricsRepository {
             THEN 'p1_new_never_synced'
             WHEN is_recent_release
               AND last_ccu_validation_state = 'confirmed_zero'
-              AND last_ccu_synced <= $2::timestamptz - ($6::integer * INTERVAL '1 hour')
+              AND last_ccu_synced <= $1::timestamptz - ($5::integer * INTERVAL '1 hour')
             THEN 'p1_new_zero'
             WHEN last_ccu_synced IS NULL
             THEN 'p2_never_synced'
             WHEN last_ccu_validation_state = 'confirmed_zero'
-              AND last_ccu_synced <= $2::timestamptz - ($7::integer * INTERVAL '1 day')
+              AND last_ccu_synced <= $1::timestamptz - ($6::integer * INTERVAL '1 day')
             THEN 'p3_zero_refresh'
             ELSE NULL
           END AS bucket
@@ -2122,8 +2121,7 @@ export class TigerMetricsRepository {
       )
     `;
 
-    const queryValues = [
-      params.limit,
+    const eligibilityValues = [
       params.nowIso,
       params.newDemoWindowDays,
       params.newPositiveRefreshMinutes,
@@ -2158,7 +2156,7 @@ export class TigerMetricsRepository {
             GROUP BY bucket
             ORDER BY bucket ASC
           `,
-          queryValues
+          eligibilityValues
         ),
         runQuery<DemoCcuAdaptiveCandidateRow>(
           this.pool,
@@ -2183,9 +2181,9 @@ export class TigerMetricsRepository {
               created_at DESC NULLS LAST,
               rank_position ASC NULLS LAST,
               appid ASC
-            LIMIT $1::integer
+            LIMIT $7::integer
           `,
-          queryValues
+          [...eligibilityValues, params.limit]
         ),
       ]);
 
