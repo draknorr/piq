@@ -92,29 +92,29 @@ Accepted incoming ingestion/product-data writers should use Tiger and R2 directl
 
 Core runtime variables:
 
-| Variable | Use |
-| -------- | --- |
-| `DATA_READ_TARGET=tiger` | Read worker scheduling/state from Tiger when supported |
-| `DATA_WRITE_TARGET=tiger` | Write catalog/metric/product-derived state to Tiger |
-| `CHANGE_INTEL_READ_TARGET=tiger` | Read change-intel queue/state from Tiger |
-| `CHANGE_INTEL_WRITE_TARGET=tiger` | Write storefront/news/change-intel rows to Tiger |
-| `TIGER_PRIMARY_URL` | Target Tiger Postgres URL |
-| `CHANGE_INTEL_ARCHIVE_TARGET=object_storage` | Store raw/normalized payload archives in R2/S3 |
-| `CHANGE_INTEL_ARCHIVE_BUCKET` | R2/S3 archive bucket |
-| `CHANGE_INTEL_ARCHIVE_PREFIX` | Prefix such as `production/change-intel` |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | R2/S3 endpoint |
-| `CHANGE_INTEL_ARCHIVE_REGION` | R2 commonly uses `auto` |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | R2/S3 access key |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | R2/S3 secret key |
-| `CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE=true` | R2 path-style setting |
+| Variable                                     | Use                                                    |
+| -------------------------------------------- | ------------------------------------------------------ |
+| `DATA_READ_TARGET=tiger`                     | Read worker scheduling/state from Tiger when supported |
+| `DATA_WRITE_TARGET=tiger`                    | Write catalog/metric/product-derived state to Tiger    |
+| `CHANGE_INTEL_READ_TARGET=tiger`             | Read change-intel queue/state from Tiger               |
+| `CHANGE_INTEL_WRITE_TARGET=tiger`            | Write storefront/news/change-intel rows to Tiger       |
+| `TIGER_PRIMARY_URL`                          | Target Tiger Postgres URL                              |
+| `CHANGE_INTEL_ARCHIVE_TARGET=object_storage` | Store raw/normalized payload archives in R2/S3         |
+| `CHANGE_INTEL_ARCHIVE_BUCKET`                | R2/S3 archive bucket                                   |
+| `CHANGE_INTEL_ARCHIVE_PREFIX`                | Prefix such as `production/change-intel`               |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`              | R2/S3 endpoint                                         |
+| `CHANGE_INTEL_ARCHIVE_REGION`                | R2 commonly uses `auto`                                |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`         | R2/S3 access key                                       |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY`     | R2/S3 secret key                                       |
+| `CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE=true` | R2 path-style setting                                  |
 
 Scheduled writer gates in GitHub Actions:
 
-| Gate | Enables |
-| ---- | ------- |
-| `ENABLE_TIGER_CATALOG_WRITERS=true` | App list, storefront, catalog/change-intel writer schedules |
-| `ENABLE_TIGER_METRICS_WRITERS=true` | Reviews, price, SteamSpy, CCU, trends, velocity, interpolation, priority schedules |
-| `ENABLE_TIGER_EMBEDDING_WRITER=true` | Embedding sync schedule |
+| Gate                                 | Enables                                                                            |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| `ENABLE_TIGER_CATALOG_WRITERS=true`  | App list, storefront, catalog/change-intel writer schedules                        |
+| `ENABLE_TIGER_METRICS_WRITERS=true`  | Reviews, price, SteamSpy, CCU, trends, velocity, interpolation, priority schedules |
+| `ENABLE_TIGER_EMBEDDING_WRITER=true` | Embedding sync schedule                                                            |
 
 Use manual dispatch first. For embeddings, set `max_batches=1` on `embedding-sync.yml` as the smoke test before enabling `ENABLE_TIGER_EMBEDDING_WRITER`.
 
@@ -201,6 +201,13 @@ flag. `APP_PROJECTION_VERSION=v2` also requires both
 `metrics.apps_page_projection_v2` and
 `metrics.apps_page_filter_counts_v2`, plus a proven projection refresh cadence
 that keeps source freshness within eight hours.
+
+The intended production cadence is the fixed four-hour Tiger-native Timescale
+job documented in
+`docs/developer-guide/operations/apps-projection-native-scheduler.md`. Schema
+0091 installs it disabled. Applying, smoke-running, and enabling that job are
+separate production writes; none is implied by setting a reader flag. The
+GitHub Apps projection workflow remains manual-only.
 
 Pins, credits, alerts, and account consumers are not covered by these product
 reader flags. Do not move those routes until Tiger has exact, no-loss parity

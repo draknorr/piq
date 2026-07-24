@@ -172,6 +172,59 @@ does not require this gate.
   same-named Railway services still stopped. See
   `readiness-events-windows-schema-apply.md`.
 
+## Approval Record: Versioned Consumer Views 0090
+
+- Proposed operation: apply
+  `packages/data-plane/sql/tiger-bootstrap/0090_apps_page_projection_v2.sql`
+  to Tiger production with `psql --single-transaction`.
+- Affected objects: additive normal views
+  `metrics.apps_page_projection_v2` and
+  `metrics.apps_page_filter_counts_v2`, plus their comments.
+- Reason: install the low-cost, versioned Apps contract without duplicating the
+  maintained materialized projection or its refresh cost.
+- Risk level: medium. The operation changes the production catalog and takes
+  brief DDL locks, but does not change base-table data, refresh a projection,
+  deploy a reader, or change a runtime flag.
+- Recovery recheck: Tiger was `READY`; the authenticated provider form still
+  offered any-point PITR for the last three days and its recovery-fork control
+  was enabled. No recovery fork was created.
+- Failure rollback: `--single-transaction` rolls back the entire file if any
+  statement fails.
+- Post-success rollback: keep every reader on its legacy default and leave the
+  additive views unused. Destructive removal requires separate approval.
+- Explicit approval reference: the user replied `yes` immediately after the
+  operation, reason, risk, rollback, recovery, commit, and checksum were
+  presented in the current Codex task.
+- Outcome: applied successfully with exact Apps and filter-count row/key
+  parity, no v2 ID fan-out, an unchanged PICS cursor, and both same-named
+  Railway services still stopped. See
+  `versioned-consumer-schema-apply.md`.
+
+## Approval Record: Post-0090 Apps Projection Refresh
+
+- Proposed operation: manually dispatch
+  `.github/workflows/apps-projection-refresh.yml` with its backup and approval
+  inputs to refresh the two existing Apps materialized views concurrently.
+- Affected objects: `metrics.apps_page_projection` and
+  `metrics.apps_page_filter_counts`.
+- Reason: restore exact source parity and freshness before evaluating v2
+  readers.
+- Risk level: medium because the operation creates temporary Tiger CPU and I/O
+  load and can fail on a lock or statement timeout.
+- Recovery recheck: Tiger was `READY`; the authenticated provider form still
+  offered any-point PITR for the last three days and its recovery-fork control
+  was enabled. No recovery fork was created.
+- Failure rollback: a failed concurrent refresh leaves the existing
+  materialization in service; no base table, reader flag, or recurring
+  schedule changes.
+- Explicit approval reference: the user replied `yes` immediately after the
+  one-time refresh, expected duration, risk, rollback, and separately disabled
+  cadence were presented in the current Codex task.
+- Outcome: GitHub Actions run `30120074312` passed; source, legacy, and v2 Apps
+  counts reached exact `224,030` parity; freshness reached `0.031` hours; the
+  PICS cursor remained unchanged; and both same-named Railway services stayed
+  stopped. See `versioned-consumer-projection-refresh.md`.
+
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from
 this file after verification.
