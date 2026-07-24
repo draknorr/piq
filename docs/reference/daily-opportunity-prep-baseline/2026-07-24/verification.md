@@ -1,10 +1,12 @@
 # PR 1 Verification — 2026-07-24
 
-All production database access used read-only transactions or bounded `SELECT`
-queries. No workflow was dispatched, no Railway service was restarted, and no
-production database/object was mutated. A Vercel configuration-only repair set
-the missing strict Tiger Change Feed flags and rebuilt the existing production
-artifact; it did not deploy branch code.
+The baseline and all diagnostic access used read-only transactions or bounded
+`SELECT` queries. After the Tiger recovery gate passed, one separately approved
+operation concurrently refreshed the two existing Apps materialized views. No
+base table, cursor, writer target, read flag, workflow schedule, or Railway
+service changed. A Vercel configuration-only repair set the missing strict
+Tiger Change Feed flags and rebuilt the existing production artifact; it did
+not deploy branch code.
 
 ## Passed
 
@@ -31,6 +33,11 @@ artifact; it did not deploy branch code.
 - The rebuilt Vercel production artifact retained the `/login?next=` redirect
   and API `401` contracts. Authenticated `/changes` reported `Capture healthy`
   and displayed `25` current Tiger-backed rows for the last day.
+- The separately approved Apps projection refresh completed in `57.56s` plus
+  `4.41s` for filter counts. Post-validation proved `223,851` source and
+  projection rows, zero missing/extra/duplicate IDs, and `0.202h` freshness.
+- Authenticated production `/apps` rendered successfully after the refresh with
+  its existing filters, sorting, table, entity links, and pin controls.
 
 ## Existing blockers surfaced
 
@@ -57,9 +64,8 @@ baseline or the contained admin/configuration changes in PR 1.
 
 ## External gates still open
 
-- Separate approval for any materialized-view refresh or later database
-  migration/backfill.
-- Manual Apps projection refresh timing and parity proof before enabling its
+- Separate approval for every later database migration, backfill, or repair.
+- Separate authorization before enabling the recurring Apps projection refresh
   schedule.
 - Three healthy daily cycles before any primary catalog, PICS, projection, or
   consumer cutover.

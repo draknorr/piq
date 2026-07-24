@@ -4,6 +4,10 @@ Captured during the first implementation slice on Friday, July 24, 2026 at `2026
 
 This baseline is read-only. No production mutation was performed while capturing it.
 
+After capture and explicit user approval, the two existing Apps materialized
+views were refreshed concurrently. That operation and its before/after evidence
+are isolated in `apps-projection-refresh.md`.
+
 ## Scope
 
 - Tiger production snapshot for PICS progress, queue state, and projection freshness.
@@ -42,5 +46,9 @@ This baseline is read-only. No production mutation was performed while capturing
 - `r2-manifest.json`: metadata-only object inventory for the production change-intel prefix.
 - `runtime-matrix.json`: GitHub Actions, Railway, query-api, PICS, demo CCU, and Vercel observations.
 - `route-contract-matrix.json`: source ownership and preservation contracts for current browser/API surfaces.
-- `backup-pitr-gate.md`: unresolved provider-dashboard evidence and approval gate.
+- `backup-pitr-gate.md`: verified Tiger recovery evidence and the explicit
+  one-time production-write approval record.
+- `apps-projection-refresh.md`: explicit approval, safe execution settings,
+  before/after parity, timing, freshness, and live-route evidence for the
+  one-time production refresh.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

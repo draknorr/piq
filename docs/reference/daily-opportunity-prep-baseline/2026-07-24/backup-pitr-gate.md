@@ -63,15 +63,22 @@ does not require this gate.
 
 ## Approval Record
 
-- Proposed operation:
-- Affected objects:
-- Reason:
-- Risk level:
-- Rollback:
-- Maintenance window:
-- Operator:
-- Communication channel:
-- Explicit approval reference:
+- Proposed operation: concurrent refresh of the existing Apps materialized
+  views.
+- Affected objects: `metrics.apps_page_projection` and
+  `metrics.apps_page_filter_counts`.
+- Reason: restore projection/source parity and the eight-hour freshness SLO.
+- Risk level: medium.
+- Rollback: no base table or read flag changed; keep the recurring schedule
+  disabled and rebuild again from unchanged source data if validation fails.
+- Maintenance window: `2026-07-24T02:22:11Z` through
+  `2026-07-24T02:24:29.891388Z`.
+- Operator: Codex under the user's explicit approval.
+- Communication channel: current Codex task.
+- Explicit approval reference: user reply `yes` immediately following the
+  operation/risk/rollback approval request.
+- Outcome: passed with exact row and ID parity; see
+  `apps-projection-refresh.md`.
 
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from

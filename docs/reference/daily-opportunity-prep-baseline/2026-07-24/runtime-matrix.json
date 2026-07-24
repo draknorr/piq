@@ -1,8 +1,31 @@
 {
   "schemaVersion": 2,
-  "capturedAt": "2026-07-24T02:19:18Z",
-  "productionDatabaseMutationPerformed": false,
+  "capturedAt": "2026-07-24T02:24:29.891388Z",
+  "productionDatabaseMutationPerformed": true,
   "productionConfigurationChanged": true,
+  "productionDatabaseMutation": {
+    "approval": "user replied yes after receiving operation, reason, risk, and rollback",
+    "operation": "concurrent refresh of existing Apps materialized views",
+    "objects": [
+      "metrics.apps_page_projection",
+      "metrics.apps_page_filter_counts"
+    ],
+    "execution": {
+      "appsProjectionDurationSeconds": 57.56,
+      "filterCountsDurationSeconds": 4.41,
+      "recurringScheduleEnabled": false
+    },
+    "validation": {
+      "sourceRows": 223851,
+      "projectionRows": 223851,
+      "rowDelta": 0,
+      "missingIds": 0,
+      "extraIds": 0,
+      "duplicateIds": 0,
+      "freshnessHours": 0.202,
+      "verifiedAt": "2026-07-24T02:24:29.891388Z"
+    }
+  },
   "githubActions": [
     {
       "name": "Steam App Change Hints",
@@ -254,7 +277,8 @@
     "Only variable names and non-secret operating modes are recorded.",
     "A successful deployment or process health response is not evidence of source progress.",
     "Workflow states were read from the GitHub Actions API; schedules and target flags were read from the captured origin/main workflow files.",
-    "No service restart, workflow dispatch, or production database write occurred.",
-    "The existing Vercel production artifact was rebuilt after two non-secret Change Feed flags were added; no branch code was deployed."
+    "No service restart or workflow dispatch occurred.",
+    "The existing Vercel production artifact was rebuilt after two non-secret Change Feed flags were added; no branch code was deployed.",
+    "One separately approved production database operation concurrently refreshed the existing Apps materialized views; no base table, cursor, writer target, or read flag changed."
   ]
 }
