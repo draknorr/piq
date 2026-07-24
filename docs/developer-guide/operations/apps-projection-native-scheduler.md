@@ -141,10 +141,19 @@ read-only query:
 CALL public.run_job(<resolved_job_id>);
 ```
 
-`run_job` must not be wrapped in a transaction block. When it returns, verify
-job history, exact parity, projection query latency, the live Apps route, and
-the PICS cursor. Keep both Railway services named `publisheriq` stopped; this
-job does not depend on either service.
+`run_job` must not be wrapped in a transaction block. It runs the job in the
+current session/foreground, as described by the
+[Timescale `run_job` reference](https://docs.timescale.com/api/latest/jobs-automation/run_job/).
+On production Tiger 2.27.2, the foreground smoke did not increment
+`timescaledb_information.job_stats` or create a `job_history` row, even with
+job-execution logging enabled. Those views describe automation-framework
+background executions, not proof of this foreground smoke.
+
+Capture the successful client result and independently verify exact parity,
+projection query latency, the live Apps route, and the PICS cursor. Keep both
+Railway services named `publisheriq` stopped; this job does not depend on
+either service. Treat background-worker history as unverified until the first
+approved scheduled execution occurs.
 
 ## Enable recurring execution
 
@@ -155,13 +164,20 @@ native smoke, fresh recovery proof, and separate approval:
 SELECT *
 FROM public.alter_job(
   job_id => <resolved_job_id>,
-  scheduled => true
+  scheduled => true,
+  next_start => date_bin(
+    interval '4 hours',
+    clock_timestamp(),
+    timestamptz '2000-01-01 00:47:00+00'
+  ) + interval '4 hours'
 );
 ```
 
-Immediately verify that `scheduled = true` and `next_start` is the next
-four-hour `:47` UTC slot. If either condition is false, disable the job and
-investigate.
+A paused fixed-schedule job can retain a past `next_start`. Explicitly setting
+the next future fixed slot prevents enablement from being interpreted as an
+immediate catch-up run. Immediately verify that `scheduled = true` and
+`next_start` is that future four-hour `:47` UTC slot. If either condition is
+false, disable the job and investigate.
 
 ## Health and SLO
 
@@ -169,7 +185,8 @@ Use `timescaledb_information.job_stats.last_successful_finish` as the scheduler
 freshness clock. `metrics.apps_page_projection.data_updated_at` is source-data
 provenance, not proof of when the materialization last ran.
 
-The Apps projection is healthy only when:
+After enablement and the first background execution, the Apps projection is
+healthy only when:
 
 - exactly one matching job exists and is scheduled;
 - `last_run_status = 'Success'`;
