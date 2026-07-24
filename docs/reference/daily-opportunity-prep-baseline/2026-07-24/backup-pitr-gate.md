@@ -80,6 +80,23 @@ does not require this gate.
 - Outcome: passed with exact row and ID parity; see
   `apps-projection-refresh.md`.
 
+## Approval Record: Catalog Observation Schema 0087
+
+- Proposed operation: apply the additive Tiger catalog-observation schema.
+- Affected objects: `ops.catalog_scan_runs`, `ops.app_catalog_state`,
+  `events.app_catalog_events`, their indexes, and four transactional functions.
+- Reason: install the durable catalog ledger needed for a separately approved
+  shadow rollout.
+- Risk level: medium.
+- Rollback: keep `CATALOG_OBSERVATION_MODE=off` and leave the additive objects
+  unused; destructive removal would require separate approval.
+- Operator: Codex under the user's explicit approval.
+- Communication channel: current Codex task.
+- Explicit approval reference: user reply `yes` immediately following the
+  operation/risk/rollback approval request.
+- Outcome: applied transactionally and verified with zero initial rows; see
+  `catalog-observation-schema-apply.md`.
+
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from
 this file after verification.

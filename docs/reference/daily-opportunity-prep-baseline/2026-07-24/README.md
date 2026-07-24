@@ -55,4 +55,7 @@ are isolated in `apps-projection-refresh.md`.
 - `apps-projection-refresh.md`: explicit approval, safe execution settings,
   before/after parity, timing, freshness, and live-route evidence for the
   one-time production refresh.
+- `catalog-observation-schema-apply.md`: approved additive Tiger DDL, immutable
+  source checksum, post-apply object verification, and proof that observation
+  remained disabled.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

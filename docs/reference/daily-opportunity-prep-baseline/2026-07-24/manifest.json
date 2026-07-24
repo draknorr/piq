@@ -44,11 +44,12 @@
     "route-contract-matrix.json",
     "runtime-matrix.json",
     "backup-pitr-gate.md",
+    "catalog-observation-schema-apply.md",
     "verification.md"
   ],
   "notes": [
     "All values are time-bound observations from Friday, July 24, 2026.",
     "No credentials or secret values are stored in this artifact.",
-    "Backup and PITR verification is still pending separate operator evidence."
+    "Tiger recovery evidence is current for Tiger-only operations; Supabase recovery evidence is required only before auth-plane or separately approved legacy Supabase mutations."
   ]
 }

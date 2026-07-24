@@ -2,15 +2,25 @@ name: Steam App Change Hints
 
 on:
   schedule:
-    - cron: '10 * * * *'
+    - cron: "10 * * * *"
   workflow_dispatch:
     inputs:
+      catalog_observation_mode:
+        description: "Durable catalog observation mode"
+        required: true
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "primary"
       batch_size:
-        description: 'Number of hint rows to compare per sync_status upsert batch'
+        description: "Number of hint rows to compare per sync_status upsert batch"
         required: false
-        default: '1000'
+        default: "1000"
 
 env:
+  CATALOG_OBSERVATION_MODE: ${{ github.event.inputs.catalog_observation_mode || vars.CATALOG_OBSERVATION_MODE || 'off' }}
   DATA_WRITE_TARGET: tiger
   DATA_READ_TARGET: tiger
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
@@ -28,8 +38,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

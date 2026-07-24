@@ -272,6 +272,189 @@ test('catalog.listAppsForSync calls the partitioned Tiger RPC when partitioned',
   assert.deepEqual(pool.calls[0]?.values, ['storefront', 10, 6, 2]);
 });
 
+test('catalogObservation.beginScan requests a resumable incremental cursor', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        committed_through: '1784863000',
+        id: '00000000-0000-0000-0000-000000000101',
+        last_committed_batch: '3',
+        requested_if_modified_since: '1784862700',
+        scan_kind: 'incremental',
+        source_started_at: '2026-07-24T03:16:40.000Z',
+        status: 'running',
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const scan = await writer.catalogObservation.beginScan({
+    forceFull: false,
+    mode: 'shadow',
+    overlapSeconds: 300,
+    runKey: 'github:30063718694',
+    source: 'steam_change_hints',
+    sourceStartedAt: '2026-07-24T03:16:40.000Z',
+  });
+
+  assert.deepEqual(scan, {
+    committedThrough: 1_784_863_000,
+    id: '00000000-0000-0000-0000-000000000101',
+    lastCommittedBatch: 3,
+    requestedIfModifiedSince: 1_784_862_700,
+    scanKind: 'incremental',
+    sourceStartedAt: '2026-07-24T03:16:40.000Z',
+    status: 'running',
+  });
+  assert.match(pool.calls[0]?.sql ?? '', /ops\.begin_catalog_scan/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    'github:30063718694',
+    'steam_change_hints',
+    'shadow',
+    false,
+    '2026-07-24T03:16:40.000Z',
+    300,
+  ]);
+});
+
+test('catalogObservation.commitBatch preserves durable disposition details', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        result: {
+          accepted_rows: 3,
+          batch_hash: 'batch-sha',
+          batch_index: 0,
+          changed_known_appids: [20],
+          changed_known_rows: 1,
+          enqueued_rows: 2,
+          event_rows: 1,
+          known_rows: 2,
+          rejected_rows: 1,
+          seeded_rows: 1,
+          unchanged_known_rows: 1,
+          unknown_appids: [30],
+          unknown_rows: 1,
+        },
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const committed = await writer.catalogObservation.commitBatch({
+    batchHash: 'batch-sha',
+    batchIndex: 0,
+    rejections: [
+      {
+        reason: 'invalid_appid',
+        row_hash: 'rejected-sha',
+        source_index: 3,
+      },
+    ],
+    rows: [
+      {
+        appid: 10,
+        last_modified: 100,
+        name: 'Unchanged',
+        price_change_number: 1,
+      },
+      {
+        appid: 20,
+        last_modified: 200,
+        name: 'Changed',
+        price_change_number: 2,
+      },
+      { appid: 30, last_modified: 300, name: 'New', price_change_number: 3 },
+    ],
+    scanId: '00000000-0000-0000-0000-000000000101',
+  });
+
+  assert.deepEqual(committed, {
+    acceptedRows: 3,
+    batchHash: 'batch-sha',
+    batchIndex: 0,
+    changedKnownAppids: [20],
+    changedKnownRows: 1,
+    enqueuedRows: 2,
+    eventRows: 1,
+    knownRows: 2,
+    rejectedRows: 1,
+    seededRows: 1,
+    unchangedKnownRows: 1,
+    unknownAppids: [30],
+    unknownRows: 1,
+  });
+  assert.match(pool.calls[0]?.sql ?? '', /ops\.commit_catalog_scan_batch/);
+  assert.equal(JSON.parse(String(pool.calls[0]?.values?.[3])).length, 3);
+  assert.equal(JSON.parse(String(pool.calls[0]?.values?.[4])).length, 1);
+});
+
+test('catalogObservation.commitBatch rejects malformed durable disposition details', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        result: {
+          accepted_rows: 1,
+          batch_hash: 'batch-sha',
+          batch_index: 0,
+          changed_known_appids: [],
+          changed_known_rows: 0,
+          enqueued_rows: 0,
+          event_rows: 0,
+          known_rows: 1,
+          rejected_rows: 0,
+          seeded_rows: 0,
+          unchanged_known_rows: -1,
+          unknown_appids: [],
+          unknown_rows: 0,
+        },
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  await assert.rejects(
+    writer.catalogObservation.commitBatch({
+      batchHash: 'batch-sha',
+      batchIndex: 0,
+      rows: [{ appid: 10, name: 'App' }],
+      scanId: '00000000-0000-0000-0000-000000000101',
+    }),
+    /invalid unchanged_known_rows/
+  );
+});
+
+test('catalogObservation completion and failure call the guarded Tiger RPCs', async () => {
+  const pool = new CapturingPool([result(), result()]);
+  const writer = createTigerWriterForPool(pool);
+
+  await writer.catalogObservation.completeScan({
+    expectedBatches: 2,
+    expectedSourceRows: 1500,
+    inputHash: 'scan-sha',
+    reconciliationOutcome: { status: 'pending_daily_parity' },
+    scanId: '00000000-0000-0000-0000-000000000101',
+  });
+  await writer.catalogObservation.failScan(
+    '00000000-0000-0000-0000-000000000102',
+    'forced failure'
+  );
+
+  assert.match(pool.calls[0]?.sql ?? '', /ops\.complete_catalog_scan/);
+  assert.deepEqual(pool.calls[0]?.values, [
+    '00000000-0000-0000-0000-000000000101',
+    2,
+    1500,
+    'scan-sha',
+    { status: 'pending_daily_parity' },
+  ]);
+  assert.match(pool.calls[1]?.sql ?? '', /ops\.fail_catalog_scan/);
+  assert.deepEqual(pool.calls[1]?.values, [
+    '00000000-0000-0000-0000-000000000102',
+    'forced failure',
+  ]);
+});
+
 test('catalog.markStorefrontInaccessible updates apps and sync_status transactionally', async () => {
   const pool = new CapturingPool([result(), result([], 1), result([], 1), result()]);
   const writer = createTigerWriterForPool(pool);

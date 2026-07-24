@@ -32,7 +32,11 @@ export interface SteamApp {
   name: string;
 }
 
-async function fetchStoreAppListPage(lastAppId?: number): Promise<StoreAppListResponse> {
+async function fetchStoreAppListPage(
+  lastAppId?: number,
+  ifModifiedSince?: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<StoreAppListResponse> {
   const apiKey = process.env.STEAM_API_KEY;
   if (!apiKey) {
     throw new Error('STEAM_API_KEY environment variable is required');
@@ -44,9 +48,12 @@ async function fetchStoreAppListPage(lastAppId?: number): Promise<StoreAppListRe
   if (lastAppId !== undefined) {
     url.searchParams.set('last_appid', lastAppId.toString());
   }
+  if (ifModifiedSince !== undefined) {
+    url.searchParams.set('if_modified_since', ifModifiedSince.toString());
+  }
 
   return withRetry(async () => {
-    const res = await fetch(url.toString());
+    const res = await fetchImpl(url.toString());
 
     if (!res.ok) {
       throw new ApiError(`Failed to fetch app list: ${res.statusText}`, res.status, url.toString());
@@ -63,7 +70,9 @@ async function fetchStoreAppListPage(lastAppId?: number): Promise<StoreAppListRe
  *
  * @returns Array of all Steam apps with appid and name
  */
-export async function fetchSteamAppList(): Promise<SteamApp[]> {
+export async function fetchSteamAppList(
+  options: { fetchImpl?: typeof fetch } = {}
+): Promise<SteamApp[]> {
   const allApps: SteamApp[] = [];
   let lastAppId: number | undefined;
   let hasMore = true;
@@ -73,7 +82,7 @@ export async function fetchSteamAppList(): Promise<SteamApp[]> {
 
   while (hasMore) {
     pageCount++;
-    const response = await fetchStoreAppListPage(lastAppId);
+    const response = await fetchStoreAppListPage(lastAppId, undefined, options.fetchImpl);
 
     const apps = response.response.apps || [];
     for (const app of apps) {
@@ -94,13 +103,21 @@ export async function fetchSteamAppList(): Promise<SteamApp[]> {
   return allApps;
 }
 
-export async function fetchSteamAppChangeHints(): Promise<SteamAppChangeHint[]> {
+export async function fetchSteamAppChangeHints(
+  options: { fetchImpl?: typeof fetch; ifModifiedSince?: number | null } = {}
+): Promise<SteamAppChangeHint[]> {
   const hints: SteamAppChangeHint[] = [];
   let lastAppId: number | undefined;
   let hasMore = true;
+  const ifModifiedSince =
+    typeof options.ifModifiedSince === 'number' &&
+    Number.isSafeInteger(options.ifModifiedSince) &&
+    options.ifModifiedSince >= 0
+      ? options.ifModifiedSince
+      : undefined;
 
   while (hasMore) {
-    const response = await fetchStoreAppListPage(lastAppId);
+    const response = await fetchStoreAppListPage(lastAppId, ifModifiedSince, options.fetchImpl);
     const apps = response.response.apps ?? [];
     for (const app of apps) {
       hints.push({

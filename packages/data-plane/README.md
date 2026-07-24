@@ -82,4 +82,5 @@ pnpm --filter @publisheriq/data-plane reconcile-events-news
 - [Tiger Chat Production](../../docs/developer-guide/deployment/tiger-chat-production.md)
 - [Sync Pipeline](../../docs/developer-guide/architecture/sync-pipeline.md)
 - [Database Schema](../../docs/developer-guide/architecture/database-schema.md)
+- [Durable Steam Catalog Observation](../../docs/developer-guide/operations/catalog-observation.md)
 - [YouTube Collector](../../packages/youtube/README.md)
