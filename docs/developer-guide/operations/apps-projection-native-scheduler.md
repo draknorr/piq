@@ -155,6 +155,34 @@ Railway services named `publisheriq` stopped; this job does not depend on
 either service. Treat background-worker history as unverified until the first
 approved scheduled execution occurs.
 
+## Forced background validation
+
+If waiting for the first natural slot is operationally inconvenient, a
+separately approved metadata write can advance only the next execution:
+
+```sql
+SELECT *
+FROM public.alter_job(
+  job_id => <resolved_job_id>,
+  next_start => clock_timestamp()
+);
+```
+
+This causes the Timescale automation worker—not the client session—to claim the
+job. It is a full projection refresh, can exercise the configured retry policy
+on failure, and requires the same recovery proof, preflight, write explanation,
+approval, and post-run reconciliation as any other production run.
+
+During execution, `job_status` should become `Running`; `next_start` can
+temporarily appear as infinity while Timescale prevents overlap. After success,
+prove that `job_stats` and `job_history` record the background execution, the
+job returns to `Scheduled`, and `next_start` returns to the next natural fixed
+`:47` UTC slot.
+
+A forced background execution validates the worker and history path. It does
+not validate natural time-based dispatch and does not count as a substitute
+for the required three healthy daily cycles.
+
 ## Enable recurring execution
 
 Enabling creates six recurring production refreshes per day. After a successful

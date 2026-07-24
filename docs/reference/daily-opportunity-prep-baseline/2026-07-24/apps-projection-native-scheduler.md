@@ -1,6 +1,6 @@
 # Apps Projection Native Scheduler Decision
 
-Status: **installed disabled; native smoke passed; enable pending approval**
+Status: **enabled; background-worker validation passed; natural cycles pending**
 
 This record captures the Option A decision for the recurring Apps projection
 refresh. No scheduler job, function, procedure, extension, service, deployment,
@@ -96,8 +96,17 @@ exact source, app-ID, v2, filter-count, runtime-containment, and live-route
 checks. Its evidence is in
 `apps-projection-native-scheduler-smoke.md`.
 
-Enabling the recurring schedule remains unapplied and requires a third approval
-because it authorizes six ongoing database writes per day.
+The recurring schedule was enabled after a third explicit approval. Job `1016`
+is scheduled every four hours at `:47` UTC. Its first approved actual
+background-worker execution succeeded in `23.399017` seconds, recorded one
+success and zero failures, created history row `4049`, and restored the next
+natural slot to `2026-07-25T00:47:00Z`. Exact source/legacy/v2/filter parity
+passed afterward.
+
+Enablement and background-worker evidence are recorded in
+`apps-projection-native-scheduler-enable.md`. The forced execution does not
+replace proof of a naturally timed slot or the required three healthy daily
+cycles. No reader cutover is authorized yet.
 
 Both Railway services named `publisheriq` remain outside this architecture and
 must stay stopped. The scheduler neither connects to nor restarts either
