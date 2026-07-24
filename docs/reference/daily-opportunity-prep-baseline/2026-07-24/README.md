@@ -4,9 +4,10 @@ Captured during the first implementation slice on Friday, July 24, 2026 at `2026
 
 This baseline is read-only. No production mutation was performed while capturing it.
 
-After capture and explicit user approval, the two existing Apps materialized
-views were refreshed concurrently. That operation and its before/after evidence
-are isolated in `apps-projection-refresh.md`.
+After capture and explicit user approvals, the two existing Apps materialized
+views were refreshed concurrently. The direct first refresh and later
+GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
+`versioned-consumer-projection-refresh.md`.
 
 ## Scope
 
@@ -31,7 +32,11 @@ are isolated in `apps-projection-refresh.md`.
   [`railway-pics-service-topology.md`](./railway-pics-service-topology.md).
 - Tiger backlog remains large: `ops.sync_status` has `93,557` syncable rows with no completed PICS sync.
 - Change-intel queue remains degraded: `179` non-dead queued records and `2,858` dead-lettered records were present in the refreshed snapshot.
-- `metrics.apps_page_projection` remains stale: `166,864` rows with newest `data_updated_at = 2026-05-04 03:47:38+00`.
+- At initial capture, `metrics.apps_page_projection` was stale at `166,864`
+  rows with newest `data_updated_at = 2026-05-04 03:47:38+00`. After the
+  separately approved refreshes, the final `2026-07-24T19:17:31.585814Z`
+  verification had exact source/legacy/v2 parity at `224,030` rows and
+  `0.031` hours of source-data freshness.
 - `metrics.unreleased_games_projection` remains current enough to preserve: `51,427` rows with newest `data_updated_at = 2026-07-23 06:18:07+00`.
 - Supabase retained non-auth data still exists and must be preserved until reconciled into Tiger: `9` profiles, `7` pins, `0` user alerts, `9` credit transactions, `0` credit reservations. It is a legacy dependency, not the target source of truth.
 - The current Supabase schema no longer exposes `public.alert_preferences` or `public.pin_alert_settings`.
@@ -44,7 +49,9 @@ are isolated in `apps-projection-refresh.md`.
 
 - Change Feed must prefer the Tiger/query-api contract whenever it is configured and available; stale Supabase fallback cannot remain the default production path.
 - Admin PICS health must report stale cursor progress instead of inferring “active” from the existence of a historical cursor.
-- A dedicated Tiger Apps projection refresh workflow is required before any future freshness SLO can be enforced.
+- The long-term Apps refresh owner is a fixed four-hour Tiger-native Timescale
+  job. Schema 0091 installs it disabled; install, smoke, and enable remain
+  separate production approvals. GitHub is manual fallback only.
 - Tiger recovery capability is verified from the authenticated production console: automatic same-region backup and a continuous three-day PITR fork window are available. No Tiger database refresh is authorized until its separate operation-specific approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 
 ## Artifacts
@@ -85,6 +92,15 @@ are isolated in `apps-projection-refresh.md`.
   low-cost v2 projection design, query-API/product-reader validation,
   reversible runtime controls, and the current user-control reconciliation
   blocker.
+- `versioned-consumer-schema-apply.md`: approved transactional 0090 Tiger
+  apply, exact legacy/v2 parity, query timing, unchanged PICS cursor, and
+  dual-Railway-service containment.
+- `versioned-consumer-projection-refresh.md`: approved post-0090 manual Apps
+  projection refresh, exact source/legacy/v2 parity, freshness and timing
+  evidence, and the still-disabled recurring cadence.
+- `apps-projection-native-scheduler.md`: live scheduler capability checks,
+  cost/architecture decision, disabled source contract, monitoring model, and
+  remaining production approval gates.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

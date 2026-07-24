@@ -17,31 +17,31 @@ Current state: accepted incoming ingestion and product-data writer paths use Tig
 
 Go to **Settings > Secrets and variables > Actions > New repository secret**:
 
-| Secret                                    | Value                                              |
-| ----------------------------------------- | -------------------------------------------------- |
-| `STEAM_API_KEY`                           | Your Steam API key                                 |
-| `YOUTUBE_API_KEY`                         | YouTube Data API key for the YouTube collector     |
-| `DATABASE_URL`                            | Live Supabase Postgres source/reference URL        |
-| `TIGER_PRODUCTION_URL`                    | Production TigerData / Timescale connection string |
-| `TIGER_PREVIEW_URL`                       | Preview TigerData / Timescale connection string    |
-| `QDRANT_URL`                              | Qdrant URL for embedding sync                      |
-| `QDRANT_API_KEY`                          | Qdrant API key for embedding sync                  |
-| `OPENAI_API_KEY`                          | OpenAI key for embedding generation                |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT`           | Cloudflare R2/S3-compatible endpoint               |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`      | R2/S3 access key                                   |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY`  | R2/S3 secret key                                   |
+| Secret                                   | Value                                              |
+| ---------------------------------------- | -------------------------------------------------- |
+| `STEAM_API_KEY`                          | Your Steam API key                                 |
+| `YOUTUBE_API_KEY`                        | YouTube Data API key for the YouTube collector     |
+| `DATABASE_URL`                           | Live Supabase Postgres source/reference URL        |
+| `TIGER_PRODUCTION_URL`                   | Production TigerData / Timescale connection string |
+| `TIGER_PREVIEW_URL`                      | Preview TigerData / Timescale connection string    |
+| `QDRANT_URL`                             | Qdrant URL for embedding sync                      |
+| `QDRANT_API_KEY`                         | Qdrant API key for embedding sync                  |
+| `OPENAI_API_KEY`                         | OpenAI key for embedding generation                |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`          | Cloudflare R2/S3-compatible endpoint               |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`     | R2/S3 access key                                   |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | R2/S3 secret key                                   |
 
 Only keep `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` on workflows that are still explicitly legacy Supabase writers or approved auth/reference paths. Tiger writer workflows should not hold Supabase service-role credentials unless `SUPABASE_SERVICE_CLIENT_PURPOSE` is set to an approved non-product-write purpose.
 
 Repository variables gate scheduled writers:
 
-| Variable | Meaning |
-| -------- | ------- |
-| `ENABLE_TIGER_CATALOG_WRITERS=true` | Allows scheduled catalog/storefront/app-list Tiger writers. Manual dispatch still works without this variable. |
-| `ENABLE_TIGER_METRICS_WRITERS=true` | Allows scheduled reviews, price, SteamSpy, CCU, trends, velocity, interpolation, and priority Tiger writers. |
-| `ENABLE_TIGER_EMBEDDING_WRITER=true` | Allows scheduled embedding writer. Manual dispatch is the preferred smoke path. |
-| `ENABLE_UNRELEASED_PROJECTION_REFRESH=true` | Allows the scheduled `/unreleased` projection refresh. Manual dispatch still works without this variable. |
-| `ENABLE_LEGACY_SUPABASE_WRITERS=true` | Allows explicitly legacy Supabase writer workflows such as old view refresh/cleanup repair jobs. Keep off unless there is an approved legacy operation. |
+| Variable                                    | Meaning                                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENABLE_TIGER_CATALOG_WRITERS=true`         | Allows scheduled catalog/storefront/app-list Tiger writers. Manual dispatch still works without this variable.                                          |
+| `ENABLE_TIGER_METRICS_WRITERS=true`         | Allows scheduled reviews, price, SteamSpy, CCU, trends, velocity, interpolation, and priority Tiger writers.                                            |
+| `ENABLE_TIGER_EMBEDDING_WRITER=true`        | Allows scheduled embedding writer. Manual dispatch is the preferred smoke path.                                                                         |
+| `ENABLE_UNRELEASED_PROJECTION_REFRESH=true` | Allows the scheduled `/unreleased` projection refresh. Manual dispatch still works without this variable.                                               |
+| `ENABLE_LEGACY_SUPABASE_WRITERS=true`       | Allows explicitly legacy Supabase writer workflows such as old view refresh/cleanup repair jobs. Keep off unless there is an approved legacy operation. |
 
 ### 2. Enable Actions
 
@@ -56,37 +56,42 @@ Workflows should appear in the Actions tab. You can manually trigger any workflo
 
 All times are UTC:
 
-| Workflow                | File                          | Schedule                       | Purpose                                    |
-| ----------------------- | ----------------------------- | ------------------------------ | ------------------------------------------ |
-| App List Sync           | `applist-sync.yml`            | 00:15 daily                    | Master app list, Tiger writer gated by `ENABLE_TIGER_CATALOG_WRITERS` |
-| App Change Hints        | `app-change-hints.yml`        | :10 hourly                     | Steam changed-app hints into Tiger queue state |
-| Storefront Sync         | `storefront-sync.yml`         | :00 every 2h                   | Storefront latest state and change-intel archives into Tiger/R2, gated by `ENABLE_TIGER_CATALOG_WRITERS` |
-| Unreleased Projection Refresh | `unreleased-projection-refresh.yml` | :50 every 4h             | Refreshes `/unreleased` Tiger materialized views, gated by `ENABLE_UNRELEASED_PROJECTION_REFRESH` |
-| Steam News Hot Refresh  | `news-hot-refresh.yml`        | every 10 minutes               | Hot news queue refresh into Tiger/R2 |
-| SteamSpy Sync           | `steamspy-sync.yml`           | 02:15 daily                    | Owners, playtime, tags, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Embedding Sync          | `embedding-sync.yml`          | 03:00 daily                    | Embeddings, Tiger status writer gated by `ENABLE_TIGER_EMBEDDING_WRITER` |
-| Histogram Sync          | `histogram-sync.yml`          | 04:15 daily                    | Monthly reviews, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Reviews Sync            | `reviews-sync.yml`            | :15 every 2h                   | Review counts, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Price Sync              | `price-sync.yml`              | 00:15, 06:15, 12:15, 18:15     | Price tracking, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Trends Calculation      | `trends-calculation.yml`      | 22:00 daily                    | Trend metrics, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Priority Calculation    | `priority-calculation.yml`    | 22:30 daily                    | Priority scores, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Velocity Calculation    | `velocity-calculation.yml`    | 08,16,00:00                    | Velocity stats, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Interpolation           | `interpolation.yml`           | 05:00 daily                    | Fill metric gaps, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| Refresh Views           | `refresh-views.yml`           | 05:00 daily                    | Legacy Supabase materialized view refresh, gated by `ENABLE_LEGACY_SUPABASE_WRITERS` |
-| Refresh App Filter Data | `refresh-app-filter-data.yml` | 00,06,12,18:00                 | Legacy `app_filter_data` refresh, gated by `ENABLE_LEGACY_SUPABASE_WRITERS` |
-| CCU Sync                | `ccu-sync.yml`                | :00 hourly                     | Tier 1+2 CCU, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| CCU Daily Sync          | `ccu-daily-sync.yml`          | 04:30, 12:30, 20:30            | Tier 3 CCU rotation, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS` |
-| CCU Cleanup             | `ccu-cleanup.yml`             | Sun 03:00                      | Legacy cleanup, gated by `ENABLE_LEGACY_SUPABASE_WRITERS` |
-| Cleanup Reservations    | `cleanup-reservations.yml`    | :00 hourly                     | Stale credit reservation cleanup in Tiger ops |
-| Cleanup Chat Logs       | `cleanup-chat-logs.yml`       | 03:00 daily                    | 7-day chat log cleanup in Tiger ops         |
-| YouTube Production Bootstrap | `youtube-production-bootstrap.yml` | Manual                    | Bootstrap YouTube routing, discovery, refresh, and rollups |
-| YouTube Production Sync | `youtube-production-sync.yml` | 15 */6 * * *                   | Steady-state YouTube discovery, refresh, and rollups |
-| YouTube Preview Mirror  | `youtube-preview-mirror.yml`  | Manual                         | Mirror production YouTube slices into preview Tiger |
-| Tiger Production Sync   | `tiger-production-sync.yml`   | Manual                         | Retained Tiger validation/reporting; not a scheduled Supabase source ingest |
-| Tiger Preview Sync      | `tiger-preview-sync.yml`      | Manual                         | Refresh preview Tiger chat-serving data    |
-| CI                      | `ci.yml`                      | On push/PR                     | Type checking                              |
+| Workflow                      | File                                | Schedule                   | Purpose                                                                                                  |
+| ----------------------------- | ----------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| App List Sync                 | `applist-sync.yml`                  | 00:15 daily                | Master app list, Tiger writer gated by `ENABLE_TIGER_CATALOG_WRITERS`                                    |
+| App Change Hints              | `app-change-hints.yml`              | :10 hourly                 | Steam changed-app hints into Tiger queue state                                                           |
+| Storefront Sync               | `storefront-sync.yml`               | :00 every 2h               | Storefront latest state and change-intel archives into Tiger/R2, gated by `ENABLE_TIGER_CATALOG_WRITERS` |
+| Unreleased Projection Refresh | `unreleased-projection-refresh.yml` | :50 every 4h               | Refreshes `/unreleased` Tiger materialized views, gated by `ENABLE_UNRELEASED_PROJECTION_REFRESH`        |
+| Apps Projection Refresh       | `apps-projection-refresh.yml`       | Manual                     | Approval-gated fallback for the Tiger-native Apps projection job                                         |
+| Steam News Hot Refresh        | `news-hot-refresh.yml`              | every 10 minutes           | Hot news queue refresh into Tiger/R2                                                                     |
+| SteamSpy Sync                 | `steamspy-sync.yml`                 | 02:15 daily                | Owners, playtime, tags, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                             |
+| Embedding Sync                | `embedding-sync.yml`                | 03:00 daily                | Embeddings, Tiger status writer gated by `ENABLE_TIGER_EMBEDDING_WRITER`                                 |
+| Histogram Sync                | `histogram-sync.yml`                | 04:15 daily                | Monthly reviews, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                    |
+| Reviews Sync                  | `reviews-sync.yml`                  | :15 every 2h               | Review counts, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |
+| Price Sync                    | `price-sync.yml`                    | 00:15, 06:15, 12:15, 18:15 | Price tracking, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                     |
+| Trends Calculation            | `trends-calculation.yml`            | 22:00 daily                | Trend metrics, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |
+| Priority Calculation          | `priority-calculation.yml`          | 22:30 daily                | Priority scores, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                    |
+| Velocity Calculation          | `velocity-calculation.yml`          | 08,16,00:00                | Velocity stats, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                     |
+| Interpolation                 | `interpolation.yml`                 | 05:00 daily                | Fill metric gaps, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                   |
+| Refresh Views                 | `refresh-views.yml`                 | 05:00 daily                | Legacy Supabase materialized view refresh, gated by `ENABLE_LEGACY_SUPABASE_WRITERS`                     |
+| Refresh App Filter Data       | `refresh-app-filter-data.yml`       | 00,06,12,18:00             | Legacy `app_filter_data` refresh, gated by `ENABLE_LEGACY_SUPABASE_WRITERS`                              |
+| CCU Sync                      | `ccu-sync.yml`                      | :00 hourly                 | Tier 1+2 CCU, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                       |
+| CCU Daily Sync                | `ccu-daily-sync.yml`                | 04:30, 12:30, 20:30        | Tier 3 CCU rotation, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                |
+| CCU Cleanup                   | `ccu-cleanup.yml`                   | Sun 03:00                  | Legacy cleanup, gated by `ENABLE_LEGACY_SUPABASE_WRITERS`                                                |
+| Cleanup Reservations          | `cleanup-reservations.yml`          | :00 hourly                 | Stale credit reservation cleanup in Tiger ops                                                            |
+| Cleanup Chat Logs             | `cleanup-chat-logs.yml`             | 03:00 daily                | 7-day chat log cleanup in Tiger ops                                                                      |
+| YouTube Production Bootstrap  | `youtube-production-bootstrap.yml`  | Manual                     | Bootstrap YouTube routing, discovery, refresh, and rollups                                               |
+| YouTube Production Sync       | `youtube-production-sync.yml`       | `15 */6 * * *`             | Steady-state YouTube discovery, refresh, and rollups                                                     |
+| YouTube Preview Mirror        | `youtube-preview-mirror.yml`        | Manual                     | Mirror production YouTube slices into preview Tiger                                                      |
+| Tiger Production Sync         | `tiger-production-sync.yml`         | Manual                     | Retained Tiger validation/reporting; not a scheduled Supabase source ingest                              |
+| Tiger Preview Sync            | `tiger-preview-sync.yml`            | Manual                     | Refresh preview Tiger chat-serving data                                                                  |
+| CI                            | `ci.yml`                            | On push/PR                 | Type checking                                                                                            |
 
-Games page filter-count views are not GitHub-owned. `mv_tag_counts`, `mv_genre_counts`, `mv_category_counts`, `mv_steam_deck_counts`, `mv_ccu_tier_counts`, and `mv_velocity_tier_counts` refresh every 4 hours via `pg_cron` and `refresh_filter_count_views()`.
+The production Tiger service does not have `pg_cron` installed. The maintained
+Apps materializations are owned by the disabled-by-default Timescale job in
+`0091_apps_projection_native_scheduler.sql` once that schema is separately
+approved and the job is explicitly enabled. The GitHub Apps workflow must stay
+manual-only so two recurring schedulers cannot overlap.
 
 ## Workflow Structure
 
@@ -266,10 +271,10 @@ gh workflow run steamspy-sync.yml -f max_pages=10
 
 ### Embedding Sync
 
-| Input             | Default | Description |
-| ----------------- | ------- | ----------- |
-| `batch_size`      | `500`   | Rows per embedding batch |
-| `sync_collection` | `all`   | `games`, `publishers`, `developers`, or `all` |
+| Input             | Default | Description                                                                                       |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `batch_size`      | `500`   | Rows per embedding batch                                                                          |
+| `sync_collection` | `all`   | `games`, `publishers`, `developers`, or `all`                                                     |
 | `max_batches`     | empty   | Manual smoke cap. Use `1` before enabling `ENABLE_TIGER_EMBEDDING_WRITER`; blank means full sync. |
 
 ### Tiger Preview Events/News
@@ -285,11 +290,11 @@ gh workflow run steamspy-sync.yml -f max_pages=10
 
 ### YouTube Workflows
 
-| Input                    | Default | Description                                                               |
-| ------------------------ | ------- | ------------------------------------------------------------------------- |
-| `bootstrap_lookback_days` | `30`    | Historical window to backfill or mirror before steady-state sync starts   |
-| `discovery_limit`        | `25`    | Maximum number of games to process during discovery sync                  |
-| `refresh_limit`          | `500`   | Maximum number of matched videos to refresh during YouTube sync            |
+| Input                     | Default | Description                                                             |
+| ------------------------- | ------- | ----------------------------------------------------------------------- |
+| `bootstrap_lookback_days` | `30`    | Historical window to backfill or mirror before steady-state sync starts |
+| `discovery_limit`         | `25`    | Maximum number of games to process during discovery sync                |
+| `refresh_limit`           | `500`   | Maximum number of matched videos to refresh during YouTube sync         |
 
 ## Related Operator Scripts
 

@@ -28,8 +28,9 @@ not deploy branch code.
 - `git diff --check`: passed.
 - The before/after protected-object comparison reports every complete Supabase
   user/profile/pin/alert/credit primary-key set unchanged.
-- The new Apps projection workflow parses as YAML and remains disabled for
-  schedules unless `ENABLE_TIGER_APPS_PROJECTION_REFRESH=true`.
+- The PR 1 Apps projection workflow parsed as YAML and initially gated its
+  schedule behind `ENABLE_TIGER_APPS_PROJECTION_REFRESH=true`. PR 7 removes
+  that unreliable cron path and retains the workflow as manual fallback only.
 - The rebuilt Vercel production artifact retained the `/login?next=` redirect
   and API `401` contracts. Authenticated `/changes` reported `Capture healthy`
   and displayed `25` current Tiger-backed rows for the last day.
@@ -62,11 +63,31 @@ by this slice:
 These results block a primary cutover. They do not invalidate the read-only
 baseline or the contained admin/configuration changes in PR 1.
 
+## PR 7 Option A validation
+
+- Full `pnpm check-types`: 13 Turbo tasks passed.
+- Full `pnpm test`: 10 Turbo tasks passed after rerunning outside the sandbox
+  so query-api tests could bind localhost.
+- `pnpm --filter @publisheriq/data-plane test`: 76 tests passed, including
+  three new native-scheduler/manual-fallback contracts.
+- Focused lint for
+  `packages/data-plane/src/apps-projection-native-scheduler.test.ts`: passed.
+- Prettier check for every touched YAML, TypeScript, and Markdown file: passed.
+- `git diff --check`: passed.
+- Live Tiger job API signatures and monitoring columns were verified with a
+  bounded read-only transaction.
+- The final read-only production check found zero matching native Apps jobs,
+  proving schema 0091 remains unapplied.
+- Both Railway services named `publisheriq` remained stopped and the PICS
+  cursor remained unchanged.
+- Package-wide lint still reports the four unrelated existing errors listed
+  above; the new PR 7 test has no lint findings.
+
 ## External gates still open
 
 - Separate approval for every later database migration, backfill, or repair.
-- Separate authorization before enabling the recurring Apps projection refresh
-  schedule.
+- Separate approvals to install schema 0091 disabled, run one native refresh
+  smoke, and enable its recurring four-hour schedule.
 - Three healthy daily cycles before any primary catalog, PICS, projection, or
   consumer cutover.
 

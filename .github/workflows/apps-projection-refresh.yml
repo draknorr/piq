@@ -1,9 +1,6 @@
 name: Apps Projection Refresh
 
 on:
-  schedule:
-    # Six-hour cadence, offset after the velocity job at :50.
-    - cron: "20 1,7,13,19 * * *"
   workflow_dispatch:
     inputs:
       backup_pitr_verified:
@@ -27,11 +24,8 @@ jobs:
   refresh:
     if: >-
       ${{
-        (github.event_name == 'workflow_dispatch'
-          && inputs.backup_pitr_verified == true
-          && inputs.approval_reference != '')
-        || (github.event_name == 'schedule'
-          && vars.ENABLE_TIGER_APPS_PROJECTION_REFRESH == 'true')
+        inputs.backup_pitr_verified == true
+        && inputs.approval_reference != ''
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -42,17 +36,10 @@ jobs:
           APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
           BACKUP_PITR_VERIFIED: ${{ inputs.backup_pitr_verified }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-            {
-              echo "Backup/PITR verified: schedule enabled by repository variable"
-              echo "Approval reference: scheduled mode enabled by repository variable"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "Backup/PITR verified: $BACKUP_PITR_VERIFIED"
-              echo "Approval reference: $APPROVAL_REFERENCE"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "Backup/PITR verified: $BACKUP_PITR_VERIFIED"
+            echo "Approval reference: $APPROVAL_REFERENCE"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
