@@ -181,6 +181,32 @@ Retained Supabase surfaces:
 - keep server-side Supabase service-role credentials only for approved auth/reference/legacy server paths
 - set `SUPABASE_SERVICE_CLIENT_PURPOSE=auth`, `legacy-read`, `reference`, `migration`, or `parity` when a server process legitimately needs a Supabase service client while Tiger writer targets are enabled
 
+### Versioned product consumers
+
+Apps, Insights, dashboard product counts, and admin product health have
+independent rollback controls. Leave every control on its legacy value until
+the selected Tiger contract has passed live parity and latency checks:
+
+| Variable                        | Values              | Purpose                                                                                     |
+| ------------------------------- | ------------------- | ------------------------------------------------------------------------------------------- |
+| `APP_PROJECTION_VERSION`        | `legacy`, `v2`      | Select the allowlisted Apps projection pair. v2 never falls back if its relation is absent. |
+| `INSIGHTS_READ_TARGET`          | `legacy`, `tiger`   | Select the Insights product reader.                                                         |
+| `DASHBOARD_PRODUCT_READ_TARGET` | `legacy`, `tiger`   | Select dashboard catalog counts.                                                            |
+| `ADMIN_PRODUCT_READ_TARGET`     | `legacy`, `tiger`   | Select admin product and ingestion health.                                                  |
+| `PRODUCT_HEALTH_READ_TARGET`    | `legacy`, `tiger`   | Optional shared dashboard/admin default; surface flags override it.                         |
+| `CHAT_QUERY_LOG_WRITE_TARGET`   | `supabase`, `tiger` | Select the non-auth chat telemetry writer. Tiger failure never falls back to Supabase.      |
+
+Cut over one surface per deployment. Rollback changes only that surface's
+flag. `APP_PROJECTION_VERSION=v2` also requires both
+`metrics.apps_page_projection_v2` and
+`metrics.apps_page_filter_counts_v2`, plus a proven projection refresh cadence
+that keeps source freshness within eight hours.
+
+Pins, credits, alerts, and account consumers are not covered by these product
+reader flags. Do not move those routes until Tiger has exact, no-loss parity
+with the live user-control records and the writer cutover has separate
+approval.
+
 ## 6. Enable Scheduled Tiger Refresh
 
 GitHub Actions now includes:

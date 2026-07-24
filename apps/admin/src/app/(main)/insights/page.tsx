@@ -1,12 +1,16 @@
-import type { Metadata } from 'next';
-import { Suspense } from 'react';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
-import { PageHeader } from '@/components/layout';
-import { InsightsTabs } from './InsightsTabs';
-import { InsightsSkeleton } from './components/InsightsSkeleton';
-import { getTopGames, getNewestGames, getTrendingGames } from './lib/insights-queries';
-import type { TimeRange, InsightsTab, NewestSortMode } from './lib/insights-types';
+import type { Metadata } from "next";
+import { Suspense } from "react";
+import { isSupabaseConfigured } from "@/lib/supabase";
+import { ConfigurationRequired } from "@/components/ConfigurationRequired";
+import { PageHeader } from "@/components/layout";
+import { InsightsTabs } from "./InsightsTabs";
+import { InsightsSkeleton } from "./components/InsightsSkeleton";
+import { getInsightsDashboardData } from "./lib/insights-queries";
+import type {
+  TimeRange,
+  InsightsTab,
+  NewestSortMode,
+} from "./lib/insights-types";
 
 export const metadata: Metadata = {
   title: 'Insights',
@@ -41,12 +45,8 @@ export default async function InsightsPage({ searchParams }: PageProps) {
 
   const newestSort: NewestSortMode = params.sort === 'growth' ? 'growth' : 'release';
 
-  // Fetch data for all tabs in parallel
-  const [topGames, newestGames, trendingGames] = await Promise.all([
-    getTopGames(timeRange),
-    getNewestGames(timeRange, newestSort),
-    getTrendingGames(timeRange),
-  ]);
+  const { topGames, newestGames, trendingGames } =
+    await getInsightsDashboardData(timeRange, newestSort);
 
   return (
     <div>

@@ -178,47 +178,275 @@ export type ChangePattern =
 export type RelatedEntityKind = 'dlc' | 'franchise_games';
 export type CatalogFacetKind = 'tags' | 'genres' | 'categories';
 export type DataPlaneRelationKey =
-  | 'apps'
-  | 'ccu_snapshots'
-  | 'developers'
-  | 'core_entity_aliases'
-  | 'core_entity_external_ids'
-  | 'publishers'
-  | 'app_dlc'
-  | 'app_franchises'
-  | 'app_developers'
-  | 'app_steam_deck'
-  | 'app_publishers'
-  | 'user_pins'
-  | 'user_alerts'
-  | 'user_alert_preferences'
-  | 'user_pin_alert_settings'
-  | 'latest_daily_metrics'
-  | 'metrics_daily_metrics'
-  | 'metrics_monthly_game_metrics'
-  | 'metrics_monthly_publisher_metrics'
-  | 'core_entities'
-  | 'events_app_change_events'
-  | 'events_change_activity_bursts'
-  | 'ops_app_capture_work_state'
-  | 'docs_steam_news_items'
-  | 'docs_steam_news_search_projection'
-  | 'franchises'
-  | 'app_genres'
-  | 'steam_genres'
-  | 'app_steam_tags'
-  | 'steam_tags'
-  | 'steam_categories'
-  | 'docs_youtube_videos'
-  | 'docs_youtube_channels'
-  | 'docs_youtube_video_matches'
-  | 'metrics_youtube_video_snapshots'
-  | 'metrics_youtube_game_daily';
+  | "apps"
+  | "app_categories"
+  | "app_trends"
+  | "ccu_snapshots"
+  | "ccu_tier_assignments"
+  | "chat_query_logs"
+  | "developers"
+  | "core_entity_aliases"
+  | "core_entity_external_ids"
+  | "publishers"
+  | "app_dlc"
+  | "app_franchises"
+  | "app_developers"
+  | "app_steam_deck"
+  | "app_publishers"
+  | "user_pins"
+  | "user_alerts"
+  | "user_alert_preferences"
+  | "user_pin_alert_settings"
+  | "latest_daily_metrics"
+  | "metrics_daily_metrics"
+  | "metrics_monthly_game_metrics"
+  | "metrics_monthly_publisher_metrics"
+  | "core_entities"
+  | "events_app_change_events"
+  | "events_change_event_registry"
+  | "events_change_activity_bursts"
+  | "ops_app_capture_work_state"
+  | "ops_app_data_readiness"
+  | "ops_catalog_scan_runs"
+  | "ops_pics_sync_state"
+  | "ops_pics_work_state"
+  | "ops_sync_jobs"
+  | "ops_sync_status"
+  | "docs_steam_news_items"
+  | "docs_steam_news_search_projection"
+  | "franchises"
+  | "app_genres"
+  | "steam_genres"
+  | "app_steam_tags"
+  | "steam_tags"
+  | "steam_categories"
+  | "docs_youtube_videos"
+  | "docs_youtube_channels"
+  | "docs_youtube_video_matches"
+  | "metrics_youtube_video_snapshots"
+  | "metrics_youtube_game_daily";
 
 export interface QueryProvenance {
   capturedAt: string;
   source: DataPlaneSource;
   tables: string[];
+}
+
+export type InsightsTimeRange = "24h" | "7d" | "30d";
+export type InsightsNewestSort = "release" | "growth";
+
+export interface InsightsGame {
+  appid: number;
+  avgCcu?: number;
+  avgPlaytimeHours?: number | null;
+  ccuSparkline?: number[];
+  ccuTier?: 1 | 2 | 3;
+  ccuTrend?: "up" | "down" | "stable";
+  currentCcu: number;
+  discountPercent?: number | null;
+  growthPct?: number;
+  isFree?: boolean;
+  name: string;
+  peakCcu?: number;
+  positivePercent?: number;
+  priceCents?: number | null;
+  priorAvgCcu?: number;
+  releaseDate: string | null;
+  releaseRank?: number;
+  reviewVelocity?: number;
+  tierReason?: string;
+  totalReviews?: number;
+}
+
+export interface GetInsightsDashboardRequest {
+  newestSort?: InsightsNewestSort;
+  timeRange?: InsightsTimeRange;
+}
+
+export interface GetInsightsDashboardResponse {
+  newestGames: InsightsGame[];
+  provenance: QueryProvenance;
+  summary: {
+    avgCcu: number;
+    tier1Count: number;
+    tier2Count: number;
+    totalGamesTracked: number;
+  };
+  timeRange: InsightsTimeRange;
+  topGames: InsightsGame[];
+  trendingGames: InsightsGame[];
+}
+
+export interface GetProductHealthRequest {
+  detail?: "summary" | "admin";
+  errorLimit?: number;
+  jobLimit?: number;
+  logLimit?: number;
+  projectionVersion?: "legacy" | "v2";
+}
+
+export interface ProductHealthSyncJob {
+  batch_size: number | null;
+  completed_at: string | null;
+  created_at: string | null;
+  error_message: string | null;
+  github_run_id: string | null;
+  id: string;
+  items_created: number | null;
+  items_failed: number | null;
+  items_processed: number | null;
+  items_succeeded: number | null;
+  items_updated: number | null;
+  job_type: string;
+  started_at: string | null;
+  status: string | null;
+}
+
+export interface ProductHealthChatLog {
+  answer_contract_summary: Record<string, unknown> | null;
+  chat_family: string | null;
+  created_at: string;
+  guardrail_trace: Array<Record<string, unknown>> | null;
+  id: string;
+  iteration_count: number;
+  quality_flags: string[] | null;
+  query_text: string;
+  response_length: number;
+  session_context_summary: Record<string, unknown> | null;
+  timing_total_ms: number | null;
+  timing_llm_ms: number | null;
+  timing_tools_ms: number | null;
+  tool_count: number;
+  tool_names: string[];
+}
+
+export interface ProductSourceHealth {
+  captureQueue: {
+    deadLetter: number;
+    oldestPendingAt: string | null;
+    pending: number;
+  };
+  eventRegistry: {
+    latestUnknownAt: string | null;
+    unknownEventTypes: number;
+  };
+  pics: {
+    cursorUpdatedAt: string | null;
+    lastChangeNumber: number;
+  };
+  projection: {
+    latestSourceAt: string | null;
+    relation: string;
+    rowCount: number;
+  };
+  readiness: Array<{
+    count: number;
+    source: string;
+    status: string;
+  }>;
+  verifiedAt: string;
+}
+
+export interface GetProductHealthResponse {
+  admin: {
+    allJobs: ProductHealthSyncJob[];
+    appsWithErrors: Array<{
+      appid: number;
+      consecutive_errors: number;
+      last_error_at: string | null;
+      last_error_message: string | null;
+      last_error_source: string | null;
+      name: string;
+    }>;
+    catalogControlStats: {
+      currentCatalogApps: number;
+      dataSource: "live";
+      historicalRetainedApps: number;
+      latestApplistCompletedAt: string | null;
+      latestApplistStartedAt: string | null;
+      latestLiveAppCount: number;
+      liveOnlyMissing: number;
+      staleRunningApplistJobs: number;
+    };
+    ccuQualityStats: {
+      confirmedPositive: number;
+      confirmedZero: number;
+      currentCatalogApps: number;
+      dataSource: "live";
+      invalid: number;
+      isApproximate: false;
+      legacyUnknown: number;
+      noTierAssignment: number;
+      skipped: number;
+      steamApi: number;
+      steamspy: number;
+      suspectZero: number;
+      tierAssigned: number;
+      unavailable: number;
+      updatedAt: string | null;
+    };
+    chatLogs: ProductHealthChatLog[];
+    completionStats: Array<{
+      completionPercent: number;
+      lastSyncTime: string | null;
+      neverSynced: number;
+      source: "steamspy" | "storefront" | "reviews" | "histogram" | "pics";
+      staleApps: number;
+      syncedApps: number;
+      totalApps: number;
+    }>;
+    fullyCompletedCount: number;
+    picsDataStats: {
+      dataSource: "live";
+      isApproximate: false;
+      totalApps: number;
+      withCategories: number;
+      withFranchises: number;
+      withGenres: number;
+      withParentApp: number;
+      withPicsSync: number;
+      withTags: number;
+    };
+    priorityDistribution: {
+      high: number;
+      low: number;
+      medium: number;
+      minimal: number;
+      normal: number;
+    };
+    queueStatus: {
+      dataSource: "live";
+      dueIn1Hour: number;
+      dueIn24Hours: number;
+      dueIn6Hours: number;
+      overdue: number;
+    };
+    syncHealth: {
+      appsWithErrors: number;
+      jobs24h: {
+        avgDurationMs: number | null;
+        completed: number;
+        failed: number;
+        running: number;
+        total: number;
+      };
+      lastSyncs: {
+        histogram: string | null;
+        reviews: string | null;
+        steamspy: string | null;
+        storefront: string | null;
+      };
+      overdueApps: number;
+      successRate7d: number;
+    };
+  } | null;
+  catalog: {
+    appCount: number;
+    developerCount: number;
+    publisherCount: number;
+  };
+  provenance: QueryProvenance;
+  sourceHealth: ProductSourceHealth;
 }
 
 export interface ResolveEntitiesRequest {
@@ -1426,26 +1654,28 @@ export interface QueryContractDescriptor {
   description: string;
   endpoint: string;
   name:
-    | 'resolveEntities'
-    | 'getEntityOverview'
-    | 'searchCatalog'
-    | 'searchChangeActivity'
-    | 'getChangeActivityDetail'
-    | 'getChangeFeedStatus'
-    | 'discoverMomentum'
-    | 'discoverChangePatterns'
-    | 'rankEntities'
-    | 'queryMonthlyPlaytime'
-    | 'compareEntities'
-    | 'traceMetricHistory'
-    | 'explainChanges'
-    | 'searchDocuments'
-    | 'semanticSearch'
-    | 'getUserContext'
-    | 'getRelatedEntities'
-    | 'continueResultSet'
-    | 'getYoutubeGameCoverage'
-    | 'getYoutubeMarketPulse';
+    | "resolveEntities"
+    | "getEntityOverview"
+    | "searchCatalog"
+    | "searchChangeActivity"
+    | "getChangeActivityDetail"
+    | "getChangeFeedStatus"
+    | "discoverMomentum"
+    | "discoverChangePatterns"
+    | "rankEntities"
+    | "queryMonthlyPlaytime"
+    | "compareEntities"
+    | "traceMetricHistory"
+    | "explainChanges"
+    | "searchDocuments"
+    | "semanticSearch"
+    | "getUserContext"
+    | "getRelatedEntities"
+    | "continueResultSet"
+    | "getYoutubeGameCoverage"
+    | "getYoutubeMarketPulse"
+    | "getInsightsDashboard"
+    | "getProductHealth";
   naturalLanguageStrength: string[];
   requiredRelations: DataPlaneRelationKey[];
   status: ContractStatus;

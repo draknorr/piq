@@ -9,8 +9,30 @@ import 'server-only';
  * Run `pnpm --filter database generate` after applying migrations to fix types.
  */
 
-import { getServiceSupabase } from '@/lib/supabase-service';
-import type { TimeRange, GameInsight, TimeRangeConfig, NewestSortMode } from './insights-types';
+import { getServiceSupabase } from "@/lib/supabase-service";
+import { postToQueryApi } from "@/lib/query-api-client";
+import { resolveProductReadTarget } from "@/lib/product-read-runtime";
+import type {
+  TimeRange,
+  GameInsight,
+  TimeRangeConfig,
+  NewestSortMode,
+} from "./insights-types";
+
+export interface InsightsDashboardData {
+  newestGames: GameInsight[];
+  topGames: GameInsight[];
+  trendingGames: GameInsight[];
+}
+
+interface TigerInsightsDashboardResponse extends InsightsDashboardData {
+  provenance: {
+    capturedAt: string;
+    source: "tiger";
+    tables: string[];
+  };
+  timeRange: TimeRange;
+}
 
 // Type for snapshot row (not yet in generated types)
 interface CCUSnapshotRow {
@@ -180,6 +202,44 @@ export const TIME_RANGE_CONFIG: Record<TimeRange, TimeRangeConfig> = {
     label: '30 days',
   },
 };
+
+export async function getInsightsDashboardData(
+  timeRange: TimeRange,
+  newestSort: NewestSortMode,
+): Promise<InsightsDashboardData> {
+  if (resolveProductReadTarget("insights") === "legacy") {
+    const [topGames, newestGames, trendingGames] = await Promise.all([
+      getTopGames(timeRange),
+      getNewestGames(timeRange, newestSort),
+      getTrendingGames(timeRange),
+    ]);
+    return {
+      newestGames,
+      topGames,
+      trendingGames,
+    };
+  }
+
+  const result = await postToQueryApi<TigerInsightsDashboardResponse>(
+    "/v1/contracts/get-insights-dashboard",
+    {
+      newestSort,
+      timeRange,
+    },
+    { timeoutMs: 20_000 },
+  );
+  if (!result.ok || !result.data || result.data.provenance.source !== "tiger") {
+    throw new Error(
+      `Tiger Insights contract unavailable: ${result.errorCode ?? result.reason ?? "unknown error"}`,
+    );
+  }
+
+  return {
+    newestGames: result.data.newestGames,
+    topGames: result.data.topGames,
+    trendingGames: result.data.trendingGames,
+  };
+}
 
 /**
  * Get top games by peak CCU in the given time range

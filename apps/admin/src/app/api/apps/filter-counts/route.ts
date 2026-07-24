@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { runTigerQuery } from '@publisheriq/database';
-import { createServerClient } from '@/lib/supabase/server';
+import { NextRequest, NextResponse } from "next/server";
+import { runTigerQuery } from "@publisheriq/database";
+import { resolveAppProjectionRelations } from "@/app/(main)/apps/lib/apps-projection-runtime";
+import { createServerClient } from "@/lib/supabase/server";
 
 type FilterType = 'genre' | 'tag' | 'category' | 'steam_deck' | 'platform' | 'ccu_tier';
 
@@ -12,8 +13,11 @@ interface FilterOptionRow {
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 128;
-const filterCountCache = new Map<string, { data: FilterOptionRow[]; timestamp: number }>();
-let filterCountProjectionAvailable: boolean | null = null;
+const filterCountCache = new Map<
+  string,
+  { data: FilterOptionRow[]; timestamp: number }
+>();
+const filterCountProjectionAvailability = new Map<string, boolean>();
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -149,20 +153,23 @@ function queryForFilter(filterType: FilterType, baseJoinSql: string, baseWhereSq
 }
 
 async function hasFilterCountProjection(): Promise<boolean> {
-  if (filterCountProjectionAvailable !== null) return filterCountProjectionAvailable;
+  const relations = resolveAppProjectionRelations();
+  const cached = filterCountProjectionAvailability.get(relations.filterCounts);
+  if (cached !== undefined) return cached;
   const { rows } = await runTigerQuery<{ exists: boolean }>(
-    `SELECT to_regclass('metrics.apps_page_filter_counts') IS NOT NULL AS exists`,
-    []
+    "SELECT to_regclass($1) IS NOT NULL AS exists",
+    [relations.filterCounts],
   );
-  filterCountProjectionAvailable = rows[0]?.exists === true;
-  return filterCountProjectionAvailable;
+  const available = rows[0]?.exists === true;
+  filterCountProjectionAvailability.set(relations.filterCounts, available);
+  return available;
 }
 
 function defaultProjectionCountQuery(filterType: FilterType): string | null {
   if (filterType === 'genre') {
     return `
       SELECT sg.genre_id AS option_id, sg.name AS option_name, fc.app_count
-      FROM metrics.apps_page_filter_counts fc
+      FROM ${resolveAppProjectionRelations().filterCounts} fc
       JOIN legacy.steam_genres sg ON sg.genre_id = fc.option_id
       WHERE fc.filter_type = 'genre'
       ORDER BY fc.app_count DESC, sg.name
@@ -172,7 +179,7 @@ function defaultProjectionCountQuery(filterType: FilterType): string | null {
   if (filterType === 'tag') {
     return `
       SELECT st.tag_id AS option_id, st.name AS option_name, fc.app_count
-      FROM metrics.apps_page_filter_counts fc
+      FROM ${resolveAppProjectionRelations().filterCounts} fc
       JOIN legacy.steam_tags st ON st.tag_id = fc.option_id
       WHERE fc.filter_type = 'tag'
       ORDER BY fc.app_count DESC, st.name
@@ -182,7 +189,7 @@ function defaultProjectionCountQuery(filterType: FilterType): string | null {
   if (filterType === 'category') {
     return `
       SELECT sc.category_id AS option_id, sc.name AS option_name, fc.app_count
-      FROM metrics.apps_page_filter_counts fc
+      FROM ${resolveAppProjectionRelations().filterCounts} fc
       JOIN legacy.steam_categories sc ON sc.category_id = fc.option_id
       WHERE fc.filter_type = 'category'
       ORDER BY fc.app_count DESC, sc.name
@@ -229,7 +236,23 @@ export async function GET(request: NextRequest) {
     values.length === 1 && values[0] === 'game'
       ? defaultProjectionCountQuery(filterType)
       : null;
-  const useProjectionQuery = projectionQuery !== null && await hasFilterCountProjection();
+  const projectionRelations = resolveAppProjectionRelations();
+  const projectionAvailable =
+    projectionQuery !== null && (await hasFilterCountProjection());
+  if (
+    projectionQuery !== null &&
+    projectionRelations.version === "v2" &&
+    !projectionAvailable
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "APP_PROJECTION_VERSION=v2 requires metrics.apps_page_filter_counts_v2.",
+      },
+      { status: 503 },
+    );
+  }
+  const useProjectionQuery = projectionQuery !== null && projectionAvailable;
   const { rows } = await runTigerQuery<FilterOptionRow>(
     useProjectionQuery
       ? projectionQuery

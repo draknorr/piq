@@ -1,11 +1,14 @@
-import type { Metadata } from 'next';
-import Link from 'next/link';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { getServiceSupabase } from '@/lib/supabase-service';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
-import { Card } from '@/components/ui';
-import { Gamepad2, Building2, Users, ArrowRight, Sparkles } from 'lucide-react';
-import { DashboardSearch } from './DashboardSearch';
+import type { Metadata } from "next";
+import Link from "next/link";
+import { isSupabaseConfigured } from "@/lib/supabase";
+import { getServiceSupabase } from "@/lib/supabase-service";
+import { ConfigurationRequired } from "@/components/ConfigurationRequired";
+import { Card } from "@/components/ui";
+import { Gamepad2, Building2, Users, ArrowRight, Sparkles } from "lucide-react";
+import { DashboardSearch } from "./DashboardSearch";
+import { postToQueryApi } from "@/lib/query-api-client";
+import { resolveProductReadTarget } from "@/lib/product-read-runtime";
+import { resolveAppProjectionRelations } from "@/app/(main)/apps/lib/apps-projection-runtime";
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -17,6 +20,38 @@ async function getStats() {
   if (!isSupabaseConfigured()) {
     return null;
   }
+
+  if (resolveProductReadTarget("dashboard") === "tiger") {
+    const result = await postToQueryApi<{
+      catalog: {
+        appCount: number;
+        developerCount: number;
+        publisherCount: number;
+      };
+      provenance: {
+        source: "tiger";
+      };
+    }>(
+      "/v1/contracts/get-product-health",
+      {
+        detail: "summary",
+        projectionVersion: resolveAppProjectionRelations().version,
+      },
+      { timeoutMs: 10_000 },
+    );
+    if (
+      !result.ok ||
+      !result.data ||
+      result.data.provenance.source !== "tiger"
+    ) {
+      throw new Error(
+        `Tiger dashboard product contract unavailable: ${result.errorCode ?? result.reason ?? "unknown error"}`,
+      );
+    }
+
+    return result.data.catalog;
+  }
+
   const supabase = getServiceSupabase();
 
   // Query the pre-computed stats cache (single row, instant response)
