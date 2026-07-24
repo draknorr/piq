@@ -37,10 +37,13 @@ def normalize_pics_snapshot(app: ExtractedPICSData) -> Dict[str, Any]:
         "developer_names": developer_names,
         "publisher_names": publisher_names,
         "franchise_names": franchise_names,
+        "parent_appid": app.parent_appid,
         "dlc_appids": sorted({int(appid) for appid in app.dlc_appids}),
         "release_state": app.release_state,
         "review_score": app.review_score,
         "review_percentage": app.review_percentage,
+        "metacritic_score": app.metacritic_score,
+        "metacritic_url": _normalize_optional_string(app.metacritic_url),
         "store_tags": sorted({int(tag_id) for tag_id in app.store_tags}),
         "genres": sorted({int(genre_id) for genre_id in app.genres}),
         "primary_genre": app.primary_genre,
@@ -48,6 +51,9 @@ def normalize_pics_snapshot(app: ExtractedPICSData) -> Dict[str, Any]:
         "platforms": sorted({platform.strip().lower() for platform in app.platforms if platform}),
         "controller_support": _normalize_optional_string(app.controller_support),
         "steam_deck_category": _normalize_steam_deck_category(app),
+        "steam_deck_details": _normalize_steam_deck_details(app),
+        "has_workshop": app.has_workshop,
+        "is_free": app.is_free,
         "content_descriptors": _canonicalize(app.content_descriptors),
         "languages": _canonicalize(app.languages),
         "homepage_url": app.homepage_url,
@@ -80,7 +86,9 @@ def diff_pics_snapshots(before: Dict[str, Any], after: Dict[str, Any]) -> List[P
         )
     if removed_tags:
         events.append(
-            PICSEvent("tags_removed", sorted(before_tags), sorted(after_tags), {"removed": removed_tags})
+            PICSEvent(
+                "tags_removed", sorted(before_tags), sorted(after_tags), {"removed": removed_tags}
+            )
         )
 
     _append_set_change(events, "genres_changed", before, after, "genres")
@@ -93,7 +101,9 @@ def diff_pics_snapshots(before: Dict[str, Any], after: Dict[str, Any]) -> List[P
     _append_set_change(events, "developer_association_changed", before, after, "developer_names")
     _append_set_change(events, "dlc_references_changed", before, after, "dlc_appids")
     _append_value_change(events, "build_id_changed", before, after, "current_build_id")
-    _append_value_change(events, "last_content_update_changed", before, after, "last_content_update")
+    _append_value_change(
+        events, "last_content_update_changed", before, after, "last_content_update"
+    )
 
     return events
 
@@ -135,7 +145,9 @@ def _append_value_change(
     if before_value == after_value:
         return
 
-    events.append(PICSEvent(change_type=change_type, before_value=before_value, after_value=after_value))
+    events.append(
+        PICSEvent(change_type=change_type, before_value=before_value, after_value=after_value)
+    )
 
 
 def _normalize_association_names(
@@ -168,6 +180,17 @@ def _normalize_steam_deck_category(app: ExtractedPICSData) -> Optional[str]:
     return category_map.get(app.steam_deck.category, "unknown")
 
 
+def _normalize_steam_deck_details(app: ExtractedPICSData) -> Optional[Dict[str, Any]]:
+    if not app.steam_deck:
+        return None
+    return {
+        "category": _normalize_steam_deck_category(app),
+        "test_timestamp": app.steam_deck.test_timestamp,
+        "tested_build_id": app.steam_deck.tested_build_id,
+        "tests": _canonicalize(app.steam_deck.tests),
+    }
+
+
 def _normalize_datetime(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
@@ -188,6 +211,8 @@ def _canonicalize(value: Any) -> Any:
         canonical_items = [_canonicalize(item) for item in value]
         return sorted(
             canonical_items,
-            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+            key=lambda item: json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
         )
     return value

@@ -7,7 +7,9 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, TypeVar
 
 import httpx
 
-from .client import SupabaseClient
+from ..config.settings import settings
+from ..extractors.common import ExtractedPICSData, SteamDeckCompatibility
+from ..extractors.taxonomy import CATEGORY_NAMES, GENRE_NAMES
 from .change_intelligence import (
     PICS_CHANGE_SOURCE,
     PICS_SNAPSHOT_SOURCE,
@@ -15,130 +17,14 @@ from .change_intelligence import (
     hash_normalized_snapshot,
     normalize_pics_snapshot,
 )
+from .client import SupabaseClient
 from .tiger_change_history import TigerPICSChangeHistoryStore
 from .tiger_latest_state import TigerPICSLatestStateStore
-from ..config.settings import settings
-from ..extractors.common import ExtractedPICSData, Association
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 STEAM_TAGS_URL = "https://store.steampowered.com/tagdata/populartags/english"
-
-# Genre ID → Name mapping (from Steam PICS data)
-GENRE_NAMES: Dict[int, str] = {
-    1: "Action",
-    2: "Strategy",
-    3: "RPG",
-    4: "Casual",
-    5: "Racing",
-    9: "Racing",
-    12: "Sports",
-    18: "Sports",
-    23: "Indie",
-    25: "Adventure",
-    28: "Simulation",
-    29: "Massively Multiplayer",
-    37: "Free to Play",
-    51: "Animation & Modeling",
-    53: "Design & Illustration",
-    54: "Education",
-    55: "Software Training",
-    56: "Utilities",
-    57: "Video Production",
-    58: "Web Publishing",
-    59: "Game Development",
-    60: "Photo Editing",
-    70: "Early Access",
-    71: "Audio Production",
-    72: "Accounting",
-    81: "Documentary",
-    82: "Episodic",
-    83: "Feature Film",
-    84: "Short",
-    85: "Benchmark",
-    86: "VR",
-    87: "360 Video",
-}
-
-# Category ID → Name mapping (Steam feature categories)
-# Gathered from Steam Storefront API calls on 30+ games
-CATEGORY_NAMES: Dict[int, str] = {
-    # Core gameplay modes
-    1: "Multi-player",
-    2: "Single-player",
-    6: "Mods (require HL2)",
-    8: "Valve Anti-Cheat enabled",
-    9: "Co-op",
-    # Steam features
-    13: "Captions available",
-    14: "Commentary available",
-    15: "Stats",
-    16: "Includes Source SDK",
-    17: "Includes level editor",
-    18: "Partial Controller Support",
-    19: "Mods",
-    20: "MMO",
-    21: "Downloadable Content",
-    22: "Steam Achievements",
-    23: "Steam Cloud",
-    24: "Shared/Split Screen",
-    25: "Steam Leaderboards",
-    # Multiplayer features
-    27: "Cross-Platform Multiplayer",
-    28: "Full controller support",
-    29: "Steam Trading Cards",
-    30: "Steam Workshop",
-    31: "VR Support",
-    32: "Steam Turn Notifications",
-    35: "In-App Purchases",
-    36: "Online PvP",
-    37: "Shared/Split Screen PvP",
-    38: "Online Co-op",
-    39: "Shared/Split Screen Co-op",
-    40: "SteamVR Collectibles",
-    41: "Remote Play on Phone",
-    42: "Remote Play on Tablet",
-    43: "Remote Play on TV",
-    44: "Remote Play Together",
-    45: "Captions available",
-    46: "LAN PvP",
-    47: "LAN Co-op",
-    48: "LAN Co-op",
-    49: "PvP",
-    50: "VR Only",
-    51: "Steam Workshop",
-    52: "Tracked Controller Support",
-    53: "VR Supported",
-    54: "VR Only",
-    # HDR and new features
-    55: "Timeline Support",
-    56: "GPU Recording",
-    57: "Cloud Gaming",
-    58: "Steam Input API",
-    59: "Co-op Campaigns",
-    60: "Steam Overlay Support",
-    61: "HDR available",
-    62: "Family Sharing",
-    63: "Steam Timeline",
-    # Accessibility features
-    64: "Adjustable Text Size",
-    65: "Subtitle Options",
-    66: "Color Alternatives",
-    67: "Camera Comfort",
-    68: "Custom Volume Controls",
-    69: "Stereo Sound",
-    70: "Surround Sound",
-    71: "Narrated Game Menus",
-    72: "Chat Speech-to-text",
-    74: "Playable without Timed Input",
-    75: "Keyboard Only Option",
-    76: "Mouse Only Option",
-    77: "Touch Only Option",
-    78: "Adjustable Difficulty",
-    79: "Save Anytime",
-}
-
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
     if not isinstance(value, str) or not value:

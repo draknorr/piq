@@ -72,6 +72,9 @@ are isolated in `apps-projection-refresh.md`.
 - `durable-pics-shadow-capture.md`: approved fail-closed historical response
   capture, retained `source_blocked` evidence, zero downstream work, unchanged
   canonical cursor, and stopped-runtime proof.
+- `durable-pics-processing-validation.md`: read-only live Steam/Tiger contract
+  checks, leased consumer and promotion failure injection, and proof that PR 4
+  remained disabled and undeployed.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

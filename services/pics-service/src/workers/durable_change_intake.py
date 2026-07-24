@@ -16,6 +16,7 @@ from ..database.durable_intake import (
 from ..health.server import HealthServer
 from ..steam.client import PICSSteamClient
 from ..steam.pics import PICSFetcher
+from .durable_processor import DurablePICSProcessor, PICSProcessingStats
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,15 @@ class DurableChangeIntakeWorker:
         self._last_poll_error: Optional[str] = None
         self._last_successful_change_poll_at: Optional[str] = None
         self._last_committed_batch: Optional[PersistedPICSBatch] = None
+        self._processor = (
+            DurablePICSProcessor(
+                work_mode=self._work_mode,
+                stream_key=self._stream_key,
+            )
+            if settings.pics_processing_enabled
+            else None
+        )
+        self._last_processing_stats: Optional[PICSProcessingStats] = None
 
     def run(self) -> None:
         """Run the durable intake leader continuously."""
@@ -87,6 +97,10 @@ class DurableChangeIntakeWorker:
             while self._running:
                 try:
                     last_change = self.poll_once(last_change)
+                    if self._processor is not None:
+                        if self._fetcher is None:
+                            raise RuntimeError("PICS fetcher is not initialized")
+                        self._last_processing_stats = self._processor.process_once(self._fetcher)
                     self._consecutive_poll_failures = 0
                     self._last_poll_error = None
                     self._last_successful_change_poll_at = datetime.now(timezone.utc).isoformat()
@@ -194,13 +208,31 @@ class DurableChangeIntakeWorker:
             health_state = "degraded"
 
         batch = self._last_committed_batch
+        processing = self._last_processing_stats
         self._health.update_status(
             {
                 "mode": "change_monitor",
                 "pics_work_mode": self._work_mode,
                 "intake_stream": self._stream_key,
                 "intake_lane": self._lane,
-                "intake_only": True,
+                "intake_only": self._processor is None,
+                "processing_enabled": self._processor is not None,
+                "processing_worker_id": (
+                    self._processor.worker_id if self._processor is not None else None
+                ),
+                "last_processing_claimed": processing.claimed if processing else None,
+                "last_processing_completed": processing.completed if processing else None,
+                "last_processing_retried": processing.retried if processing else None,
+                "last_processing_dead_lettered": (processing.dead_lettered if processing else None),
+                "last_processing_source_blocked": (
+                    processing.source_blocked if processing else None
+                ),
+                "last_processing_snapshots_changed": (
+                    processing.snapshots_changed if processing else None
+                ),
+                "last_processing_events_created": (
+                    processing.events_created if processing else None
+                ),
                 "health_state": health_state,
                 "last_change": last_change,
                 "last_committed_batch_id": str(batch.batch_id) if batch else None,
