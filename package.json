@@ -14,6 +14,8 @@
     "query-api:build": "pnpm --filter @publisheriq/query-api build",
     "query-api:dev": "pnpm --filter @publisheriq/query-api dev",
     "tiger:baseline": "pnpm --filter @publisheriq/data-plane capture-live-baseline",
+    "opportunity:baseline": "pnpm --filter @publisheriq/data-plane capture-daily-opportunity-baseline",
+    "opportunity:r2-manifest": "pnpm --filter @publisheriq/ingestion change-intel-r2-manifest",
     "tiger:target-baseline": "pnpm --filter @publisheriq/data-plane capture-target-baseline",
     "tiger:backfill-legacy": "pnpm --filter @publisheriq/data-plane backfill-legacy-compatibility",
     "tiger:backfill-daily-metrics": "pnpm --filter @publisheriq/data-plane backfill-metrics-daily-metrics",

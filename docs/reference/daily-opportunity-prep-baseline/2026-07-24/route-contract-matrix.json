@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-24T01:17:08Z",
+  "contracts": [
+    {
+      "surface": "/",
+      "authentication": "public",
+      "productSource": "application content",
+      "preservation": "landing behavior and approved-partner positioning"
+    },
+    {
+      "surface": "/login",
+      "authentication": "public",
+      "productSource": "Supabase Auth",
+      "preservation": "login and next-parameter continuation"
+    },
+    {
+      "surface": "/waitlist",
+      "authentication": "public",
+      "productSource": "Supabase",
+      "preservation": "waitlist submission and status behavior"
+    },
+    {
+      "surface": "/dashboard",
+      "authentication": "protected",
+      "productSource": "mixed; product counts require Tiger migration",
+      "preservation": "navigation, cards, and /login?next=%2Fdashboard redirect"
+    },
+    {
+      "surface": "/apps",
+      "authentication": "protected",
+      "productSource": "Tiger metrics.apps_page_projection",
+      "preservation": "response shape, filters, sort, pagination, sparklines, comparison, details"
+    },
+    {
+      "surface": "/companies",
+      "authentication": "protected",
+      "productSource": "Tiger company projections",
+      "preservation": "list, filter, sort, pagination, publisher/developer navigation"
+    },
+    {
+      "surface": "/unreleased",
+      "authentication": "protected",
+      "productSource": "Tiger metrics.unreleased_games_projection",
+      "preservation": "filters, export, detail, timeline, and latest_added_at UI semantics"
+    },
+    {
+      "surface": "/insights",
+      "authentication": "protected",
+      "productSource": "stale Supabase product metrics plus authoritative Supabase pins",
+      "preservation": "tabs, URL parameters, result shapes, pinned-item behavior, empty/error states"
+    },
+    {
+      "surface": "/changes",
+      "authentication": "protected",
+      "productSource": "Tiger/query-api intended; stale Supabase fallback reproduced",
+      "preservation": "activity list, filters, details, status, pagination, entity links"
+    },
+    {
+      "surface": "/chat",
+      "authentication": "protected",
+      "productSource": "Tiger/query-api with Supabase session, credit, and log behavior",
+      "preservation": "tool contracts, credits, streaming, logging, links, pagination"
+    },
+    {
+      "surface": "/youtube",
+      "authentication": "protected",
+      "productSource": "Tiger/query-api YouTube contracts",
+      "preservation": "list, filters, market rows, and inspector flows"
+    },
+    {
+      "surface": "/account",
+      "authentication": "protected",
+      "productSource": "Supabase account and credit data",
+      "preservation": "display, credits, and sign-out"
+    },
+    {
+      "surface": "/admin",
+      "authentication": "admin",
+      "productSource": "Supabase administration plus Tiger PICS cursor progress",
+      "preservation": "role restriction and account administration; product health must identify source"
+    },
+    {
+      "surface": "/api/apps",
+      "authentication": "protected API",
+      "productSource": "Tiger Apps projection",
+      "preservation": "unauthenticated 401 and existing response schema"
+    },
+    {
+      "surface": "/api/change-feed/activity",
+      "authentication": "protected API",
+      "productSource": "Tiger/query-api intended",
+      "preservation": "unauthenticated 401, filters, continuation, and item shape"
+    },
+    {
+      "surface": "/api/change-feed/status",
+      "authentication": "protected API",
+      "productSource": "Tiger/query-api intended",
+      "preservation": "unauthenticated 401 and existing status shape"
+    },
+    {
+      "surface": "/api/pins and /api/alerts",
+      "authentication": "protected API",
+      "productSource": "Supabase user-control data",
+      "preservation": "authorization, create/update/remove/read behavior, preferences, and counts"
+    }
+  ],
+  "unauthenticatedChecks": {
+    "protectedRouteStatus": 307,
+    "redirectPattern": "/login?next=%2F<route>",
+    "protectedApiStatus": 401
+  }
+}

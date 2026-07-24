@@ -53,8 +53,10 @@ Navigate to **Settings > Environment Variables** and add:
 | `SUPABASE_URL` | `https://xxx.supabase.co` | All |
 | `SUPABASE_SERVICE_KEY` | `eyJ...` | All |
 | `TIGER_PRIMARY_URL` | Production or preview Tiger Postgres URL | All |
-| `QUERY_API_BASE_URL` | `https://publisheriq-production.up.railway.app` | All |
+| `QUERY_API_BASE_URL` | `https://publisheriq-query-api-prod-production.up.railway.app` | All |
 | `QUERY_API_BEARER_TOKEN` | Shared bearer token for query-api | All |
+| `CHANGE_INTEL_READ_TARGET` | `tiger` | All |
+| `CHANGE_INTEL_READ_STRICT` | `true` | All |
 | `CHAT_TIGER_PRIMARY_MODE` | `all` | All |
 | `CHAT_TIGER_SHADOW_MODE` | `off` | All |
 
@@ -137,6 +139,12 @@ Preview deployments use the same environment variables by default. For different
 If `QUERY_API_BASE_URL` is not set in a deployed Vercel preview or production
 environment, the admin app now treats that as a configuration error instead of
 silently falling back to `127.0.0.1`.
+
+The Change Feed also requires `CHANGE_INTEL_READ_TARGET=tiger`. Keep
+`CHANGE_INTEL_READ_STRICT=true` in production so a query-api configuration or
+contract failure is reported instead of rendering stale Supabase product data
+as an empty, delayed feed. Preview must point to its preview query-api rather
+than the production service.
 
 ## Troubleshooting
 

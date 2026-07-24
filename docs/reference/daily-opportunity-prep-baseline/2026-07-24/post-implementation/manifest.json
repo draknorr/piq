@@ -1,0 +1,180 @@
+{
+  "captureGaps": [
+    "managed backup/PITR dashboard proof",
+    "restorable snapshots for future in-place repairs",
+    "R2 prefix-level object manifest",
+    "GitHub and Railway runtime inventory",
+    "authenticated browser route matrix"
+  ],
+  "capturedAt": "2026-07-24T01:44:32.785Z",
+  "productionMutationPerformed": false,
+  "schemaVersion": 1,
+  "status": "partial",
+  "supabase": {
+    "changeEvents24h": [
+      {
+        "source": "media",
+        "events_24h": "0",
+        "latest_event_at": "2026-04-29 23:24:28.825+00"
+      },
+      {
+        "source": "news",
+        "events_24h": "0",
+        "latest_event_at": "2026-04-30 00:12:00.495+00"
+      },
+      {
+        "source": "pics",
+        "events_24h": "0",
+        "latest_event_at": "2026-04-28 06:23:30.467992+00"
+      },
+      {
+        "source": "storefront",
+        "events_24h": "0",
+        "latest_event_at": "2026-04-29 23:40:53.156+00"
+      }
+    ],
+    "identity": {
+      "database_name": "postgres",
+      "engine_version": "PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 13.2.0, 64-bit",
+      "captured_at_utc": "2026-07-24 01:44:33.826279+00"
+    },
+    "latestDailyMetrics": {
+      "latest_metric_date": "2026-04-30"
+    },
+    "protectedObjects": {
+      "credit_reservations": {
+        "hashedRows": 0,
+        "primaryKeyColumns": [
+          "id"
+        ],
+        "primaryKeyHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "primaryKeyHashComplete": true,
+        "rows": 0
+      },
+      "credit_transactions": {
+        "hashedRows": 9,
+        "primaryKeyColumns": [
+          "id"
+        ],
+        "primaryKeyHash": "f0bb971955ecc2eb668657be87805a3830986b148baa335e6fdb4ce5c1ffb4c3",
+        "primaryKeyHashComplete": true,
+        "rows": 9
+      },
+      "user_alert_preferences": {
+        "hashedRows": 1,
+        "primaryKeyColumns": [
+          "user_id"
+        ],
+        "primaryKeyHash": "6420a1fab6df4440e0902f8edba6fe0abd54b53bf14f36c428021e46d3dfa32c",
+        "primaryKeyHashComplete": true,
+        "rows": 1
+      },
+      "user_alerts": {
+        "hashedRows": 0,
+        "primaryKeyColumns": [
+          "id"
+        ],
+        "primaryKeyHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "primaryKeyHashComplete": true,
+        "rows": 0
+      },
+      "user_pin_alert_settings": {
+        "hashedRows": 0,
+        "primaryKeyColumns": [
+          "pin_id"
+        ],
+        "primaryKeyHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "primaryKeyHashComplete": true,
+        "rows": 0
+      },
+      "user_pins": {
+        "hashedRows": 7,
+        "primaryKeyColumns": [
+          "id"
+        ],
+        "primaryKeyHash": "de190ee2f311f009d3269947d127324594cca5166bd200c4ff2441851be1806f",
+        "primaryKeyHashComplete": true,
+        "rows": 7
+      },
+      "user_profiles": {
+        "hashedRows": 9,
+        "primaryKeyColumns": [
+          "id"
+        ],
+        "primaryKeyHash": "275feabf723140132680d886cc219a0154cd82e4a7c47fabc03e1fad9880aa6e",
+        "primaryKeyHashComplete": true,
+        "rows": 9
+      }
+    }
+  },
+  "tiger": {
+    "appsProjection": {
+      "rows": "166864",
+      "latest_data_updated_at": "2026-05-04 03:47:38.203909+00"
+    },
+    "captureWork": [
+      {
+        "source": "hero_asset",
+        "dirty_non_dead": "0",
+        "dead_lettered": "36",
+        "oldest_dirty_at": null
+      },
+      {
+        "source": "news",
+        "dirty_non_dead": "91",
+        "dead_lettered": "27",
+        "oldest_dirty_at": "2026-07-23 21:15:09.551447+00"
+      },
+      {
+        "source": "projection_refresh",
+        "dirty_non_dead": "17",
+        "dead_lettered": "5",
+        "oldest_dirty_at": "2026-07-23 20:19:28.499688+00"
+      },
+      {
+        "source": "storefront",
+        "dirty_non_dead": "36",
+        "dead_lettered": "2790",
+        "oldest_dirty_at": "2026-07-23 21:19:53.687219+00"
+      }
+    ],
+    "changeEvents24h": [
+      {
+        "source": "media",
+        "events_24h": "1402",
+        "latest_event_at": "2026-07-24 01:37:48.563+00"
+      },
+      {
+        "source": "news",
+        "events_24h": "1151",
+        "latest_event_at": "2026-07-24 01:39:01.854+00"
+      },
+      {
+        "source": "storefront",
+        "events_24h": "11472",
+        "latest_event_at": "2026-07-24 01:34:05.191+00"
+      }
+    ],
+    "identity": {
+      "database_name": "tsdb",
+      "engine_version": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg22.04+1) on aarch64-unknown-linux-gnu, compiled by gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, 64-bit",
+      "captured_at_utc": "2026-07-24 01:44:33.91852+00"
+    },
+    "picsCoverage": {
+      "never_pics_synced": "93557",
+      "syncable_never_pics_synced": "93557",
+      "latest_pics_sync": "2026-06-16 22:06:22.449398+00"
+    },
+    "picsCursor": [
+      {
+        "last_change_number": "36631816",
+        "updated_at": "2026-06-16 22:05:18.735848+00"
+      }
+    ],
+    "unreleasedProjection": {
+      "rows": "51427",
+      "latest_data_updated_at": "2026-07-23 06:18:07.708959+00",
+      "latest_projection_refreshed_at": "2026-07-23 06:20:53.471291+00"
+    }
+  }
+}

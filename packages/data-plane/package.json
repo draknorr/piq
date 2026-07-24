@@ -18,6 +18,7 @@
     "lint": "eslint src/",
     "test": "node --import tsx --test $(find src -name '*.test.ts' -type f | sort)",
     "capture-live-baseline": "tsx src/scripts/capture-live-baseline.ts",
+    "capture-daily-opportunity-baseline": "tsx src/scripts/capture-daily-opportunity-baseline.ts",
     "capture-target-baseline": "tsx src/scripts/capture-target-baseline.ts",
     "backfill-legacy-compatibility": "tsx src/scripts/backfill-legacy-compatibility.ts",
     "backfill-metrics-daily-metrics": "tsx src/scripts/backfill-metrics-daily-metrics.ts",

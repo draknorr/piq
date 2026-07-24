@@ -1,6 +1,10 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 import { resolveQueryApiBaseUrl } from '@/lib/query-api-config';
 import { getServiceSupabase } from '@/lib/supabase-service';
+import {
+  shouldUseStrictTigerChangeFeedReads,
+  shouldUseTigerChangeFeedReads,
+} from './change-feed-runtime';
 import type {
   AppType,
   ChatChangePatternCandidateRow,
@@ -260,19 +264,6 @@ async function postChangeFeedQueryApi<T>(
       reason: error instanceof Error ? error.message : 'Unknown query-api error',
     };
   }
-}
-
-function shouldUseTigerChangeFeedReads(): boolean {
-  const target =
-    process.env.CHANGE_INTEL_READ_TARGET?.trim().toLowerCase() ??
-    process.env.CHANGE_FEED_READ_TARGET?.trim().toLowerCase();
-  return target === 'tiger';
-}
-
-function shouldUseStrictTigerChangeFeedReads(): boolean {
-  const value =
-    process.env.CHANGE_INTEL_READ_STRICT ?? process.env.CHANGE_FEED_READ_STRICT;
-  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
 }
 
 function normalizeTigerAppType(value: string | null): AppType | null {

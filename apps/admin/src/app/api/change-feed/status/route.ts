@@ -3,6 +3,10 @@ import { getAuthErrorResponse, requireAuthOrThrow } from '@/lib/auth-utils';
 import { postToQueryApi } from '@/lib/query-api-client';
 import { createServerClient } from '@/lib/supabase/server';
 import type { ChangeFeedStatus } from '@/app/(main)/changes/lib';
+import {
+  shouldUseStrictTigerChangeFeedReads,
+  shouldUseTigerChangeFeedReads,
+} from '@/app/(main)/changes/lib/change-feed-runtime';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,19 +47,6 @@ function getHoursSince(timestamp: string | null): number | null {
   }
 
   return (Date.now() - parsed) / (1000 * 60 * 60);
-}
-
-function shouldUseTigerChangeFeedReads(): boolean {
-  const target =
-    process.env.CHANGE_INTEL_READ_TARGET?.trim().toLowerCase() ??
-    process.env.CHANGE_FEED_READ_TARGET?.trim().toLowerCase();
-  return target === 'tiger';
-}
-
-function shouldUseStrictTigerChangeFeedReads(): boolean {
-  const value =
-    process.env.CHANGE_INTEL_READ_STRICT ?? process.env.CHANGE_FEED_READ_STRICT;
-  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
 }
 
 async function fetchTigerStatus(): Promise<ChangeFeedStatus> {

@@ -12,7 +12,7 @@ Current state: Storefront/news/change-intel writer paths are Tiger/R2-primary wh
 | News/change events and projections | Tiger | `news-hot-refresh.yml`, `news-catchup.yml`, and Tiger sync/reconcile paths |
 | Raw and normalized payload archives | R2/S3-compatible object storage | Required for Tiger change-intel archival |
 | `/chat` change/news contracts | Tiger via `query-api` | `explainChanges`, `searchDocuments`, and related contract paths |
-| `/changes` product page | Supabase unless separately proven | Do not assume this page has moved just because chat contracts have |
+| `/changes` product page | Tiger via `query-api` when `CHANGE_INTEL_READ_TARGET=tiger` | Production must also set the explicit query-api base URL and use strict reads so stale Supabase product data cannot appear healthy |
 | Auth, sessions, credits, legacy reads | Supabase | Retained system |
 
 ## Required Environment
@@ -23,6 +23,7 @@ Set these on accepted change-intel workflows/services:
 DATA_READ_TARGET=tiger
 DATA_WRITE_TARGET=tiger
 CHANGE_INTEL_READ_TARGET=tiger
+CHANGE_INTEL_READ_STRICT=true
 CHANGE_INTEL_WRITE_TARGET=tiger
 TIGER_PRIMARY_URL=<production tiger url>
 
