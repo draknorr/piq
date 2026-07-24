@@ -1,6 +1,6 @@
 # Apps Projection Native Scheduler Decision
 
-Status: **source validated; production install pending approval**
+Status: **installed disabled; native smoke pending separate approval**
 
 This record captures the Option A decision for the recurring Apps projection
 refresh. No scheduler job, function, procedure, extension, service, deployment,
@@ -87,14 +87,14 @@ hourly `:10`, two-hour `:00`, and Unreleased `:50` workload anchors.
 
 ## Safety boundary
 
-Schema 0091 is intentionally unapplied. The next database action, if approved,
-would install the function, procedure, and one disabled job. It would not run a
-refresh.
+Schema 0091 was applied after a separate explicit approval and installed one
+job in the disabled state. The post-apply record is in
+`apps-projection-native-scheduler-schema-apply.md`.
 
-After that, a native `run_job` smoke would require a second approval because it
-refreshes production materializations. Enabling the recurring schedule would
-require a third approval because it authorizes six ongoing database writes per
-day.
+A native `run_job` smoke remains unapplied and requires a second approval
+because it refreshes production materializations. Enabling the recurring
+schedule remains unapplied and requires a third approval because it authorizes
+six ongoing database writes per day.
 
 Both Railway services named `publisheriq` remain outside this architecture and
 must stay stopped. The scheduler neither connects to nor restarts either
