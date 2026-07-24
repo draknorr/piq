@@ -7,7 +7,7 @@ This baseline is read-only. No production mutation was performed while capturing
 ## Scope
 
 - Tiger production snapshot for PICS progress, queue state, and projection freshness.
-- Supabase production snapshot for retained user-control and legacy product freshness.
+- Supabase production snapshot for Auth-adjacent and legacy non-auth migration safeguards, plus legacy product freshness.
 - R2 metadata-only prefix inventory and stable object-metadata hash.
 - GitHub Actions and Railway runtime/mode inventory without secret values.
 - Live query-api health check.
@@ -20,19 +20,19 @@ This baseline is read-only. No production mutation was performed while capturing
 - Change-intel queue remains degraded: `179` non-dead queued records and `2,858` dead-lettered records were present in the refreshed snapshot.
 - `metrics.apps_page_projection` remains stale: `166,864` rows with newest `data_updated_at = 2026-05-04 03:47:38+00`.
 - `metrics.unreleased_games_projection` remains current enough to preserve: `51,427` rows with newest `data_updated_at = 2026-07-23 06:18:07+00`.
-- Supabase retained user-control data still exists and must be preserved: `9` profiles, `7` pins, `0` user alerts, `9` credit transactions, `0` credit reservations.
+- Supabase retained non-auth data still exists and must be preserved until reconciled into Tiger: `9` profiles, `7` pins, `0` user alerts, `9` credit transactions, `0` credit reservations. It is a legacy dependency, not the target source of truth.
 - The current Supabase schema no longer exposes `public.alert_preferences` or `public.pin_alert_settings`.
 - Supabase product freshness remains stale: `public.daily_metrics.metric_date` tops out at `2026-04-30`, and `public.pics_sync_state.updated_at` is `2026-04-30 03:16:23+00`.
 - R2 `production/change-intel` contained `1,188,708` objects totaling `11,182,262,682` bytes; the metadata-only manifest records a stable SHA-256 without exporting object bodies or credentials.
 - Live query-api `/healthz` returned `{"ok":true}` with Tiger provenance at `2026-07-24T00:59:39.324Z`.
-- Live authenticated `/changes` was empty and marked delayed during the July 24 production review, despite current Tiger change activity.
+- Live authenticated `/changes` was empty and marked delayed during the initial July 24 production review, despite current Tiger change activity. After setting the missing strict Tiger read flags and rebuilding the existing Vercel production artifact, it reported `Capture healthy` and displayed `25` current rows for the last day.
 
 ## Current implementation implications
 
 - Change Feed must prefer the Tiger/query-api contract whenever it is configured and available; stale Supabase fallback cannot remain the default production path.
 - Admin PICS health must report stale cursor progress instead of inferring “active” from the existence of a historical cursor.
 - A dedicated Tiger Apps projection refresh workflow is required before any future freshness SLO can be enforced.
-- Backup/PITR verification and any database refresh remain blocked pending separate operator evidence and explicit approval.
+- Tiger backup/PITR verification and any Tiger database refresh remain blocked pending separate operator evidence and explicit approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 
 ## Artifacts
 

@@ -1,8 +1,10 @@
 # PR 1 Verification — 2026-07-24
 
 All production database access used read-only transactions or bounded `SELECT`
-queries. No workflow was dispatched, no Railway or Vercel service was restarted
-or redeployed, and no production database/object was mutated.
+queries. No workflow was dispatched, no Railway service was restarted, and no
+production database/object was mutated. A Vercel configuration-only repair set
+the missing strict Tiger Change Feed flags and rebuilt the existing production
+artifact; it did not deploy branch code.
 
 ## Passed
 
@@ -26,6 +28,9 @@ or redeployed, and no production database/object was mutated.
   user/profile/pin/alert/credit primary-key set unchanged.
 - The new Apps projection workflow parses as YAML and remains disabled for
   schedules unless `ENABLE_TIGER_APPS_PROJECTION_REFRESH=true`.
+- The rebuilt Vercel production artifact retained the `/login?next=` redirect
+  and API `401` contracts. Authenticated `/changes` reported `Capture healthy`
+  and displayed `25` current Tiger-backed rows for the last day.
 
 ## Existing blockers surfaced
 
@@ -52,11 +57,11 @@ baseline or the contained admin/configuration changes in PR 1.
 
 ## External gates still open
 
-- TigerData and Supabase provider-dashboard backup/PITR proof.
+- Tiger provider-dashboard backup history, retained recovery point, and PITR
+  fork proof. Supabase recovery proof is conditional on a future Auth-plane or
+  legacy-row mutation and is not a gate for Tiger-only work.
 - Separate approval for any materialized-view refresh or later database
   migration/backfill.
-- Vercel production configuration/redeployment and authenticated Change Feed
-  verification.
 - Manual Apps projection refresh timing and parity proof before enabling its
   schedule.
 - Three healthy daily cycles before any primary catalog, PICS, projection, or

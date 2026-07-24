@@ -1,9 +1,10 @@
 # Production Backup/PITR Gate
 
-Status: **blocked pending provider-dashboard evidence**
+Status: **Tiger writes blocked pending provider-dashboard evidence**
 
-No production migration, materialized-view refresh, backfill, repair, or PICS
-restart may proceed until every required field below is recorded.
+No production Tiger migration, materialized-view refresh, backfill, or repair
+may proceed until every required Tiger field below is recorded. PICS must not
+be restarted into the current lossy path regardless of backup status.
 
 ## TigerData
 
@@ -18,6 +19,13 @@ restart may proceed until every required field below is recorded.
 - Verified at:
 
 ## Supabase
+
+Status: **not a gate for Tiger-only work**
+
+Supabase is authoritative only for authentication identities and sessions.
+Complete this section only before an auth-plane mutation or an approved
+migration that changes legacy Supabase rows. A read-only export or checksum
+does not require this gate.
 
 - Provider project:
 - Backup feature enabled:

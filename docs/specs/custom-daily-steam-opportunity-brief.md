@@ -39,7 +39,7 @@ PublisherIQ's responsibility is to:
 - **Market context is part of every result.** A match should explain both why the game fits the user's profile and how comparable released games are performing.
 - **Preset health is monitored separately from game eligibility.** PublisherIQ can label a preset Growing, Surging, or Cooling, but market momentum never overrides the user's required or excluded rules.
 - **Preset recommendations are a future capability.** PublisherIQ may suggest a new preset when broad and persistent market evidence supports it, but must not silently create, enable, or modify a user's profile.
-- **Supabase remains the account authority.** Authentication, sessions, and account identity stay in Supabase.
+- **Supabase remains the Auth authority only.** Authentication identities and sessions stay in Supabase; all non-auth account, team, preference, credit, alert, and opportunity state belongs in Tiger behind the query API.
 - **Tiger owns this feature's operational and product truth.** Profiles, profile versions, team/workspace authorization records, source events, readiness, runs, results, evidence, game state, delivery work, Steam data, and calculations live together in Tiger behind the query API.
 - **Dismissed games may reappear.** A new subscribed material event can make a dismissed game eligible again.
 - **Ignored games remain suppressed.** Ignore is a separate, user-level choice that lasts until the user reverses it.

@@ -1,7 +1,8 @@
 {
-  "schemaVersion": 1,
-  "capturedAt": "2026-07-24T01:33:51Z",
-  "productionMutationPerformed": false,
+  "schemaVersion": 2,
+  "capturedAt": "2026-07-24T02:05:59Z",
+  "productionDatabaseMutationPerformed": false,
+  "productionConfigurationChanged": true,
   "githubActions": [
     {
       "name": "Steam App Change Hints",
@@ -149,10 +150,7 @@
         "DATA_READ_TARGET": "tiger",
         "DATA_WRITE_TARGET": "tiger"
       },
-      "credentialKeysPresent": [
-        "STEAM_CCU_CONCURRENCY",
-        "TIGER_PRIMARY_URL"
-      ]
+      "credentialKeysPresent": ["STEAM_CCU_CONCURRENCY", "TIGER_PRIMARY_URL"]
     },
     {
       "project": "enthusiastic-caring",
@@ -213,19 +211,31 @@
     }
   ],
   "vercel": {
-    "projectName": "publisheriq",
-    "projectId": "prj_u47JTdk9myIR8LMIVlRon1inu3z1",
+    "projectName": "publisheriq-admin",
+    "projectId": "prj_ZxKZTJ0wOnNmuHHcZk67QOfVzJ1z",
+    "owner": "ryanbohmann-gmailcoms-projects",
     "productionObservation": {
       "hosting": "Vercel",
-      "changeFeed": "authenticated route showed Capture delayed and zero activity",
-      "configurationFinding": "QUERY_API_BASE_URL and the Tiger Change Feed read target require production configuration verification",
-      "cliCredentialAvailable": false
+      "deployment": "publisheriq-admin-oz75ui3nw-ryanbohmann-gmailcoms-projects.vercel.app",
+      "alias": "www.publisheriq.app",
+      "changeFeedBefore": "authenticated route showed Capture delayed and zero activity",
+      "configurationFinding": "QUERY_API_BASE_URL and QUERY_API_BEARER_TOKEN existed; CHANGE_INTEL_READ_TARGET and CHANGE_INTEL_READ_STRICT were missing",
+      "configurationRepair": {
+        "CHANGE_INTEL_READ_TARGET": "tiger",
+        "CHANGE_INTEL_READ_STRICT": "true"
+      },
+      "changeFeedAfter": "authenticated route showed Capture healthy, 25 rows, 1 day, and 25 changes",
+      "unauthenticatedRoute": "307 to /login?next=%2Fchanges",
+      "unauthenticatedApi": "401 with Authentication required",
+      "verifiedAt": "2026-07-24T02:04:00Z",
+      "cliCredentialAvailable": true
     }
   },
   "notes": [
     "Only variable names and non-secret operating modes are recorded.",
     "A successful deployment or process health response is not evidence of source progress.",
     "Workflow states were read from the GitHub Actions API; schedules and target flags were read from the captured origin/main workflow files.",
-    "No service restart, redeploy, workflow dispatch, variable update, or production database write occurred."
+    "No service restart, workflow dispatch, or production database write occurred.",
+    "The existing Vercel production artifact was rebuilt after two non-secret Change Feed flags were added; no branch code was deployed."
   ]
 }

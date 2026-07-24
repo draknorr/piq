@@ -28,27 +28,28 @@ The supporting architectural analysis is in the [Backend Assessment](./custom-da
 - A relationship may be removed only when a complete archived source payload explicitly proves that the relationship is absent.
 - A source cursor must not advance until every item it covers is durably recorded.
 - Failed primary writer cutovers pause at the last durable cursor. They do not fall back to a writer known to have a data-loss window.
-- Supabase remains authoritative for authentication, sessions, accounts, pins, alert preferences, and retained alerts.
-- Tiger and R2 remain authoritative for accepted product-data ingestion, durable product events, prepared calculations, and archived source evidence.
+- Supabase remains authoritative only for authentication identities and sessions.
+- Tiger and R2 remain authoritative for all non-auth product, operational, user-control, credit, alert, workspace, opportunity, ingestion, event, calculation, and archived-source state.
+- Existing non-auth Supabase rows are legacy migration inputs, not the target source of truth. Preserve them until a reconciled Tiger migration is complete; do not add new non-auth Supabase writes.
 - Browsers continue to use authenticated application and query-API boundaries. They never connect directly to Tiger.
 
 ## Current Production Baseline
 
 Read-only production inspection on Friday, July 24, 2026 UTC established the following time-bound baseline:
 
-| Area                       | Observed state                                                                                                                                                                                                                                         | Preparation consequence                                                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Recent game intake         | 198 Tiger game rows created in the preceding 24 hours had storefront sync and developer or publisher relationships. None had Steam tags or genres.                                                                                                     | Catalog discovery is working, but taxonomy-dependent readiness is not.                                                                  |
-| Tiger PICS                 | The latest `ops.sync_status.last_pics_sync` was June 16, 2026. About 93,557 sync-status rows had never completed a PICS sync.                                                                                                                          | PICS repair is a preparation blocker.                                                                                                   |
-| PICS runtime               | Railway service `publisheriq` was deployed in `change_monitor` mode with Tiger latest-state/history targets. `/health` returned `OK`, but `/status.updated_at`, `/status.last_successful_change_poll_at`, and the Tiger cursor were frozen on June 16. | Process liveness is not source progress. Report the worker as stalled and do not restart it into the lossy catch-up path.               |
-| PICS events                | The latest Tiger PICS change event was June 16, while storefront, news, and media events were current.                                                                                                                                                 | Restarting the existing worker is not evidence of recovery. Cursor and queue durability must be fixed.                                  |
-| Change-intel work          | At the refreshed July 24 00:59 UTC baseline, `ops.app_capture_work_state` contained 2,858 dead-lettered records and 179 non-dead records with `dirty_since` set.                                                                                       | Terminal causes and the meaning of dirty versus completed work must be understood before relying on this queue for readiness or health. |
-| Change Feed                | The authenticated `/changes` route displayed `Capture delayed` and zero activity while Tiger contained 14,026 storefront, news, and media events in the preceding 24 hours. Supabase contained no events in that window.                               | Repair the Tiger/query-API application contract before changing event semantics or introducing the registry.                            |
-| Apps projection            | `metrics.apps_page_projection` contained about 166,864 rows, but its newest `data_updated_at` was May 4, 2026.                                                                                                                                         | `/apps` needs a versioned replacement and a reversible read cutover.                                                                    |
-| Unreleased projection      | `metrics.unreleased_games_projection` contained about 51,427 rows and was refreshed on July 23.                                                                                                                                                        | Its current behavior must be preserved, but `latest_added_at` must not become the opportunity newness clock.                            |
-| Supabase product plane     | Supabase product sync jobs and PICS freshness stopped around April 30. No recent `daily_metrics.metric_date` was found in the inspected 14-day window.                                                                                                 | Retained product and operational reads cannot be treated as monitors for current Tiger ingestion.                                       |
-| Existing user control data | Supabase contained 9 user profiles, 7 pins, no `public.alert_preferences` or `public.pin_alert_settings` table in the current schema, 0 user alerts, 9 credit transactions, and 0 credit reservations at inspection time.                              | Low current usage does not authorize deleting or repurposing these records.                                                             |
-| Route protection           | The deployed `/apps` route redirected an unauthenticated request to `/login?next=%2Fapps`.                                                                                                                                                             | Existing authentication and redirect behavior is a regression contract.                                                                 |
+| Area                       | Observed state                                                                                                                                                                                                                                                                                                                  | Preparation consequence                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Recent game intake         | 198 Tiger game rows created in the preceding 24 hours had storefront sync and developer or publisher relationships. None had Steam tags or genres.                                                                                                                                                                              | Catalog discovery is working, but taxonomy-dependent readiness is not.                                                                                            |
+| Tiger PICS                 | The latest `ops.sync_status.last_pics_sync` was June 16, 2026. About 93,557 sync-status rows had never completed a PICS sync.                                                                                                                                                                                                   | PICS repair is a preparation blocker.                                                                                                                             |
+| PICS runtime               | Railway service `publisheriq` was deployed in `change_monitor` mode with Tiger latest-state/history targets. `/health` returned `OK`, but `/status.updated_at`, `/status.last_successful_change_poll_at`, and the Tiger cursor were frozen on June 16.                                                                          | Process liveness is not source progress. Report the worker as stalled and do not restart it into the lossy catch-up path.                                         |
+| PICS events                | The latest Tiger PICS change event was June 16, while storefront, news, and media events were current.                                                                                                                                                                                                                          | Restarting the existing worker is not evidence of recovery. Cursor and queue durability must be fixed.                                                            |
+| Change-intel work          | At the refreshed July 24 00:59 UTC baseline, `ops.app_capture_work_state` contained 2,858 dead-lettered records and 179 non-dead records with `dirty_since` set.                                                                                                                                                                | Terminal causes and the meaning of dirty versus completed work must be understood before relying on this queue for readiness or health.                           |
+| Change Feed                | The authenticated `/changes` route initially displayed `Capture delayed` and zero activity while Tiger contained 14,026 storefront, news, and media events in the preceding 24 hours. After the July 24 Vercel configuration repair, it reported `Capture healthy` and displayed 25 current Tiger-backed rows for the last day. | Preserve the repaired strict Tiger/query-API contract and its authentication/shape regression checks before changing event semantics or introducing the registry. |
+| Apps projection            | `metrics.apps_page_projection` contained about 166,864 rows, but its newest `data_updated_at` was May 4, 2026.                                                                                                                                                                                                                  | `/apps` needs a versioned replacement and a reversible read cutover.                                                                                              |
+| Unreleased projection      | `metrics.unreleased_games_projection` contained about 51,427 rows and was refreshed on July 23.                                                                                                                                                                                                                                 | Its current behavior must be preserved, but `latest_added_at` must not become the opportunity newness clock.                                                      |
+| Supabase product plane     | Supabase product sync jobs and PICS freshness stopped around April 30. No recent `daily_metrics.metric_date` was found in the inspected 14-day window.                                                                                                                                                                          | Retained product and operational reads cannot be treated as monitors for current Tiger ingestion.                                                                 |
+| Existing user control data | Supabase contained 9 user profiles, 7 pins, no `public.alert_preferences` or `public.pin_alert_settings` table in the current schema, 0 user alerts, 9 credit transactions, and 0 credit reservations at inspection time.                                                                                                       | These are legacy dependencies to reconcile into Tiger, not target authority. Low usage does not authorize deleting or silently ignoring them.                     |
+| Route protection           | The deployed `/apps` route redirected an unauthenticated request to `/login?next=%2Fapps`.                                                                                                                                                                                                                                      | Existing authentication and redirect behavior is a regression contract.                                                                                           |
 
 These numbers are evidence for planning, not permanent thresholds. Phase 0 must capture a fresh baseline before any later execution.
 
@@ -56,20 +57,21 @@ These numbers are evidence for planning, not permanent thresholds. Phase 0 must 
 
 The preparation project must maintain a versioned source-and-contract matrix for the current site.
 
-| Consumer group                               | Current primary dependency                                           | Preparation treatment                                                                        |
-| -------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Landing, login, waitlist, auth callback      | Supabase Auth and application middleware                             | Preserve behavior exactly.                                                                   |
-| Account, users, credits                      | Supabase account and credit data                                     | Out of scope except for regression testing.                                                  |
-| Pins and retained alerts                     | Supabase user-control and alert tables                               | Keep operationally separate; do not reuse for opportunities.                                 |
-| `/apps` and app details                      | Tiger projections and Tiger relational data                          | Build and compare a new Apps projection beside the old one.                                  |
-| `/companies`, publisher, and developer paths | Tiger relational data and projections                                | Preserve response and navigation contracts.                                                  |
-| `/unreleased`                                | Tiger unreleased projection                                          | Preserve behavior and remove any future newness dependency on projection refresh time.       |
-| `/changes`                                   | Tiger/query API with retained Supabase fallback behavior             | Centralize event interpretation only after parity is proved.                                 |
-| `/chat`                                      | Query API and Tiger, with Supabase session, credit, and log behavior | Preserve every existing contract and source family.                                          |
-| `/youtube`                                   | Query API and Tiger YouTube data                                     | Regression-test only unless a shared readiness change affects it.                            |
-| `/insights`                                  | Retained Supabase product and metric reads                           | Migrate the server-side data contract to Tiger without redesigning the UI.                   |
-| `/dashboard` and `/admin` sync health        | Retained Supabase product and operational reads                      | Move product and ingestion health to Tiger; keep account administration in Supabase.         |
-| Reports                                      | Static and report-specific data access                               | Verify that shared field and calculation meanings do not change underneath existing reports. |
+| Consumer group                               | Current primary dependency                                                 | Preparation treatment                                                                                                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Landing, login, auth callback                | Supabase Auth and application middleware                                   | Preserve authentication identity and session behavior exactly.                                                                                       |
+| Waitlist                                     | Legacy Supabase non-auth table                                             | Preserve browser behavior while moving durable state to Tiger/query API through a reconciled cutover.                                                |
+| Account, users, credits                      | Supabase Auth plus legacy profile and credit data                          | Keep authentication in Supabase; migrate non-auth profile and credit contracts to Tiger behind the query API.                                        |
+| Pins and retained alerts                     | Legacy Supabase user-control and alert tables                              | Preserve during reconciliation, then migrate non-auth state to Tiger; do not reuse the legacy alert model for opportunities.                         |
+| `/apps` and app details                      | Tiger projections and Tiger relational data                                | Build and compare a new Apps projection beside the old one.                                                                                          |
+| `/companies`, publisher, and developer paths | Tiger relational data and projections                                      | Preserve response and navigation contracts.                                                                                                          |
+| `/unreleased`                                | Tiger unreleased projection                                                | Preserve behavior and remove any future newness dependency on projection refresh time.                                                               |
+| `/changes`                                   | Strict Tiger/query API in production                                       | Preserve the repaired contract; centralize event interpretation only after parity is proved.                                                         |
+| `/chat`                                      | Query API and Tiger, with Supabase session plus legacy credit/log behavior | Keep Supabase session validation; move non-auth credit and log state behind Tiger/query-API contracts without changing browser shapes.               |
+| `/youtube`                                   | Query API and Tiger YouTube data                                           | Regression-test only unless a shared readiness change affects it.                                                                                    |
+| `/insights`                                  | Retained Supabase product and metric reads                                 | Migrate the server-side data contract to Tiger without redesigning the UI.                                                                           |
+| `/dashboard` and `/admin` sync health        | Retained Supabase product and operational reads                            | Move all non-auth product, ingestion, account-control, and operational state to Tiger; retain only Auth identity/session administration in Supabase. |
+| Reports                                      | Static and report-specific data access                                     | Verify that shared field and calculation meanings do not change underneath existing reports.                                                         |
 
 Phase 0 must expand this matrix to the route, API, query, field, and test level.
 
@@ -90,7 +92,7 @@ Phase 0 must expand this matrix to the route, API, query, field, and test level.
    - ingestion and PICS environment **keys and modes**, without recording secret values;
    - query-API readiness and configured data targets; and
    - deployed route, authentication, API-shape, and latency behavior.
-3. Confirm managed backup or point-in-time recovery for Tiger and Supabase.
+3. Confirm managed backup or point-in-time recovery for Tiger before any Tiger write. Confirm Supabase recovery only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 4. Capture restorable, access-controlled snapshots for every table that a later phase may update in place.
 5. Capture R2 object counts and prefix-level manifests for affected archive paths without copying credentials into the artifact.
 6. Define the approved maintenance-window procedure, operator, abort conditions, and communication channel.
@@ -104,7 +106,7 @@ Phase 0 must expand this matrix to the route, API, query, field, and test level.
 - Mutable current-state tables record primary-key sets and the before-state of every row selected for a repair.
 - Relationship tables record per-app counts and values for the exact app IDs a repair will touch.
 - Large metrics tables use time-bounded partitions and aggregate checks rather than unsafe unbounded scans.
-- Existing Supabase user IDs, pin IDs, alert settings, credit balances, and alert records are included in protected-object checks without exporting private profile fields into general CI artifacts.
+- Existing Supabase Auth user IDs and legacy non-auth row IDs are included in protected-object checks without exporting private profile fields into general CI artifacts. These checks prevent migration loss; they do not assign non-auth authority to Supabase.
 
 ### Exit Gate
 
@@ -356,7 +358,8 @@ Phase 3 is complete when current source readiness is explainable, every observed
 ### Dashboard and Admin
 
 - Move catalog counts, job health, queue state, PICS health, source completion, and freshness to Tiger operational contracts.
-- Keep Supabase user administration, roles, waitlist, credits, and account operations unchanged.
+- Keep Supabase authentication identity and session behavior unchanged.
+- Move roles, waitlist, credits, pins, alerts, account controls, and other non-auth state to versioned Tiger/query-API contracts through separately approved, reconciled cutovers.
 - Make the current Tiger PICS stall and future cursor gaps visible to administrators.
 
 ### Change Feed and Chat
@@ -504,7 +507,8 @@ Existing browser-facing response shapes should be adapted server-side. The UI mu
 - Unauthenticated protected routes retain the `?next=` redirect contract.
 - API routes retain authenticated `401` behavior.
 - Admin paths remain role-restricted.
-- Supabase session, account, pin, alert, and credit behavior remains authoritative.
+- Supabase authentication identity and session behavior remains authoritative.
+- Existing non-auth account, pin, alert, credit, and waitlist behavior remains a compatibility contract only until its reconciled Tiger cutover.
 - Existing report URLs and underlying field meanings remain stable unless a separate report migration is approved.
 
 ## Verification Plan
@@ -546,7 +550,7 @@ Before and after each stage:
 - append-only history row counts and maximum IDs cannot move backward;
 - all received source IDs are durable or have a recorded rejection;
 - every relationship removal maps to a complete archived source payload;
-- user-control and account records remain unchanged;
+- Supabase Auth identities and legacy non-auth records remain unchanged until an approved migration proves one-to-one reconciliation and rollback;
 - repaired current-state rows match their approved source payload; and
 - R2 references resolve to the expected content hash.
 
