@@ -34,7 +34,9 @@ class FakeSteamApiClient:
 
 
 class FakeClient:
-    def __init__(self, *, connected=False, wait_result=False, reconnect_result=False, responses=None):
+    def __init__(
+        self, *, connected=False, wait_result=False, reconnect_result=False, responses=None
+    ):
         self.is_connected = connected
         self.wait_result = wait_result
         self.reconnect_result = reconnect_result
@@ -62,10 +64,29 @@ class FakeClient:
         return self.reconnect(max_attempts=reconnect_attempts, force=True)
 
 
-def build_response(change_number, appids):
+def build_response(
+    change_number,
+    appids,
+    *,
+    since_change_number=0,
+    force_full_update=False,
+    force_full_app_update=False,
+    force_full_package_update=False,
+):
     return SimpleNamespace(
         current_change_number=change_number,
-        app_changes=[SimpleNamespace(appid=appid) for appid in appids],
+        since_change_number=since_change_number,
+        app_changes=[
+            SimpleNamespace(
+                appid=appid,
+                change_number=change_number,
+                needs_token=False,
+            )
+            for appid in appids
+        ],
+        force_full_update=force_full_update,
+        force_full_app_update=force_full_app_update,
+        force_full_package_update=force_full_package_update,
     )
 
 
@@ -74,7 +95,7 @@ def test_get_changes_since_waits_for_auto_reconnect_before_polling():
         connected=False,
         wait_result=True,
         reconnect_result=False,
-        responses=[build_response(123, [10, 20])],
+        responses=[build_response(123, [10, 20], since_change_number=120)],
     )
     fetcher = PICSFetcher(client, max_retries=2)
 
@@ -83,6 +104,8 @@ def test_get_changes_since_waits_for_auto_reconnect_before_polling():
     assert result is not None
     assert result.change_number == 123
     assert result.app_changes == [10, 20]
+    assert result.since_change_number == 120
+    assert [change.change_number for change in result.app_change_details] == [123, 123]
     assert client.wait_calls == 1
     assert client.reconnect_calls == []
 
@@ -109,7 +132,9 @@ def test_get_changes_since_raises_when_reconnect_cannot_recover():
     client = FakeClient(connected=False, wait_result=False, reconnect_result=False)
     fetcher = PICSFetcher(client, max_retries=1)
 
-    with pytest.raises(RuntimeError, match="Failed to get PICS changes: Failed to reconnect to Steam"):
+    with pytest.raises(
+        RuntimeError, match="Failed to get PICS changes: Failed to reconnect to Steam"
+    ):
         fetcher.get_changes_since(500)
 
 

@@ -24,6 +24,11 @@ are isolated in `apps-projection-refresh.md`.
   [`pics-restart-incident.md`](./pics-restart-incident.md). The legacy monitor
   was unintentionally restarted by Railway autodeploy, contained at cursor
   `37,491,237`, stopped, and disconnected from its GitHub source.
+- Railway also contained a second service with the same `publisheriq` name in
+  another project. It was an accidental Query API duplicate, not PICS; it was
+  stopped and source-disconnected without changing the genuine legacy PICS
+  service. See
+  [`railway-pics-service-topology.md`](./railway-pics-service-topology.md).
 - Tiger backlog remains large: `ops.sync_status` has `93,557` syncable rows with no completed PICS sync.
 - Change-intel queue remains degraded: `179` non-dead queued records and `2,858` dead-lettered records were present in the refreshed snapshot.
 - `metrics.apps_page_projection` remains stale: `166,864` rows with newest `data_updated_at = 2026-05-04 03:47:38+00`.
@@ -61,4 +66,12 @@ are isolated in `apps-projection-refresh.md`.
 - `catalog-observation-shadow-rollout.md`: approved bounded, replay, complete
   AppList, and initial complete change-hint shadow evidence, including exact
   manifest reconciliation and sync-status write-scope proof.
+- `durable-pics-intake-schema-apply.md`: approved additive Tiger DDL, immutable
+  source checksum, empty-object verification, unchanged PICS cursor, and
+  stopped-runtime proof.
+- `durable-pics-shadow-capture.md`: approved fail-closed historical response
+  capture, retained `source_blocked` evidence, zero downstream work, unchanged
+  canonical cursor, and stopped-runtime proof.
+- `railway-pics-service-topology.md`: disambiguation and final containment
+  state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

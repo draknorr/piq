@@ -3,16 +3,17 @@
 import logging
 import signal
 import sys
-from typing import Optional
+from typing import Any, Optional
 
-from .config.settings import settings
+from .config.settings import resolve_pics_work_mode, settings
 from .health.server import HealthServer
 from .workers.bulk_sync import BulkSyncWorker
 from .workers.change_history_backfill import ChangeHistoryBackfillWorker
 from .workers.change_monitor import ChangeMonitorWorker
+from .workers.durable_change_intake import DurableChangeIntakeWorker
 
 # Global worker reference for signal handling
-current_worker: Optional[ChangeMonitorWorker] = None
+current_worker: Optional[Any] = None
 
 
 def setup_logging():
@@ -87,7 +88,19 @@ def main():
             logger.info(f"First-pass sync completed: {result}")
 
         elif settings.mode == "change_monitor":
-            current_worker = ChangeMonitorWorker(health_server=health_server)
+            pics_work_mode = resolve_pics_work_mode(settings.pics_work_mode)
+            logger.info("Selected PICS work mode: %s", pics_work_mode)
+            if pics_work_mode == "legacy":
+                logger.warning(
+                    "PICS_WORK_MODE=legacy uses the lossy in-memory queue and must not "
+                    "be restarted as the production primary"
+                )
+                current_worker = ChangeMonitorWorker(health_server=health_server)
+            else:
+                current_worker = DurableChangeIntakeWorker(
+                    work_mode=pics_work_mode,
+                    health_server=health_server,
+                )
             current_worker.run()
 
         elif settings.mode == "backfill_change_history":

@@ -1,6 +1,7 @@
 """Application settings from environment variables."""
 
 from typing import Optional
+
 from pydantic_settings import BaseSettings
 
 
@@ -12,16 +13,14 @@ class Settings(BaseSettings):
     supabase_service_key: Optional[str] = None
     tiger_primary_url: Optional[str] = None
 
-    # PICS change-history storage. This only controls app_source_snapshots and
-    # app_change_events writes for source='pics'; latest-state PICS writes still
-    # use Supabase in the current phase.
-    pics_change_history_target: str = "supabase"  # 'supabase' or 'tiger'
+    # PICS product data is Tiger/R2-primary. The Supabase value remains only for
+    # explicit legacy compatibility and is never used by durable intake.
+    pics_change_history_target: str = "tiger"  # 'tiger' or legacy 'supabase'
     pics_change_history_tiger_url: Optional[str] = None
 
     # PICS latest-state storage for apps, relationships, sync status, and the
-    # PICS cursor. Supabase remains the default until the Tiger bootstrap SQL is
-    # applied and the Railway service env is flipped.
-    pics_latest_state_target: str = "supabase"  # 'supabase' or 'tiger'
+    # legacy cursor. Supabase is an explicit legacy compatibility target only.
+    pics_latest_state_target: str = "tiger"  # 'tiger' or legacy 'supabase'
     pics_latest_state_tiger_url: Optional[str] = None
 
     # One-time PICS change-history backfill controls.
@@ -53,6 +52,15 @@ class Settings(BaseSettings):
     poll_interval: int = 30
     process_batch_size: int = 100
     max_queue_size: int = 10000
+    # Required when MODE=change_monitor. Missing or unknown values fail closed
+    # instead of silently restarting the lossy legacy monitor.
+    pics_work_mode: Optional[str] = None  # 'legacy', 'shadow', or 'durable'
+    pics_intake_tiger_url: Optional[str] = None
+    pics_intake_stream_key: str = "shadow-default"
+    pics_intake_lane: str = "live"  # 'live' or 'catchup'
+    pics_shadow_start_change_number: Optional[int] = None
+    pics_intake_statement_timeout_seconds: int = 60
+    pics_intake_lock_timeout_seconds: int = 10
 
     # Steam connection settings
     steam_heartbeat_interval: int = 300  # 5 minutes - heartbeat to prevent idle disconnect
@@ -69,3 +77,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def resolve_pics_work_mode(value: Optional[str]) -> str:
+    """Normalize an explicit PICS work mode or fail closed."""
+
+    normalized = (value or "").strip().lower()
+    if normalized not in {"legacy", "shadow", "durable"}:
+        raise ValueError(
+            "MODE=change_monitor requires explicit PICS_WORK_MODE=legacy|shadow|durable"
+        )
+    return normalized

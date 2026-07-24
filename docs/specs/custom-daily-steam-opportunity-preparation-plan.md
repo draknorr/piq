@@ -184,12 +184,12 @@ The current change monitor advances the stored PICS change number after adding a
 
 Add:
 
-| Record                       | Purpose                                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `ops.pics_change_batches`    | Durable upstream PICS batch boundaries, counts, hashes, receipt times, status, and cursor range.                 |
-| `ops.pics_change_batch_apps` | Every app ID contained in each upstream batch.                                                                   |
-| `ops.pics_work_state`        | Coalesced, claimable app work with priority lane, lease, retry, next-attempt, completion, and dead-letter state. |
-| `ops.app_data_readiness`     | Independent catalog, storefront, taxonomy, market-metric, creator, and overall source states.                    |
+| Record                       | Purpose                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ops.pics_change_batches`    | Durable upstream PICS request/response cursor boundaries, counts, hashes, receipt times, force-full flags, completeness, and status. |
+| `ops.pics_change_batch_apps` | Every ordered app entry, including app ID, item change number, token requirement, and duplicates.                                    |
+| `ops.pics_work_state`        | Coalesced, claimable app work with priority lane, lease, retry, next-attempt, completion, and dead-letter state.                     |
+| `ops.app_data_readiness`     | Independent catalog, storefront, taxonomy, market-metric, creator, and overall source states.                                        |
 
 ### Cursor Transaction
 
@@ -200,9 +200,15 @@ Within one Tiger transaction, the PICS leader must:
 3. upsert claimable work without lowering existing priority;
 4. verify the durable item count against the upstream count;
 5. record the payload or content-addressed archive reference; and
-6. advance `ops.pics_sync_state.last_change_number`.
+6. retain the echoed starting cursor plus `force_full_update`,
+   `force_full_app_update`, and `force_full_package_update`;
+7. create work and advance `ops.pics_sync_state.last_change_number` only when
+   the echoed starting cursor matches the request and no app/global force-full
+   flag is set.
 
 If any step fails, the transaction rolls back and the cursor remains unchanged.
+An incomplete response is durable evidence, not claimable work: retain it as
+`source_blocked` and leave the old cursor unchanged.
 
 ### Work Processing
 
@@ -230,7 +236,12 @@ An explicitly complete empty relationship family may clear prior edges. An absen
 ### Cutover
 
 1. Capture the current PICS cursor, health, and relevant relationship baselines.
-2. Replay a bounded historical change-number interval into the durable path.
+2. Capture a historical response from the frozen cursor into a uniquely named
+   shadow stream. Steam accepts a starting change number but no ending change
+   number, so persist the complete returned response and derive the bounded
+   comparison interval from each app entry's change number. Do not claim the
+   skipped interval was reconstructed if Steam returns force-full signals, an
+   echoed-cursor mismatch, or retention-limited evidence.
 3. Compare app IDs, normalized hashes, relationships, events, errors, and final cursor.
 4. Run `PICS_WORK_MODE=shadow` until parity and restart tests pass.
 5. Use a short maintenance window to stop the legacy monitor.
@@ -252,7 +263,8 @@ If the new path fails, stop it at the last committed batch. Do not make the in-m
 Phase 2 is complete only when:
 
 - forced restarts produce no cursor or batch-item gaps;
-- bounded replay has exact app-ID and cursor parity;
+- the bounded comparison has exact ordered app-entry, item-change-number,
+  force-flag, and cursor parity;
 - new-game PICS work is not starved by catch-up;
 - every relationship removal has archived complete-source evidence;
 - dead letters have explicit causes and operator actions; and

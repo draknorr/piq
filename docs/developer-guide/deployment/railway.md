@@ -2,14 +2,25 @@
 
 This guide covers deploying the Python PICS service to Railway for real-time Steam data monitoring. It is separate from the TigerData/query-api data plane and does not deploy the admin dashboard or chat services.
 
-Current state: PICS can write both change-history rows and latest-state PICS app/relationship/cursor data to Tiger/R2, but Supabase remains the default unless the explicit PICS target variables are flipped. Keep Supabase credentials available only when either PICS target is still `supabase`.
+Current state: the genuine legacy PICS service is stopped and disconnected
+after the July 24 cursor-loss incident. A second Railway service with the same
+`publisheriq` name was an accidental Query API duplicate; it is also stopped
+and source-disconnected. See the
+[verified topology](../../reference/daily-opportunity-prep-baseline/2026-07-24/railway-pics-service-topology.md).
+
+Do not reconnect, redeploy, or restart either service from this guide. The
+durable Tiger schema must be applied in a separately approved database window,
+shadow intake must pass its gates, and the exact genuine PICS service ID must be
+selected before any runtime action.
 
 ## Prerequisites
 
 - GitHub repository with PublisherIQ code
 - Railway account ([railway.app](https://railway.app))
-- Supabase project with PICS tables migrated for legacy/reference operation
-- Tiger bootstrap SQL applied before enabling PICS Tiger targets
+- Supabase is needed only if an explicitly retained legacy target still uses it;
+  durable PICS intake does not use Supabase
+- Tiger bootstrap SQL `0088_durable_pics_intake.sql` applied before starting
+  shadow or durable intake
 - Cloudflare R2 or another S3-compatible bucket when `PICS_CHANGE_HISTORY_TARGET=tiger`
 
 ## Quick Start
@@ -25,11 +36,13 @@ Current state: PICS can write both change-history rows and latest-state PICS app
 Set the following service settings:
 
 **Root Directory:**
+
 ```
 services/pics-service
 ```
 
 **Start Command:**
+
 ```bash
 python -m src.main
 ```
@@ -40,27 +53,35 @@ Railway auto-detects Python and uses Poetry for dependencies.
 
 Click **Variables** and add:
 
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `MODE` | `change_monitor` | Operating mode |
-| `LOG_JSON` | `true` | JSON logging for Railway |
-| `SUPABASE_URL` | `https://xxx.supabase.co` | Required only when either PICS target is `supabase` |
-| `SUPABASE_SERVICE_KEY` | `eyJ...` | Required only when either PICS target is `supabase` |
-| `TIGER_PRIMARY_URL` | `postgresql://...` | Tiger target URL used by PICS Tiger stores |
-| `PICS_CHANGE_HISTORY_TARGET` | `tiger` or `supabase` | Controls PICS `app_source_snapshots` and `app_change_events` writes |
-| `PICS_LATEST_STATE_TARGET` | `tiger` or `supabase` | Controls PICS app, relationship, sync-status, and cursor writes |
-| `CHANGE_INTEL_ARCHIVE_TARGET` | `object_storage` | Required when PICS history target is Tiger |
-| `CHANGE_INTEL_ARCHIVE_BUCKET` | `publisheriq-change-intel-archive` | R2/S3 archive bucket |
-| `CHANGE_INTEL_ARCHIVE_PREFIX` | `production/change-intel` | R2/S3 key prefix |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | `https://...r2.cloudflarestorage.com` | R2/S3 endpoint |
-| `CHANGE_INTEL_ARCHIVE_REGION` | `auto` | R2 region |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | `...` | R2/S3 access key |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | `...` | R2/S3 secret key |
-| `CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE` | `true` | R2 path-style setting |
+| Variable                                 | Value                                 | Description                                                         |
+| ---------------------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
+| `MODE`                                   | `change_monitor`                      | Operating mode                                                      |
+| `PICS_WORK_MODE`                         | `shadow`                              | Required and fail-closed: `legacy`, `shadow`, or `durable`          |
+| `LOG_JSON`                               | `true`                                | JSON logging for Railway                                            |
+| `SUPABASE_URL`                           | `https://xxx.supabase.co`             | Required only when either PICS target is `supabase`                 |
+| `SUPABASE_SERVICE_KEY`                   | `eyJ...`                              | Required only when either PICS target is `supabase`                 |
+| `TIGER_PRIMARY_URL`                      | `postgresql://...`                    | Tiger target URL used by PICS Tiger stores                          |
+| `PICS_CHANGE_HISTORY_TARGET`             | `tiger` or `supabase`                 | Controls PICS `app_source_snapshots` and `app_change_events` writes |
+| `PICS_LATEST_STATE_TARGET`               | `tiger` or `supabase`                 | Controls PICS app, relationship, sync-status, and cursor writes     |
+| `PICS_INTAKE_TIGER_URL`                  | `postgresql://...`                    | Optional durable-intake override; otherwise `TIGER_PRIMARY_URL`     |
+| `PICS_INTAKE_STREAM_KEY`                 | unique replay key                     | Non-primary stream key required for shadow intake                   |
+| `PICS_INTAKE_LANE`                       | `catchup` or `live`                   | Scheduling lane for the upstream batch                              |
+| `PICS_SHADOW_START_CHANGE_NUMBER`        | approved frozen cursor                | Required for the first batch in a new shadow stream                 |
+| `CHANGE_INTEL_ARCHIVE_TARGET`            | `object_storage`                      | Required when PICS history target is Tiger                          |
+| `CHANGE_INTEL_ARCHIVE_BUCKET`            | `publisheriq-change-intel-archive`    | R2/S3 archive bucket                                                |
+| `CHANGE_INTEL_ARCHIVE_PREFIX`            | `production/change-intel`             | R2/S3 key prefix                                                    |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`          | `https://...r2.cloudflarestorage.com` | R2/S3 endpoint                                                      |
+| `CHANGE_INTEL_ARCHIVE_REGION`            | `auto`                                | R2 region                                                           |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`     | `...`                                 | R2/S3 access key                                                    |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | `...`                                 | R2/S3 secret key                                                    |
+| `CHANGE_INTEL_ARCHIVE_FORCE_PATH_STYLE`  | `true`                                | R2 path-style setting                                               |
 
 ### 4. Deploy
 
-Railway automatically deploys when variables are set.
+Production deployment is intentionally disabled while the durable intake and
+processing path is incomplete. Variables alone are not approval to reconnect a
+source or deploy. Use the exact genuine PICS service from the verified topology
+and a separately approved rollout procedure.
 
 ## Operating Modes
 
@@ -89,51 +110,68 @@ First-pass prioritizes recent releases and near-release apps. It is useful for c
 
 ### Change Monitor (Production)
 
-Continuous monitoring:
-- Polls Steam for changes every 30 seconds
-- Queues and processes changed apps
-- Runs indefinitely
+`MODE=change_monitor` requires an explicit `PICS_WORK_MODE`:
+
+- `legacy` is compatibility-only. It advances its cursor before in-memory work
+  is durable and must not be production primary.
+- `shadow` stores ordered upstream batch rows and isolated shadow work without
+  advancing the canonical cursor.
+- `durable` stores the batch, every source position, coalesced work, and
+  readiness before advancing the canonical cursor in the same Tiger
+  transaction.
+
+The current durable implementation is intake-only. Do not enable `durable` in
+production until leased consumers and completeness-aware promotion are merged,
+verified, and separately approved.
 
 ## Configuration Options
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MODE` | `change_monitor` | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history` |
-| `PORT` | Auto | Health check port (Railway sets this) |
-| `PICS_CHANGE_HISTORY_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS change-history rows |
-| `PICS_CHANGE_HISTORY_TIGER_URL` | `TIGER_PRIMARY_URL` | Optional override for history writes |
-| `PICS_LATEST_STATE_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS latest-state/cursor writes |
-| `PICS_LATEST_STATE_TIGER_URL` | `TIGER_PRIMARY_URL` | Optional override for latest-state writes |
-| `CHANGE_INTEL_ARCHIVE_TARGET` | `disabled` | Must be `object_storage` for Tiger history writes |
-| `CHANGE_INTEL_ARCHIVE_BUCKET` | required for Tiger | S3-compatible bucket for normalized snapshot archives |
-| `CHANGE_INTEL_ARCHIVE_PREFIX` | `change-intel` | Object prefix such as `production/change-intel` |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | optional | S3-compatible endpoint |
-| `CHANGE_INTEL_ARCHIVE_REGION` | `us-east-1` | R2 usually uses `auto` |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | optional | S3-compatible access key |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional | S3-compatible secret key |
-| `BULK_BATCH_SIZE` | `200` | Apps per PICS request |
-| `BULK_REQUEST_DELAY` | `0.5` | Seconds between batches |
-| `FIRST_PASS_BATCH_LIMIT` | `500` | Max apps processed by `MODE=first_pass` |
-| `FIRST_PASS_CANDIDATE_POOL_SIZE` | `1000` | Candidate pool size for first-pass ranking |
-| `FIRST_PASS_RECENT_RELEASE_DAYS` | `30` | Recent-release priority window |
-| `FIRST_PASS_NEAR_RELEASE_DAYS` | `14` | Upcoming/near-release priority window |
-| `POLL_INTERVAL` | `30` | Seconds between polls |
-| `PROCESS_BATCH_SIZE` | `100` | Queue batch size |
-| `MAX_QUEUE_SIZE` | `10000` | Maximum queue size |
-| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `LOG_JSON` | `true` | JSON format for production |
+| Variable                                 | Default             | Description                                                               |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------- |
+| `MODE`                                   | `change_monitor`    | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history` |
+| `PORT`                                   | Auto                | Health check port (Railway sets this)                                     |
+| `PICS_CHANGE_HISTORY_TARGET`             | `tiger`             | `tiger` or legacy `supabase`; controls PICS change-history rows           |
+| `PICS_CHANGE_HISTORY_TIGER_URL`          | `TIGER_PRIMARY_URL` | Optional override for history writes                                      |
+| `PICS_LATEST_STATE_TARGET`               | `tiger`             | `tiger` or legacy `supabase`; controls PICS latest-state/cursor writes    |
+| `PICS_LATEST_STATE_TIGER_URL`            | `TIGER_PRIMARY_URL` | Optional override for latest-state writes                                 |
+| `PICS_WORK_MODE`                         | required            | `legacy`, `shadow`, or `durable`; missing/unknown values fail closed      |
+| `PICS_INTAKE_TIGER_URL`                  | `TIGER_PRIMARY_URL` | Optional Tiger URL for durable intake                                     |
+| `PICS_INTAKE_STREAM_KEY`                 | `shadow-default`    | Non-primary restart cursor namespace for shadow                           |
+| `PICS_INTAKE_LANE`                       | `live`              | `live` or `catchup`                                                       |
+| `PICS_SHADOW_START_CHANGE_NUMBER`        | unset               | Required for a new shadow stream                                          |
+| `PICS_INTAKE_STATEMENT_TIMEOUT_SECONDS`  | `60`                | Maximum duration for one intake transaction                               |
+| `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`       | `10`                | Maximum wait for the stream/cursor lock                                   |
+| `CHANGE_INTEL_ARCHIVE_TARGET`            | `disabled`          | Must be `object_storage` for Tiger history writes                         |
+| `CHANGE_INTEL_ARCHIVE_BUCKET`            | required for Tiger  | S3-compatible bucket for normalized snapshot archives                     |
+| `CHANGE_INTEL_ARCHIVE_PREFIX`            | `change-intel`      | Object prefix such as `production/change-intel`                           |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`          | optional            | S3-compatible endpoint                                                    |
+| `CHANGE_INTEL_ARCHIVE_REGION`            | `us-east-1`         | R2 usually uses `auto`                                                    |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`     | optional            | S3-compatible access key                                                  |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional            | S3-compatible secret key                                                  |
+| `BULK_BATCH_SIZE`                        | `200`               | Apps per PICS request                                                     |
+| `BULK_REQUEST_DELAY`                     | `0.5`               | Seconds between batches                                                   |
+| `FIRST_PASS_BATCH_LIMIT`                 | `500`               | Max apps processed by `MODE=first_pass`                                   |
+| `FIRST_PASS_CANDIDATE_POOL_SIZE`         | `1000`              | Candidate pool size for first-pass ranking                                |
+| `FIRST_PASS_RECENT_RELEASE_DAYS`         | `30`                | Recent-release priority window                                            |
+| `FIRST_PASS_NEAR_RELEASE_DAYS`           | `14`                | Upcoming/near-release priority window                                     |
+| `POLL_INTERVAL`                          | `30`                | Seconds between polls                                                     |
+| `PROCESS_BATCH_SIZE`                     | `100`               | Queue batch size                                                          |
+| `MAX_QUEUE_SIZE`                         | `10000`             | Maximum queue size                                                        |
+| `LOG_LEVEL`                              | `INFO`              | `DEBUG`, `INFO`, `WARNING`, `ERROR`                                       |
+| `LOG_JSON`                               | `true`              | JSON format for production                                                |
 
 ## Health Checks
 
 The service exposes health endpoints:
 
-| Endpoint | Response | Purpose |
-|----------|----------|---------|
-| `GET /` | `200 OK` | Railway health check |
-| `GET /health` | `200 OK` | Basic health |
-| `GET /status` | JSON | Detailed status |
+| Endpoint      | Response | Purpose              |
+| ------------- | -------- | -------------------- |
+| `GET /`       | `200 OK` | Railway health check |
+| `GET /health` | `200 OK` | Basic health         |
+| `GET /status` | JSON     | Detailed status      |
 
 Railway uses these to:
+
 - Detect service health
 - Trigger restarts on failures
 - Show status in dashboard
@@ -161,24 +199,27 @@ With `LOG_JSON=true`, logs are structured:
 
 ### Key Log Messages
 
-| Message | Meaning |
-|---------|---------|
-| `Connected to Steam` | PICS connection established |
-| `Polling for changes` | Normal operation |
-| `Processing N apps` | Changes being processed |
-| `Bulk sync complete` | Initial sync finished |
+| Message               | Meaning                     |
+| --------------------- | --------------------------- |
+| `Connected to Steam`  | PICS connection established |
+| `Polling for changes` | Normal operation            |
+| `Processing N apps`   | Changes being processed     |
+| `Bulk sync complete`  | Initial sync finished       |
 
 ## Troubleshooting
 
 ### Service keeps restarting
 
 1. Check logs for errors
-2. Verify Supabase credentials are correct
-3. Ensure PICS tables exist in database
+2. Stop the service; repeated restarts are not a recovery procedure
+3. Verify the exact Railway project/service ID against the topology document
+4. Verify `PICS_WORK_MODE` is explicit and `0088` exists in Tiger
+5. Verify Tiger/R2 credentials; check Supabase only for an explicit legacy target
 
 ### "Connection refused" errors
 
 Steam PICS connections can be rate-limited:
+
 - Service implements automatic reconnection
 - Check logs for reconnection attempts
 - May need to wait a few minutes
@@ -210,30 +251,31 @@ Steam PICS connections can be rate-limited:
 ### Resource Allocation
 
 Default Railway allocation is sufficient. For faster processing:
+
 - Increase memory allocation in Railway settings
 - Adjust `PROCESS_BATCH_SIZE` for larger batches
 
 ### Multiple Instances
 
-**Not recommended.** The PICS service maintains state:
-- Change number tracking
-- Connection management
-- Queue processing
-
-Run a single instance to avoid duplicate processing.
+Run one PICS intake leader. Future durable consumers may scale independently;
+their claims use Tiger leases and `SKIP LOCKED`. Do not scale the intake leader
+itself.
 
 ## Cost Optimization
 
 Railway charges based on usage. To minimize costs:
+
 - Use default resource allocation
-- `change_monitor` mode is efficient (low CPU when idle)
-- Consider pausing during low-activity periods
+- use one intake leader and no separate managed queue service
+- use binary `COPY` plus one Tiger transaction per upstream response
+- keep historical catch-up bounded and separate from live consumer capacity
 
 ## Deployment Workflow
 
 ### Automatic Deploys
 
-Railway deploys automatically on push to main branch.
+Automatic deploys are disabled for the stopped legacy PICS service. Do not
+reconnect GitHub until the approved durable cutover.
 
 ### Manual Deploys
 
