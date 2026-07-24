@@ -114,7 +114,7 @@ does not require this gate.
 - Outcome: applied transactionally and verified with zero initial rows; see
   `catalog-observation-schema-apply.md`.
 
-## Pending Approval: Durable PICS Schema 0088
+## Approval Record: Durable PICS Schema 0088
 
 - Proposed operation: apply
   `packages/data-plane/sql/tiger-bootstrap/0088_durable_pics_intake.sql` to
@@ -137,7 +137,12 @@ does not require this gate.
 - Required verification: exact tables, columns, constraints, and indexes;
   zero rows in all four tables; unchanged PICS cursor; and no runtime
   deployment or service restart.
-- Approval status: **not yet authorized**.
+- Explicit approval reference: the user replied `yes` immediately after the
+  operation, reason, risk, and rollback terms were presented in the current
+  Codex task.
+- Outcome: applied in one transaction and verified with zero rows, an unchanged
+  PICS cursor, and both Railway services still stopped. See
+  `durable-pics-intake-schema-apply.md`.
 
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from

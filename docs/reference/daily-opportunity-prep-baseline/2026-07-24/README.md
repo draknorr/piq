@@ -66,6 +66,9 @@ are isolated in `apps-projection-refresh.md`.
 - `catalog-observation-shadow-rollout.md`: approved bounded, replay, complete
   AppList, and initial complete change-hint shadow evidence, including exact
   manifest reconciliation and sync-status write-scope proof.
+- `durable-pics-intake-schema-apply.md`: approved additive Tiger DDL, immutable
+  source checksum, empty-object verification, unchanged PICS cursor, and
+  stopped-runtime proof.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
