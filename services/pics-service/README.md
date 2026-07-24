@@ -37,10 +37,10 @@ legacy compatibility only and are not used by durable intake.
 - `durable` writes the batch, every source list position, coalesced work, and
   PICS readiness in one Tiger transaction before advancing the primary cursor
 
-The durable path is intake-only in this implementation slice. Do not enable
-`PICS_WORK_MODE=durable` in production until the leased consumers, promotion
-transaction, completeness-aware relationship handling, and cutover gates are
-implemented and separately approved.
+Durable processing is independently gated by
+`PICS_PROCESSING_ENABLED=false`. Do not enable `PICS_WORK_MODE=durable` or
+processing in production until PR 4 is merged, forced-restart and parity gates
+pass, and the exact rollout is separately approved.
 
 ## Runtime Behavior
 
@@ -58,6 +58,16 @@ implemented and separately approved.
   cannot use the canonical `primary` stream key
 - durable and shadow work rows are isolated by work mode, so replay cannot make
   production work claimable
+- leased consumers use `FOR UPDATE SKIP LOCKED`, heartbeats, stale-claim
+  recovery, capped retries, explicit dead letters, and separate live/catch-up
+  quotas
+- raw source presence is retained before normalization; only explicitly
+  complete relationship families may replace or clear Tiger edges
+- changed payloads are archived to R2 before one Tiger transaction updates
+  snapshots, events, PICS-owned latest state, readiness, and acknowledgement
+- absent or partial families preserve prior relationships and normalized state
+- Storefront-owned release, free/released, and developer/publisher authority is
+  preserved
 - history capture retries bounded transient and schema-cache failures before giving up
 - unchanged normalized snapshots update `last_seen_at` instead of producing duplicate history rows
 - structured PICS diff events are only written when the normalized snapshot hash changes
@@ -114,6 +124,13 @@ old gap was reconstructed.
 | `PICS_SHADOW_START_CHANGE_NUMBER`        | unset                         | Required when a shadow stream has no committed batch                                              |
 | `PICS_INTAKE_STATEMENT_TIMEOUT_SECONDS`  | `60`                          | Upper bound for one intake transaction                                                            |
 | `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`       | `10`                          | Upper bound for the stream/cursor lock                                                            |
+| `PICS_PROCESSING_ENABLED`                | `false`                       | Independent fail-closed gate for leased payload processing                                        |
+| `PICS_CONSUMER_WORKER_ID`                | generated                     | Optional stable worker identity; generated from host/process when unset                           |
+| `PICS_CONSUMER_LIVE_BATCH_SIZE`          | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
+| `PICS_CONSUMER_CATCHUP_BATCH_SIZE`       | `10`                          | Separate per-pass historical catch-up quota                                                       |
+| `PICS_CONSUMER_LEASE_SECONDS`            | `300`                         | Claim lease and heartbeat extension                                                               |
+| `PICS_CONSUMER_RETRY_BASE_SECONDS`       | `30`                          | Initial retry delay                                                                               |
+| `PICS_CONSUMER_RETRY_MAX_SECONDS`        | `3600`                        | Maximum capped retry delay                                                                        |
 | `CHANGE_INTEL_ARCHIVE_TARGET`            | `disabled`                    | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger`                                  |
 | `CHANGE_INTEL_ARCHIVE_BUCKET`            | required for Tiger            | S3-compatible bucket for archived normalized PICS snapshots                                       |
 | `CHANGE_INTEL_ARCHIVE_PREFIX`            | `change-intel`                | Object key prefix, e.g. `production/change-intel`                                                 |

@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     pics_shadow_start_change_number: Optional[int] = None
     pics_intake_statement_timeout_seconds: int = 60
     pics_intake_lock_timeout_seconds: int = 10
+    # Leased processing remains disabled until a separately approved shadow
+    # runtime. Intake can be validated without enabling payload promotion.
+    pics_processing_enabled: bool = False
+    pics_consumer_worker_id: Optional[str] = None
+    pics_consumer_live_batch_size: int = 40
+    pics_consumer_catchup_batch_size: int = 10
+    pics_consumer_lease_seconds: int = 300
+    pics_consumer_retry_base_seconds: int = 30
+    pics_consumer_retry_max_seconds: int = 3600
 
     # Steam connection settings
     steam_heartbeat_interval: int = 300  # 5 minutes - heartbeat to prevent idle disconnect

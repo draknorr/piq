@@ -2,13 +2,21 @@
 
 ## Status
 
-Implementation-only. `0088_durable_pics_intake.sql` has not been applied, no
-PICS service has been restarted, and neither `shadow` nor `durable` is enabled
-in production.
+`0088_durable_pics_intake.sql` was applied to Tiger production after explicit
+approval on July 24, 2026 UTC. PR #43 merged the intake implementation as
+commit `ac81b9d`. A separately approved historical shadow request produced one
+`source_blocked` parent row and zero batch-app, work, or readiness rows. No PICS
+service was restarted, and neither `shadow` nor `durable` is enabled in
+production.
 
 At the July 24, 2026 UTC inspection, the canonical Tiger row was
 `ops.pics_sync_state.id = 1`, with `last_change_number = 37,491,237`. That value
 is incident evidence, not proof that the skipped interval was processed.
+
+Leased processing, completeness-aware promotion, and single-service
+orchestration are implemented on the PR 4 branch but remain disabled by
+default with `PICS_PROCESSING_ENABLED=false`. Code presence is not runtime
+approval.
 
 ## Architecture Decision
 
@@ -110,18 +118,87 @@ replay must not mutate the canonical cursor.
 - terminal work can be revived by a later source change, while an active claim
   keeps its lease and records the later dirty cursor for another pass.
 
+## Leased Processing
+
+The same PICS process can run intake and bounded consumers, avoiding a second
+always-on service or external broker.
+
+For each pass:
+
+1. recover expired claims as `retrying` or `dead_letter`;
+2. claim protected `new`/`live` capacity with `FOR UPDATE SKIP LOCKED`;
+3. claim a separate, smaller `catchup` quota;
+4. increment attempts when the lease is acquired so a crash cannot retry
+   forever without consuming its cap;
+5. heartbeat before and after the bounded Steam product-info request and renew
+   every still-unprocessed lease before each app promotion;
+6. retry transient payload or processing failures with capped exponential
+   backoff;
+7. record inaccessible or token-blocked source payloads as `source_blocked`;
+   and
+8. acknowledge work only inside the shadow settlement or primary promotion
+   transaction.
+
+If a newer PICS change arrives during processing, acknowledgement records the
+claimed cursor and returns the row to `pending` for the later cursor. It never
+marks unseen work complete.
+
+## Payload Completeness and Promotion
+
+The legacy extractor normalized both a missing family and an explicitly empty
+family to the same empty Python value. Durable processing retains evidence
+before normalization:
+
+- payload access-token state, source change number, source SHA-1, and source
+  byte size;
+- the exact set of scalar fields present in the source;
+- `complete`, `absent`, or `partial` status for categories, genres, store tags,
+  associations/franchises, and DLC; and
+- a canonical SHA-256 of the raw payload plus a separate SHA-256 of the
+  effective normalized state.
+
+Only a present, well-typed family in a source-complete payload may replace its
+Tiger relationship set. A present empty family may clear existing edges.
+Absent or partial families preserve the prior normalized snapshot and latest
+relationships. The normalized state includes every PICS field that the durable
+path may promote, and source timestamps are normalized to UTC before hashing,
+so evidence does not depend on the worker host timezone.
+
+For durable primary work, one Tiger transaction:
+
+1. verifies the live lease and latest-snapshot pointer;
+2. inserts or touches the PICS source snapshot;
+3. updates only PICS-owned or approved fallback fields;
+4. replaces only complete relationship families;
+5. inserts diff events with the R2 evidence pointer;
+6. updates `ops.sync_status` and PICS readiness; and
+7. acknowledges the exact claimed change number.
+
+R2 is written before the transaction because object storage cannot participate
+in a PostgreSQL commit. A failed Tiger transaction may therefore leave a
+content-addressed orphan, but it cannot leave partial latest state or
+acknowledged work. Replaying the claim reuses deterministic evidence safely.
+Developer/publisher relationships remain Storefront-owned. PICS supplies
+`release_date`, `is_free`, and `is_released` only while the corresponding
+Storefront authority has not been established.
+
 ## Runtime Modes
 
 `MODE=change_monitor` requires one explicit value:
 
-| `PICS_WORK_MODE` | Behavior                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `legacy`         | Compatibility-only in-memory monitor. Unsafe as production primary.                          |
-| `shadow`         | Durable isolated intake without canonical cursor/readiness changes.                          |
-| `durable`        | Durable primary intake and canonical cursor advance. Intake-only until consumers are merged. |
+| `PICS_WORK_MODE` | Behavior                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `legacy`         | Compatibility-only in-memory monitor. Unsafe as production primary.                                  |
+| `shadow`         | Durable isolated intake and optional isolated processing without canonical cursor/readiness changes. |
+| `durable`        | Durable primary intake; optional consumers promote and acknowledge primary work transactionally.     |
 
 Missing or unknown values fail at startup. PICS product targets now default to
-Tiger; Supabase target values remain explicit legacy compatibility only.
+Tiger. The durable intake and processing path neither reads nor writes
+Supabase.
+
+`PICS_PROCESSING_ENABLED` is a second fail-closed gate. It defaults to `false`;
+enabling it requires working Tiger/R2 configuration and does not bypass the
+separate shadow or primary rollout approval.
 
 ## Approval Boundary
 
@@ -129,13 +206,14 @@ Before any production action:
 
 1. capture fresh Tiger backup/PITR and schema evidence;
 2. explain the additive tables/indexes, risk, and rollback;
-3. receive explicit approval to apply `0088`;
+3. verify the already applied `0088` objects and capture their current state;
 4. verify all created objects and prove the canonical cursor is unchanged;
-5. receive separate approval for a uniquely named historical shadow capture
-   and a bounded comparison selected by item change number; and
+5. receive separate approval for any new shadow intake or processing run and
+   a bounded comparison selected by item change number; and
 6. keep both Railway services named `publisheriq` stopped unless the exact
    genuine PICS service ID is selected in an approved rollout.
 
-`PICS_WORK_MODE=durable` remains prohibited until PR 4 adds leased consumers,
-payload promotion, relationship completeness evidence, and restart/parity
-gates.
+`PICS_WORK_MODE=durable` and `PICS_PROCESSING_ENABLED=true` remain prohibited
+in production until PR 4 is merged, forced-restart tests pass, a recoverable
+full-state reconciliation plan replaces the retention-limited June replay, and
+the exact Railway rollout receives separate approval.

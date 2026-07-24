@@ -91,6 +91,10 @@ def main():
             pics_work_mode = resolve_pics_work_mode(settings.pics_work_mode)
             logger.info("Selected PICS work mode: %s", pics_work_mode)
             if pics_work_mode == "legacy":
+                if settings.pics_processing_enabled:
+                    raise ValueError(
+                        "PICS_PROCESSING_ENABLED cannot be used with the lossy legacy monitor"
+                    )
                 logger.warning(
                     "PICS_WORK_MODE=legacy uses the lossy in-memory queue and must not "
                     "be restarted as the production primary"
