@@ -10,7 +10,8 @@ The PICS service connects directly to Steam's Product Info Cache Server and now 
 - normalized PICS history capture for change intelligence
 
 During change monitoring, the service writes normalized snapshots and PICS diff events before the latest-state upserts that keep the `apps` table and relationship tables current.
-`PICS_CHANGE_HISTORY_TARGET=tiger` moves normalized history capture to Tiger/R2, and `PICS_LATEST_STATE_TARGET=tiger` moves PICS app, relationship, sync-status, and cursor writes to Tiger.
+PICS product data is Tiger/R2-primary. The retained Supabase target values are
+legacy compatibility only and are not used by durable intake.
 
 ## Modes
 
@@ -28,13 +29,35 @@ During change monitoring, the service writes normalized snapshots and PICS diff 
 
 ### `MODE=change_monitor`
 
-- long-running polling of Steam PICS change numbers
-- fetches changed app payloads
-- writes normalized history snapshots and diff events
-- then performs latest-state upserts for apps and relationships
+- requires an explicit, fail-closed `PICS_WORK_MODE`
+- `legacy` retains the old in-memory queue for local compatibility only and
+  must not be restarted as the production primary
+- `shadow` writes ordered source batches and isolated shadow work to Tiger
+  without advancing `ops.pics_sync_state`
+- `durable` writes the batch, every source list position, coalesced work, and
+  PICS readiness in one Tiger transaction before advancing the primary cursor
+
+The durable path is intake-only in this implementation slice. Do not enable
+`PICS_WORK_MODE=durable` in production until the leased consumers, promotion
+transaction, completeness-aware relationship handling, and cutover gates are
+implemented and separately approved.
 
 ## Runtime Behavior
 
+- durable intake stages one complete upstream response with PostgreSQL binary
+  `COPY`; source positions, duplicate app IDs, item change numbers, and token
+  requirements remain auditable
+- Tiger recomputes the item count, distinct count, and SHA-256 before and after
+  the permanent child-row insert
+- the response's echoed starting cursor and force-full flags are retained;
+  cursor mismatch or forced-full app responses are recorded as
+  `source_blocked` without creating work or advancing a cursor
+- a cursor mismatch, manifest mismatch, timeout, or worker termination rolls
+  back the batch and leaves the primary cursor unchanged
+- shadow streams use their committed batch history as a restart cursor and
+  cannot use the canonical `primary` stream key
+- durable and shadow work rows are isolated by work mode, so replay cannot make
+  production work claimable
 - history capture retries bounded transient and schema-cache failures before giving up
 - unchanged normalized snapshots update `last_seen_at` instead of producing duplicate history rows
 - structured PICS diff events are only written when the normalized snapshot hash changes
@@ -57,40 +80,64 @@ MODE=first_pass python -m src.main
 MODE=change_monitor python -m src.main
 ```
 
+`MODE=change_monitor` also requires `PICS_WORK_MODE`. For a historical shadow
+capture, use a unique stream and explicit start cursor:
+
+```bash
+MODE=change_monitor \
+PICS_WORK_MODE=shadow \
+PICS_INTAKE_STREAM_KEY=shadow-2026-07-replay \
+PICS_SHADOW_START_CHANGE_NUMBER=36631816 \
+python -m src.main
+```
+
+Steam accepts no ending cursor for `get_changes_since`. The response runs
+through Steam's current cursor; use the retained per-item change numbers to
+select a bounded comparison interval. Do not treat a forced-full response,
+echoed-cursor mismatch, or retention-limited empty response as proof that an
+old gap was reconstructed.
+
 ## Key Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SUPABASE_URL` | required for Supabase targets | Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | required for Supabase targets | Supabase service role key |
-| `PICS_CHANGE_HISTORY_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS `app_source_snapshots` and `app_change_events` writes |
-| `PICS_CHANGE_HISTORY_TIGER_URL` | `TIGER_PRIMARY_URL` | Tiger Postgres URL for PICS change-history writes |
-| `PICS_LATEST_STATE_TARGET` | `supabase` | `supabase` or `tiger`; controls PICS app, relationship, sync-status, and cursor writes |
-| `PICS_LATEST_STATE_TIGER_URL` | `TIGER_PRIMARY_URL` | Tiger Postgres URL for PICS latest-state writes |
-| `CHANGE_INTEL_ARCHIVE_TARGET` | `disabled` | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger` |
-| `CHANGE_INTEL_ARCHIVE_BUCKET` | required for Tiger | S3-compatible bucket for archived normalized PICS snapshots |
-| `CHANGE_INTEL_ARCHIVE_PREFIX` | `change-intel` | Object key prefix, e.g. `production/change-intel` |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT` | optional | S3-compatible endpoint, e.g. Cloudflare R2 account endpoint |
-| `CHANGE_INTEL_ARCHIVE_REGION` | `us-east-1` | S3 region; R2 commonly uses `auto` |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID` | optional | S3-compatible access key |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional | S3-compatible secret key |
-| `MODE` | `change_monitor` | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history` |
-| `PORT` | `8080` | Health-check port |
-| `BULK_BATCH_SIZE` | `200` | Apps per PICS request |
-| `BULK_REQUEST_DELAY` | `0.5` | Seconds between bulk requests |
-| `BULK_TIMEOUT` | `60` | Timeout per bulk batch fetch |
-| `BULK_MAX_RETRIES` | `5` | Retry attempts per bulk batch |
-| `FIRST_PASS_BATCH_LIMIT` | `500` | Max apps processed in a first-pass run |
-| `FIRST_PASS_CANDIDATE_POOL_SIZE` | `1000` | Unsynced candidate pool size for first-pass ranking |
-| `FIRST_PASS_RECENT_RELEASE_DAYS` | `30` | Prefer recent releases within this window |
-| `FIRST_PASS_NEAR_RELEASE_DAYS` | `14` | Prefer upcoming / near-release apps within this window |
-| `POLL_INTERVAL` | `30` | Seconds between PICS change polls |
-| `PROCESS_BATCH_SIZE` | `100` | Apps per queue processing batch |
-| `MAX_QUEUE_SIZE` | `10000` | Maximum queued apps |
-| `STEAM_HEARTBEAT_INTERVAL` | `300` | Heartbeat interval to keep the Steam connection alive |
-| `STEAM_AUTO_RECONNECT` | `true` | Automatically reconnect after a disconnect |
-| `LOG_LEVEL` | `INFO` | Logging level |
-| `LOG_JSON` | `true` | JSON log formatting |
+| Variable                                 | Default                       | Description                                                                                       |
+| ---------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`                           | required for Supabase targets | Supabase project URL                                                                              |
+| `SUPABASE_SERVICE_KEY`                   | required for Supabase targets | Supabase service role key                                                                         |
+| `PICS_CHANGE_HISTORY_TARGET`             | `tiger`                       | `tiger` or legacy `supabase`; controls PICS `app_source_snapshots` and `app_change_events` writes |
+| `PICS_CHANGE_HISTORY_TIGER_URL`          | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS change-history writes                                                 |
+| `PICS_LATEST_STATE_TARGET`               | `tiger`                       | `tiger` or legacy `supabase`; controls PICS app, relationship, sync-status, and cursor writes     |
+| `PICS_LATEST_STATE_TIGER_URL`            | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS latest-state writes                                                   |
+| `PICS_WORK_MODE`                         | required for `change_monitor` | `legacy`, `shadow`, or `durable`; missing and unknown values fail closed                          |
+| `PICS_INTAKE_TIGER_URL`                  | `TIGER_PRIMARY_URL`           | Tiger URL used only by durable batch intake                                                       |
+| `PICS_INTAKE_STREAM_KEY`                 | `shadow-default`              | Non-primary durable cursor namespace for a shadow replay                                          |
+| `PICS_INTAKE_LANE`                       | `live`                        | `live` or `catchup`; newly catalog-observed unsynced apps use the protected `new` lane            |
+| `PICS_SHADOW_START_CHANGE_NUMBER`        | unset                         | Required when a shadow stream has no committed batch                                              |
+| `PICS_INTAKE_STATEMENT_TIMEOUT_SECONDS`  | `60`                          | Upper bound for one intake transaction                                                            |
+| `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`       | `10`                          | Upper bound for the stream/cursor lock                                                            |
+| `CHANGE_INTEL_ARCHIVE_TARGET`            | `disabled`                    | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger`                                  |
+| `CHANGE_INTEL_ARCHIVE_BUCKET`            | required for Tiger            | S3-compatible bucket for archived normalized PICS snapshots                                       |
+| `CHANGE_INTEL_ARCHIVE_PREFIX`            | `change-intel`                | Object key prefix, e.g. `production/change-intel`                                                 |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`          | optional                      | S3-compatible endpoint, e.g. Cloudflare R2 account endpoint                                       |
+| `CHANGE_INTEL_ARCHIVE_REGION`            | `us-east-1`                   | S3 region; R2 commonly uses `auto`                                                                |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`     | optional                      | S3-compatible access key                                                                          |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional                      | S3-compatible secret key                                                                          |
+| `MODE`                                   | `change_monitor`              | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history`                         |
+| `PORT`                                   | `8080`                        | Health-check port                                                                                 |
+| `BULK_BATCH_SIZE`                        | `200`                         | Apps per PICS request                                                                             |
+| `BULK_REQUEST_DELAY`                     | `0.5`                         | Seconds between bulk requests                                                                     |
+| `BULK_TIMEOUT`                           | `60`                          | Timeout per bulk batch fetch                                                                      |
+| `BULK_MAX_RETRIES`                       | `5`                           | Retry attempts per bulk batch                                                                     |
+| `FIRST_PASS_BATCH_LIMIT`                 | `500`                         | Max apps processed in a first-pass run                                                            |
+| `FIRST_PASS_CANDIDATE_POOL_SIZE`         | `1000`                        | Unsynced candidate pool size for first-pass ranking                                               |
+| `FIRST_PASS_RECENT_RELEASE_DAYS`         | `30`                          | Prefer recent releases within this window                                                         |
+| `FIRST_PASS_NEAR_RELEASE_DAYS`           | `14`                          | Prefer upcoming / near-release apps within this window                                            |
+| `POLL_INTERVAL`                          | `30`                          | Seconds between PICS change polls                                                                 |
+| `PROCESS_BATCH_SIZE`                     | `100`                         | Apps per queue processing batch                                                                   |
+| `MAX_QUEUE_SIZE`                         | `10000`                       | Maximum queued apps                                                                               |
+| `STEAM_HEARTBEAT_INTERVAL`               | `300`                         | Heartbeat interval to keep the Steam connection alive                                             |
+| `STEAM_AUTO_RECONNECT`                   | `true`                        | Automatically reconnect after a disconnect                                                        |
+| `LOG_LEVEL`                              | `INFO`                        | Logging level                                                                                     |
+| `LOG_JSON`                               | `true`                        | JSON log formatting                                                                               |
 
 ## PICS Change-History Backfill
 
@@ -108,12 +155,12 @@ MODE=backfill_change_history PICS_CHANGE_HISTORY_BACKFILL_DRY_RUN=false python -
 
 Useful controls:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PICS_CHANGE_HISTORY_BACKFILL_BATCH_SIZE` | `500` | Rows per Supabase page |
-| `PICS_CHANGE_HISTORY_BACKFILL_LIMIT` | unset | Optional per-surface max rows |
-| `PICS_CHANGE_HISTORY_BACKFILL_MIN_ID` | `0` | Resume cursor by source row id |
-| `PICS_CHANGE_HISTORY_BACKFILL_SURFACES` | `snapshots,events` | `snapshots`, `events`, or both |
+| Variable                                  | Default            | Description                    |
+| ----------------------------------------- | ------------------ | ------------------------------ |
+| `PICS_CHANGE_HISTORY_BACKFILL_BATCH_SIZE` | `500`              | Rows per Supabase page         |
+| `PICS_CHANGE_HISTORY_BACKFILL_LIMIT`      | unset              | Optional per-surface max rows  |
+| `PICS_CHANGE_HISTORY_BACKFILL_MIN_ID`     | `0`                | Resume cursor by source row id |
+| `PICS_CHANGE_HISTORY_BACKFILL_SURFACES`   | `snapshots,events` | `snapshots`, `events`, or both |
 
 ## Health Endpoints
 
@@ -152,4 +199,5 @@ src/
 
 - [PICS Data Fields Reference](../../docs/reference/pics-data-fields.md)
 - [Data Sources](../../docs/developer-guide/architecture/data-sources.md)
+- [Durable PICS Intake](../../docs/developer-guide/operations/durable-pics-intake.md)
 - [Steam Change Intelligence](../../docs/developer-guide/workers/steam-change-intelligence.md)

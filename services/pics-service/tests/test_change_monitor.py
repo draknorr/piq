@@ -78,6 +78,16 @@ class FakeHealthServer:
 def test_change_monitor_exits_after_repeated_poll_failures(monkeypatch):
     fake_fetcher = FailingFetcher()
     fake_health = FakeHealthServer()
+    monkeypatch.setattr(
+        change_monitor_module.settings,
+        "pics_change_history_target",
+        "supabase",
+    )
+    monkeypatch.setattr(
+        change_monitor_module.settings,
+        "pics_latest_state_target",
+        "supabase",
+    )
     worker = ChangeMonitorWorker(health_server=fake_health)
     worker._steam = FakeSteamClient()
     worker._db = FakeDatabase()

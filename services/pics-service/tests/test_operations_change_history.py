@@ -406,6 +406,7 @@ def test_capture_change_history_can_write_to_tiger_history_store(
     fake_client = FakeSupabaseClient()
 
     monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "tiger")
+    monkeypatch.setattr(operations_module.settings, "pics_latest_state_target", "supabase")
     monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
     monkeypatch.setattr(PICSDatabase, "_create_tiger_change_history_store", lambda self: fake_store)
     monkeypatch.setattr(
@@ -446,6 +447,7 @@ def test_capture_change_history_updates_tiger_last_seen_for_unchanged_snapshot(
     fake_client = FakeSupabaseClient()
 
     monkeypatch.setattr(operations_module.settings, "pics_change_history_target", "tiger")
+    monkeypatch.setattr(operations_module.settings, "pics_latest_state_target", "supabase")
     monkeypatch.setattr(PICSDatabase, "_load_tag_names", lambda self: None)
     monkeypatch.setattr(PICSDatabase, "_create_tiger_change_history_store", lambda self: fake_store)
     monkeypatch.setattr(

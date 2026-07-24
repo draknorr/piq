@@ -50,6 +50,27 @@ The service, variables, and domain remain present so recovery is possible.
 Reconnecting or redeploying the legacy monitor is prohibited until durable
 intake exists and receives a separate cutover approval.
 
+## Verified Client Protocol Limitation
+
+The repository's locked ValvePython `steam` client resolves to version `1.4.4`.
+Its inspected `SteamClient.get_changes_since` signature is:
+
+```text
+(self, change_number, app_changes=True, package_changes=False)
+```
+
+There is no ending-cursor request parameter. The response descriptor does,
+however, expose `current_change_number`, `since_change_number`,
+`force_full_update`, `force_full_app_update`, and
+`force_full_package_update`. Each app entry exposes `appid`, `change_number`,
+and `needs_token`.
+
+The durable design must therefore preserve those response and item fields,
+fail closed on an echoed-cursor mismatch or app/global force-full response, and
+derive any bounded comparison from persisted item change numbers. A request
+from the June cursor cannot by itself prove that Steam retained the entire
+missing interval.
+
 ## Required Reconciliation
 
 - Recover or independently reconstruct the source app IDs for

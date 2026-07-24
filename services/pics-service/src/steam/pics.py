@@ -13,12 +13,26 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class PICSAppChange:
+    """One app entry from a PICS changes-since response."""
+
+    appid: int
+    change_number: int
+    needs_token: bool
+
+
+@dataclass
 class PICSChange:
     """Represents a PICS change notification."""
 
     change_number: int
     app_changes: List[int]
     package_changes: List[int]
+    since_change_number: int = 0
+    app_change_details: Optional[List[PICSAppChange]] = None
+    force_full_update: bool = False
+    force_full_app_update: bool = False
+    force_full_package_update: bool = False
 
 
 class PICSFetcher:
@@ -74,12 +88,14 @@ class PICSFetcher:
                 response = self._client.client.get_product_info(apps=appids, timeout=self.timeout)
 
                 if response is None:
-                    logger.warning(f"No response for batch starting at {appids[0] if appids else 'empty'}")
+                    logger.warning(
+                        f"No response for batch starting at {appids[0] if appids else 'empty'}"
+                    )
                     return {}
 
                 return response.get("apps", {})
             except BaseException as e:
-                # Catch BaseException to handle gevent.timeout.Timeout which doesn't extend Exception
+                # gevent.timeout.Timeout does not extend Exception.
                 age = self._client.connection_age_seconds
                 age_str = f"{age:.1f}s" if age is not None else "N/A"
 
@@ -147,7 +163,9 @@ class PICSFetcher:
         # Log summary of failed batches
         if failed_batches:
             total_failed = sum(len(b) for b in failed_batches)
-            failed_ids = [appid for batch in failed_batches for appid in batch[:5]]  # First 5 from each
+            failed_ids = [
+                appid for batch in failed_batches for appid in batch[:5]
+            ]  # First 5 from each
             logger.error(
                 f"Sync completed with {len(failed_batches)} failed batches ({total_failed} apps). "
                 f"Sample failed IDs: {failed_ids}"
@@ -181,14 +199,27 @@ class PICSFetcher:
                         "PICS change poll returned no response before the client timeout"
                     )
 
+                app_change_details = [
+                    PICSAppChange(
+                        appid=int(change.appid),
+                        change_number=int(change.change_number),
+                        needs_token=bool(change.needs_token),
+                    )
+                    for change in (response.app_changes or [])
+                ]
                 return PICSChange(
                     change_number=response.current_change_number,
-                    app_changes=[c.appid for c in (response.app_changes or [])],
+                    app_changes=[change.appid for change in app_change_details],
                     package_changes=[],
+                    since_change_number=int(response.since_change_number),
+                    app_change_details=app_change_details,
+                    force_full_update=bool(response.force_full_update),
+                    force_full_app_update=bool(response.force_full_app_update),
+                    force_full_package_update=bool(response.force_full_package_update),
                 )
             except BaseException as e:
                 if attempt < self.max_retries - 1:
-                    delay = min(2 ** attempt, 30)
+                    delay = min(2**attempt, 30)
                     logger.warning(
                         "Change poll attempt %s/%s failed, retrying in %ss: %s",
                         attempt + 1,
