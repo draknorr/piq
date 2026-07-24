@@ -393,7 +393,6 @@ class TigerPICSDurableIntakeStore:
                             stream_key=normalized_stream,
                             work_mode=normalized_mode,
                             lane=normalized_lane,
-                            to_change_number=target_cursor,
                             received_at=observed_at,
                         )
                     if normalized_mode == "durable" and source_complete:
@@ -890,7 +889,6 @@ class TigerPICSDurableIntakeStore:
         stream_key: str,
         work_mode: str,
         lane: str,
-        to_change_number: int,
         received_at: datetime,
     ) -> None:
         cursor.execute(
@@ -898,6 +896,8 @@ class TigerPICSDurableIntakeStore:
             WITH incoming AS (
               SELECT
                 staged.appid,
+                staged.first_change_number,
+                staged.latest_change_number,
                 CASE
                   WHEN catalog.first_observation_kind = 'new'
                     AND sync.last_pics_sync IS NULL THEN 'new'
@@ -910,7 +910,10 @@ class TigerPICSDurableIntakeStore:
                   ELSE 100
                 END AS priority
               FROM (
-                SELECT appid
+                SELECT
+                  appid,
+                  min(source_change_number) AS first_change_number,
+                  max(source_change_number) AS latest_change_number
                 FROM pics_batch_stage
                 GROUP BY appid
               ) staged
@@ -945,8 +948,8 @@ class TigerPICSDurableIntakeStore:
               'pending',
               %s,
               %s,
-              %s,
-              %s,
+              incoming.first_change_number,
+              incoming.latest_change_number,
               %s,
               %s,
               0,
@@ -1040,8 +1043,6 @@ class TigerPICSDurableIntakeStore:
                 work_mode,
                 batch_id,
                 batch_id,
-                to_change_number,
-                to_change_number,
                 received_at,
                 received_at,
             ),
