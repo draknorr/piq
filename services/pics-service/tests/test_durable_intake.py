@@ -251,6 +251,40 @@ def test_persist_batch_copies_every_source_position_before_cursor_update():
     assert child_insert < work_upsert < cursor_update
 
 
+def test_work_upsert_uses_each_apps_staged_change_numbers():
+    cursor = FakeCursor(primary_cursor=10)
+    store, connection = make_store(cursor)
+
+    store.persist_batch(
+        from_change_number=10,
+        to_change_number=20,
+        response_since_change_number=10,
+        app_changes=[
+            app_change(7, 11),
+            app_change(7, 18),
+            app_change(9, 20),
+        ],
+        force_full_update=False,
+        force_full_app_update=False,
+        force_full_package_update=False,
+        work_mode="durable",
+        stream_key="primary",
+    )
+
+    work_query, work_params = next(
+        (query, params)
+        for query, params in cursor.events
+        if query.startswith("WITH incoming AS")
+    )
+
+    assert "min(source_change_number) AS first_change_number" in work_query
+    assert "max(source_change_number) AS latest_change_number" in work_query
+    assert "incoming.first_change_number, incoming.latest_change_number" in work_query
+    assert len(work_params) == 8
+    assert 20 not in work_params
+    assert connection.committed is True
+
+
 @pytest.mark.parametrize(
     "failure_boundary",
     [
