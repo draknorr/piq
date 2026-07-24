@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 2,
+  "capturedAt": "2026-07-24T02:05:59Z",
+  "contracts": [
+    {
+      "surface": "/",
+      "authentication": "public",
+      "productSource": "application content",
+      "preservation": "landing behavior and approved-partner positioning"
+    },
+    {
+      "surface": "/login",
+      "authentication": "public",
+      "productSource": "Supabase Auth",
+      "preservation": "login and next-parameter continuation"
+    },
+    {
+      "surface": "/waitlist",
+      "authentication": "public",
+      "productSource": "legacy Supabase waitlist table",
+      "targetAuthority": "Tiger/query API for non-auth state",
+      "preservation": "waitlist submission and status behavior"
+    },
+    {
+      "surface": "/dashboard",
+      "authentication": "protected",
+      "productSource": "mixed; product counts require Tiger migration",
+      "preservation": "navigation, cards, and /login?next=%2Fdashboard redirect"
+    },
+    {
+      "surface": "/apps",
+      "authentication": "protected",
+      "productSource": "Tiger metrics.apps_page_projection",
+      "preservation": "response shape, filters, sort, pagination, sparklines, comparison, details"
+    },
+    {
+      "surface": "/companies",
+      "authentication": "protected",
+      "productSource": "Tiger company projections",
+      "preservation": "list, filter, sort, pagination, publisher/developer navigation"
+    },
+    {
+      "surface": "/unreleased",
+      "authentication": "protected",
+      "productSource": "Tiger metrics.unreleased_games_projection",
+      "preservation": "filters, export, detail, timeline, and latest_added_at UI semantics"
+    },
+    {
+      "surface": "/insights",
+      "authentication": "protected",
+      "productSource": "stale Supabase product metrics plus legacy Supabase pins",
+      "targetAuthority": "Tiger/query API for product and user-control state; Supabase Auth only",
+      "preservation": "tabs, URL parameters, result shapes, pinned-item behavior, empty/error states"
+    },
+    {
+      "surface": "/changes",
+      "authentication": "protected",
+      "productSource": "strict Tiger/query API production path verified after configuration repair",
+      "targetAuthority": "Tiger/query API",
+      "preservation": "activity list, filters, details, status, pagination, entity links"
+    },
+    {
+      "surface": "/chat",
+      "authentication": "protected",
+      "productSource": "Tiger/query API with Supabase Auth session plus legacy Supabase credit and log behavior",
+      "targetAuthority": "Tiger/query API for all non-auth state; Supabase Auth only",
+      "preservation": "tool contracts, credits, streaming, logging, links, pagination"
+    },
+    {
+      "surface": "/youtube",
+      "authentication": "protected",
+      "productSource": "Tiger/query-api YouTube contracts",
+      "preservation": "list, filters, market rows, and inspector flows"
+    },
+    {
+      "surface": "/account",
+      "authentication": "protected",
+      "productSource": "Supabase Auth identity plus legacy Supabase profile and credit data",
+      "targetAuthority": "Supabase Auth for identity/session; Tiger/query API for non-auth account and credit state",
+      "preservation": "display, credits, and sign-out"
+    },
+    {
+      "surface": "/admin",
+      "authentication": "admin",
+      "productSource": "Supabase Auth administration and legacy non-auth controls plus Tiger PICS cursor progress",
+      "targetAuthority": "Tiger/query API for non-auth administration and health; Supabase Auth only",
+      "preservation": "role restriction and account administration; product health must identify source"
+    },
+    {
+      "surface": "/api/apps",
+      "authentication": "protected API",
+      "productSource": "Tiger Apps projection",
+      "preservation": "unauthenticated 401 and existing response schema"
+    },
+    {
+      "surface": "/api/change-feed/activity",
+      "authentication": "protected API",
+      "productSource": "Tiger/query-api intended",
+      "preservation": "unauthenticated 401, filters, continuation, and item shape"
+    },
+    {
+      "surface": "/api/change-feed/status",
+      "authentication": "protected API",
+      "productSource": "Tiger/query-api intended",
+      "preservation": "unauthenticated 401 and existing status shape"
+    },
+    {
+      "surface": "/api/pins and /api/alerts",
+      "authentication": "protected API",
+      "productSource": "legacy Supabase user-control data",
+      "targetAuthority": "Tiger/query API",
+      "preservation": "authorization, create/update/remove/read behavior, preferences, and counts"
+    }
+  ],
+  "unauthenticatedChecks": {
+    "protectedRouteStatus": 307,
+    "redirectPattern": "/login?next=%2F<route>",
+    "protectedApiStatus": 401
+  },
+  "productionChangeFeedVerification": {
+    "verifiedAt": "2026-07-24T02:04:00Z",
+    "status": "Capture healthy",
+    "visibleRows": 25,
+    "windowDays": 1,
+    "source": "Tiger/query API"
+  }
+}

@@ -10,6 +10,7 @@ import {
   type PriorityDistribution,
 } from '@/lib/sync-queries';
 import type { AdminDashboardData, SyncJob, ChatQueryLog } from './page';
+import { getPicsRuntimeStatus } from './pics-health';
 import { CheckCircle2, MessageSquare, Search, Copy, ChevronDown, ChevronRight } from 'lucide-react';
 
 // Source configuration
@@ -114,6 +115,7 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
   const ccuUpdatedLabel = data.ccuQualityStats.updatedAt
     ? `updated ${formatRelativeTime(data.ccuQualityStats.updatedAt)}`
     : null;
+  const picsStatus = getPicsRuntimeStatus(data.picsSyncState);
 
   return (
     <div className="space-y-3">
@@ -414,18 +416,25 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
       <CollapsibleSection
         title="PICS Service"
         badge={{
-          value: data.picsSyncState.lastChangeNumber > 0 ? 'Active' : 'Inactive',
-          variant:
-            data.picsDataStats.isApproximate
-              ? 'warning'
-              : data.picsSyncState.lastChangeNumber > 0
-                ? 'success'
-                : 'warning',
+          value: picsStatus.label,
+          variant: data.picsDataStats.isApproximate ? 'warning' : picsStatus.variant,
         }}
         headerExtra={
-          data.picsDataStats.isApproximate ? (
-            <span className="text-caption text-accent-orange">approximate fallback</span>
-          ) : null
+          <span
+            className={`text-caption ${
+              data.picsDataStats.isApproximate || picsStatus.label === 'Stalled'
+                ? 'text-accent-orange'
+                : 'text-text-muted'
+            }`}
+          >
+            {data.picsDataStats.isApproximate && picsStatus.label === 'Stalled'
+              ? 'cursor stalled; coverage approximate'
+              : data.picsDataStats.isApproximate
+                ? 'coverage is approximate'
+                : picsStatus.label === 'Stalled'
+                  ? 'cursor progress is stale'
+                  : 'live cursor progress'}
+          </span>
         }
       >
         <div className="p-2 rounded-md border border-border-subtle bg-surface-elevated/50">
@@ -441,7 +450,7 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
               </div>
             </div>
             <div>
-              <div className="text-caption text-text-tertiary">Last Updated</div>
+              <div className="text-caption text-text-tertiary">Last Progress</div>
               <div className="text-body font-semibold text-text-primary">
                 {data.picsSyncState.updatedAt
                   ? formatRelativeTime(data.picsSyncState.updatedAt)

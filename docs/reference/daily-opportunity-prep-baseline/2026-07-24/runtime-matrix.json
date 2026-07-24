@@ -1,0 +1,284 @@
+{
+  "schemaVersion": 2,
+  "capturedAt": "2026-07-24T02:24:29.891388Z",
+  "productionDatabaseMutationPerformed": true,
+  "productionConfigurationChanged": true,
+  "productionDatabaseMutation": {
+    "approval": "user replied yes after receiving operation, reason, risk, and rollback",
+    "operation": "concurrent refresh of existing Apps materialized views",
+    "objects": [
+      "metrics.apps_page_projection",
+      "metrics.apps_page_filter_counts"
+    ],
+    "execution": {
+      "appsProjectionDurationSeconds": 57.56,
+      "filterCountsDurationSeconds": 4.41,
+      "recurringScheduleEnabled": false
+    },
+    "validation": {
+      "sourceRows": 223851,
+      "projectionRows": 223851,
+      "rowDelta": 0,
+      "missingIds": 0,
+      "extraIds": 0,
+      "duplicateIds": 0,
+      "freshnessHours": 0.202,
+      "verifiedAt": "2026-07-24T02:24:29.891388Z"
+    }
+  },
+  "githubActions": [
+    {
+      "name": "Steam App Change Hints",
+      "path": ".github/workflows/app-change-hints.yml",
+      "state": "active",
+      "schedule": "10 * * * *",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      }
+    },
+    {
+      "name": "Steam App List Sync",
+      "path": ".github/workflows/applist-sync.yml",
+      "state": "active",
+      "schedule": "15 0 * * *",
+      "gate": "ENABLE_TIGER_CATALOG_WRITERS",
+      "gateValueAtCapture": "true",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      }
+    },
+    {
+      "name": "CCU Demo Mini-Tiered Sync",
+      "path": ".github/workflows/ccu-demo-tiered-sync.yml",
+      "state": "active",
+      "schedule": "20 3,7,11,15,19,23 * * *",
+      "gate": "ENABLE_TIGER_DEMO_CCU_WRITER",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      },
+      "note": "A separate always-on Railway demo CCU worker is also deployed and must remain in the runtime inventory."
+    },
+    {
+      "name": "CCU Daily Sync (Tier 3)",
+      "path": ".github/workflows/ccu-daily-sync.yml",
+      "state": "active",
+      "schedule": "30 0,4,8,12,16,20 * * *",
+      "gate": "ENABLE_TIGER_METRICS_WRITERS",
+      "gateValueAtCapture": "true",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      }
+    },
+    {
+      "name": "CCU Tiered Sync (Tier 1+2)",
+      "path": ".github/workflows/ccu-sync.yml",
+      "state": "active",
+      "schedule": "0 * * * *",
+      "gate": "ENABLE_TIGER_METRICS_WRITERS",
+      "gateValueAtCapture": "true",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      }
+    },
+    {
+      "name": "Velocity Calculation",
+      "path": ".github/workflows/velocity-calculation.yml",
+      "state": "active",
+      "schedule": "50 */6 * * *",
+      "gate": "ENABLE_TIGER_METRICS_WRITERS",
+      "gateValueAtCapture": "true",
+      "targets": {
+        "read": "tiger",
+        "write": "tiger"
+      }
+    },
+    {
+      "name": "Unreleased Projection Refresh",
+      "path": ".github/workflows/unreleased-projection-refresh.yml",
+      "state": "active",
+      "schedule": "50 3 * * *",
+      "gate": "ENABLE_UNRELEASED_PROJECTION_REFRESH",
+      "gateValueAtCapture": "true"
+    },
+    {
+      "name": "Refresh App Filter Data",
+      "path": ".github/workflows/refresh-app-filter-data.yml",
+      "state": "disabled_manually",
+      "schedule": "0 */6 * * *",
+      "gate": "ENABLE_LEGACY_SUPABASE_WRITERS",
+      "gateValueAtCapture": "false"
+    },
+    {
+      "name": "Refresh Materialized Views",
+      "path": ".github/workflows/refresh-views.yml",
+      "state": "disabled_manually",
+      "schedule": null,
+      "gate": "ENABLE_LEGACY_SUPABASE_WRITERS",
+      "gateValueAtCapture": "false"
+    }
+  ],
+  "railway": [
+    {
+      "project": "enthusiastic-caring",
+      "environment": "production",
+      "service": "publisheriq",
+      "role": "PICS change monitor",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:36:45.443Z",
+      "replicas": 1,
+      "domain": "publisheriq-production-d727.up.railway.app",
+      "modes": {
+        "MODE": "change_monitor",
+        "PICS_CHANGE_HISTORY_TARGET": "tiger",
+        "PICS_LATEST_STATE_TARGET": "tiger",
+        "CHANGE_INTEL_ARCHIVE_TARGET": "object_storage",
+        "CHANGE_INTEL_ARCHIVE_PREFIX": "production/change-intel"
+      },
+      "credentialKeysPresent": [
+        "CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID",
+        "CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY",
+        "SUPABASE_URL",
+        "TIGER_PRIMARY_URL"
+      ],
+      "liveness": {
+        "health": "OK",
+        "status": "running",
+        "connected": true
+      },
+      "progress": {
+        "lastChange": 36631816,
+        "lastSuccessfulPollAt": "2026-06-16T22:05:18.352675",
+        "updatedAt": "2026-06-16T22:06:22.599100Z",
+        "classification": "stalled"
+      }
+    },
+    {
+      "project": "enthusiastic-caring",
+      "environment": "production",
+      "service": "publisheriq-demo-ccu-worker-prod",
+      "role": "adaptive demo CCU scheduler",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:40:47.527Z",
+      "replicas": 1,
+      "modes": {
+        "CCU_DEMO_REFRESH_MODE": "adaptive",
+        "CCU_DEMO_MAIN_CCU_GUARD_MODE": "hot_independent",
+        "CCU_DEMO_SCHEDULER_HOURS_UTC": "0,4,8,12,16,20",
+        "CCU_DEMO_SCHEDULER_MINUTE_UTC": "20",
+        "DATA_READ_TARGET": "tiger",
+        "DATA_WRITE_TARGET": "tiger"
+      },
+      "credentialKeysPresent": ["STEAM_CCU_CONCURRENCY", "TIGER_PRIMARY_URL"]
+    },
+    {
+      "project": "enthusiastic-caring",
+      "environment": "production",
+      "service": "change-intel-storefront",
+      "role": "storefront capture consumer",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:36:46.207Z",
+      "replicas": 1,
+      "modes": {
+        "CHANGE_INTEL_READ_TARGET": "tiger",
+        "CHANGE_INTEL_WRITE_TARGET": "tiger"
+      }
+    },
+    {
+      "project": "enthusiastic-caring",
+      "environment": "production",
+      "service": "change-intel-news",
+      "role": "news capture consumer",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:36:46.106Z",
+      "replicas": 1,
+      "modes": {
+        "CHANGE_INTEL_READ_TARGET": "tiger",
+        "CHANGE_INTEL_WRITE_TARGET": "tiger"
+      }
+    },
+    {
+      "project": "enthusiastic-caring",
+      "environment": "production",
+      "service": "change-intel-hero",
+      "role": "hero asset capture consumer",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:36:45.751Z",
+      "replicas": 1,
+      "modes": {
+        "CHANGE_INTEL_READ_TARGET": "tiger",
+        "CHANGE_INTEL_WRITE_TARGET": "tiger"
+      }
+    },
+    {
+      "project": "confident-education",
+      "environment": "production",
+      "service": "publisheriq-query-api-prod",
+      "role": "Tiger query API",
+      "deploymentStatus": "SUCCESS",
+      "deployedAt": "2026-06-09T06:36:45.874Z",
+      "replicas": 1,
+      "domains": [
+        "publisheriq-query-api-prod-production-e1c7.up.railway.app",
+        "publisheriq-query-api-prod-production.up.railway.app"
+      ],
+      "health": {
+        "ok": true,
+        "source": "tiger",
+        "capturedAt": "2026-07-24T00:59:39.324Z"
+      }
+    }
+  ],
+  "tigerCloud": {
+    "projectId": "n9lactseoj",
+    "serviceId": "hdp8cp0w5i",
+    "serviceName": "publisheriq-tiger-prod",
+    "plan": "Performance",
+    "region": "us-west-2",
+    "status": "READY",
+    "backupAndRestore": {
+      "sameRegionBackup": "automatic",
+      "crossRegionBackup": "not enabled; Enterprise upgrade required",
+      "pitrMode": "recovery fork",
+      "pitrWindowDays": 3,
+      "oldestSelectableAtInspection": "2026-07-21T02:17:00Z",
+      "latestRecoveryEvidence": "current-time recovery form available; no discrete backup-job timestamp exposed",
+      "backupEvidenceUrl": "https://console.cloud.tigerdata.com/projects/n9lactseoj/services/hdp8cp0w5i/operations/backup-restore",
+      "recoveryFormUrl": "https://console.cloud.tigerdata.com/projects/n9lactseoj/create_services/recovery_fork/hdp8cp0w5i",
+      "verifiedAt": "2026-07-24T02:19:18Z"
+    }
+  },
+  "vercel": {
+    "projectName": "publisheriq-admin",
+    "projectId": "prj_ZxKZTJ0wOnNmuHHcZk67QOfVzJ1z",
+    "owner": "ryanbohmann-gmailcoms-projects",
+    "productionObservation": {
+      "hosting": "Vercel",
+      "deployment": "publisheriq-admin-oz75ui3nw-ryanbohmann-gmailcoms-projects.vercel.app",
+      "alias": "www.publisheriq.app",
+      "changeFeedBefore": "authenticated route showed Capture delayed and zero activity",
+      "configurationFinding": "QUERY_API_BASE_URL and QUERY_API_BEARER_TOKEN existed; CHANGE_INTEL_READ_TARGET and CHANGE_INTEL_READ_STRICT were missing",
+      "configurationRepair": {
+        "CHANGE_INTEL_READ_TARGET": "tiger",
+        "CHANGE_INTEL_READ_STRICT": "true"
+      },
+      "changeFeedAfter": "authenticated route showed Capture healthy, 25 rows, 1 day, and 25 changes",
+      "unauthenticatedRoute": "307 to /login?next=%2Fchanges",
+      "unauthenticatedApi": "401 with Authentication required",
+      "verifiedAt": "2026-07-24T02:04:00Z",
+      "cliCredentialAvailable": true
+    }
+  },
+  "notes": [
+    "Only variable names and non-secret operating modes are recorded.",
+    "A successful deployment or process health response is not evidence of source progress.",
+    "Workflow states were read from the GitHub Actions API; schedules and target flags were read from the captured origin/main workflow files.",
+    "No service restart or workflow dispatch occurred.",
+    "The existing Vercel production artifact was rebuilt after two non-secret Change Feed flags were added; no branch code was deployed.",
+    "One separately approved production database operation concurrently refreshed the existing Apps materialized views; no base table, cursor, writer target, or read flag changed."
+  ]
+}

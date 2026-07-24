@@ -1,0 +1,54 @@
+{
+  "capturedAtUtc": "2026-07-24T01:05:08Z",
+  "queryApiHealth": {
+    "capturedAtUtc": "2026-07-24T00:59:39.324Z",
+    "ok": true,
+    "source": "tiger"
+  },
+  "tiger": {
+    "appsCreated24h": 269,
+    "hydratedGames24h": 198,
+    "demoStubs24h": 71,
+    "neverPicsSynced": 93557,
+    "neverPicsSyncable": 93557,
+    "picsCursor": 36631816,
+    "picsCursorUpdatedAt": "2026-06-16T22:05:18.735848Z",
+    "queuePending": 179,
+    "queueDead": 2858,
+    "appsProjectionRows": 166864,
+    "appsProjectionDataUpdatedAt": "2026-05-04T03:47:38.203909Z",
+    "unreleasedProjectionRows": 51427,
+    "unreleasedProjectionDataUpdatedAt": "2026-07-23T06:18:07.708959Z"
+  },
+  "supabase": {
+    "userProfiles": 9,
+    "userPins": 7,
+    "hasAlertPreferencesTable": false,
+    "hasPinAlertSettingsTable": false,
+    "userAlerts": 0,
+    "creditTransactions": 9,
+    "creditReservations": 0,
+    "latestDailyMetricsDate": "2026-04-30",
+    "picsCursor": 35561335,
+    "picsCursorUpdatedAt": "2026-04-30T03:16:23.136060Z"
+  },
+  "artifacts": [
+    "README.md",
+    "manifest.json",
+    "implementation/manifest.json",
+    "implementation/tiger-schema.json",
+    "implementation/supabase-schema.json",
+    "post-implementation/manifest.json",
+    "protected-object-comparison.json",
+    "r2-manifest.json",
+    "route-contract-matrix.json",
+    "runtime-matrix.json",
+    "backup-pitr-gate.md",
+    "verification.md"
+  ],
+  "notes": [
+    "All values are time-bound observations from Friday, July 24, 2026.",
+    "No credentials or secret values are stored in this artifact.",
+    "Backup and PITR verification is still pending separate operator evidence."
+  ]
+}

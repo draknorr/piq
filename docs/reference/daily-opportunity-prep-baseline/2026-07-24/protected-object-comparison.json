@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "capturedBefore": "2026-07-24T01:27:56.667Z",
+  "capturedAfter": "2026-07-24T01:44:32.785Z",
+  "allUnchanged": true,
+  "productionMutationPerformedByThisSlice": false,
+  "protectedObjects": {
+    "credit_reservations": {
+      "rowsBefore": 0,
+      "rowsAfter": 0,
+      "primaryKeyHashBefore": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "primaryKeyHashAfter": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "complete": true,
+      "unchanged": true
+    },
+    "credit_transactions": {
+      "rowsBefore": 9,
+      "rowsAfter": 9,
+      "primaryKeyHashBefore": "f0bb971955ecc2eb668657be87805a3830986b148baa335e6fdb4ce5c1ffb4c3",
+      "primaryKeyHashAfter": "f0bb971955ecc2eb668657be87805a3830986b148baa335e6fdb4ce5c1ffb4c3",
+      "complete": true,
+      "unchanged": true
+    },
+    "user_alert_preferences": {
+      "rowsBefore": 1,
+      "rowsAfter": 1,
+      "primaryKeyHashBefore": "6420a1fab6df4440e0902f8edba6fe0abd54b53bf14f36c428021e46d3dfa32c",
+      "primaryKeyHashAfter": "6420a1fab6df4440e0902f8edba6fe0abd54b53bf14f36c428021e46d3dfa32c",
+      "complete": true,
+      "unchanged": true
+    },
+    "user_alerts": {
+      "rowsBefore": 0,
+      "rowsAfter": 0,
+      "primaryKeyHashBefore": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "primaryKeyHashAfter": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "complete": true,
+      "unchanged": true
+    },
+    "user_pin_alert_settings": {
+      "rowsBefore": 0,
+      "rowsAfter": 0,
+      "primaryKeyHashBefore": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "primaryKeyHashAfter": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "complete": true,
+      "unchanged": true
+    },
+    "user_pins": {
+      "rowsBefore": 7,
+      "rowsAfter": 7,
+      "primaryKeyHashBefore": "de190ee2f311f009d3269947d127324594cca5166bd200c4ff2441851be1806f",
+      "primaryKeyHashAfter": "de190ee2f311f009d3269947d127324594cca5166bd200c4ff2441851be1806f",
+      "complete": true,
+      "unchanged": true
+    },
+    "user_profiles": {
+      "rowsBefore": 9,
+      "rowsAfter": 9,
+      "primaryKeyHashBefore": "275feabf723140132680d886cc219a0154cd82e4a7c47fabc03e1fad9880aa6e",
+      "primaryKeyHashAfter": "275feabf723140132680d886cc219a0154cd82e4a7c47fabc03e1fad9880aa6e",
+      "complete": true,
+      "unchanged": true
+    }
+  }
+}

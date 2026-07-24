@@ -1,0 +1,16 @@
+{
+  "capturedAt": "2026-07-24T01:36:42.741Z",
+  "completed": true,
+  "groups": {
+    "app-source-snapshot": 1006884,
+    "hero-asset": 93707,
+    "steam-news-version": 88117
+  },
+  "latestModifiedAt": "2026-07-24T01:34:04.886Z",
+  "metadataSha256": "f54b4b91e46623ab06c28d2f8a28e74687fa4a772d335014c6a0975aeebb1a18",
+  "objects": 1188708,
+  "pages": 1189,
+  "prefix": "production/change-intel",
+  "schemaVersion": 1,
+  "totalBytes": 11182262682
+}

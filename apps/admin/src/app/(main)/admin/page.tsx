@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { runTigerQuery } from '@publisheriq/database';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getServiceSupabase } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/auth-utils';
@@ -90,6 +91,53 @@ export interface AdminDashboardData {
   chatLogs: ChatQueryLog[];
 }
 
+interface TigerPicsSyncStateRow {
+  last_change_number: number | string | null;
+  updated_at: string | null;
+}
+
+function toCount(value: number | string | null | undefined): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+}
+
+async function getTigerPicsSyncState(): Promise<PICSSyncState | null> {
+  try {
+    const result = await runTigerQuery<TigerPicsSyncStateRow>(
+      `
+        SELECT last_change_number, updated_at::text
+        FROM ops.pics_sync_state
+        WHERE id = 1
+        LIMIT 1
+      `
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return {
+        lastChangeNumber: 0,
+        updatedAt: null,
+      };
+    }
+
+    return {
+      lastChangeNumber: toCount(row.last_change_number),
+      updatedAt: row.updated_at ?? null,
+    };
+  } catch (error) {
+    console.warn('Tiger PICS sync-state read failed; falling back to Supabase.', error);
+    return null;
+  }
+}
+
 async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
   if (!isSupabaseConfigured()) {
     return null;
@@ -162,6 +210,8 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
       .limit(RECENT_CHAT_LOG_LIMIT),
   ]);
 
+  const tigerPicsSyncState = await getTigerPicsSyncState();
+
   const allJobsData = allJobs.data ?? [];
 
   const data: AdminDashboardData = {
@@ -174,8 +224,12 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     runningJobs: runningJobs.data ?? [],
     recentJobs: allJobsData.slice(0, 10), // Derive from allJobs instead of separate query
     allJobs: allJobsData,
-    picsSyncState,
-    picsDataStats,
+    picsSyncState: tigerPicsSyncState ?? picsSyncState,
+    picsDataStats: {
+      ...picsDataStats,
+      dataSource: 'approximate_fallback',
+      isApproximate: true,
+    },
     catalogControlStats,
     ccuQualityStats,
     chatLogs: chatLogs.data ?? [],

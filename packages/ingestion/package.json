@@ -26,6 +26,7 @@
     "backfill-tiger-ccu-snapshots": "tsx src/scripts/backfill-tiger-ccu-snapshots.ts",
     "change-intel-tiger-parity": "tsx src/scripts/change-intel-tiger-parity.ts",
     "change-intel-copy-hero-assets-to-r2": "tsx src/scripts/copy-hero-assets-to-r2.ts",
+    "change-intel-r2-manifest": "tsx src/scripts/capture-change-intel-r2-manifest.ts",
     "repair-current-ccu-state": "tsx src/scripts/repair-current-ccu-state.ts",
     "repair-storefront-authority": "tsx src/scripts/repair-storefront-authority.ts",
     "requeue-hero-asset-404-dead-letters": "tsx src/scripts/requeue-hero-asset-404-dead-letters.ts",
