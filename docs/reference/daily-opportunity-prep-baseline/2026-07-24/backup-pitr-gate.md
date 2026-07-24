@@ -144,6 +144,34 @@ does not require this gate.
   PICS cursor, and both Railway services still stopped. See
   `durable-pics-intake-schema-apply.md`.
 
+## Approval Record: Readiness, Events, and Signal Windows Schema 0089
+
+- Proposed operation: apply
+  `packages/data-plane/sql/tiger-bootstrap/0089_readiness_events_signal_windows.sql`
+  to Tiger production with `psql --single-transaction`.
+- Affected objects: additive change-event registry/version tables and seed
+  rows, interpreted and health views, lifecycle events, signal windows, ten
+  functions, and five source triggers.
+- Reason: install the normalized readiness, event, lifecycle, and signal-window
+  contracts required before versioned consumer reads.
+- Risk level: medium. The operation changes the production catalog, takes
+  normal DDL locks, and installs triggers on existing source relations, but
+  performs no destructive migration or historical backfill.
+- Recovery recheck: the authenticated Tiger console still offered a three-day
+  PITR fork and enabled `Create recovery fork` for
+  `Thu, 23 Jul 2026 22:34 (GMT -07:00)`. No fork was created.
+- Failure rollback: `--single-transaction` rolls back the entire file if any
+  statement fails.
+- Post-success rollback: keep the preparation runner off and both dependent
+  PICS services stopped. Disable only a faulty exact trigger in a separately
+  approved write window; destructive removal requires separate approval.
+- Explicit approval reference: the user wrote `0089 approved` and directed
+  review/merge in the current Codex task.
+- Outcome: applied successfully and verified with 43 registry definitions,
+  empty lifecycle/signal/readiness state, an unchanged PICS cursor, and both
+  same-named Railway services still stopped. See
+  `readiness-events-windows-schema-apply.md`.
+
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from
 this file after verification.

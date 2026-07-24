@@ -18,6 +18,12 @@ is a production database write. Before applying it, provide:
 Do not deploy ingestion or PICS code that calls
 `events.resolve_change_event_v1` before the function exists in Tiger.
 
+The production 0089 transaction was separately approved, applied, and verified
+on July 24, 2026. See the credential-free
+[`readiness-events-windows-schema-apply.md`](../../reference/daily-opportunity-prep-baseline/2026-07-24/readiness-events-windows-schema-apply.md)
+record. That schema apply does not authorize a lifecycle materialization,
+bounded refresh, PICS deployment, service restart, or reader cutover.
+
 ## Contract semantics
 
 | Contract                        | Meaning                                                                                                                                                      |

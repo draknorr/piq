@@ -44,9 +44,15 @@ registry resolver absent, `ops.app_data_readiness` still at zero rows, and the
 canonical PICS cursor unchanged from the durable-processing baseline at
 `37,491,237` (`updated_at = 2026-07-24 02:52:52.69384+00`).
 
+Those statements describe the pre-apply validation boundary. The user later
+approved the exact 0089 transaction; its successful production application,
+post-apply schema manifest, empty initial state, and runtime containment are
+recorded in
+[`readiness-events-windows-schema-apply.md`](./readiness-events-windows-schema-apply.md).
+
 ## Additive contracts
 
-The unapplied `0089_readiness_events_signal_windows.sql` bootstrap adds:
+The then-unapplied `0089_readiness_events_signal_windows.sql` bootstrap adds:
 
 - versioned registry metadata plus exact source/type resolution and unknown
   telemetry;
@@ -118,15 +124,12 @@ Other correctly named Railway services were not changed.
 
 ## Remaining gates
 
-1. Merge the code-only PR without applying `0089` or deploying changed
-   ingestion/PICS writers.
-2. Before any schema apply, present the exact additive DDL change, reason,
-   medium operational risk, and rollback/containment procedure; obtain separate
-   explicit approval.
-3. Apply the schema before deploying writers that call
-   `events.resolve_change_event_v1`.
-4. With separate approval, run a small exact-ID shadow batch and verify row
+1. Review and merge PR 5 with the already verified schema-before-writer
+   ordering intact.
+2. Keep both stopped PICS services stopped; merging the repository change does
+   not authorize a PICS deployment or restart.
+3. With separate approval, run a small exact-ID shadow batch and verify row
    parity, lifecycle idempotency, source timestamps, window boundaries,
    unknown-event telemetry, and unchanged existing consumer results.
-5. Do not enable primary mode or a reader cutover until the required healthy
+4. Do not enable primary mode or a reader cutover until the required healthy
    cycles and the later per-surface PR gates pass.

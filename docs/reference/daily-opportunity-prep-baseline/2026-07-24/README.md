@@ -78,6 +78,9 @@ are isolated in `apps-projection-refresh.md`.
 - `readiness-events-windows-validation.md`: PR 5 live Tiger schema validation,
   normalized readiness/lifecycle/event-registry decisions, signal-window
   verification, and no-write rollout gates.
+- `readiness-events-windows-schema-apply.md`: approved transactional 0089
+  Tiger apply, recovery/preflight evidence, exact schema verification, and
+  post-apply runtime containment.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
