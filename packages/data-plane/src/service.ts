@@ -146,7 +146,6 @@ interface CanonicalLookupTerms {
 
 interface CanonicalEntityQueryOptions {
   allowFuzzyFallback?: boolean;
-  lightweight?: boolean;
 }
 
 interface CatalogRow extends QueryResultRow {
@@ -2701,7 +2700,6 @@ export class DataPlaneService {
     const includeMetricsForSorting = resolutionMode === 'autocomplete' ? true : includeMetrics;
     const canonicalQueryOptions: CanonicalEntityQueryOptions = {
       allowFuzzyFallback: resolutionMode !== 'autocomplete',
-      lightweight: resolutionMode === 'autocomplete',
     };
 
     const entities: ResolvedEntity[] = [];
@@ -8607,8 +8605,7 @@ export class DataPlaneService {
     const lexicalRows = await this.queryCanonicalEntitiesLexical(
       kind,
       terms,
-      limit,
-      options.lightweight ?? false
+      limit
     );
 
     if (lexicalRows.length > 0 || options.allowFuzzyFallback === false) {
@@ -8618,16 +8615,14 @@ export class DataPlaneService {
     return this.queryCanonicalEntitiesFallback(
       kind,
       terms,
-      limit,
-      options.lightweight ?? false
+      limit
     );
   }
 
   private async queryCanonicalEntitiesLexical(
     kind: EntityKind,
     terms: CanonicalLookupTerms,
-    limit: number,
-    lightweight: boolean
+    limit: number
   ): Promise<EntityRow[]> {
     const entitiesTable = this.relation('core_entities').sql;
     const aliasesTable = this.relation('core_entity_aliases').sql;
@@ -9073,8 +9068,7 @@ export class DataPlaneService {
   private async queryCanonicalEntitiesFallback(
     kind: EntityKind,
     terms: CanonicalLookupTerms,
-    limit: number,
-    lightweight: boolean
+    limit: number
   ): Promise<EntityRow[]> {
     const entitiesTable = this.relation('core_entities').sql;
     const aliasesTable = this.relation('core_entity_aliases').sql;

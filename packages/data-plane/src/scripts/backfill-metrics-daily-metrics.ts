@@ -103,18 +103,6 @@ function parseOptionalDate(value: string | undefined, envName: string): string |
   return trimmed;
 }
 
-function toNumber(value: string | number | null | undefined): number {
-  if (typeof value === 'number') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    return Number(value);
-  }
-
-  return 0;
-}
-
 function buildInsertSql(rowCount: number): string {
   const targetColumns = COLUMN_MAPPINGS.map((mapping) => mapping.targetColumn);
   const valuesSql = Array.from({ length: rowCount }, (_, rowIndex) => {

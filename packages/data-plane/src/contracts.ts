@@ -1044,7 +1044,7 @@ export interface GetChangeActivityDetailResponse {
   sufficientToAnswer: boolean;
 }
 
-export interface GetChangeFeedStatusRequest {}
+export type GetChangeFeedStatusRequest = Record<string, never>;
 
 export interface GetChangeFeedStatusResponse {
   latestNewsEventAt: string | null;
