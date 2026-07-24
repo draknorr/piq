@@ -58,4 +58,7 @@ are isolated in `apps-projection-refresh.md`.
 - `catalog-observation-schema-apply.md`: approved additive Tiger DDL, immutable
   source checksum, post-apply object verification, and proof that observation
   remained disabled.
+- `catalog-observation-shadow-rollout.md`: approved bounded, replay, complete
+  AppList, and initial complete change-hint shadow evidence, including exact
+  manifest reconciliation and sync-status write-scope proof.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

@@ -45,6 +45,7 @@
     "runtime-matrix.json",
     "backup-pitr-gate.md",
     "catalog-observation-schema-apply.md",
+    "catalog-observation-shadow-rollout.md",
     "verification.md"
   ],
   "notes": [
