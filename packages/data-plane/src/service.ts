@@ -39,6 +39,10 @@ import type {
   GetChangeFeedStatusResponse,
   GetEntityOverviewRequest,
   GetEntityOverviewResponse,
+  GetInsightsDashboardRequest,
+  GetInsightsDashboardResponse,
+  GetProductHealthRequest,
+  GetProductHealthResponse,
   GetRelatedEntitiesRequest,
   GetRelatedEntitiesResponse,
   GetUserContextRequest,
@@ -47,6 +51,8 @@ import type {
   GetYoutubeGameCoverageResponse,
   GetYoutubeMarketPulseRequest,
   GetYoutubeMarketPulseResponse,
+  InsightsGame,
+  InsightsTimeRange,
   MatchQuality,
   QueryProvenance,
   QueryMonthlyPlaytimeRequest,
@@ -164,6 +170,113 @@ interface CatalogRow extends QueryResultRow {
   release_year: number | null;
   review_score: number | null;
   total_reviews: number | null;
+}
+
+interface InsightsGameRow extends QueryResultRow {
+  appid: number;
+  ccu_sparkline: Array<number | string> | null;
+  ccu_tier: number | string | null;
+  current_ccu: number | string | null;
+  discount_percent: number | string | null;
+  growth_pct: number | string | null;
+  is_free: boolean | null;
+  name: string;
+  peak_ccu: number | string | null;
+  positive_reviews: number | string | null;
+  price_cents: number | string | null;
+  prior_avg_ccu: number | string | null;
+  recent_avg_ccu: number | string | null;
+  release_date: string | null;
+  release_rank: number | string | null;
+  review_velocity_7d: number | string | null;
+  tier_reason: string | null;
+  total_reviews: number | string | null;
+  average_playtime_forever: number | string | null;
+}
+
+interface InsightsSummaryRow extends QueryResultRow {
+  avg_ccu: number | string | null;
+  tier1_count: number | string;
+  tier2_count: number | string;
+  total_games_tracked: number | string;
+}
+
+interface ProductCatalogRow extends QueryResultRow {
+  app_count: number | string;
+  developer_count: number | string;
+  publisher_count: number | string;
+}
+
+interface ProductSourceHealthRow extends QueryResultRow {
+  capture_dead_letter: number | string;
+  capture_oldest_pending_at: string | null;
+  capture_pending: number | string;
+  latest_unknown_at: string | null;
+  pics_cursor_updated_at: string | null;
+  pics_last_change_number: number | string | null;
+  projection_latest_source_at: string | null;
+  projection_rows: number | string;
+  readiness: Array<{
+    count: number | string;
+    source: string;
+    status: string;
+  }> | null;
+  unknown_event_types: number | string;
+  verified_at: string;
+}
+
+interface ProductAdminSummaryRow extends QueryResultRow {
+  apps_with_errors: number | string;
+  catalog_current: number | string;
+  catalog_historical: number | string;
+  catalog_latest_completed_at: string | null;
+  catalog_latest_live_count: number | string;
+  catalog_latest_started_at: string | null;
+  catalog_live_only_missing: number | string;
+  catalog_stale_running: number | string;
+  completion_stats: Array<Record<string, unknown>> | null;
+  fully_completed_count: number | string;
+  jobs_24h_avg_duration_ms: number | string | null;
+  jobs_24h_completed: number | string;
+  jobs_24h_failed: number | string;
+  jobs_24h_running: number | string;
+  jobs_24h_total: number | string;
+  last_histogram_sync: string | null;
+  last_reviews_sync: string | null;
+  last_steamspy_sync: string | null;
+  last_storefront_sync: string | null;
+  pics_with_categories: number | string;
+  pics_with_franchises: number | string;
+  pics_with_genres: number | string;
+  pics_with_parent_app: number | string;
+  pics_with_sync: number | string;
+  pics_with_tags: number | string;
+  priority_high: number | string;
+  priority_low: number | string;
+  priority_medium: number | string;
+  priority_minimal: number | string;
+  priority_normal: number | string;
+  queue_due_1h: number | string;
+  queue_due_24h: number | string;
+  queue_due_6h: number | string;
+  queue_overdue: number | string;
+  success_rate_7d: number | string | null;
+  total_syncable: number | string;
+}
+
+interface ProductCcuQualityRow extends QueryResultRow {
+  confirmed_positive: number | string;
+  confirmed_zero: number | string;
+  invalid: number | string;
+  legacy_unknown: number | string;
+  no_tier_assignment: number | string;
+  skipped: number | string;
+  steam_api: number | string;
+  steamspy: number | string;
+  suspect_zero: number | string;
+  tier_assigned: number | string;
+  unavailable: number | string;
+  updated_at: string | null;
 }
 
 interface EntityOverviewRow extends QueryResultRow {
@@ -865,6 +978,10 @@ const YOUTUBE_MARKET_CANDIDATE_LIMIT = 200;
 const EXPLAIN_CHANGE_MOMENT_GAP_MS = 6 * 60 * 60 * 1000;
 const EXPLAIN_NEWS_PROXIMITY_MS = 24 * 60 * 60 * 1000;
 const ALLOW_EMPTY_RELATIONS = new Set<DataPlaneRelationKey>([
+  'chat_query_logs',
+  'ops_app_data_readiness',
+  'ops_catalog_scan_runs',
+  'ops_pics_work_state',
   'user_pins',
   'user_alerts',
   'user_alert_preferences',
@@ -998,16 +1115,68 @@ const RELATION_LOCATIONS: Record<
   Record<DataPlaneRelationKey, RelationLocation>
 > = {
   'supabase-postgres': {
+    app_categories: {
+      schema: 'public',
+      sql: 'public.app_categories',
+      table: 'app_categories',
+    },
     app_dlc: { schema: 'public', sql: 'public.app_dlc', table: 'app_dlc' },
-    app_developers: { schema: 'public', sql: 'public.app_developers', table: 'app_developers' },
-    app_franchises: { schema: 'public', sql: 'public.app_franchises', table: 'app_franchises' },
-    app_genres: { schema: 'public', sql: 'public.app_genres', table: 'app_genres' },
-    app_publishers: { schema: 'public', sql: 'public.app_publishers', table: 'app_publishers' },
-    app_steam_deck: { schema: 'public', sql: 'public.app_steam_deck', table: 'app_steam_deck' },
-    app_steam_tags: { schema: 'public', sql: 'public.app_steam_tags', table: 'app_steam_tags' },
+    app_developers: {
+      schema: 'public',
+      sql: 'public.app_developers',
+      table: 'app_developers',
+    },
+    app_franchises: {
+      schema: 'public',
+      sql: 'public.app_franchises',
+      table: 'app_franchises',
+    },
+    app_genres: {
+      schema: 'public',
+      sql: 'public.app_genres',
+      table: 'app_genres',
+    },
+    app_publishers: {
+      schema: 'public',
+      sql: 'public.app_publishers',
+      table: 'app_publishers',
+    },
+    app_steam_deck: {
+      schema: 'public',
+      sql: 'public.app_steam_deck',
+      table: 'app_steam_deck',
+    },
+    app_steam_tags: {
+      schema: 'public',
+      sql: 'public.app_steam_tags',
+      table: 'app_steam_tags',
+    },
+    app_trends: {
+      schema: 'public',
+      sql: 'public.app_trends',
+      table: 'app_trends',
+    },
     apps: { schema: 'public', sql: 'public.apps', table: 'apps' },
-    ccu_snapshots: { schema: 'public', sql: 'public.ccu_snapshots', table: 'ccu_snapshots' },
-    developers: { schema: 'public', sql: 'public.developers', table: 'developers' },
+    ccu_snapshots: {
+      schema: 'public',
+      sql: 'public.ccu_snapshots',
+      table: 'ccu_snapshots',
+    },
+    ccu_tier_assignments: {
+      schema: 'public',
+      sql: 'public.ccu_tier_assignments',
+      table: 'ccu_tier_assignments',
+    },
+    chat_query_logs: {
+      schema: 'public',
+      sql: 'public.chat_query_logs',
+      table: 'chat_query_logs',
+    },
+    developers: {
+      schema: 'public',
+      sql: 'public.developers',
+      table: 'developers',
+    },
     latest_daily_metrics: {
       schema: 'public',
       sql: 'public.latest_daily_metrics',
@@ -1058,6 +1227,11 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.app_change_events',
       table: 'app_change_events',
     },
+    events_change_event_registry: {
+      schema: 'public',
+      sql: 'public.change_event_registry',
+      table: 'change_event_registry',
+    },
     events_change_activity_bursts: {
       schema: 'public',
       sql: 'public.change_activity_bursts',
@@ -1068,8 +1242,46 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.app_capture_work_state',
       table: 'app_capture_work_state',
     },
-    franchises: { schema: 'public', sql: 'public.franchises', table: 'franchises' },
-    publishers: { schema: 'public', sql: 'public.publishers', table: 'publishers' },
+    ops_app_data_readiness: {
+      schema: 'public',
+      sql: 'public.app_data_readiness',
+      table: 'app_data_readiness',
+    },
+    ops_catalog_scan_runs: {
+      schema: 'public',
+      sql: 'public.catalog_scan_runs',
+      table: 'catalog_scan_runs',
+    },
+    ops_pics_sync_state: {
+      schema: 'public',
+      sql: 'public.pics_sync_state',
+      table: 'pics_sync_state',
+    },
+    ops_pics_work_state: {
+      schema: 'public',
+      sql: 'public.pics_work_state',
+      table: 'pics_work_state',
+    },
+    ops_sync_jobs: {
+      schema: 'public',
+      sql: 'public.sync_jobs',
+      table: 'sync_jobs',
+    },
+    ops_sync_status: {
+      schema: 'public',
+      sql: 'public.sync_status',
+      table: 'sync_status',
+    },
+    franchises: {
+      schema: 'public',
+      sql: 'public.franchises',
+      table: 'franchises',
+    },
+    publishers: {
+      schema: 'public',
+      sql: 'public.publishers',
+      table: 'publishers',
+    },
     docs_youtube_channels: {
       schema: 'public',
       sql: 'public.youtube_channels',
@@ -1090,13 +1302,21 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.user_alert_preferences',
       table: 'user_alert_preferences',
     },
-    user_alerts: { schema: 'public', sql: 'public.user_alerts', table: 'user_alerts' },
+    user_alerts: {
+      schema: 'public',
+      sql: 'public.user_alerts',
+      table: 'user_alerts',
+    },
     user_pin_alert_settings: {
       schema: 'public',
       sql: 'public.user_pin_alert_settings',
       table: 'user_pin_alert_settings',
     },
-    user_pins: { schema: 'public', sql: 'public.user_pins', table: 'user_pins' },
+    user_pins: {
+      schema: 'public',
+      sql: 'public.user_pins',
+      table: 'user_pins',
+    },
     metrics_youtube_game_daily: {
       schema: 'public',
       sql: 'public.youtube_game_daily',
@@ -1107,21 +1327,85 @@ const RELATION_LOCATIONS: Record<
       sql: 'public.youtube_video_snapshots',
       table: 'youtube_video_snapshots',
     },
-    steam_categories: { schema: 'public', sql: 'public.steam_categories', table: 'steam_categories' },
-    steam_genres: { schema: 'public', sql: 'public.steam_genres', table: 'steam_genres' },
-    steam_tags: { schema: 'public', sql: 'public.steam_tags', table: 'steam_tags' },
+    steam_categories: {
+      schema: 'public',
+      sql: 'public.steam_categories',
+      table: 'steam_categories',
+    },
+    steam_genres: {
+      schema: 'public',
+      sql: 'public.steam_genres',
+      table: 'steam_genres',
+    },
+    steam_tags: {
+      schema: 'public',
+      sql: 'public.steam_tags',
+      table: 'steam_tags',
+    },
   },
   tiger: {
+    app_categories: {
+      schema: 'legacy',
+      sql: 'legacy.app_categories',
+      table: 'app_categories',
+    },
     app_dlc: { schema: 'legacy', sql: 'legacy.app_dlc', table: 'app_dlc' },
-    app_developers: { schema: 'legacy', sql: 'legacy.app_developers', table: 'app_developers' },
-    app_franchises: { schema: 'legacy', sql: 'legacy.app_franchises', table: 'app_franchises' },
-    app_genres: { schema: 'legacy', sql: 'legacy.app_genres', table: 'app_genres' },
-    app_publishers: { schema: 'legacy', sql: 'legacy.app_publishers', table: 'app_publishers' },
-    app_steam_deck: { schema: 'legacy', sql: 'legacy.app_steam_deck', table: 'app_steam_deck' },
-    app_steam_tags: { schema: 'legacy', sql: 'legacy.app_steam_tags', table: 'app_steam_tags' },
+    app_developers: {
+      schema: 'legacy',
+      sql: 'legacy.app_developers',
+      table: 'app_developers',
+    },
+    app_franchises: {
+      schema: 'legacy',
+      sql: 'legacy.app_franchises',
+      table: 'app_franchises',
+    },
+    app_genres: {
+      schema: 'legacy',
+      sql: 'legacy.app_genres',
+      table: 'app_genres',
+    },
+    app_publishers: {
+      schema: 'legacy',
+      sql: 'legacy.app_publishers',
+      table: 'app_publishers',
+    },
+    app_steam_deck: {
+      schema: 'legacy',
+      sql: 'legacy.app_steam_deck',
+      table: 'app_steam_deck',
+    },
+    app_steam_tags: {
+      schema: 'legacy',
+      sql: 'legacy.app_steam_tags',
+      table: 'app_steam_tags',
+    },
+    app_trends: {
+      schema: 'metrics',
+      sql: 'metrics.app_trends',
+      table: 'app_trends',
+    },
     apps: { schema: 'legacy', sql: 'legacy.apps', table: 'apps' },
-    ccu_snapshots: { schema: 'metrics', sql: 'metrics.ccu_snapshots', table: 'ccu_snapshots' },
-    developers: { schema: 'legacy', sql: 'legacy.developers', table: 'developers' },
+    ccu_snapshots: {
+      schema: 'metrics',
+      sql: 'metrics.ccu_snapshots',
+      table: 'ccu_snapshots',
+    },
+    ccu_tier_assignments: {
+      schema: 'ops',
+      sql: 'ops.ccu_tier_assignments',
+      table: 'ccu_tier_assignments',
+    },
+    chat_query_logs: {
+      schema: 'chat',
+      sql: 'chat.chat_query_logs',
+      table: 'chat_query_logs',
+    },
+    developers: {
+      schema: 'legacy',
+      sql: 'legacy.developers',
+      table: 'developers',
+    },
     latest_daily_metrics: {
       schema: 'legacy',
       sql: 'legacy.latest_daily_metrics',
@@ -1172,6 +1456,11 @@ const RELATION_LOCATIONS: Record<
       sql: 'events.app_change_events',
       table: 'app_change_events',
     },
+    events_change_event_registry: {
+      schema: 'events',
+      sql: 'events.change_event_registry',
+      table: 'change_event_registry',
+    },
     events_change_activity_bursts: {
       schema: 'events',
       sql: 'events.change_activity_bursts',
@@ -1182,8 +1471,46 @@ const RELATION_LOCATIONS: Record<
       sql: 'ops.app_capture_work_state',
       table: 'app_capture_work_state',
     },
-    franchises: { schema: 'legacy', sql: 'legacy.franchises', table: 'franchises' },
-    publishers: { schema: 'legacy', sql: 'legacy.publishers', table: 'publishers' },
+    ops_app_data_readiness: {
+      schema: 'ops',
+      sql: 'ops.app_data_readiness',
+      table: 'app_data_readiness',
+    },
+    ops_catalog_scan_runs: {
+      schema: 'ops',
+      sql: 'ops.catalog_scan_runs',
+      table: 'catalog_scan_runs',
+    },
+    ops_pics_sync_state: {
+      schema: 'ops',
+      sql: 'ops.pics_sync_state',
+      table: 'pics_sync_state',
+    },
+    ops_pics_work_state: {
+      schema: 'ops',
+      sql: 'ops.pics_work_state',
+      table: 'pics_work_state',
+    },
+    ops_sync_jobs: {
+      schema: 'ops',
+      sql: 'ops.sync_jobs',
+      table: 'sync_jobs',
+    },
+    ops_sync_status: {
+      schema: 'ops',
+      sql: 'ops.sync_status',
+      table: 'sync_status',
+    },
+    franchises: {
+      schema: 'legacy',
+      sql: 'legacy.franchises',
+      table: 'franchises',
+    },
+    publishers: {
+      schema: 'legacy',
+      sql: 'legacy.publishers',
+      table: 'publishers',
+    },
     docs_youtube_channels: {
       schema: 'docs',
       sql: 'docs.youtube_channels',
@@ -1204,13 +1531,21 @@ const RELATION_LOCATIONS: Record<
       sql: 'legacy.user_alert_preferences',
       table: 'user_alert_preferences',
     },
-    user_alerts: { schema: 'legacy', sql: 'legacy.user_alerts', table: 'user_alerts' },
+    user_alerts: {
+      schema: 'legacy',
+      sql: 'legacy.user_alerts',
+      table: 'user_alerts',
+    },
     user_pin_alert_settings: {
       schema: 'legacy',
       sql: 'legacy.user_pin_alert_settings',
       table: 'user_pin_alert_settings',
     },
-    user_pins: { schema: 'legacy', sql: 'legacy.user_pins', table: 'user_pins' },
+    user_pins: {
+      schema: 'legacy',
+      sql: 'legacy.user_pins',
+      table: 'user_pins',
+    },
     metrics_youtube_game_daily: {
       schema: 'metrics',
       sql: 'metrics.youtube_game_daily',
@@ -1221,9 +1556,21 @@ const RELATION_LOCATIONS: Record<
       sql: 'metrics.youtube_video_snapshots',
       table: 'youtube_video_snapshots',
     },
-    steam_categories: { schema: 'legacy', sql: 'legacy.steam_categories', table: 'steam_categories' },
-    steam_genres: { schema: 'legacy', sql: 'legacy.steam_genres', table: 'steam_genres' },
-    steam_tags: { schema: 'legacy', sql: 'legacy.steam_tags', table: 'steam_tags' },
+    steam_categories: {
+      schema: 'legacy',
+      sql: 'legacy.steam_categories',
+      table: 'steam_categories',
+    },
+    steam_genres: {
+      schema: 'legacy',
+      sql: 'legacy.steam_genres',
+      table: 'steam_genres',
+    },
+    steam_tags: {
+      schema: 'legacy',
+      sql: 'legacy.steam_tags',
+      table: 'steam_tags',
+    },
   },
 };
 
@@ -1264,6 +1611,58 @@ function parseNullableCountValue(value: unknown): number | null {
   }
 
   return parseCountValue(value);
+}
+
+function normalizeInsightsTimeRange(value: unknown): InsightsTimeRange {
+  return value === '24h' || value === '30d' ? value : '7d';
+}
+
+function insightsRangeConfig(timeRange: InsightsTimeRange): {
+  priorInterval: string;
+  recentInterval: string;
+  targetPoints: number;
+} {
+  if (timeRange === '24h') {
+    return {
+      priorInterval: '48 hours',
+      recentInterval: '24 hours',
+      targetPoints: 12,
+    };
+  }
+
+  if (timeRange === '30d') {
+    return {
+      priorInterval: '60 days',
+      recentInterval: '30 days',
+      targetPoints: 15,
+    };
+  }
+
+  return {
+    priorInterval: '14 days',
+    recentInterval: '7 days',
+    targetPoints: 14,
+  };
+}
+
+function calculateInsightsTrend(values: number[]): 'up' | 'down' | 'stable' {
+  if (values.length < 2) {
+    return 'stable';
+  }
+
+  const midpoint = Math.floor(values.length / 2);
+  const first = values.slice(0, midpoint);
+  const second = values.slice(midpoint);
+  const firstAverage = first.reduce((sum, value) => sum + value, 0) / first.length;
+  const secondAverage = second.reduce((sum, value) => sum + value, 0) / second.length;
+  if (firstAverage === 0) {
+    return 'stable';
+  }
+
+  const changePercent = ((secondAverage - firstAverage) / firstAverage) * 100;
+  if (changePercent > 5) return 'up';
+  if (changePercent < -5) return 'down';
+  return 'stable';
 }
 
 function normalizeOffset(value: number | undefined): number {
@@ -2148,6 +2547,86 @@ export class DataPlaneService {
   async healthCheck(): Promise<QueryProvenance> {
     await runQuery('SELECT 1', [], this.config);
     return buildProvenance(this.config.source, []);
+  }
+
+  async getInsightsDashboard(
+    request: GetInsightsDashboardRequest
+  ): Promise<GetInsightsDashboardResponse> {
+    await this.assertContractRuntime('getInsightsDashboard');
+    const timeRange = normalizeInsightsTimeRange(request.timeRange);
+    const newestSort = request.newestSort === 'growth' ? 'growth' : 'release';
+    const [topGames, newestGames, trendingGames, summary] = await Promise.all([
+      this.queryTopInsightsGames(timeRange),
+      this.queryNewestInsightsGames(timeRange, newestSort),
+      this.queryTrendingInsightsGames(timeRange),
+      this.queryInsightsSummary(),
+    ]);
+
+    return {
+      newestGames,
+      provenance: buildProvenance(this.config.source, [
+        this.relation('apps').sql,
+        this.relation('latest_daily_metrics').sql,
+        this.relation('ccu_snapshots').sql,
+        this.relation('ccu_tier_assignments').sql,
+        this.relation('app_trends').sql,
+      ]),
+      summary,
+      timeRange,
+      topGames,
+      trendingGames,
+    };
+  }
+
+  async getProductHealth(request: GetProductHealthRequest): Promise<GetProductHealthResponse> {
+    await this.assertContractRuntime('getProductHealth');
+    const projectionVersion = request.projectionVersion ?? 'legacy';
+    if (projectionVersion !== 'legacy' && projectionVersion !== 'v2') {
+      throw new PublisherIQError(
+        'getProductHealth projectionVersion must be "legacy" or "v2".',
+        'INVALID_PRODUCT_PROJECTION_VERSION',
+        { projectionVersion }
+      );
+    }
+    const projectionRelation =
+      projectionVersion === 'v2'
+        ? 'metrics.apps_page_projection_v2'
+        : 'metrics.apps_page_projection';
+    await this.assertProductProjectionRelation(projectionRelation);
+    const [catalog, sourceHealth, admin] = await Promise.all([
+      this.queryProductCatalog(),
+      this.queryProductSourceHealth(projectionRelation),
+      request.detail === 'admin'
+        ? this.queryProductAdmin({
+            errorLimit: normalizeLimit(request.errorLimit, 20, 100),
+            jobLimit: normalizeLimit(request.jobLimit, 100, 250),
+            logLimit: normalizeLimit(request.logLimit, 50, 100),
+          })
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      admin,
+      catalog,
+      provenance: buildProvenance(this.config.source, [
+        this.relation('apps').sql,
+        this.relation('publishers').sql,
+        this.relation('developers').sql,
+        this.relation('ops_sync_status').sql,
+        this.relation('ops_sync_jobs').sql,
+        this.relation('ops_pics_sync_state').sql,
+        this.relation('ops_app_capture_work_state').sql,
+        this.relation('ops_app_data_readiness').sql,
+        projectionRelation,
+      ]),
+      sourceHealth: {
+        ...sourceHealth,
+        projection: {
+          ...sourceHealth.projection,
+          relation: projectionRelation,
+        },
+      },
+    };
   }
 
   async readinessCheck(): Promise<DataPlaneReadiness> {
@@ -4310,7 +4789,11 @@ export class DataPlaneService {
         items: [],
         limit,
         offset,
-        pagination: this.buildYoutubePagination({ limit, offset, totalRows: 0 }),
+        pagination: this.buildYoutubePagination({
+          limit,
+          offset,
+          totalRows: 0,
+        }),
         provenance,
         sort,
         sufficientToAnswer: false,
@@ -4341,7 +4824,11 @@ export class DataPlaneService {
         items: [],
         limit,
         offset,
-        pagination: this.buildYoutubePagination({ limit, offset, totalRows: 0 }),
+        pagination: this.buildYoutubePagination({
+          limit,
+          offset,
+          totalRows: 0,
+        }),
         provenance,
         sort,
         sufficientToAnswer: false,
@@ -4510,7 +4997,9 @@ export class DataPlaneService {
     return request.entityKind === 'game'
       ? this.runTigerGameSimilaritySearch(request, resolved.entity)
       : this.runTigerCompanySimilaritySearch(
-          request as SemanticSearchRequest & { entityKind: 'developer' | 'publisher' },
+          request as SemanticSearchRequest & {
+            entityKind: 'developer' | 'publisher';
+          },
           resolved.entity
         );
   }
@@ -13518,6 +14007,1016 @@ export class DataPlaneService {
     };
   }
 
+  private mapInsightsGameRow(row: InsightsGameRow): InsightsGame {
+    const sparkline = (row.ccu_sparkline ?? []).map(parseCountValue);
+    const totalReviews = parseNullableCountValue(row.total_reviews);
+    const positiveReviews = parseNullableCountValue(row.positive_reviews);
+    const playtimeMinutes = parseNullableCountValue(row.average_playtime_forever);
+    const ccuTier = parseNullableCountValue(row.ccu_tier);
+
+    return {
+      appid: parseCountValue(row.appid),
+      avgCcu: parseNullableCountValue(row.recent_avg_ccu) ?? undefined,
+      avgPlaytimeHours:
+        playtimeMinutes && playtimeMinutes > 0 ? Math.round(playtimeMinutes / 60) : null,
+      ccuSparkline: sparkline,
+      ccuTier: ccuTier === 1 || ccuTier === 2 || ccuTier === 3 ? ccuTier : undefined,
+      ccuTrend: calculateInsightsTrend(sparkline),
+      currentCcu: parseCountValue(row.current_ccu),
+      discountPercent: parseNullableCountValue(row.discount_percent),
+      growthPct: parseNullableCountValue(row.growth_pct) ?? undefined,
+      isFree: row.is_free ?? false,
+      name: row.name,
+      peakCcu: parseNullableCountValue(row.peak_ccu) ?? undefined,
+      positivePercent:
+        totalReviews && totalReviews > 0 && positiveReviews !== null
+          ? Math.round((positiveReviews / totalReviews) * 100)
+          : undefined,
+      priceCents: parseNullableCountValue(row.price_cents),
+      priorAvgCcu: parseNullableCountValue(row.prior_avg_ccu) ?? undefined,
+      releaseDate: row.release_date,
+      releaseRank: parseNullableCountValue(row.release_rank) ?? undefined,
+      reviewVelocity: parseNullableCountValue(row.review_velocity_7d) ?? undefined,
+      tierReason: row.tier_reason ?? undefined,
+      totalReviews: totalReviews ?? undefined,
+    };
+  }
+
+  private async queryTopInsightsGames(timeRange: InsightsTimeRange): Promise<InsightsGame[]> {
+    const { recentInterval, targetPoints } = insightsRangeConfig(timeRange);
+    const apps = this.relation('apps').sql;
+    const snapshots = this.relation('ccu_snapshots').sql;
+    const tiers = this.relation('ccu_tier_assignments').sql;
+    const metrics = this.relation('latest_daily_metrics').sql;
+    const trends = this.relation('app_trends').sql;
+    const result = await runQuery<InsightsGameRow>(
+      `
+        WITH snapshot_peaks AS (
+          SELECT appid, max(player_count)::integer AS peak_ccu
+          FROM ${snapshots}
+          WHERE snapshot_time >= now() - $1::interval
+          GROUP BY appid
+        ),
+        candidates AS (
+          SELECT
+            coalesce(snapshot.appid, tier.appid) AS appid,
+            coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0)::integer AS current_ccu,
+            row_number() OVER (
+              ORDER BY coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0) DESC,
+                coalesce(snapshot.appid, tier.appid) ASC
+            ) AS candidate_rank
+          FROM snapshot_peaks snapshot
+          FULL OUTER JOIN ${tiers} tier ON tier.appid = snapshot.appid
+          WHERE coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0) > 0
+          ORDER BY current_ccu DESC, appid ASC
+          LIMIT 50
+        ),
+        point_buckets AS (
+          SELECT
+            snapshot.appid,
+            snapshot.player_count,
+            ntile($2::integer) OVER (
+              PARTITION BY snapshot.appid
+              ORDER BY snapshot.snapshot_time
+            ) AS bucket
+          FROM ${snapshots} snapshot
+          JOIN candidates candidate ON candidate.appid = snapshot.appid
+          WHERE snapshot.snapshot_time >= now() - $1::interval
+        ),
+        sparkline AS (
+          SELECT appid, array_agg(bucket_peak ORDER BY bucket) AS ccu_sparkline
+          FROM (
+            SELECT appid, bucket, max(player_count)::integer AS bucket_peak
+            FROM point_buckets
+            GROUP BY appid, bucket
+          ) bucketed
+          GROUP BY appid
+        )
+        SELECT
+          candidate.appid,
+          app.name,
+          app.release_date::text,
+          app.is_free,
+          candidate.current_ccu,
+          candidate.current_ccu AS peak_ccu,
+          NULL::numeric AS recent_avg_ccu,
+          NULL::numeric AS prior_avg_ccu,
+          NULL::numeric AS growth_pct,
+          tier.ccu_tier,
+          tier.tier_reason,
+          tier.release_rank,
+          sparkline.ccu_sparkline,
+          metric.total_reviews,
+          metric.positive_reviews,
+          metric.price_cents,
+          metric.discount_percent,
+          metric.average_playtime_forever,
+          trend.review_velocity_7d
+        FROM candidates candidate
+        JOIN ${apps} app ON app.appid = candidate.appid
+        LEFT JOIN ${tiers} tier ON tier.appid = candidate.appid
+        LEFT JOIN ${metrics} metric ON metric.appid = candidate.appid
+        LEFT JOIN ${trends} trend ON trend.appid = candidate.appid
+        LEFT JOIN sparkline ON sparkline.appid = candidate.appid
+        ORDER BY candidate.candidate_rank
+      `,
+      [recentInterval, targetPoints],
+      this.config
+    );
+
+    return result.rows.map((row) => this.mapInsightsGameRow(row));
+  }
+
+  private async queryNewestInsightsGames(
+    timeRange: InsightsTimeRange,
+    newestSort: 'release' | 'growth'
+  ): Promise<InsightsGame[]> {
+    const { recentInterval, targetPoints } = insightsRangeConfig(timeRange);
+    const apps = this.relation('apps').sql;
+    const snapshots = this.relation('ccu_snapshots').sql;
+    const tiers = this.relation('ccu_tier_assignments').sql;
+    const metrics = this.relation('latest_daily_metrics').sql;
+    const trends = this.relation('app_trends').sql;
+    const result = await runQuery<InsightsGameRow>(
+      `
+        WITH recent_apps AS (
+          SELECT appid, name, release_date, is_free
+          FROM ${apps}
+          WHERE type = 'game'
+            AND is_released = true
+            AND release_date >= current_date - interval '1 year'
+          ORDER BY release_date DESC NULLS LAST, appid DESC
+          LIMIT 200
+        ),
+        snapshot_peaks AS (
+          SELECT snapshot.appid, max(snapshot.player_count)::integer AS peak_ccu
+          FROM ${snapshots} snapshot
+          JOIN recent_apps app ON app.appid = snapshot.appid
+          WHERE snapshot.snapshot_time >= now() - $1::interval
+          GROUP BY snapshot.appid
+        ),
+        candidates AS (
+          SELECT
+            app.*,
+            coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0)::integer AS current_ccu
+          FROM recent_apps app
+          LEFT JOIN snapshot_peaks snapshot ON snapshot.appid = app.appid
+          LEFT JOIN ${tiers} tier ON tier.appid = app.appid
+          WHERE coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0) > 0
+          ORDER BY app.release_date DESC NULLS LAST, app.appid DESC
+          LIMIT 50
+        ),
+        point_buckets AS (
+          SELECT
+            snapshot.appid,
+            snapshot.player_count,
+            ntile($2::integer) OVER (
+              PARTITION BY snapshot.appid
+              ORDER BY snapshot.snapshot_time
+            ) AS bucket
+          FROM ${snapshots} snapshot
+          JOIN candidates candidate ON candidate.appid = snapshot.appid
+          WHERE snapshot.snapshot_time >= now() - $1::interval
+        ),
+        sparkline AS (
+          SELECT appid, array_agg(bucket_peak ORDER BY bucket) AS ccu_sparkline
+          FROM (
+            SELECT appid, bucket, max(player_count)::integer AS bucket_peak
+            FROM point_buckets
+            GROUP BY appid, bucket
+          ) bucketed
+          GROUP BY appid
+        )
+        SELECT
+          candidate.appid,
+          candidate.name,
+          candidate.release_date::text,
+          candidate.is_free,
+          candidate.current_ccu,
+          candidate.current_ccu AS peak_ccu,
+          NULL::numeric AS recent_avg_ccu,
+          NULL::numeric AS prior_avg_ccu,
+          NULL::numeric AS growth_pct,
+          tier.ccu_tier,
+          tier.tier_reason,
+          tier.release_rank,
+          sparkline.ccu_sparkline,
+          metric.total_reviews,
+          metric.positive_reviews,
+          metric.price_cents,
+          metric.discount_percent,
+          metric.average_playtime_forever,
+          trend.review_velocity_7d
+        FROM candidates candidate
+        LEFT JOIN ${tiers} tier ON tier.appid = candidate.appid
+        LEFT JOIN ${metrics} metric ON metric.appid = candidate.appid
+        LEFT JOIN ${trends} trend ON trend.appid = candidate.appid
+        LEFT JOIN sparkline ON sparkline.appid = candidate.appid
+        ORDER BY candidate.release_date DESC NULLS LAST, candidate.appid DESC
+      `,
+      [recentInterval, targetPoints],
+      this.config
+    );
+
+    const games = result.rows.map((row) => {
+      const game = this.mapInsightsGameRow(row);
+      const points = game.ccuSparkline ?? [];
+      if (points.length < 2) return game;
+      const midpoint = Math.floor(points.length / 2);
+      const first = points.slice(0, midpoint);
+      const second = points.slice(midpoint);
+      const firstAverage = first.reduce((sum, value) => sum + value, 0) / first.length;
+      const secondAverage = second.reduce((sum, value) => sum + value, 0) / second.length;
+      return {
+        ...game,
+        growthPct:
+          firstAverage > 0
+            ? Math.round(((secondAverage - firstAverage) / firstAverage) * 100)
+            : undefined,
+      };
+    });
+
+    if (newestSort === 'growth') {
+      games.sort((left, right) => (right.growthPct ?? -Infinity) - (left.growthPct ?? -Infinity));
+    }
+    return games;
+  }
+
+  private async queryTrendingInsightsGames(timeRange: InsightsTimeRange): Promise<InsightsGame[]> {
+    const { priorInterval, recentInterval, targetPoints } = insightsRangeConfig(timeRange);
+    const apps = this.relation('apps').sql;
+    const snapshots = this.relation('ccu_snapshots').sql;
+    const tiers = this.relation('ccu_tier_assignments').sql;
+    const metrics = this.relation('latest_daily_metrics').sql;
+    const trends = this.relation('app_trends').sql;
+    const result = await runQuery<InsightsGameRow>(
+      `
+        WITH period_averages AS (
+          SELECT
+            appid,
+            avg(player_count) FILTER (
+              WHERE snapshot_time >= now() - $1::interval
+            ) AS recent_avg_ccu,
+            avg(player_count) FILTER (
+              WHERE snapshot_time >= now() - $2::interval
+                AND snapshot_time < now() - $1::interval
+            ) AS prior_avg_ccu
+          FROM ${snapshots}
+          WHERE snapshot_time >= now() - $2::interval
+          GROUP BY appid
+        ),
+        candidates AS (
+          SELECT
+            appid,
+            round(recent_avg_ccu)::integer AS recent_avg_ccu,
+            round(prior_avg_ccu)::integer AS prior_avg_ccu,
+            round(
+              ((recent_avg_ccu - prior_avg_ccu) / prior_avg_ccu) * 100,
+              1
+            ) AS growth_pct
+          FROM period_averages
+          WHERE recent_avg_ccu >= 10
+            AND prior_avg_ccu >= 10
+          ORDER BY growth_pct DESC, appid ASC
+          LIMIT 50
+        ),
+        point_buckets AS (
+          SELECT
+            snapshot.appid,
+            snapshot.player_count,
+            ntile($3::integer) OVER (
+              PARTITION BY snapshot.appid
+              ORDER BY snapshot.snapshot_time
+            ) AS bucket
+          FROM ${snapshots} snapshot
+          JOIN candidates candidate ON candidate.appid = snapshot.appid
+          WHERE snapshot.snapshot_time >= now() - $1::interval
+        ),
+        sparkline AS (
+          SELECT appid, array_agg(bucket_peak ORDER BY bucket) AS ccu_sparkline
+          FROM (
+            SELECT appid, bucket, max(player_count)::integer AS bucket_peak
+            FROM point_buckets
+            GROUP BY appid, bucket
+          ) bucketed
+          GROUP BY appid
+        )
+        SELECT
+          candidate.appid,
+          app.name,
+          app.release_date::text,
+          app.is_free,
+          candidate.recent_avg_ccu AS current_ccu,
+          candidate.recent_avg_ccu AS peak_ccu,
+          candidate.recent_avg_ccu,
+          candidate.prior_avg_ccu,
+          candidate.growth_pct,
+          tier.ccu_tier,
+          tier.tier_reason,
+          tier.release_rank,
+          sparkline.ccu_sparkline,
+          metric.total_reviews,
+          metric.positive_reviews,
+          metric.price_cents,
+          metric.discount_percent,
+          metric.average_playtime_forever,
+          trend.review_velocity_7d
+        FROM candidates candidate
+        JOIN ${apps} app ON app.appid = candidate.appid
+        LEFT JOIN ${tiers} tier ON tier.appid = candidate.appid
+        LEFT JOIN ${metrics} metric ON metric.appid = candidate.appid
+        LEFT JOIN ${trends} trend ON trend.appid = candidate.appid
+        LEFT JOIN sparkline ON sparkline.appid = candidate.appid
+        ORDER BY candidate.growth_pct DESC, candidate.appid ASC
+      `,
+      [recentInterval, priorInterval, targetPoints],
+      this.config
+    );
+
+    return result.rows.map((row) => this.mapInsightsGameRow(row));
+  }
+
+  private async queryInsightsSummary(): Promise<GetInsightsDashboardResponse['summary']> {
+    const tiers = this.relation('ccu_tier_assignments').sql;
+    const snapshots = this.relation('ccu_snapshots').sql;
+    const result = await runQuery<InsightsSummaryRow>(
+      `
+        SELECT
+          (SELECT count(*) FROM ${tiers})::bigint AS total_games_tracked,
+          (SELECT count(*) FROM ${tiers} WHERE ccu_tier = 1)::bigint AS tier1_count,
+          (SELECT count(*) FROM ${tiers} WHERE ccu_tier = 2)::bigint AS tier2_count,
+          (
+            SELECT round(avg(player_count))::bigint
+            FROM ${snapshots}
+            WHERE snapshot_time >= now() - interval '24 hours'
+          ) AS avg_ccu
+      `,
+      [],
+      this.config
+    );
+    const row = result.rows[0];
+    return {
+      avgCcu: parseCountValue(row?.avg_ccu),
+      tier1Count: parseCountValue(row?.tier1_count),
+      tier2Count: parseCountValue(row?.tier2_count),
+      totalGamesTracked: parseCountValue(row?.total_games_tracked),
+    };
+  }
+
+  private async queryProductCatalog(): Promise<GetProductHealthResponse['catalog']> {
+    const result = await runQuery<ProductCatalogRow>(
+      `
+        SELECT
+          (
+            SELECT count(*)
+            FROM ${this.relation('ops_sync_status').sql}
+            WHERE is_syncable = true
+          )::bigint AS app_count,
+          (SELECT count(*) FROM ${this.relation('publishers').sql})::bigint AS publisher_count,
+          (SELECT count(*) FROM ${this.relation('developers').sql})::bigint AS developer_count
+      `,
+      [],
+      this.config
+    );
+    const row = result.rows[0];
+    return {
+      appCount: parseCountValue(row?.app_count),
+      developerCount: parseCountValue(row?.developer_count),
+      publisherCount: parseCountValue(row?.publisher_count),
+    };
+  }
+
+  private async queryProductSourceHealth(
+    projectionRelation: 'metrics.apps_page_projection' | 'metrics.apps_page_projection_v2'
+  ): Promise<GetProductHealthResponse['sourceHealth']> {
+    const captureWork = this.relation('ops_app_capture_work_state').sql;
+    const readiness = this.relation('ops_app_data_readiness').sql;
+    const picsState = this.relation('ops_pics_sync_state').sql;
+    const result = await runQuery<ProductSourceHealthRow>(
+      `
+        WITH capture AS (
+          SELECT
+            count(*) FILTER (
+              WHERE dead_lettered_at IS NULL
+                AND dirty_since IS NOT NULL
+                AND (
+                  last_completed_at IS NULL
+                  OR last_dirty_at > last_completed_at
+                )
+            )::bigint AS pending,
+            count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::bigint AS dead_letter,
+            min(dirty_since) FILTER (
+              WHERE dead_lettered_at IS NULL
+                AND dirty_since IS NOT NULL
+                AND (
+                  last_completed_at IS NULL
+                  OR last_dirty_at > last_completed_at
+                )
+            ) AS oldest_pending_at
+          FROM ${captureWork}
+        ),
+        projection AS (
+          SELECT
+            count(*)::bigint AS row_count,
+            max(data_updated_at) AS latest_source_at
+          FROM ${projectionRelation}
+        ),
+        unknowns AS (
+          SELECT
+            count(DISTINCT (event.source, event.change_type))::bigint AS event_types,
+            max(event.occurred_at) AS latest_unknown_at
+          FROM ${this.relation('events_app_change_events').sql} event
+          LEFT JOIN ${this.relation('events_change_event_registry').sql} registry
+            ON registry.registry_version = 'change-events/v1'
+           AND registry.source = event.source
+           AND registry.raw_event_type = event.change_type
+           AND registry.deprecated_at IS NULL
+          WHERE event.occurred_at >= now() - interval '30 days'
+            AND registry.raw_event_type IS NULL
+        ),
+        readiness_counts AS (
+          SELECT coalesce(
+            jsonb_agg(
+              jsonb_build_object(
+                'source', source,
+                'status', status,
+                'count', row_count
+              )
+              ORDER BY source, status
+            ),
+            '[]'::jsonb
+          ) AS rows
+          FROM (
+            SELECT source, status, count(*)::bigint AS row_count
+            FROM ${readiness}
+            GROUP BY source, status
+          ) grouped
+        )
+        SELECT
+          clock_timestamp()::text AS verified_at,
+          coalesce(pics.last_change_number, 0)::bigint AS pics_last_change_number,
+          pics.updated_at::text AS pics_cursor_updated_at,
+          capture.pending AS capture_pending,
+          capture.dead_letter AS capture_dead_letter,
+          capture.oldest_pending_at::text AS capture_oldest_pending_at,
+          projection.row_count AS projection_rows,
+          projection.latest_source_at::text AS projection_latest_source_at,
+          unknowns.event_types AS unknown_event_types,
+          unknowns.latest_unknown_at::text AS latest_unknown_at,
+          readiness_counts.rows AS readiness
+        FROM capture
+        CROSS JOIN projection
+        CROSS JOIN unknowns
+        CROSS JOIN readiness_counts
+        LEFT JOIN ${picsState} pics ON pics.id = 1
+        LIMIT 1
+      `,
+      [],
+      this.config
+    );
+    const row = result.rows[0];
+    return {
+      captureQueue: {
+        deadLetter: parseCountValue(row?.capture_dead_letter),
+        oldestPendingAt: row?.capture_oldest_pending_at ?? null,
+        pending: parseCountValue(row?.capture_pending),
+      },
+      eventRegistry: {
+        latestUnknownAt: row?.latest_unknown_at ?? null,
+        unknownEventTypes: parseCountValue(row?.unknown_event_types),
+      },
+      pics: {
+        cursorUpdatedAt: row?.pics_cursor_updated_at ?? null,
+        lastChangeNumber: parseCountValue(row?.pics_last_change_number),
+      },
+      projection: {
+        latestSourceAt: row?.projection_latest_source_at ?? null,
+        relation: projectionRelation,
+        rowCount: parseCountValue(row?.projection_rows),
+      },
+      readiness: (row?.readiness ?? []).map((entry) => ({
+        count: parseCountValue(entry.count),
+        source: entry.source,
+        status: entry.status,
+      })),
+      verifiedAt: row?.verified_at ?? new Date().toISOString(),
+    };
+  }
+
+  private async assertProductProjectionRelation(
+    projectionRelation: 'metrics.apps_page_projection' | 'metrics.apps_page_projection_v2'
+  ): Promise<void> {
+    const result = await runQuery<{ exists: boolean }>(
+      'SELECT to_regclass($1) IS NOT NULL AS exists',
+      [projectionRelation],
+      this.config
+    );
+    if (result.rows[0]?.exists) {
+      return;
+    }
+
+    throw new ContractRuntimeUnavailableError(
+      `getProductHealth requires ${projectionRelation} for the selected projection version.`,
+      'getProductHealth',
+      [projectionRelation],
+      { projectionRelation }
+    );
+  }
+
+  private async queryProductAdmin(limits: {
+    errorLimit: number;
+    jobLimit: number;
+    logLimit: number;
+  }): Promise<NonNullable<GetProductHealthResponse['admin']>> {
+    const syncStatus = this.relation('ops_sync_status').sql;
+    const syncJobs = this.relation('ops_sync_jobs').sql;
+    const apps = this.relation('apps').sql;
+    const metrics = this.relation('latest_daily_metrics').sql;
+    const tiers = this.relation('ccu_tier_assignments').sql;
+    const summaryResult = await runQuery<ProductAdminSummaryRow>(
+      `
+        WITH totals AS (
+          SELECT count(*)::bigint AS total
+          FROM ${syncStatus}
+          WHERE is_syncable = true
+        ),
+        latest_applist AS (
+          SELECT
+            source_rows_committed::bigint AS live_count,
+            started_at,
+            completed_at
+          FROM ${this.relation('ops_catalog_scan_runs').sql}
+          WHERE source = 'steam_applist'
+            AND scan_kind = 'full'
+            AND status = 'completed'
+          ORDER BY completed_at DESC NULLS LAST, started_at DESC
+          LIMIT 1
+        ),
+        job_stats AS (
+          SELECT
+            count(*) FILTER (WHERE started_at >= now() - interval '24 hours')::bigint AS total_24h,
+            count(*) FILTER (
+              WHERE started_at >= now() - interval '24 hours'
+                AND status = 'completed'
+            )::bigint AS completed_24h,
+            count(*) FILTER (
+              WHERE started_at >= now() - interval '24 hours'
+                AND status = 'failed'
+            )::bigint AS failed_24h,
+            count(*) FILTER (
+              WHERE started_at >= now() - interval '24 hours'
+                AND status = 'running'
+            )::bigint AS running_24h,
+            avg(extract(epoch FROM (completed_at - started_at)) * 1000)
+              FILTER (
+                WHERE started_at >= now() - interval '24 hours'
+                  AND status = 'completed'
+                  AND completed_at IS NOT NULL
+              ) AS avg_duration_ms,
+            100.0 * count(*) FILTER (
+              WHERE started_at >= now() - interval '7 days'
+                AND status = 'completed'
+            ) / nullif(count(*) FILTER (
+              WHERE started_at >= now() - interval '7 days'
+                AND status <> 'running'
+            ), 0) AS success_rate_7d
+          FROM ${syncJobs}
+        ),
+        sync_aggregates AS (
+          SELECT
+            count(*) FILTER (
+              WHERE is_syncable = true AND next_sync_after < now()
+            )::bigint AS overdue,
+            count(*) FILTER (
+              WHERE is_syncable = true
+                AND next_sync_after >= now()
+                AND next_sync_after < now() + interval '1 hour'
+            )::bigint AS due_1h,
+            count(*) FILTER (
+              WHERE is_syncable = true
+                AND next_sync_after >= now()
+                AND next_sync_after < now() + interval '6 hours'
+            )::bigint AS due_6h,
+            count(*) FILTER (
+              WHERE is_syncable = true
+                AND next_sync_after >= now()
+                AND next_sync_after < now() + interval '24 hours'
+            )::bigint AS due_24h,
+            count(*) FILTER (WHERE consecutive_errors > 0)::bigint AS apps_with_errors,
+            count(*) FILTER (WHERE is_syncable = true AND priority_score >= 150)::bigint AS priority_high,
+            count(*) FILTER (
+              WHERE is_syncable = true AND priority_score >= 100 AND priority_score < 150
+            )::bigint AS priority_medium,
+            count(*) FILTER (
+              WHERE is_syncable = true AND priority_score >= 50 AND priority_score < 100
+            )::bigint AS priority_normal,
+            count(*) FILTER (
+              WHERE is_syncable = true AND priority_score >= 25 AND priority_score < 50
+            )::bigint AS priority_low,
+            count(*) FILTER (WHERE is_syncable = true AND priority_score < 25)::bigint AS priority_minimal,
+            max(last_steamspy_sync) AS last_steamspy_sync,
+            max(last_storefront_sync) AS last_storefront_sync,
+            max(last_reviews_sync) AS last_reviews_sync,
+            max(last_histogram_sync) AS last_histogram_sync,
+            count(*) FILTER (
+              WHERE is_syncable = true
+                AND last_steamspy_sync IS NOT NULL
+                AND last_storefront_sync IS NOT NULL
+                AND last_reviews_sync IS NOT NULL
+                AND last_histogram_sync IS NOT NULL
+                AND last_pics_sync IS NOT NULL
+            )::bigint AS fully_completed,
+            count(*) FILTER (
+              WHERE is_syncable = true AND last_pics_sync IS NOT NULL
+            )::bigint AS with_pics_sync
+          FROM ${syncStatus}
+        ),
+        completion AS (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'source', source,
+              'totalApps', total_apps,
+              'syncedApps', synced_apps,
+              'neverSynced', total_apps - synced_apps,
+              'staleApps', stale_apps,
+              'completionPercent',
+                CASE WHEN total_apps > 0 THEN synced_apps::numeric / total_apps * 100 ELSE 0 END,
+              'lastSyncTime', last_sync_time
+            )
+            ORDER BY source_order
+          ) AS rows
+          FROM (
+            SELECT
+              source,
+              source_order,
+              CASE
+                WHEN source = 'steamspy' THEN count(*) FILTER (
+                  WHERE is_syncable = true
+                    AND (steamspy_available IS NULL OR steamspy_available = true)
+                )
+                ELSE count(*) FILTER (WHERE is_syncable = true)
+              END::bigint AS total_apps,
+              count(*) FILTER (
+                WHERE is_syncable = true
+                  AND CASE source
+                    WHEN 'steamspy' THEN last_steamspy_sync IS NOT NULL
+                      AND (steamspy_available IS NULL OR steamspy_available = true)
+                    WHEN 'storefront' THEN last_storefront_sync IS NOT NULL
+                    WHEN 'reviews' THEN last_reviews_sync IS NOT NULL
+                    WHEN 'histogram' THEN last_histogram_sync IS NOT NULL
+                    WHEN 'pics' THEN last_pics_sync IS NOT NULL
+                  END
+              )::bigint AS synced_apps,
+              count(*) FILTER (
+                WHERE is_syncable = true
+                  AND CASE source
+                    WHEN 'steamspy' THEN last_steamspy_sync < now() - interval '1 day'
+                    WHEN 'storefront' THEN last_storefront_sync < now() - interval '1 day'
+                    WHEN 'reviews' THEN last_reviews_sync < now() - interval '1 day'
+                    WHEN 'histogram' THEN last_histogram_sync < now() - interval '7 days'
+                    WHEN 'pics' THEN last_pics_sync < now() - interval '1 day'
+                  END
+              )::bigint AS stale_apps,
+              CASE source
+                WHEN 'steamspy' THEN max(last_steamspy_sync)::text
+                WHEN 'storefront' THEN max(last_storefront_sync)::text
+                WHEN 'reviews' THEN max(last_reviews_sync)::text
+                WHEN 'histogram' THEN max(last_histogram_sync)::text
+                WHEN 'pics' THEN max(last_pics_sync)::text
+              END AS last_sync_time
+            FROM ${syncStatus}
+            CROSS JOIN (
+              VALUES
+                ('steamspy'::text, 1),
+                ('storefront'::text, 2),
+                ('reviews'::text, 3),
+                ('histogram'::text, 4),
+                ('pics'::text, 5)
+            ) sources(source, source_order)
+            GROUP BY source, source_order
+          ) rows
+        ),
+        pics_relations AS (
+          SELECT
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_categories').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS with_categories,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_genres').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS with_genres,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_steam_tags').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS with_tags,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_franchises').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS with_franchises,
+            (
+              SELECT count(*)
+              FROM ${apps} app
+              JOIN ${syncStatus} status ON status.appid = app.appid
+              WHERE status.is_syncable = true
+                AND app.parent_appid IS NOT NULL
+            )::bigint AS with_parent_app
+        )
+        SELECT
+          totals.total AS total_syncable,
+          greatest((SELECT count(*) FROM ${apps}) - totals.total, 0)::bigint AS catalog_historical,
+          coalesce(latest_applist.live_count, totals.total)::bigint AS catalog_latest_live_count,
+          greatest(coalesce(latest_applist.live_count, totals.total) - totals.total, 0)::bigint
+            AS catalog_live_only_missing,
+          (
+            SELECT count(*)
+            FROM ${this.relation('ops_catalog_scan_runs').sql}
+            WHERE source = 'steam_applist'
+              AND status = 'running'
+              AND started_at < now() - interval '6 hours'
+          )::bigint AS catalog_stale_running,
+          latest_applist.started_at::text AS catalog_latest_started_at,
+          latest_applist.completed_at::text AS catalog_latest_completed_at,
+          totals.total AS catalog_current,
+          job_stats.total_24h AS jobs_24h_total,
+          job_stats.completed_24h AS jobs_24h_completed,
+          job_stats.failed_24h AS jobs_24h_failed,
+          job_stats.running_24h AS jobs_24h_running,
+          job_stats.avg_duration_ms AS jobs_24h_avg_duration_ms,
+          job_stats.success_rate_7d,
+          sync_aggregates.overdue AS queue_overdue,
+          sync_aggregates.due_1h AS queue_due_1h,
+          sync_aggregates.due_6h AS queue_due_6h,
+          sync_aggregates.due_24h AS queue_due_24h,
+          sync_aggregates.apps_with_errors,
+          sync_aggregates.priority_high,
+          sync_aggregates.priority_medium,
+          sync_aggregates.priority_normal,
+          sync_aggregates.priority_low,
+          sync_aggregates.priority_minimal,
+          sync_aggregates.last_steamspy_sync::text,
+          sync_aggregates.last_storefront_sync::text,
+          sync_aggregates.last_reviews_sync::text,
+          sync_aggregates.last_histogram_sync::text,
+          sync_aggregates.fully_completed AS fully_completed_count,
+          sync_aggregates.with_pics_sync AS pics_with_sync,
+          pics_relations.with_categories AS pics_with_categories,
+          pics_relations.with_genres AS pics_with_genres,
+          pics_relations.with_tags AS pics_with_tags,
+          pics_relations.with_franchises AS pics_with_franchises,
+          pics_relations.with_parent_app AS pics_with_parent_app,
+          completion.rows AS completion_stats
+        FROM totals
+        CROSS JOIN job_stats
+        CROSS JOIN sync_aggregates
+        CROSS JOIN completion
+        CROSS JOIN pics_relations
+        LEFT JOIN latest_applist ON true
+      `,
+      [],
+      this.config
+    );
+    const summary = summaryResult.rows[0];
+    const currentCatalogApps = parseCountValue(summary?.total_syncable);
+    const [jobsResult, errorsResult, ccuResult, logsResult] = await Promise.all([
+      runQuery<Record<string, unknown>>(
+        `
+          SELECT
+            id::text,
+            job_type,
+            status,
+            items_processed,
+            items_succeeded,
+            items_failed,
+            items_created,
+            items_updated,
+            started_at::text,
+            completed_at::text,
+            error_message,
+            github_run_id,
+            batch_size,
+            created_at::text
+          FROM ${syncJobs}
+          ORDER BY started_at DESC NULLS LAST, created_at DESC
+          LIMIT $1
+        `,
+        [limits.jobLimit],
+        this.config
+      ),
+      runQuery<Record<string, unknown>>(
+        `
+          SELECT
+            status.appid,
+            coalesce(app.name, 'App ' || status.appid::text) AS name,
+            status.consecutive_errors,
+            status.last_error_source,
+            status.last_error_message,
+            status.last_error_at::text
+          FROM ${syncStatus} status
+          LEFT JOIN ${apps} app ON app.appid = status.appid
+          WHERE status.consecutive_errors > 0
+          ORDER BY status.consecutive_errors DESC, status.last_error_at DESC NULLS LAST
+          LIMIT $1
+        `,
+        [limits.errorLimit],
+        this.config
+      ),
+      runQuery<ProductCcuQualityRow>(
+        `
+          SELECT
+            count(*)::bigint AS tier_assigned,
+            greatest($1::bigint - count(*), 0)::bigint AS no_tier_assignment,
+            count(*) FILTER (
+              WHERE last_ccu_validation_state = 'confirmed_positive'
+            )::bigint AS confirmed_positive,
+            count(*) FILTER (
+              WHERE last_ccu_validation_state = 'confirmed_zero'
+            )::bigint AS confirmed_zero,
+            count(*) FILTER (
+              WHERE last_ccu_validation_state = 'suspect_zero'
+            )::bigint AS suspect_zero,
+            count(*) FILTER (
+              WHERE last_ccu_validation_state = 'skipped'
+                OR ccu_fetch_status = 'skipped'
+            )::bigint AS skipped,
+            count(*) FILTER (
+              WHERE last_ccu_validation_state = 'invalid'
+                OR ccu_fetch_status = 'invalid'
+            )::bigint AS invalid,
+            greatest(
+              $1::bigint - count(*) FILTER (
+                WHERE last_ccu_validation_state IS NOT NULL
+              ),
+              0
+            )::bigint AS unavailable,
+            (
+              SELECT count(*)
+              FROM ${syncStatus} status
+              JOIN ${metrics} metric ON metric.appid = status.appid
+              WHERE status.is_syncable = true
+                AND metric.ccu_peak IS NOT NULL
+                AND metric.ccu_source = 'steam_api'
+            )::bigint AS steam_api,
+            (
+              SELECT count(*)
+              FROM ${syncStatus} status
+              JOIN ${metrics} metric ON metric.appid = status.appid
+              WHERE status.is_syncable = true
+                AND metric.ccu_peak IS NOT NULL
+                AND metric.ccu_source = 'steamspy'
+            )::bigint AS steamspy,
+            (
+              SELECT count(*)
+              FROM ${syncStatus} status
+              JOIN ${metrics} metric ON metric.appid = status.appid
+              WHERE status.is_syncable = true
+                AND metric.ccu_peak IS NOT NULL
+                AND metric.ccu_source IS NULL
+            )::bigint AS legacy_unknown,
+            max(updated_at)::text AS updated_at
+          FROM ${tiers}
+        `,
+        [currentCatalogApps],
+        this.config
+      ),
+      runQuery<Record<string, unknown>>(
+        `
+          SELECT
+            id::text,
+            query_text,
+            tool_names,
+            tool_count,
+            iteration_count,
+            response_length,
+            timing_llm_ms,
+            timing_tools_ms,
+            timing_total_ms,
+            created_at::text,
+            chat_family,
+            NULL::text[] AS quality_flags,
+            NULL::jsonb AS session_context_summary,
+            NULL::jsonb AS guardrail_trace,
+            NULL::jsonb AS answer_contract_summary
+          FROM ${this.relation('chat_query_logs').sql}
+          WHERE created_at >= now() - interval '7 days'
+          ORDER BY created_at DESC
+          LIMIT $1
+        `,
+        [limits.logLimit],
+        this.config
+      ),
+    ]);
+    const jobs = jobsResult.rows as unknown as NonNullable<
+      GetProductHealthResponse['admin']
+    >['allJobs'];
+    const completionStats = (summary?.completion_stats ?? []).map((row) => ({
+      completionPercent: parseCountValue(row.completionPercent),
+      lastSyncTime: typeof row.lastSyncTime === 'string' ? row.lastSyncTime : null,
+      neverSynced: parseCountValue(row.neverSynced),
+      source: row.source as 'steamspy' | 'storefront' | 'reviews' | 'histogram' | 'pics',
+      staleApps: parseCountValue(row.staleApps),
+      syncedApps: parseCountValue(row.syncedApps),
+      totalApps: parseCountValue(row.totalApps),
+    }));
+    const ccu = ccuResult.rows[0];
+
+    return {
+      allJobs: jobs,
+      appsWithErrors: errorsResult.rows.map((row) => ({
+        appid: parseCountValue(row.appid),
+        consecutive_errors: parseCountValue(row.consecutive_errors),
+        last_error_at: typeof row.last_error_at === 'string' ? row.last_error_at : null,
+        last_error_message:
+          typeof row.last_error_message === 'string' ? row.last_error_message : null,
+        last_error_source: typeof row.last_error_source === 'string' ? row.last_error_source : null,
+        name: typeof row.name === 'string' ? row.name : `App ${parseCountValue(row.appid)}`,
+      })),
+      catalogControlStats: {
+        currentCatalogApps,
+        dataSource: 'live',
+        historicalRetainedApps: parseCountValue(summary?.catalog_historical),
+        latestApplistCompletedAt: summary?.catalog_latest_completed_at ?? null,
+        latestApplistStartedAt: summary?.catalog_latest_started_at ?? null,
+        latestLiveAppCount: parseCountValue(summary?.catalog_latest_live_count),
+        liveOnlyMissing: parseCountValue(summary?.catalog_live_only_missing),
+        staleRunningApplistJobs: parseCountValue(summary?.catalog_stale_running),
+      },
+      ccuQualityStats: {
+        confirmedPositive: parseCountValue(ccu?.confirmed_positive),
+        confirmedZero: parseCountValue(ccu?.confirmed_zero),
+        currentCatalogApps,
+        dataSource: 'live',
+        invalid: parseCountValue(ccu?.invalid),
+        isApproximate: false,
+        legacyUnknown: parseCountValue(ccu?.legacy_unknown),
+        noTierAssignment: parseCountValue(ccu?.no_tier_assignment),
+        skipped: parseCountValue(ccu?.skipped),
+        steamApi: parseCountValue(ccu?.steam_api),
+        steamspy: parseCountValue(ccu?.steamspy),
+        suspectZero: parseCountValue(ccu?.suspect_zero),
+        tierAssigned: parseCountValue(ccu?.tier_assigned),
+        unavailable: parseCountValue(ccu?.unavailable),
+        updatedAt: ccu?.updated_at ?? null,
+      },
+      chatLogs: logsResult.rows as unknown as NonNullable<
+        GetProductHealthResponse['admin']
+      >['chatLogs'],
+      completionStats,
+      fullyCompletedCount: parseCountValue(summary?.fully_completed_count),
+      picsDataStats: {
+        dataSource: 'live',
+        isApproximate: false,
+        totalApps: currentCatalogApps,
+        withCategories: parseCountValue(summary?.pics_with_categories),
+        withFranchises: parseCountValue(summary?.pics_with_franchises),
+        withGenres: parseCountValue(summary?.pics_with_genres),
+        withParentApp: parseCountValue(summary?.pics_with_parent_app),
+        withPicsSync: parseCountValue(summary?.pics_with_sync),
+        withTags: parseCountValue(summary?.pics_with_tags),
+      },
+      priorityDistribution: {
+        high: parseCountValue(summary?.priority_high),
+        low: parseCountValue(summary?.priority_low),
+        medium: parseCountValue(summary?.priority_medium),
+        minimal: parseCountValue(summary?.priority_minimal),
+        normal: parseCountValue(summary?.priority_normal),
+      },
+      queueStatus: {
+        dataSource: 'live',
+        dueIn1Hour: parseCountValue(summary?.queue_due_1h),
+        dueIn24Hours: parseCountValue(summary?.queue_due_24h),
+        dueIn6Hours: parseCountValue(summary?.queue_due_6h),
+        overdue: parseCountValue(summary?.queue_overdue),
+      },
+      syncHealth: {
+        appsWithErrors: parseCountValue(summary?.apps_with_errors),
+        jobs24h: {
+          avgDurationMs: parseNullableCountValue(summary?.jobs_24h_avg_duration_ms),
+          completed: parseCountValue(summary?.jobs_24h_completed),
+          failed: parseCountValue(summary?.jobs_24h_failed),
+          running: parseCountValue(summary?.jobs_24h_running),
+          total: parseCountValue(summary?.jobs_24h_total),
+        },
+        lastSyncs: {
+          histogram: summary?.last_histogram_sync ?? null,
+          reviews: summary?.last_reviews_sync ?? null,
+          steamspy: summary?.last_steamspy_sync ?? null,
+          storefront: summary?.last_storefront_sync ?? null,
+        },
+        overdueApps: parseCountValue(summary?.queue_overdue),
+        successRate7d: parseCountValue(summary?.success_rate_7d),
+      },
+    };
+  }
+
   private mapUserAlertPreferences(
     row: UserContextAlertPreferencesRow
   ): UserContextAlertPreferences {
@@ -13586,39 +15085,40 @@ export class DataPlaneService {
   }
 
   private async getBlockingTables(requiredRelations: DataPlaneRelationKey[]): Promise<string[]> {
-    const blockingTables: string[] = [];
+    const checks = await Promise.all(
+      requiredRelations.map(async (relationKey) => {
+        const location = this.relation(relationKey);
+        const relationName = `${location.schema}.${location.table}`;
+        const existsResult = await runQuery<{ exists: boolean }>(
+          'SELECT to_regclass($1) IS NOT NULL AS exists',
+          [relationName],
+          this.config
+        );
+        const exists = existsResult.rows[0]?.exists ?? false;
 
-    for (const relationKey of requiredRelations) {
-      const location = this.relation(relationKey);
-      const relationName = `${location.schema}.${location.table}`;
-      const existsResult = await runQuery<{ exists: boolean }>(
-        'SELECT to_regclass($1) IS NOT NULL AS exists',
-        [relationName],
-        this.config
-      );
-      const exists = existsResult.rows[0]?.exists ?? false;
+        if (!exists) {
+          return location.sql;
+        }
 
-      if (!exists) {
-        blockingTables.push(location.sql);
-        continue;
-      }
+        if (ALLOW_EMPTY_RELATIONS.has(relationKey)) {
+          return null;
+        }
 
-      if (ALLOW_EMPTY_RELATIONS.has(relationKey)) {
-        continue;
-      }
+        const hasRowsResult = await runQuery<{ has_rows: boolean }>(
+          `SELECT EXISTS(SELECT 1 FROM ${location.sql} LIMIT 1) AS has_rows`,
+          [],
+          this.config
+        );
 
-      const hasRowsResult = await runQuery<{ has_rows: boolean }>(
-        `SELECT EXISTS(SELECT 1 FROM ${location.sql} LIMIT 1) AS has_rows`,
-        [],
-        this.config
-      );
+        if (!(hasRowsResult.rows[0]?.has_rows ?? false)) {
+          return location.sql;
+        }
 
-      if (!(hasRowsResult.rows[0]?.has_rows ?? false)) {
-        blockingTables.push(location.sql);
-      }
-    }
+        return null;
+      })
+    );
 
-    return blockingTables;
+    return checks.filter((relation): relation is string => relation !== null);
   }
 
   private async getContractBlockers(

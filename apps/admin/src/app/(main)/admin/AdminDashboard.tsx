@@ -167,6 +167,79 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
         ]}
       />
 
+      {data.sourceHealth ? (
+        <CollapsibleSection
+          title="Tiger Source Health"
+          badge={{
+            value: "live",
+            variant:
+              data.sourceHealth.captureQueue.deadLetter > 0 ||
+              data.sourceHealth.eventRegistry.unknownEventTypes > 0
+                ? "warning"
+                : "success",
+          }}
+          headerExtra={
+            <span className="text-caption text-text-muted">
+              verified {formatRelativeTime(data.sourceHealth.verifiedAt)}
+            </span>
+          }
+        >
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <QueueMetric
+              label="Capture Pending"
+              value={data.sourceHealth.captureQueue.pending}
+              status={
+                data.sourceHealth.captureQueue.pending > 500
+                  ? "warning"
+                  : "neutral"
+              }
+            />
+            <QueueMetric
+              label="Capture Dead"
+              value={data.sourceHealth.captureQueue.deadLetter}
+              status={
+                data.sourceHealth.captureQueue.deadLetter > 0
+                  ? "error"
+                  : "success"
+              }
+            />
+            <QueueMetric
+              label="Projection Rows"
+              value={data.sourceHealth.projection.rowCount}
+              status="info"
+            />
+            <QueueMetric
+              label="Unknown Event Types"
+              value={data.sourceHealth.eventRegistry.unknownEventTypes}
+              status={
+                data.sourceHealth.eventRegistry.unknownEventTypes > 0
+                  ? "warning"
+                  : "success"
+              }
+            />
+          </div>
+          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-caption text-text-muted">
+            <div>Projection: {data.sourceHealth.projection.relation}</div>
+            <div>
+              Latest projection source:{" "}
+              {data.sourceHealth.projection.latestSourceAt
+                ? formatRelativeTime(
+                    data.sourceHealth.projection.latestSourceAt,
+                  )
+                : "Never"}
+            </div>
+            <div>
+              Oldest pending:{" "}
+              {data.sourceHealth.captureQueue.oldestPendingAt
+                ? formatRelativeTime(
+                    data.sourceHealth.captureQueue.oldestPendingAt,
+                  )
+                : "None"}
+            </div>
+          </div>
+        </CollapsibleSection>
+      ) : null}
+
       {/* Data Completion Section */}
       <CollapsibleSection
         title="Data Completion"

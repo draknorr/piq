@@ -1,9 +1,12 @@
-import type { Metadata } from 'next';
-import { runTigerQuery } from '@publisheriq/database';
-import { isSupabaseConfigured } from '@/lib/supabase';
-import { getServiceSupabase } from '@/lib/supabase-service';
-import { requireAdmin } from '@/lib/auth-utils';
-import { ConfigurationRequired } from '@/components/ConfigurationRequired';
+import type { Metadata } from "next";
+import { runTigerQuery } from "@publisheriq/database";
+import { postToQueryApi } from "@/lib/query-api-client";
+import { resolveProductReadTarget } from "@/lib/product-read-runtime";
+import { resolveAppProjectionRelations } from "@/app/(main)/apps/lib/apps-projection-runtime";
+import { isSupabaseConfigured } from "@/lib/supabase";
+import { getServiceSupabase } from "@/lib/supabase-service";
+import { requireAdmin } from "@/lib/auth-utils";
+import { ConfigurationRequired } from "@/components/ConfigurationRequired";
 import {
   getSyncHealthData,
   getPriorityDistribution,
@@ -93,6 +96,48 @@ export interface AdminDashboardData {
   catalogControlStats: CatalogControlStats;
   ccuQualityStats: CcuQualityStats;
   chatLogs: ChatQueryLog[];
+  sourceHealth?: {
+    captureQueue: {
+      deadLetter: number;
+      oldestPendingAt: string | null;
+      pending: number;
+    };
+    eventRegistry: {
+      latestUnknownAt: string | null;
+      unknownEventTypes: number;
+    };
+    projection: {
+      latestSourceAt: string | null;
+      relation: string;
+      rowCount: number;
+    };
+    readiness: Array<{
+      count: number;
+      source: string;
+      status: string;
+    }>;
+    verifiedAt: string;
+  };
+}
+
+interface TigerProductHealthResponse {
+  admin: Omit<
+    AdminDashboardData,
+    | "picsServiceStatus"
+    | "picsSyncState"
+    | "recentJobs"
+    | "runningJobs"
+    | "sourceHealth"
+  > | null;
+  provenance: {
+    source: "tiger";
+  };
+  sourceHealth: NonNullable<AdminDashboardData["sourceHealth"]> & {
+    pics: {
+      cursorUpdatedAt: string | null;
+      lastChangeNumber: number;
+    };
+  };
 }
 
 interface TigerPicsSyncStateRow {
@@ -151,6 +196,53 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
   const cached = getCachedDashboardData();
   if (cached) {
     return cached;
+  }
+
+  if (resolveProductReadTarget("admin") === "tiger") {
+    const [healthResult, picsServiceStatus] = await Promise.all([
+      postToQueryApi<TigerProductHealthResponse>(
+        "/v1/contracts/get-product-health",
+        {
+          detail: "admin",
+          errorLimit: 20,
+          jobLimit: ALL_JOBS_LIMIT,
+          logLimit: RECENT_CHAT_LOG_LIMIT,
+          projectionVersion: resolveAppProjectionRelations().version,
+        },
+        { timeoutMs: 20_000 },
+      ),
+      getPicsServiceStatus(),
+    ]);
+
+    if (
+      !healthResult.ok ||
+      !healthResult.data ||
+      !healthResult.data.admin ||
+      healthResult.data.provenance.source !== "tiger"
+    ) {
+      throw new Error(
+        `Tiger admin product-health contract unavailable: ${
+          healthResult.errorCode ?? healthResult.reason ?? "unknown error"
+        }`,
+      );
+    }
+
+    const allJobs = healthResult.data.admin.allJobs as SyncJob[];
+    const data: AdminDashboardData = {
+      ...healthResult.data.admin,
+      allJobs,
+      chatLogs: healthResult.data.admin.chatLogs as ChatQueryLog[],
+      picsServiceStatus,
+      picsSyncState: {
+        lastChangeNumber: healthResult.data.sourceHealth.pics.lastChangeNumber,
+        updatedAt: healthResult.data.sourceHealth.pics.cursorUpdatedAt,
+      },
+      recentJobs: allJobs.slice(0, 10),
+      runningJobs: allJobs.filter((job) => job.status === "running"),
+      sourceHealth: healthResult.data.sourceHealth,
+    };
+    setCachedDashboardData(data);
+    return data;
   }
 
   const supabase = getServiceSupabase();

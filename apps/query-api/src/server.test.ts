@@ -16,6 +16,8 @@ function createDataPlaneStub(overrides: Record<string, unknown> = {}): Record<st
     getChangeActivityDetail: async () => ({ ok: true }),
     getChangeFeedStatus: async () => ({ ok: true }),
     getEntityOverview: async () => ({ ok: true }),
+    getInsightsDashboard: async () => ({ ok: true }),
+    getProductHealth: async () => ({ ok: true }),
     getRelatedEntities: async () => ({ ok: true }),
     getUserContext: async () => ({ ok: true }),
     getYoutubeGameCoverage: async () => ({ ok: true }),
@@ -1215,5 +1217,86 @@ test('query-api maps blocked contracts to HTTP 503', async () => {
         error: 'Contract compareEntities is not ready at runtime.',
       });
     }
+  );
+});
+
+test("query-api exposes the Tiger Insights dashboard contract", async () => {
+  let received: unknown = null;
+  await withServer(
+    createDataPlaneStub({
+      getInsightsDashboard: async (request: unknown) => {
+        received = request;
+        return {
+          newestGames: [],
+          provenance: {
+            capturedAt: "2026-07-24T00:00:00.000Z",
+            source: "tiger",
+            tables: [],
+          },
+          summary: {
+            avgCcu: 0,
+            tier1Count: 0,
+            tier2Count: 0,
+            totalGamesTracked: 0,
+          },
+          timeRange: "30d",
+          topGames: [],
+          trendingGames: [],
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(
+        `${origin}/v1/contracts/get-insights-dashboard`,
+        {
+          body: JSON.stringify({ newestSort: "growth", timeRange: "30d" }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        },
+      );
+      assert.equal(response.status, 200);
+      assert.deepEqual(received, { newestSort: "growth", timeRange: "30d" });
+    },
+  );
+});
+
+test("query-api exposes bounded Tiger product-health requests", async () => {
+  let received: unknown = null;
+  await withServer(
+    createDataPlaneStub({
+      getProductHealth: async (request: unknown) => {
+        received = request;
+        return {
+          admin: null,
+          catalog: { appCount: 1, developerCount: 2, publisherCount: 3 },
+          provenance: {
+            capturedAt: "2026-07-24T00:00:00.000Z",
+            source: "tiger",
+            tables: [],
+          },
+          sourceHealth: {},
+        };
+      },
+    }),
+    null,
+    async (origin) => {
+      const response = await fetch(
+        `${origin}/v1/contracts/get-product-health`,
+        {
+          body: JSON.stringify({
+            detail: "summary",
+            projectionVersion: "legacy",
+          }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        },
+      );
+      assert.equal(response.status, 200);
+      assert.deepEqual(received, {
+        detail: "summary",
+        projectionVersion: "legacy",
+      });
+    },
   );
 });

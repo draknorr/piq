@@ -14,6 +14,8 @@ import {
   type GetChangeActivityDetailRequest,
   type GetChangeFeedStatusRequest,
   type GetEntityOverviewRequest,
+  type GetInsightsDashboardRequest,
+  type GetProductHealthRequest,
   type GetRelatedEntitiesRequest,
   type GetRelatedEntitiesResponse,
   type GetUserContextRequest,
@@ -82,29 +84,31 @@ function loadQueryApiEnvFiles(): void {
 }
 
 interface QueryApiService {
-  compareEntities: DataPlaneService['compareEntities'];
-  discoverChangePatterns: DataPlaneService['discoverChangePatterns'];
-  discoverMomentum: DataPlaneService['discoverMomentum'];
-  describeContracts: DataPlaneService['describeContracts'];
-  continueResultSet: DataPlaneService['continueResultSet'];
-  explainChanges: DataPlaneService['explainChanges'];
-  getEntityOverview: DataPlaneService['getEntityOverview'];
-  getChangeActivityDetail: DataPlaneService['getChangeActivityDetail'];
-  getChangeFeedStatus: DataPlaneService['getChangeFeedStatus'];
-  getRelatedEntities: DataPlaneService['getRelatedEntities'];
-  getUserContext: DataPlaneService['getUserContext'];
-  getYoutubeGameCoverage: DataPlaneService['getYoutubeGameCoverage'];
-  getYoutubeMarketPulse: DataPlaneService['getYoutubeMarketPulse'];
-  healthCheck: DataPlaneService['healthCheck'];
-  queryMonthlyPlaytime: DataPlaneService['queryMonthlyPlaytime'];
-  rankEntities: DataPlaneService['rankEntities'];
-  readinessCheck: DataPlaneService['readinessCheck'];
-  resolveEntities: DataPlaneService['resolveEntities'];
-  searchCatalog: DataPlaneService['searchCatalog'];
-  searchChangeActivity: DataPlaneService['searchChangeActivity'];
-  searchDocuments: DataPlaneService['searchDocuments'];
-  semanticSearch: DataPlaneService['semanticSearch'];
-  traceMetricHistory: DataPlaneService['traceMetricHistory'];
+  compareEntities: DataPlaneService["compareEntities"];
+  discoverChangePatterns: DataPlaneService["discoverChangePatterns"];
+  discoverMomentum: DataPlaneService["discoverMomentum"];
+  describeContracts: DataPlaneService["describeContracts"];
+  continueResultSet: DataPlaneService["continueResultSet"];
+  explainChanges: DataPlaneService["explainChanges"];
+  getEntityOverview: DataPlaneService["getEntityOverview"];
+  getInsightsDashboard: DataPlaneService["getInsightsDashboard"];
+  getProductHealth: DataPlaneService["getProductHealth"];
+  getChangeActivityDetail: DataPlaneService["getChangeActivityDetail"];
+  getChangeFeedStatus: DataPlaneService["getChangeFeedStatus"];
+  getRelatedEntities: DataPlaneService["getRelatedEntities"];
+  getUserContext: DataPlaneService["getUserContext"];
+  getYoutubeGameCoverage: DataPlaneService["getYoutubeGameCoverage"];
+  getYoutubeMarketPulse: DataPlaneService["getYoutubeMarketPulse"];
+  healthCheck: DataPlaneService["healthCheck"];
+  queryMonthlyPlaytime: DataPlaneService["queryMonthlyPlaytime"];
+  rankEntities: DataPlaneService["rankEntities"];
+  readinessCheck: DataPlaneService["readinessCheck"];
+  resolveEntities: DataPlaneService["resolveEntities"];
+  searchCatalog: DataPlaneService["searchCatalog"];
+  searchChangeActivity: DataPlaneService["searchChangeActivity"];
+  searchDocuments: DataPlaneService["searchDocuments"];
+  semanticSearch: DataPlaneService["semanticSearch"];
+  traceMetricHistory: DataPlaneService["traceMetricHistory"];
 }
 
 const YOUTUBE_MARKET_PULSE_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -462,7 +466,30 @@ export function createQueryApiRequestHandler(params: {
         return;
       }
 
-      if (request.method === 'POST' && url.pathname === '/v1/contracts/search-catalog') {
+      if (
+        request.method === "POST" &&
+        url.pathname === "/v1/contracts/get-insights-dashboard"
+      ) {
+        const body = await readJsonBody<GetInsightsDashboardRequest>(request);
+        const result = await dataPlane.getInsightsDashboard(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/v1/contracts/get-product-health"
+      ) {
+        const body = await readJsonBody<GetProductHealthRequest>(request);
+        const result = await dataPlane.getProductHealth(body);
+        sendJson(response, 200, result);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/v1/contracts/search-catalog"
+      ) {
         const body = await readJsonBody<SearchCatalogRequest>(request);
         const result = await executeWithSourceFallback({
           action: 'searchCatalog',

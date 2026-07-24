@@ -81,6 +81,10 @@ are isolated in `apps-projection-refresh.md`.
 - `readiness-events-windows-schema-apply.md`: approved transactional 0089
   Tiger apply, recovery/preflight evidence, exact schema verification, and
   post-apply runtime containment.
+- `versioned-consumer-reads-validation.md`: PR 6 live Tiger baseline,
+  low-cost v2 projection design, query-API/product-reader validation,
+  reversible runtime controls, and the current user-control reconciliation
+  blocker.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

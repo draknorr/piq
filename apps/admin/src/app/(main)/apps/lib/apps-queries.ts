@@ -1,7 +1,18 @@
-import 'server-only';
+import "server-only";
 
-import { runTigerQuery } from '@publisheriq/database';
-import type { App, AppsFilterParams, AggregateStats, CcuTier, VelocityTier, SteamDeckCategory } from './apps-types';
+import { runTigerQuery } from "@publisheriq/database";
+import type {
+  App,
+  AppsFilterParams,
+  AggregateStats,
+  CcuTier,
+  VelocityTier,
+  SteamDeckCategory,
+} from "./apps-types";
+import {
+  resolveAppProjectionRelations,
+  type AppProjectionRelations,
+} from "./apps-projection-runtime";
 
 /**
  * Aggregate stats row shape returned by Tiger SQL.
@@ -56,8 +67,11 @@ const ACTIVE_APPS_SQL = `COALESCE(a.is_released, false) = true AND COALESCE(a.is
 const ACTIVE_APP_ROWS_SQL = `COALESCE(is_released, false) = true AND COALESCE(is_delisted, false) = false`;
 const ACTIVE_PROJECTION_APPS_SQL = `COALESCE(p.is_released, false) = true AND COALESCE(p.is_delisted, false) = false`;
 
-const aggregateStatsCache = new Map<string, { data: AggregateStats; timestamp: number }>();
-let appsPageProjectionAvailable: boolean | null = null;
+const aggregateStatsCache = new Map<
+  string,
+  { data: AggregateStats; timestamp: number }
+>();
+const appsPageProjectionAvailability = new Map<string, boolean>();
 
 const APP_SELECT_SQL = `
   a.appid,
@@ -688,17 +702,21 @@ export function isTigerReadConfigured(env: NodeJS.ProcessEnv = process.env): boo
   return Boolean(env.TIGER_PRIMARY_URL || env.CHANGE_INTEL_TIGER_URL);
 }
 
-async function hasAppsPageProjection(): Promise<boolean> {
-  if (appsPageProjectionAvailable !== null) {
-    return appsPageProjectionAvailable;
+async function hasAppsPageProjection(
+  relations: AppProjectionRelations,
+): Promise<boolean> {
+  const cached = appsPageProjectionAvailability.get(relations.projection);
+  if (cached !== undefined) {
+    return cached;
   }
 
   const { rows } = await runTigerQuery<{ exists: boolean }>(
-    `SELECT to_regclass('metrics.apps_page_projection') IS NOT NULL AS exists`,
-    []
+    "SELECT to_regclass($1) IS NOT NULL AS exists",
+    [relations.projection],
   );
-  appsPageProjectionAvailable = rows[0]?.exists === true;
-  return appsPageProjectionAvailable;
+  const available = rows[0]?.exists === true;
+  appsPageProjectionAvailability.set(relations.projection, available);
+  return available;
 }
 
 export function mapAppRpcRowToApp(row: AppRpcRow): App {
@@ -751,8 +769,15 @@ export function mapAppRpcRowToApp(row: AppRpcRow): App {
 }
 
 export async function getApps(params: AppsFilterParams): Promise<App[]> {
-  if (await hasAppsPageProjection()) {
-    return getAppsFromProjection(params);
+  const projectionRelations = resolveAppProjectionRelations();
+  if (await hasAppsPageProjection(projectionRelations)) {
+    return getAppsFromProjection(params, projectionRelations);
+  }
+
+  if (projectionRelations.version === "v2") {
+    throw new Error(
+      "APP_PROJECTION_VERSION=v2 requires metrics.apps_page_projection_v2; refusing to fall back to legacy or direct reads.",
+    );
   }
 
   if (
@@ -921,7 +946,10 @@ export async function getApps(params: AppsFilterParams): Promise<App[]> {
   return rows.map(mapAppRpcRowToApp);
 }
 
-async function getAppsFromProjection(params: AppsFilterParams): Promise<App[]> {
+async function getAppsFromProjection(
+  params: AppsFilterParams,
+  relations: AppProjectionRelations,
+): Promise<App[]> {
   const values: SqlValue[] = [];
   const whereSql = buildProjectionWhere(params, values);
   const sortSql = SORT_SQL[params.sort] ? `p.${SORT_SQL[params.sort]}` : 'p.ccu_peak';
@@ -930,7 +958,7 @@ async function getAppsFromProjection(params: AppsFilterParams): Promise<App[]> {
   const offsetSql = addParam(values, normalizeOffset(params.offset));
   const sql = `
     SELECT p.*
-    FROM metrics.apps_page_projection p
+    FROM ${relations.projection} p
     ${whereSql}
     ORDER BY ${sortSql} ${orderSql} NULLS LAST, p.appid ASC
     LIMIT ${limitSql} OFFSET ${offsetSql}
@@ -1007,10 +1035,20 @@ export async function getAggregateStats(
     return cachedStats;
   }
 
-  if (await hasAppsPageProjection()) {
-    const stats = await getAggregateStatsFromProjection(params);
+  const projectionRelations = resolveAppProjectionRelations();
+  if (await hasAppsPageProjection(projectionRelations)) {
+    const stats = await getAggregateStatsFromProjection(
+      params,
+      projectionRelations,
+    );
     writeAggregateStatsCache(cacheKey, stats);
     return stats;
+  }
+
+  if (projectionRelations.version === "v2") {
+    throw new Error(
+      "APP_PROJECTION_VERSION=v2 requires metrics.apps_page_projection_v2; refusing to fall back to legacy or direct reads.",
+    );
   }
 
   if (isDefaultQuery(params)) {
@@ -1173,7 +1211,10 @@ export async function getAggregateStats(
   return stats;
 }
 
-async function getAggregateStatsFromProjection(params: AppsFilterParams): Promise<AggregateStats> {
+async function getAggregateStatsFromProjection(
+  params: AppsFilterParams,
+  relations: AppProjectionRelations,
+): Promise<AggregateStats> {
   const values: SqlValue[] = [];
   const whereSql = buildProjectionWhere(params, values);
   const sql = `
@@ -1187,7 +1228,7 @@ async function getAggregateStatsFromProjection(params: AppsFilterParams): Promis
       COUNT(*) FILTER (WHERE COALESCE(p.sentiment_delta, 0) > 1)::integer AS sentiment_improving_count,
       COUNT(*) FILTER (WHERE COALESCE(p.sentiment_delta, 0) < -1)::integer AS sentiment_declining_count,
       AVG(p.value_score)::numeric AS avg_value_score
-    FROM metrics.apps_page_projection p
+    FROM ${relations.projection} p
     ${whereSql}
   `;
   const { rows } = await runTigerQuery<AggregateStatsRow>(sql, values as unknown[]);

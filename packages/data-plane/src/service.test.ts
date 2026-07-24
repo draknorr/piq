@@ -94,7 +94,93 @@ function createSearchDocumentRow(params: {
   };
 }
 
-test('getUserContext returns Tiger-backed pins, alerts, and preferences', async () => {
+test("getInsightsDashboard normalizes inputs and preserves the three existing UI lists", async () => {
+  const service = createService();
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).queryTopInsightsGames = async (timeRange: string) => [
+    { name: `top:${timeRange}` },
+  ];
+  (service as any).queryNewestInsightsGames = async (
+    timeRange: string,
+    sort: string,
+  ) => [{ name: `newest:${timeRange}:${sort}` }];
+  (service as any).queryTrendingInsightsGames = async (timeRange: string) => [
+    { name: `trending:${timeRange}` },
+  ];
+  (service as any).queryInsightsSummary = async () => ({
+    avgCcu: 1,
+    tier1Count: 2,
+    tier2Count: 3,
+    totalGamesTracked: 4,
+  });
+
+  const result = await service.getInsightsDashboard({
+    newestSort: "growth",
+    timeRange: "30d",
+  });
+
+  assert.equal(result.timeRange, "30d");
+  assert.equal(result.topGames[0]?.name, "top:30d");
+  assert.equal(result.newestGames[0]?.name, "newest:30d:growth");
+  assert.equal(result.trendingGames[0]?.name, "trending:30d");
+  assert.equal(result.provenance.source, "tiger");
+});
+
+test("getProductHealth keeps summary requests bounded and identifies the selected projection", async () => {
+  const service = createService();
+  let receivedProjection: string | null = null;
+  (service as any).assertContractRuntime = async () => undefined;
+  (service as any).assertProductProjectionRelation = async () => undefined;
+  (service as any).queryProductCatalog = async () => ({
+    appCount: 1,
+    developerCount: 2,
+    publisherCount: 3,
+  });
+  (service as any).queryProductSourceHealth = async (projection: string) => {
+    receivedProjection = projection;
+    return {
+      captureQueue: { deadLetter: 0, oldestPendingAt: null, pending: 0 },
+      eventRegistry: { latestUnknownAt: null, unknownEventTypes: 0 },
+      pics: { cursorUpdatedAt: null, lastChangeNumber: 0 },
+      projection: { latestSourceAt: null, relation: projection, rowCount: 1 },
+      readiness: [],
+      verifiedAt: "2026-07-24T00:00:00.000Z",
+    };
+  };
+  (service as any).queryProductAdmin = async () => {
+    throw new Error("summary request must not query admin details");
+  };
+
+  const result = await service.getProductHealth({
+    detail: "summary",
+    projectionVersion: "v2",
+  });
+
+  assert.equal(receivedProjection, "metrics.apps_page_projection_v2");
+  assert.equal(result.admin, null);
+  assert.equal(
+    result.sourceHealth.projection.relation,
+    "metrics.apps_page_projection_v2",
+  );
+  assert.equal(result.provenance.source, "tiger");
+});
+
+test("getProductHealth rejects unknown projection versions instead of falling back", async () => {
+  const service = createService();
+  (service as any).assertContractRuntime = async () => undefined;
+
+  await assert.rejects(
+    service.getProductHealth({
+      projectionVersion: "latest",
+    } as any),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "INVALID_PRODUCT_PROJECTION_VERSION",
+  );
+});
+
+test("getUserContext returns Tiger-backed pins, alerts, and preferences", async () => {
   const service = createService();
   let receivedUserId: string | null = null;
   let receivedAlertLimit: number | null = null;
