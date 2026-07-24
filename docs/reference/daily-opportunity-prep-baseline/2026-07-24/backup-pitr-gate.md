@@ -42,6 +42,23 @@ must not be restarted into the current lossy path regardless of backup status.
 - Verified by: Codex authenticated CLI and Chrome inspection.
 - Verified at: `2026-07-24T02:19:18Z`.
 
+### Fresh pre-0088 recovery recheck
+
+Reverified at `2026-07-24T06:36:43Z` before requesting approval for the
+durable PICS schema:
+
+- authenticated Tiger CLI reported `publisheriq-tiger-prod`
+  (`hdp8cp0w5i`) as `READY` in `us-west-2`;
+- the provider console still reported automatic same-region backup and a
+  three-day point-in-time recovery window;
+- the recovery form offered July 23, July 22, July 21, and a partially expired
+  July 20 boundary; and
+- `Thu, 23 Jul 2026 22:34 (GMT -07:00)` was accepted as an available recovery
+  point and enabled `Create recovery fork`.
+
+The recovery fork was **not** created. That would be a separate billable
+infrastructure write requiring explicit approval.
+
 ## Supabase
 
 Status: **not a gate for Tiger-only work**
@@ -96,6 +113,31 @@ does not require this gate.
   operation/risk/rollback approval request.
 - Outcome: applied transactionally and verified with zero initial rows; see
   `catalog-observation-schema-apply.md`.
+
+## Pending Approval: Durable PICS Schema 0088
+
+- Proposed operation: apply
+  `packages/data-plane/sql/tiger-bootstrap/0088_durable_pics_intake.sql` to
+  Tiger production with `psql --single-transaction`.
+- Affected objects: new `ops.pics_change_batches`,
+  `ops.pics_change_batch_apps`, `ops.pics_work_state`, and
+  `ops.app_data_readiness` tables plus their indexes and constraints.
+- Existing-object preflight: all four tables are absent; `pgcrypto` is
+  installed; `ops.pics_sync_state.id = 1` remains at cursor `37,491,237`.
+- Reason: install the durable, completeness-aware PICS intake ledger needed
+  for a separately approved shadow capture.
+- Risk level: medium. The operation changes the production catalog and briefly
+  takes normal DDL locks, but creates only new empty objects and does not alter
+  or write existing tables.
+- Failure rollback: `--single-transaction` rolls back the entire file if any
+  statement fails.
+- Post-success rollback: keep both PICS services stopped and leave
+  `PICS_WORK_MODE` unset so the additive objects remain unused. Dropping them
+  would be destructive and requires separate approval.
+- Required verification: exact tables, columns, constraints, and indexes;
+  zero rows in all four tables; unchanged PICS cursor; and no runtime
+  deployment or service restart.
+- Approval status: **not yet authorized**.
 
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from
