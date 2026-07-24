@@ -57,12 +57,14 @@ baseline or the contained admin/configuration changes in PR 1.
 
 ## External gates still open
 
-- Tiger provider-dashboard backup history, retained recovery point, and PITR
-  fork proof. Supabase recovery proof is conditional on a future Auth-plane or
-  legacy-row mutation and is not a gate for Tiger-only work.
 - Separate approval for any materialized-view refresh or later database
   migration/backfill.
 - Manual Apps projection refresh timing and parity proof before enabling its
   schedule.
 - Three healthy daily cycles before any primary catalog, PICS, projection, or
   consumer cutover.
+
+The Tiger recovery gate passed at `2026-07-24T02:19:18Z`: the authenticated
+production console proved automatic same-region backup and a continuous
+three-day PITR fork window. Supabase recovery proof is conditional on a future
+Auth-plane or legacy-row mutation and is not a gate for Tiger-only work.

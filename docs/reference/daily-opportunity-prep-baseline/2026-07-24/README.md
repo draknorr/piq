@@ -32,7 +32,7 @@ This baseline is read-only. No production mutation was performed while capturing
 - Change Feed must prefer the Tiger/query-api contract whenever it is configured and available; stale Supabase fallback cannot remain the default production path.
 - Admin PICS health must report stale cursor progress instead of inferring “active” from the existence of a historical cursor.
 - A dedicated Tiger Apps projection refresh workflow is required before any future freshness SLO can be enforced.
-- Tiger backup/PITR verification and any Tiger database refresh remain blocked pending separate operator evidence and explicit approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
+- Tiger recovery capability is verified from the authenticated production console: automatic same-region backup and a continuous three-day PITR fork window are available. No Tiger database refresh is authorized until its separate operation-specific approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 
 ## Artifacts
 

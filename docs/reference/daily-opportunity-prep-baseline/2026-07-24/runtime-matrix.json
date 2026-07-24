@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "capturedAt": "2026-07-24T02:05:59Z",
+  "capturedAt": "2026-07-24T02:19:18Z",
   "productionDatabaseMutationPerformed": false,
   "productionConfigurationChanged": true,
   "githubActions": [
@@ -210,6 +210,25 @@
       }
     }
   ],
+  "tigerCloud": {
+    "projectId": "n9lactseoj",
+    "serviceId": "hdp8cp0w5i",
+    "serviceName": "publisheriq-tiger-prod",
+    "plan": "Performance",
+    "region": "us-west-2",
+    "status": "READY",
+    "backupAndRestore": {
+      "sameRegionBackup": "automatic",
+      "crossRegionBackup": "not enabled; Enterprise upgrade required",
+      "pitrMode": "recovery fork",
+      "pitrWindowDays": 3,
+      "oldestSelectableAtInspection": "2026-07-21T02:17:00Z",
+      "latestRecoveryEvidence": "current-time recovery form available; no discrete backup-job timestamp exposed",
+      "backupEvidenceUrl": "https://console.cloud.tigerdata.com/projects/n9lactseoj/services/hdp8cp0w5i/operations/backup-restore",
+      "recoveryFormUrl": "https://console.cloud.tigerdata.com/projects/n9lactseoj/create_services/recovery_fork/hdp8cp0w5i",
+      "verifiedAt": "2026-07-24T02:19:18Z"
+    }
+  },
   "vercel": {
     "projectName": "publisheriq-admin",
     "projectId": "prj_ZxKZTJ0wOnNmuHHcZk67QOfVzJ1z",
