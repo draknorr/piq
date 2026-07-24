@@ -1,4 +1,10 @@
 import type { Database } from '@publisheriq/database';
+import {
+  CHANGE_EVENT_SIGNAL_FAMILIES,
+  CHANGE_EVENT_STORY_KINDS,
+  type ChangeEventSignalFamily,
+  type ChangeEventStoryKind,
+} from '@publisheriq/shared';
 
 export type AppType = Database['public']['Enums']['app_type'];
 
@@ -28,31 +34,13 @@ export type ChangeActivitySort = (typeof CHANGE_ACTIVITY_SORTS)[number];
 
 export type ChangeHistoryScope = 'range' | 'all';
 
-export const CHANGE_ACTIVITY_SIGNAL_FAMILIES = [
-  'announcement',
-  'release',
-  'pricing',
-  'store-page',
-  'media',
-  'taxonomy',
-  'platform',
-  'build',
-] as const;
+export const CHANGE_ACTIVITY_SIGNAL_FAMILIES = CHANGE_EVENT_SIGNAL_FAMILIES;
 
-export type ChangeActivitySignalFamily = (typeof CHANGE_ACTIVITY_SIGNAL_FAMILIES)[number];
+export type ChangeActivitySignalFamily = ChangeEventSignalFamily;
 
-export const CHANGE_ACTIVITY_STORY_KINDS = [
-  'announcement',
-  'release-prep',
-  'commercial-move',
-  'store-refresh',
-  'positioning-shift',
-  'platform-expansion',
-  'build-activity',
-  'general-update',
-] as const;
+export const CHANGE_ACTIVITY_STORY_KINDS = CHANGE_EVENT_STORY_KINDS;
 
-export type ChangeActivityStoryKind = (typeof CHANGE_ACTIVITY_STORY_KINDS)[number];
+export type ChangeActivityStoryKind = ChangeEventStoryKind;
 
 export type JsonValue =
   | string

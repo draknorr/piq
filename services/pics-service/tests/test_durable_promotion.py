@@ -1,5 +1,6 @@
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -224,6 +225,33 @@ def test_absent_relationship_family_never_deletes_existing_edges():
         statement.startswith("DELETE FROM legacy.app_steam_tags") for statement in statements
     )
     assert connection.committed is True
+
+
+def test_pics_event_writes_resolve_the_shared_tiger_registry_version():
+    cursor = FakeCursor()
+
+    inserted = TigerPICSDurablePromoter._insert_events(
+        cursor,
+        claim=make_claim(),
+        snapshot_id=100,
+        previous_pointer=None,
+        archive=archive_pointer(),
+        events=[
+            SimpleNamespace(
+                change_type="tags_added",
+                before_value=[],
+                after_value=["Action"],
+                context={"added": ["Action"]},
+            )
+        ],
+        observed_at=datetime.now(timezone.utc),
+    )
+
+    statement = cursor.events[-1][0]
+    assert inserted == 0
+    assert "events.resolve_change_event_v1" in statement
+    assert "'event_registry_version', registry.registry_version" in statement
+    assert "'signal_family', registry.signal_family" in statement
 
 
 @pytest.mark.parametrize(

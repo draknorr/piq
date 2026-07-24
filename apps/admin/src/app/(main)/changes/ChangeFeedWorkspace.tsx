@@ -120,6 +120,7 @@ const SIGNAL_LABELS: Record<ChangeActivitySignalFamily, string> = {
   taxonomy: 'Positioning',
   platform: 'Platform',
   build: 'Build activity',
+  unknown: 'Unknown',
 };
 
 const APP_TYPE_LABELS: Partial<Record<AppType, string>> = {

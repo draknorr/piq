@@ -1,5 +1,9 @@
 import type { TypedSupabaseClient } from '@publisheriq/database';
-import { logger } from '@publisheriq/shared';
+import {
+  CHANGE_EVENT_REGISTRY_VERSION,
+  logger,
+  resolveChangeEventDefinition,
+} from '@publisheriq/shared';
 import { hashNormalizedContent } from './hashing.js';
 import {
   readChangeIntelRuntimeConfig,
@@ -598,20 +602,28 @@ export async function insertChangeEvents(
     return;
   }
 
-  const rows = events.map((event) => ({
-    appid,
-    source: event.source,
-    change_type: event.eventType,
-    occurred_at: event.observedAt ?? new Date().toISOString(),
-    source_snapshot_id: options.sourceSnapshotId ? Number(options.sourceSnapshotId) : null,
-    related_snapshot_id: options.relatedSnapshotId ? Number(options.relatedSnapshotId) : null,
-    media_version_id: options.mediaVersionId ? Number(options.mediaVersionId) : null,
-    news_item_gid: options.newsItemGid ?? null,
-    before_value: event.beforeValue ?? null,
-    after_value: event.afterValue ?? null,
-    context: event.context ?? {},
-    trigger_cursor: options.triggerCursor ?? null,
-  }));
+  const rows = events.map((event) => {
+    const definition = resolveChangeEventDefinition(event.source, event.eventType);
+    return {
+      appid,
+      source: event.source,
+      change_type: event.eventType,
+      occurred_at: event.observedAt ?? new Date().toISOString(),
+      source_snapshot_id: options.sourceSnapshotId ? Number(options.sourceSnapshotId) : null,
+      related_snapshot_id: options.relatedSnapshotId ? Number(options.relatedSnapshotId) : null,
+      media_version_id: options.mediaVersionId ? Number(options.mediaVersionId) : null,
+      news_item_gid: options.newsItemGid ?? null,
+      before_value: event.beforeValue ?? null,
+      after_value: event.afterValue ?? null,
+      context: {
+        ...(event.context ?? {}),
+        event_registry_known: definition.isKnown,
+        event_registry_version: CHANGE_EVENT_REGISTRY_VERSION,
+        signal_family: definition.signalFamily,
+      },
+      trigger_cursor: options.triggerCursor ?? null,
+    };
+  });
 
   const { error } = await getDb(supabase).from('app_change_events').insert(rows);
   if (error) {

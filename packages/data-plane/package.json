@@ -20,6 +20,7 @@
     "capture-live-baseline": "tsx src/scripts/capture-live-baseline.ts",
     "capture-daily-opportunity-baseline": "tsx src/scripts/capture-daily-opportunity-baseline.ts",
     "capture-target-baseline": "tsx src/scripts/capture-target-baseline.ts",
+    "refresh-preparation-derived-state": "tsx src/scripts/refresh-preparation-derived-state.ts",
     "backfill-legacy-compatibility": "tsx src/scripts/backfill-legacy-compatibility.ts",
     "backfill-metrics-daily-metrics": "tsx src/scripts/backfill-metrics-daily-metrics.ts",
     "backfill-metrics-review-deltas": "tsx src/scripts/backfill-metrics-review-deltas.ts",

@@ -1,3 +1,4 @@
+import { resolveChangeEventType } from '@publisheriq/shared';
 import type {
   ChangeActivityDetail,
   ChangeActivityRow,
@@ -15,41 +16,6 @@ import type {
   JsonValue,
 } from './change-feed-types';
 
-const CHANGE_LABELS: Record<string, string> = {
-  description_rewrite: 'Store description',
-  short_description_rewrite: 'Short description',
-  release_date_text_change: 'Release timing',
-  price_change: 'Price',
-  discount_start: 'Discount',
-  discount_end: 'Discount',
-  tags_added: 'Tags',
-  tags_removed: 'Tags',
-  genres_changed: 'Genres',
-  categories_changed: 'Categories',
-  languages_changed: 'Languages',
-  platforms_changed: 'Platforms',
-  controller_support_changed: 'Controller support',
-  steam_deck_status_changed: 'Steam Deck',
-  publisher_association_changed: 'Publisher',
-  developer_association_changed: 'Developer',
-  dlc_references_changed: 'DLC',
-  package_references_changed: 'Packages',
-  build_id_changed: 'Build',
-  last_content_update_changed: 'Content update',
-  news_published: 'Announcement',
-  news_edited: 'Announcement edit',
-  capsule_url_changed: 'Capsule art',
-  header_url_changed: 'Header art',
-  background_url_changed: 'Background art',
-  screenshot_added: 'Screenshots',
-  screenshot_removed: 'Screenshots',
-  screenshot_reordered: 'Screenshots',
-  trailer_added: 'Trailer',
-  trailer_removed: 'Trailer',
-  trailer_reordered: 'Trailer',
-  trailer_thumbnail_changed: 'Trailer art',
-};
-
 const SIGNAL_ORDER: ChangeActivitySignalFamily[] = [
   'release',
   'pricing',
@@ -59,6 +25,7 @@ const SIGNAL_ORDER: ChangeActivitySignalFamily[] = [
   'platform',
   'announcement',
   'build',
+  'unknown',
 ];
 
 function formatTokenLabel(value: string): string {
@@ -68,7 +35,7 @@ function formatTokenLabel(value: string): string {
 }
 
 export function formatChangeLabel(changeType: string): string {
-  return CHANGE_LABELS[changeType] ?? formatTokenLabel(changeType);
+  return resolveChangeEventType(changeType).label || formatTokenLabel(changeType);
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -388,59 +355,7 @@ function signalFamiliesFromChangeTypes(changeTypes: string[]): ChangeActivitySig
   const families = new Set<ChangeActivitySignalFamily>();
 
   changeTypes.forEach((changeType) => {
-    switch (changeType) {
-      case 'release_date_text_change':
-        families.add('release');
-        break;
-      case 'price_change':
-      case 'discount_start':
-      case 'discount_end':
-      case 'dlc_references_changed':
-      case 'package_references_changed':
-        families.add('pricing');
-        break;
-      case 'description_rewrite':
-      case 'short_description_rewrite':
-        families.add('store-page');
-        break;
-      case 'capsule_url_changed':
-      case 'header_url_changed':
-      case 'background_url_changed':
-      case 'screenshot_added':
-      case 'screenshot_removed':
-      case 'screenshot_reordered':
-      case 'trailer_added':
-      case 'trailer_removed':
-      case 'trailer_reordered':
-      case 'trailer_thumbnail_changed':
-        families.add('media');
-        break;
-      case 'tags_added':
-      case 'tags_removed':
-      case 'genres_changed':
-      case 'categories_changed':
-      case 'publisher_association_changed':
-      case 'developer_association_changed':
-        families.add('taxonomy');
-        break;
-      case 'languages_changed':
-      case 'platforms_changed':
-      case 'controller_support_changed':
-      case 'steam_deck_status_changed':
-        families.add('platform');
-        break;
-      case 'build_id_changed':
-      case 'last_content_update_changed':
-        families.add('build');
-        break;
-      case 'news_published':
-      case 'news_edited':
-        families.add('announcement');
-        break;
-      default:
-        families.add('store-page');
-        break;
-    }
+    families.add(resolveChangeEventType(changeType).signalFamily);
   });
 
   return SIGNAL_ORDER.filter((family) => families.has(family));
@@ -681,6 +596,7 @@ function scoreActivity(row: ChangeActivityRow): {
     taxonomy: 10,
     platform: 10,
     build: 4,
+    unknown: 0,
   };
 
   const familyScore = row.signalFamilies.reduce((total, family) => total + signalWeight[family], 0);

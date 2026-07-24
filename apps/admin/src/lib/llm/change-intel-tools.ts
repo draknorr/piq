@@ -44,7 +44,7 @@ It supports natural-language variations through broad filters, not exact prompt 
           type: 'array',
           items: {
             type: 'string',
-            enum: ['announcement', 'release', 'pricing', 'store-page', 'media', 'taxonomy', 'platform', 'build'],
+            enum: ['announcement', 'release', 'pricing', 'store-page', 'media', 'taxonomy', 'platform', 'build', 'unknown'],
           },
           description: 'Optional signal families to narrow the activity stream.',
         },
@@ -93,7 +93,7 @@ Provide app_name unless you already have a trusted appid from lookup_games.`,
           type: 'array',
           items: {
             type: 'string',
-            enum: ['announcement', 'release', 'pricing', 'store-page', 'media', 'taxonomy', 'platform', 'build'],
+            enum: ['announcement', 'release', 'pricing', 'store-page', 'media', 'taxonomy', 'platform', 'build', 'unknown'],
           },
           description: 'Optional signal families to filter the timeline.',
         },

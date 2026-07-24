@@ -285,6 +285,14 @@ Track these independently:
 
 Each source state must include status, source time, processed time, schema or calculation version, blocking reason, retryability, and provenance. `catalog_seed_state` is not a readiness input.
 
+The validated v1 policy uses `catalog`, `storefront`, and `pics` as the only
+requirements for `overall`. Market metrics and creator evidence remain
+independent states so sparse observations cannot block core source readiness.
+The current-row signal-window contract is recomputable; raw daily metrics
+retain history. First-observed and release-state transitions use the separate
+`events.app_lifecycle_events` stream and do not write synthetic rows into the
+existing raw Change Feed stream.
+
 ### Normalized Events
 
 - Keep all existing raw snapshots and raw change events.

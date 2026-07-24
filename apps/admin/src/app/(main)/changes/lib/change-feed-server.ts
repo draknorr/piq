@@ -120,12 +120,13 @@ const SOURCE_SET = new Set<ChangeFeedSource>(CHANGE_FEED_SOURCES);
 
 type TigerChangeActivityStoryKind =
   | 'announcement'
-  | 'change-roundup'
+  | 'build-activity'
   | 'commercial-move'
-  | 'launch-prep'
-  | 'store-refresh'
-  | 'taxonomy-shift'
-  | 'update-tease';
+  | 'general-update'
+  | 'platform-expansion'
+  | 'positioning-shift'
+  | 'release-prep'
+  | 'store-refresh';
 
 interface TigerSearchChangeActivityItem {
   activityId: string;
@@ -277,15 +278,14 @@ function normalizeTigerSource(value: string): ChangeFeedSource {
 function normalizeTigerStoryKind(value: string): ChangeActivityStoryKind {
   switch (value) {
     case 'announcement':
+    case 'build-activity':
     case 'commercial-move':
+    case 'general-update':
+    case 'platform-expansion':
+    case 'positioning-shift':
+    case 'release-prep':
     case 'store-refresh':
       return value;
-    case 'launch-prep':
-      return 'release-prep';
-    case 'taxonomy-shift':
-      return 'positioning-shift';
-    case 'update-tease':
-    case 'change-roundup':
     default:
       return 'general-update';
   }

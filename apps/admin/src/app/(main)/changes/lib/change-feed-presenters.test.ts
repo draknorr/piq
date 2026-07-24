@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ChangeDetailEvent, JsonValue } from './change-feed-types';
-import { buildDiffPreviews } from './change-feed-presenters';
+import { buildDiffPreviews, formatChangeLabel } from './change-feed-presenters';
 
 function changeEvent(overrides: Partial<ChangeDetailEvent>): ChangeDetailEvent {
   return {
@@ -170,4 +170,12 @@ test('short description rewrites keep full readable strings', () => {
   assert.equal(diffs[0]?.textSections?.length, 1);
   assert.equal(diffs[0]?.textSections?.[0]?.beforeText, 'Battle beyond the Underworld.');
   assert.equal(diffs[0]?.textSections?.[0]?.afterText, 'Fight deeper into the Underworld.');
+});
+
+test('central registry labels demo relationship changes explicitly', () => {
+  assert.equal(formatChangeLabel('demo_references_changed'), 'Playable demo');
+});
+
+test('unregistered change types remain readable without becoming store-page labels', () => {
+  assert.equal(formatChangeLabel('new_unregistered_signal'), 'New Unregistered Signal');
 });
