@@ -46,14 +46,16 @@ Verified after the apply on `2026-07-24T04:08:07Z`:
 - Every new table contained zero rows.
 - Every function remained invoker-security (`SECURITY DEFINER = false`).
 
-## Activation State
+## Activation State at Apply Time
 
 - GitHub repository variable `CATALOG_OBSERVATION_MODE` is not defined.
 - Both catalog workflows use a fail-closed fallback of `off`.
-- Pull request `#41` remains a draft and is not merged.
+- Pull request `#41` was still a draft and had not been merged.
 - No catalog scan, backfill, stub seed, priority update, or storefront enqueue
   was run.
 - No Supabase schema or data was read or changed for this Tiger-only operation.
 
-The next production mutation is a separately approved manual shadow scan after
-the implementation is reviewed and merged.
+Pull request `#41` later merged as
+`db35775037db69d63796edcfef0f20cfedf01553`, and separately approved manual
+shadow scans were executed. Their evidence and the current activation state are
+recorded in `catalog-observation-shadow-rollout.md`.
