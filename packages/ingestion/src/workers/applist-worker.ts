@@ -11,10 +11,19 @@ import {
   getServiceClient,
   getTigerWriter,
   readDataWriteTarget,
+  type CatalogScanStart,
   type TigerWriter,
 } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamAppList, type SteamApp } from '../apis/steam-web.js';
+import {
+  assertCatalogShadowParity,
+  buildCatalogBatchHash,
+  buildCatalogInputHash,
+  buildCatalogScanRunKey,
+  normalizeCatalogObservationRows,
+  readCatalogObservationMode,
+} from '../catalog-observation.js';
 import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
 import { promoteReviewsSyncBatch } from '../workers-support/reviews-sync.js';
 
@@ -143,8 +152,13 @@ export async function runTigerAppListSync(
   const githubRunId = env.GITHUB_RUN_ID;
   const runSeenAt = new Date().toISOString();
   const batchSize = parsePositiveInteger(env.APPLIST_BATCH_SIZE, DEFAULT_APPLIST_BATCH_SIZE);
+  const catalogObservationMode = readCatalogObservationMode(env);
 
-  log.info('Starting Tiger App List sync', { githubRunId, batchSize });
+  log.info('Starting Tiger App List sync', {
+    githubRunId,
+    batchSize,
+    catalogObservationMode,
+  });
 
   const staleBefore = new Date(Date.now() - STALE_APPLIST_JOB_THRESHOLD_MS).toISOString();
   const abandonedCount = await tiger.ops.abandonStaleSyncJobs({
@@ -171,65 +185,148 @@ export async function runTigerAppListSync(
   let errors = 0;
   let reviewPromotions = 0;
   let totalApps = 0;
+  let catalogScan: CatalogScanStart | null = null;
 
   try {
-    const apps = limitAppsForSmoke(await fetchApps(), env);
-    totalApps = apps.length;
-    log.info('Fetched app list', { count: apps.length });
+    const fetchedApps = limitAppsForSmoke(await fetchApps(), env);
+    const observation = normalizeCatalogObservationRows(fetchedApps, {
+      requireHints: false,
+    });
+    const apps = observation.rows.map(({ appid, name }) => ({ appid, name }));
+    totalApps = observation.sourceRowCount;
+    log.info('Fetched app list', {
+      accepted: apps.length,
+      rejected: observation.rejections.length,
+      sourceRows: totalApps,
+    });
 
     const existingSet = await loadExistingAppidsFromTiger(tiger);
     log.info('Existing apps in Tiger', { count: existingSet.size });
 
-    for (let i = 0; i < apps.length; i += batchSize) {
+    if (catalogObservationMode !== 'off') {
+      catalogScan = await tiger.catalogObservation.beginScan({
+        forceFull: true,
+        mode: catalogObservationMode,
+        runKey: buildCatalogScanRunKey('steam_applist', env),
+        source: 'steam_applist',
+        sourceStartedAt: runSeenAt,
+      });
+    }
+
+    const expectedBatches =
+      apps.length > 0 || observation.rejections.length > 0
+        ? Math.max(1, Math.ceil(apps.length / batchSize))
+        : 0;
+    let durableUnknownRows = 0;
+
+    for (let batchIndex = 0; batchIndex < expectedBatches; batchIndex += 1) {
+      const i = batchIndex * batchSize;
       const batch = apps.slice(i, i + batchSize);
       const newInBatch = batch.filter((app) => !existingSet.has(app.appid));
-      const existingInBatch = batch.length - newInBatch.length;
+      const rejections = batchIndex === 0 ? observation.rejections : [];
+      let durableNewInBatch = newInBatch;
+
+      if (catalogScan) {
+        const isReplay = batchIndex <= catalogScan.lastCommittedBatch;
+        const commitResult = await tiger.catalogObservation.commitBatch({
+          batchHash: buildCatalogBatchHash(batch, rejections),
+          batchIndex,
+          rejections,
+          rows: batch,
+          scanId: catalogScan.id,
+        });
+
+        if (catalogObservationMode === 'shadow' && !isReplay) {
+          assertCatalogShadowParity({
+            actualChangedKnownAppids: commitResult.changedKnownAppids,
+            actualUnknownAppids: commitResult.unknownAppids,
+            expectedChangedKnownAppids: [],
+            expectedUnknownAppids: newInBatch.map((app) => app.appid),
+          });
+        }
+
+        const durableUnknownAppids = new Set(commitResult.unknownAppids);
+        durableNewInBatch = batch.filter((app) => durableUnknownAppids.has(app.appid));
+        durableUnknownRows += commitResult.unknownRows;
+      }
 
       try {
         await tiger.catalog.upsertApps(
           batch.map((app) => ({
             appid: app.appid,
-            catalog_seed_state: 'hydrated',
             name: app.name,
             last_seen_in_steam_applist_at: runSeenAt,
+            ...(catalogScan ? {} : { catalog_seed_state: 'hydrated' }),
           }))
         );
       } catch (error) {
-        log.error('Failed to upsert Tiger applist batch', { batchStart: i, error });
+        log.error('Failed to upsert Tiger applist batch', {
+          batchStart: i,
+          error,
+        });
         errors += batch.length;
+        if (catalogScan) {
+          throw error;
+        }
         continue;
       }
 
-      newApps += newInBatch.length;
-      updatedApps += existingInBatch;
-      for (const app of newInBatch) {
+      newApps += durableNewInBatch.length;
+      updatedApps += batch.length - durableNewInBatch.length;
+      for (const app of batch) {
         existingSet.add(app.appid);
       }
 
-      if (newInBatch.length > 0) {
+      if (durableNewInBatch.length > 0) {
         try {
-          await tiger.syncStatus.upsertRows(
-            newInBatch.map((app) => ({
-              appid: app.appid,
-              priority_score: 0,
-            }))
-          );
+          if (!catalogScan) {
+            await tiger.syncStatus.upsertRows(
+              durableNewInBatch.map((app) => ({
+                appid: app.appid,
+                priority_score: 0,
+              }))
+            );
+          }
           reviewPromotions += await tiger.reviews.promoteReviewsSyncBatch(
-            buildReviewPromotions(newInBatch)
+            buildReviewPromotions(durableNewInBatch)
           );
         } catch (error) {
           log.warn('Failed to initialize Tiger sync status/review priority for new apps', {
             batchStart: i,
-            newAppsInBatch: newInBatch.length,
+            newAppsInBatch: durableNewInBatch.length,
             error: error instanceof Error ? error.message : String(error),
           });
-          errors += newInBatch.length;
+          errors += durableNewInBatch.length;
         }
       }
 
       if ((i + batchSize) % 10000 === 0) {
-        log.info('Upsert progress', { processed: i + batchSize, newApps, updatedApps, errors });
+        log.info('Upsert progress', {
+          processed: i + batchSize,
+          newApps,
+          updatedApps,
+          errors,
+        });
       }
+    }
+
+    if (catalogScan) {
+      if (errors > 0) {
+        throw new Error('Catalog observation cannot complete while AppList batches have errors');
+      }
+
+      await tiger.catalogObservation.completeScan({
+        expectedBatches,
+        expectedSourceRows: observation.sourceRowCount,
+        inputHash: buildCatalogInputHash(observation),
+        reconciliationOutcome: {
+          accepted_rows: observation.rows.length,
+          observer_unknown_rows: durableUnknownRows,
+          rejected_rows: observation.rejections.length,
+          status: 'matched',
+        },
+        scanId: catalogScan.id,
+      });
     }
 
     const status = errors > 0 ? 'failed' : 'completed';
@@ -237,9 +334,10 @@ export async function runTigerAppListSync(
       await tiger.ops.updateSyncJob(jobId, {
         status,
         completed_at: new Date().toISOString(),
-        items_processed: apps.length,
+        items_processed: totalApps,
         items_succeeded: newApps + updatedApps,
         items_failed: errors,
+        items_skipped: observation.rejections.length,
         items_created: newApps,
         items_updated: updatedApps,
         error_message: errors > 0 ? 'applist_batches_failed' : null,
@@ -271,6 +369,23 @@ export async function runTigerAppListSync(
     return { errors, newApps, reviewPromotions, totalApps, updatedApps };
   } catch (error) {
     log.error('Tiger App List sync failed', { error });
+
+    if (catalogScan) {
+      try {
+        await tiger.catalogObservation.failScan(
+          catalogScan.id,
+          error instanceof Error ? error.message : String(error)
+        );
+      } catch (catalogFailureError) {
+        log.error('Failed to mark Tiger catalog observation scan as failed', {
+          catalogFailureError:
+            catalogFailureError instanceof Error
+              ? catalogFailureError.message
+              : String(catalogFailureError),
+          catalogScanId: catalogScan.id,
+        });
+      }
+    }
 
     if (jobId) {
       await tiger.ops.updateSyncJob(jobId, {
@@ -486,7 +601,13 @@ export async function runAppListSync(
   dependencies: AppListSyncDependencies = {}
 ): Promise<AppListSyncResult> {
   const env = dependencies.env ?? process.env;
-  return readDataWriteTarget(env) === 'tiger'
+  const target = readDataWriteTarget(env);
+  const catalogObservationMode = readCatalogObservationMode(env);
+  if (catalogObservationMode !== 'off' && target !== 'tiger') {
+    throw new Error('Catalog observation requires Tiger to be the primary AppList writer');
+  }
+
+  return target === 'tiger'
     ? runTigerAppListSync(dependencies)
     : runLegacySupabaseAppListSync(dependencies);
 }

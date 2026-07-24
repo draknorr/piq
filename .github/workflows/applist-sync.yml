@@ -2,19 +2,29 @@ name: Steam App List Sync
 
 on:
   schedule:
-    - cron: '15 0 * * *' # 12:15 AM UTC daily
+    - cron: "15 0 * * *" # 12:15 AM UTC daily
   workflow_dispatch:
     inputs:
+      catalog_observation_mode:
+        description: "Durable catalog observation mode"
+        required: true
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "primary"
       max_apps:
-        description: 'Limit apps for a Tiger smoke run; leave blank for full sync'
+        description: "Limit apps for a Tiger smoke run; leave blank for full sync"
         required: false
-        default: '1000'
+        default: "1000"
       batch_size:
-        description: 'Number of apps to write per Tiger batch'
+        description: "Number of apps to write per Tiger batch"
         required: false
-        default: '500'
+        default: "500"
 
 env:
+  CATALOG_OBSERVATION_MODE: ${{ github.event.inputs.catalog_observation_mode || vars.CATALOG_OBSERVATION_MODE || 'off' }}
   DATA_READ_TARGET: tiger
   DATA_WRITE_TARGET: tiger
   STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
@@ -33,8 +43,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

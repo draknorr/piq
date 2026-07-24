@@ -29,6 +29,20 @@ interface IdRow extends QueryResultRow {
   id: string | number | null;
 }
 
+interface CatalogScanStartQueryRow extends QueryResultRow {
+  committed_through: number | string | null;
+  id: string;
+  last_committed_batch: number | string;
+  requested_if_modified_since: number | string | null;
+  scan_kind: CatalogScanKind;
+  source_started_at: Date | string;
+  status: CatalogScanStatus;
+}
+
+interface JsonResultRow extends QueryResultRow {
+  result: unknown;
+}
+
 interface AppIdRow extends QueryResultRow {
   appid: number;
 }
@@ -404,6 +418,51 @@ export interface CatalogAppUpsert {
   release_date_raw?: string | null;
   type?: string | null;
   updated_at?: string | null;
+}
+
+export type CatalogObservationWriteMode = 'shadow' | 'primary';
+export type CatalogScanKind = 'incremental' | 'full';
+export type CatalogScanSource = 'steam_change_hints' | 'steam_applist';
+export type CatalogScanStatus = 'running' | 'completed' | 'failed';
+
+export interface CatalogObservationRow {
+  appid: number;
+  last_modified?: number | null;
+  name: string;
+  price_change_number?: number | null;
+}
+
+export interface CatalogObservationRejection {
+  appid?: number | null;
+  reason: string;
+  row_hash: string;
+  source_index: number;
+}
+
+export interface CatalogScanStart {
+  committedThrough: number | null;
+  id: string;
+  lastCommittedBatch: number;
+  requestedIfModifiedSince: number | null;
+  scanKind: CatalogScanKind;
+  sourceStartedAt: string;
+  status: CatalogScanStatus;
+}
+
+export interface CatalogScanBatchResult {
+  acceptedRows: number;
+  batchHash: string;
+  batchIndex: number;
+  changedKnownAppids: number[];
+  changedKnownRows: number;
+  enqueuedRows: number;
+  eventRows: number;
+  knownRows: number;
+  rejectedRows: number;
+  seededRows: number;
+  unchangedKnownRows: number;
+  unknownAppids: number[];
+  unknownRows: number;
 }
 
 export interface AppSyncCandidate {
@@ -999,6 +1058,55 @@ function normalizeTimestamp(value: Date | string | null | undefined): string | n
   return value instanceof Date ? value.toISOString() : value;
 }
 
+function parseCatalogScanBatchResult(value: unknown): CatalogScanBatchResult {
+  const record = parseJsonRecord(value);
+  if (!record) {
+    throw new Error('Tiger catalog observation batch returned an invalid result');
+  }
+
+  const readCount = (key: string): number => {
+    const raw = record[key];
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new Error(`Tiger catalog observation batch result has invalid ${key}`);
+    }
+    return parsed;
+  };
+  const readAppids = (key: string): number[] => {
+    const raw = record[key];
+    const appids = parseNumberArray(raw);
+    if (
+      !Array.isArray(raw) ||
+      appids.length !== raw.length ||
+      appids.some((appid) => !Number.isSafeInteger(appid) || appid <= 0) ||
+      new Set(appids).size !== appids.length
+    ) {
+      throw new Error(`Tiger catalog observation batch result has invalid ${key}`);
+    }
+    return appids;
+  };
+  const batchHash = typeof record.batch_hash === 'string' ? record.batch_hash : null;
+  if (!batchHash) {
+    throw new Error('Tiger catalog observation batch result is missing batch_hash');
+  }
+
+  return {
+    acceptedRows: readCount('accepted_rows'),
+    batchHash,
+    batchIndex: readCount('batch_index'),
+    changedKnownAppids: readAppids('changed_known_appids'),
+    changedKnownRows: readCount('changed_known_rows'),
+    enqueuedRows: readCount('enqueued_rows'),
+    eventRows: readCount('event_rows'),
+    knownRows: readCount('known_rows'),
+    rejectedRows: readCount('rejected_rows'),
+    seededRows: readCount('seeded_rows'),
+    unchangedKnownRows: readCount('unchanged_known_rows'),
+    unknownAppids: readAppids('unknown_appids'),
+    unknownRows: readCount('unknown_rows'),
+  };
+}
+
 function normalizeDate(value: Date | string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -1065,7 +1173,13 @@ function buildUpsertSql(params: {
 }): string {
   const updateColumns = params.updateColumns ?? params.columns.filter((column) => column !== 'id');
   const updateSet = updateColumns
-    .filter((column) => !params.conflict.split(',').map((part) => part.trim()).includes(column))
+    .filter(
+      (column) =>
+        !params.conflict
+          .split(',')
+          .map((part) => part.trim())
+          .includes(column)
+    )
     .map((column) => `${column} = EXCLUDED.${column}`)
     .join(', ');
   const doUpdate = updateSet.length > 0 ? `DO UPDATE SET ${updateSet}` : 'DO NOTHING';
@@ -1129,7 +1243,12 @@ export class TigerOpsRepository {
         VALUES ($1, $2, 'running', COALESCE($3::timestamptz, now()), $4)
         RETURNING id
       `,
-      [params.jobType, params.githubRunId ?? null, params.startedAt ?? null, params.batchSize ?? null]
+      [
+        params.jobType,
+        params.githubRunId ?? null,
+        params.startedAt ?? null,
+        params.batchSize ?? null,
+      ]
     );
 
     return rows[0]?.id ? String(rows[0].id) : null;
@@ -1255,10 +1374,7 @@ export class TigerOpsRepository {
     return parseNumber(rows[0]?.count);
   }
 
-  async countRunningSyncJobsByTypes(
-    jobTypes: string[],
-    startedAfterIso: string
-  ): Promise<number> {
+  async countRunningSyncJobsByTypes(jobTypes: string[], startedAfterIso: string): Promise<number> {
     if (jobTypes.length === 0) {
       return 0;
     }
@@ -1474,7 +1590,9 @@ export class TigerCatalogRepository {
     source: string;
   }): Promise<AppSyncCandidate[]> {
     const isPartitioned =
-      params.partitionCount !== undefined && params.partitionCount > 1 && params.partitionId !== undefined;
+      params.partitionCount !== undefined &&
+      params.partitionCount > 1 &&
+      params.partitionId !== undefined;
     const { rows } = await runQuery<SyncCandidateRow>(
       this.pool,
       'catalog.listAppsForSync',
@@ -1741,6 +1859,137 @@ export class TigerCatalogRepository {
     );
 
     return result.rowCount ?? 0;
+  }
+}
+
+export class TigerCatalogObservationRepository {
+  constructor(private readonly pool: TigerWriterPool) {}
+
+  async beginScan(params: {
+    forceFull: boolean;
+    mode: CatalogObservationWriteMode;
+    overlapSeconds?: number;
+    runKey: string;
+    source: CatalogScanSource;
+    sourceStartedAt: string;
+  }): Promise<CatalogScanStart> {
+    const { rows } = await runQuery<CatalogScanStartQueryRow>(
+      this.pool,
+      'catalogObservation.beginScan',
+      `
+        SELECT
+          id,
+          status,
+          scan_kind,
+          source_started_at,
+          requested_if_modified_since,
+          committed_through,
+          last_committed_batch
+        FROM ops.begin_catalog_scan(
+          $1::text,
+          $2::text,
+          $3::text,
+          $4::boolean,
+          $5::timestamptz,
+          $6::integer
+        )
+      `,
+      [
+        params.runKey,
+        params.source,
+        params.mode,
+        params.forceFull,
+        params.sourceStartedAt,
+        params.overlapSeconds ?? 300,
+      ]
+    );
+
+    const row = rows[0];
+    if (!row) {
+      throw new Error('Tiger catalog observation scan did not return a run');
+    }
+
+    return {
+      committedThrough: row.committed_through === null ? null : parseNumber(row.committed_through),
+      id: row.id,
+      lastCommittedBatch: parseNumber(row.last_committed_batch),
+      requestedIfModifiedSince:
+        row.requested_if_modified_since === null
+          ? null
+          : parseNumber(row.requested_if_modified_since),
+      scanKind: row.scan_kind,
+      sourceStartedAt: normalizeTimestamp(row.source_started_at) ?? params.sourceStartedAt,
+      status: row.status,
+    };
+  }
+
+  async commitBatch(params: {
+    batchHash: string;
+    batchIndex: number;
+    rejections?: CatalogObservationRejection[];
+    rows: CatalogObservationRow[];
+    scanId: string;
+  }): Promise<CatalogScanBatchResult> {
+    const { rows } = await runQuery<JsonResultRow>(
+      this.pool,
+      'catalogObservation.commitBatch',
+      `
+        SELECT ops.commit_catalog_scan_batch(
+          $1::uuid,
+          $2::integer,
+          $3::text,
+          $4::jsonb,
+          $5::jsonb
+        ) AS result
+      `,
+      [
+        params.scanId,
+        params.batchIndex,
+        params.batchHash,
+        jsonRows(params.rows),
+        jsonRows(params.rejections ?? []),
+      ]
+    );
+
+    return parseCatalogScanBatchResult(rows[0]?.result);
+  }
+
+  async completeScan(params: {
+    expectedBatches: number;
+    expectedSourceRows: number;
+    inputHash: string;
+    reconciliationOutcome?: JsonRecord | null;
+    scanId: string;
+  }): Promise<void> {
+    await runQuery(
+      this.pool,
+      'catalogObservation.completeScan',
+      `
+        SELECT ops.complete_catalog_scan(
+          $1::uuid,
+          $2::integer,
+          $3::integer,
+          $4::text,
+          $5::jsonb
+        )
+      `,
+      [
+        params.scanId,
+        params.expectedBatches,
+        params.expectedSourceRows,
+        params.inputHash,
+        params.reconciliationOutcome ?? null,
+      ]
+    );
+  }
+
+  async failScan(scanId: string, errorMessage: string): Promise<void> {
+    await runQuery(
+      this.pool,
+      'catalogObservation.failScan',
+      'SELECT ops.fail_catalog_scan($1::uuid, $2::text)',
+      [scanId, errorMessage]
+    );
   }
 }
 
@@ -2320,7 +2569,11 @@ export class TigerMetricsRepository {
   }
 
   async upsertDailyMetrics(rows: DailyMetricUpsert[]): Promise<number> {
-    const count = await this.upsertMetricsTable('daily_metrics', rows as unknown as JsonRecord[], 'appid, metric_date');
+    const count = await this.upsertMetricsTable(
+      'daily_metrics',
+      rows as unknown as JsonRecord[],
+      'appid, metric_date'
+    );
     if (rows.length > 0) {
       await this.upsertLatestDailyMetrics(rows);
     }
@@ -2405,7 +2658,10 @@ export class TigerMetricsRepository {
     const latestRows = rows.map((row) => ({
       ...row,
       owners_midpoint:
-        row.owners_min !== undefined && row.owners_max !== undefined && row.owners_min !== null && row.owners_max !== null
+        row.owners_min !== undefined &&
+        row.owners_max !== undefined &&
+        row.owners_min !== null &&
+        row.owners_max !== null
           ? Math.round((row.owners_min + row.owners_max) / 2)
           : undefined,
     }));
@@ -2431,7 +2687,11 @@ export class TigerMetricsRepository {
       return 0;
     }
 
-    const columns = formatColumns(rows as unknown as JsonRecord[], ['appid', 'player_count', 'ccu_tier']);
+    const columns = formatColumns(rows as unknown as JsonRecord[], [
+      'appid',
+      'player_count',
+      'ccu_tier',
+    ]);
     const result = await runQuery(
       this.pool,
       'metrics.insertCcuSnapshots',
@@ -2525,7 +2785,11 @@ export class TigerMetricsRepository {
   }
 
   async upsertReviewDeltas(rows: ReviewDeltaUpsert[]): Promise<number> {
-    return this.upsertMetricsTable('review_deltas', rows as unknown as JsonRecord[], 'appid, delta_date');
+    return this.upsertMetricsTable(
+      'review_deltas',
+      rows as unknown as JsonRecord[],
+      'appid, delta_date'
+    );
   }
 
   async upsertReviewHistogram(rows: ReviewHistogramUpsert[]): Promise<number> {
@@ -2626,10 +2890,7 @@ export class TigerMetricsRepository {
     }));
   }
 
-  async countReviewDeltas(params: {
-    interpolated: boolean;
-    startDate: string;
-  }): Promise<number> {
+  async countReviewDeltas(params: { interpolated: boolean; startDate: string }): Promise<number> {
     const { rows } = await runQuery<CountRow>(
       this.pool,
       'metrics.countReviewDeltas',
@@ -3303,7 +3564,12 @@ export class TigerAlertsPinsChatRepository {
 
   async upsertUserPin(pin: UserPinUpsert): Promise<number> {
     const rows = [pin];
-    const columns = formatColumns(rows as unknown as JsonRecord[], ['user_id', 'entity_type', 'entity_id', 'display_name']);
+    const columns = formatColumns(rows as unknown as JsonRecord[], [
+      'user_id',
+      'entity_type',
+      'entity_id',
+      'display_name',
+    ]);
     const result = await runQuery(
       this.pool,
       'alertsPinsChat.upsertUserPin',
@@ -4079,6 +4345,7 @@ export class TigerIssueReportsRepository {
 export class TigerWriter {
   readonly alertsPinsChat: TigerAlertsPinsChatRepository;
   readonly catalog: TigerCatalogRepository;
+  readonly catalogObservation: TigerCatalogObservationRepository;
   readonly embeddings: TigerEmbeddingsRepository;
   readonly issueReports: TigerIssueReportsRepository;
   readonly metrics: TigerMetricsRepository;
@@ -4090,6 +4357,7 @@ export class TigerWriter {
     this.ops = new TigerOpsRepository(pool);
     this.syncStatus = new TigerSyncStatusRepository(pool);
     this.catalog = new TigerCatalogRepository(pool);
+    this.catalogObservation = new TigerCatalogObservationRepository(pool);
     this.metrics = new TigerMetricsRepository(pool);
     this.reviews = new TigerReviewsRepository(pool, this.metrics, this.syncStatus);
     this.embeddings = new TigerEmbeddingsRepository(pool);

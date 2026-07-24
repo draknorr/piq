@@ -7,17 +7,42 @@
  * Run with: pnpm --filter @publisheriq/ingestion app-change-hints
  */
 
-import { getServiceClient } from '@publisheriq/database';
+import { pathToFileURL } from 'node:url';
+import {
+  getServiceClient,
+  getTigerWriter,
+  type CatalogObservationRejection,
+  type CatalogObservationRow,
+  type CatalogScanBatchResult,
+  type CatalogScanStart,
+  type TigerWriter,
+} from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchSteamAppChangeHints } from '../apis/steam-web.js';
-import { partitionHintRows, type ExistingHintStatusRow, type HintRow } from '../change-intel/hints.js';
+import {
+  assertCatalogShadowParity,
+  buildCatalogBatchHash,
+  buildCatalogInputHash,
+  buildCatalogScanRunKey,
+  normalizeCatalogObservationRows,
+  readCatalogObservationMode,
+  type CatalogObservationMode,
+} from '../catalog-observation.js';
+import {
+  partitionHintRows,
+  type ExistingHintStatusRow,
+  type HintRow,
+} from '../change-intel/hints.js';
 import {
   createSyncJobRecord,
   enqueueCaptureJobs,
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
 import { readChangeIntelRuntimeConfig, shouldWriteTiger } from '../change-intel/runtime-config.js';
-import { getTigerChangeIntelRepository } from '../change-intel/tiger-repository.js';
+import {
+  getTigerChangeIntelRepository,
+  type TigerChangeIntelRepository,
+} from '../change-intel/tiger-repository.js';
 import { buildHintCursor } from '../workers-support/change-intel.js';
 import {
   isLaunchWindowRelease,
@@ -30,17 +55,41 @@ const log = logger.child({ worker: 'app-change-hints' });
 type SupabaseClient = ReturnType<typeof getServiceClient>;
 type OptionalSupabaseClient = SupabaseClient | null;
 
-function shouldUseTigerPrimary(): boolean {
-  return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
+export interface AppChangeHintsResult {
+  changed: number;
+  enqueued: number;
+  promoted: number;
+  skipped: number;
+  totalHints: number;
+}
+
+export interface AppChangeHintsDependencies {
+  env?: NodeJS.ProcessEnv;
+  fetchHints?: typeof fetchSteamAppChangeHints;
+  getSupabase?: () => SupabaseClient;
+  getTiger?: () => TigerWriter;
+  getTigerChangeIntel?: () => TigerChangeIntelRepository;
+  now?: () => Date;
+}
+
+function shouldUseTigerPrimary(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readChangeIntelRuntimeConfig(env).writeTarget === 'tiger';
 }
 
 async function processHintBatch(
   supabase: OptionalSupabaseClient,
-  batch: HintRow[]
-): Promise<{ changed: number; enqueued: number; skipped: number; promoted: number }> {
+  batch: HintRow[],
+  env: NodeJS.ProcessEnv = process.env,
+  injectedTiger?: TigerChangeIntelRepository
+): Promise<{
+  changed: number;
+  enqueued: number;
+  skipped: number;
+  promoted: number;
+}> {
   const appids = batch.map((row) => row.appid);
-  if (shouldUseTigerPrimary()) {
-    const tiger = getTigerChangeIntelRepository();
+  if (shouldUseTigerPrimary(env)) {
+    const tiger = injectedTiger ?? getTigerChangeIntelRepository();
     const hintRows = await tiger.listHintStatusRows(appids);
     const knownAppids = new Set<number>(hintRows.map((row) => row.appid));
 
@@ -80,15 +129,14 @@ async function processHintBatch(
     const partitioned = partitionHintRows(batch, knownAppids, existingByAppid);
 
     await tiger.upsertHintStatusRows(
-      partitioned.knownRows.map((row) => ({
+      partitioned.changedRows.map((row) => ({
         appid: row.appid,
         steamLastModified: row.lastModified,
         steamPriceChangeNumber: row.priceChangeNumber,
       }))
     );
 
-    const enqueued = await enqueueCaptureJobs(
-      {} as SupabaseClient,
+    const enqueued = await tiger.enqueueCaptureJobs(
       partitioned.changedRows.map((row) => ({
         appid: row.appid,
         source: 'storefront',
@@ -114,7 +162,9 @@ async function processHintBatch(
   }
 
   if (!supabase) {
-    throw new Error('Supabase service client is required when app-change-hints is not Tiger primary.');
+    throw new Error(
+      'Supabase service client is required when app-change-hints is not Tiger primary.'
+    );
   }
 
   const db = supabase as any;
@@ -141,7 +191,10 @@ async function processHintBatch(
   const { data: existingRows, error: existingError } = await db
     .from('sync_status')
     .select('appid, steam_last_modified, steam_price_change_number, priority_score')
-    .in('appid', knownRows.map((row) => row.appid));
+    .in(
+      'appid',
+      knownRows.map((row) => row.appid)
+    );
 
   if (existingError) {
     throw new Error(`Failed to fetch existing hint rows: ${existingError.message}`);
@@ -158,7 +211,11 @@ async function processHintBatch(
   );
   const knownAppMetaByAppid = new Map<
     number,
-    { type: string | null; is_released: boolean | null; release_date: string | null }
+    {
+      type: string | null;
+      is_released: boolean | null;
+      release_date: string | null;
+    }
   >(
     (knownApps ?? []).map(
       (row: {
@@ -179,22 +236,24 @@ async function processHintBatch(
 
   const partitioned = partitionHintRows(batch, knownAppids, existingByAppid);
 
-  const { error: updateError } = await db.from('sync_status').upsert(
-    partitioned.knownRows.map((row) => ({
-      appid: row.appid,
-      steam_last_modified: row.lastModified,
-      steam_price_change_number: row.priceChangeNumber,
-    })),
-    { onConflict: 'appid' }
-  );
+  if (partitioned.changedRows.length > 0) {
+    const { error: updateError } = await db.from('sync_status').upsert(
+      partitioned.changedRows.map((row) => ({
+        appid: row.appid,
+        steam_last_modified: row.lastModified,
+        steam_price_change_number: row.priceChangeNumber,
+      })),
+      { onConflict: 'appid' }
+    );
 
-  if (updateError) {
-    throw new Error(`Failed to upsert hint rows: ${updateError.message}`);
+    if (updateError) {
+      throw new Error(`Failed to upsert hint rows: ${updateError.message}`);
+    }
   }
 
-  if (shouldWriteTiger(readChangeIntelRuntimeConfig())) {
-    await getTigerChangeIntelRepository().upsertHintStatusRows(
-      partitioned.knownRows.map((row) => ({
+  if (shouldWriteTiger(readChangeIntelRuntimeConfig(env))) {
+    await (injectedTiger ?? getTigerChangeIntelRepository()).upsertHintStatusRows(
+      partitioned.changedRows.map((row) => ({
         appid: row.appid,
         steamLastModified: row.lastModified,
         steamPriceChangeNumber: row.priceChangeNumber,
@@ -245,8 +304,8 @@ async function processHintBatch(
   }
 
   const promoted = promotions.length > 0 ? await promoteReviewsSyncBatch(supabase, promotions) : 0;
-  if (promotions.length > 0 && shouldWriteTiger(readChangeIntelRuntimeConfig())) {
-    await getTigerChangeIntelRepository().promoteReviewsSyncBatch(promotions);
+  if (promotions.length > 0 && shouldWriteTiger(readChangeIntelRuntimeConfig(env))) {
+    await (injectedTiger ?? getTigerChangeIntelRepository()).promoteReviewsSyncBatch(promotions);
   }
 
   return {
@@ -261,7 +320,11 @@ function buildReviewPromotions(
   changedRows: HintRow[],
   knownAppMetaByAppid: Map<
     number,
-    { type: string | null; is_released: boolean | null; release_date: string | null }
+    {
+      type: string | null;
+      is_released: boolean | null;
+      release_date: string | null;
+    }
   >,
   priorityByAppid: Map<number, number>
 ): ReviewPromotion[] {
@@ -299,40 +362,221 @@ function buildReviewPromotions(
   return promotions;
 }
 
-async function main(): Promise<void> {
+async function processObservedHintBatch(params: {
+  batchHash: string;
+  batchIndex: number;
+  mode: Exclude<CatalogObservationMode, 'off'>;
+  rejections: CatalogObservationRejection[];
+  rows: CatalogObservationRow[];
+  scan: CatalogScanStart;
+  tiger: TigerWriter;
+  tigerChangeIntel: TigerChangeIntelRepository;
+  verifyParity: boolean;
+}): Promise<{
+  changed: number;
+  committed: CatalogScanBatchResult;
+  enqueued: number;
+  promoted: number;
+}> {
+  const hintRows: HintRow[] = params.rows.map((row) => ({
+    appid: row.appid,
+    lastModified: row.last_modified!,
+    priceChangeNumber: row.price_change_number!,
+  }));
+  const existingRows = await params.tigerChangeIntel.listHintStatusRows(
+    hintRows.map((row) => row.appid)
+  );
+  const knownAppids = new Set(existingRows.map((row) => row.appid));
+  const existingByAppid = new Map<number, ExistingHintStatusRow>(
+    existingRows.map((row) => [
+      row.appid,
+      {
+        appid: row.appid,
+        steam_last_modified: row.steam_last_modified,
+        steam_price_change_number: row.steam_price_change_number,
+      },
+    ])
+  );
+  const partitioned = partitionHintRows(hintRows, knownAppids, existingByAppid);
+  const committed = await params.tiger.catalogObservation.commitBatch({
+    batchHash: params.batchHash,
+    batchIndex: params.batchIndex,
+    rejections: params.rejections,
+    rows: params.rows,
+    scanId: params.scan.id,
+  });
+
+  if (params.mode === 'shadow' && params.verifyParity) {
+    assertCatalogShadowParity({
+      actualChangedKnownAppids: committed.changedKnownAppids,
+      actualUnknownAppids: committed.unknownAppids,
+      expectedChangedKnownAppids: partitioned.changedRows.map((row) => row.appid),
+      expectedUnknownAppids: partitioned.skippedRows.map((row) => row.appid),
+    });
+  }
+
+  const changedAppids = new Set(committed.changedKnownAppids);
+  const changedRows = hintRows.filter((row) => changedAppids.has(row.appid));
+  const knownAppMetaByAppid = new Map(
+    existingRows.map((row) => [
+      row.appid,
+      {
+        is_released: row.is_released,
+        release_date: row.release_date,
+        type: row.type,
+      },
+    ])
+  );
+  const priorityByAppid = new Map(existingRows.map((row) => [row.appid, row.priority_score ?? 0]));
+  const promotions = buildReviewPromotions(changedRows, knownAppMetaByAppid, priorityByAppid);
+  const promoted =
+    promotions.length > 0 ? await params.tigerChangeIntel.promoteReviewsSyncBatch(promotions) : 0;
+
+  return {
+    changed: committed.changedKnownRows,
+    committed,
+    enqueued: committed.enqueuedRows,
+    promoted,
+  };
+}
+
+export async function runAppChangeHints(
+  dependencies: AppChangeHintsDependencies = {}
+): Promise<AppChangeHintsResult> {
   const startTime = Date.now();
-  const batchSize = parseInt(process.env.HINT_BATCH_SIZE || '1000', 10);
-  const supabase = shouldUseTigerPrimary() ? null : getServiceClient();
-  const jobId = await createSyncJobRecord(supabase ?? ({} as SupabaseClient), 'change_hints', batchSize);
+  const env = dependencies.env ?? process.env;
+  const parsedBatchSize = Number.parseInt(env.HINT_BATCH_SIZE || '1000', 10);
+  const batchSize =
+    Number.isFinite(parsedBatchSize) && parsedBatchSize > 0 ? parsedBatchSize : 1000;
+  const mode = readCatalogObservationMode(env);
+  const tigerPrimary = shouldUseTigerPrimary(env);
+  if (mode !== 'off' && !tigerPrimary) {
+    throw new Error('Catalog observation requires Tiger to be the primary change-intel writer');
+  }
+
+  const now = dependencies.now ?? (() => new Date());
+  const fetchHints = dependencies.fetchHints ?? fetchSteamAppChangeHints;
+  const supabase = tigerPrimary ? null : (dependencies.getSupabase?.() ?? getServiceClient());
+  const tiger = mode === 'off' ? null : (dependencies.getTiger?.() ?? getTigerWriter(env));
+  const tigerChangeIntel =
+    tigerPrimary || mode !== 'off'
+      ? (dependencies.getTigerChangeIntel?.() ?? getTigerChangeIntelRepository())
+      : null;
+  const jobId = tigerPrimary
+    ? await tigerChangeIntel!.createSyncJobRecord('change_hints', batchSize)
+    : await createSyncJobRecord(supabase!, 'change_hints', batchSize);
+  const updateJob = async (id: string, values: Record<string, unknown>): Promise<void> => {
+    if (tigerPrimary) {
+      await tigerChangeIntel!.updateSyncJobRecord(id, values);
+    } else {
+      await updateSyncJobRecord(supabase!, id, values);
+    }
+  };
+  let scan: CatalogScanStart | null = null;
 
   try {
-    const hints = await fetchSteamAppChangeHints();
+    if (mode !== 'off') {
+      scan = await tiger!.catalogObservation.beginScan({
+        forceFull: false,
+        mode,
+        runKey: buildCatalogScanRunKey('steam_change_hints', env),
+        source: 'steam_change_hints',
+        sourceStartedAt: now().toISOString(),
+      });
+      if (scan.status === 'completed') {
+        const completedResult: AppChangeHintsResult = {
+          changed: 0,
+          enqueued: 0,
+          promoted: 0,
+          skipped: 0,
+          totalHints: 0,
+        };
+        if (jobId) {
+          await updateJob(jobId, {
+            completed_at: now().toISOString(),
+            items_created: 0,
+            items_processed: 0,
+            items_skipped: 0,
+            items_succeeded: 0,
+            status: 'completed',
+          });
+        }
+        return completedResult;
+      }
+    }
+
+    const hints = await fetchHints({
+      ifModifiedSince: scan?.requestedIfModifiedSince ?? null,
+    });
+    const observation = normalizeCatalogObservationRows(hints, {
+      requireHints: true,
+    });
     let changed = 0;
     let enqueued = 0;
-    let skipped = 0;
+    let skipped = observation.rejections.length;
     let promoted = 0;
 
-    for (let index = 0; index < hints.length; index += batchSize) {
-      const batch = hints.slice(index, index + batchSize);
-      const result = await processHintBatch(
-        supabase,
-        batch.map((row) => ({
-          appid: row.appid,
-          lastModified: row.lastModified,
-          priceChangeNumber: row.priceChangeNumber,
-        }))
+    if (mode === 'off') {
+      for (let index = 0; index < observation.rows.length; index += batchSize) {
+        const batch = observation.rows.slice(index, index + batchSize);
+        const result = await processHintBatch(
+          supabase,
+          batch.map((row) => ({
+            appid: row.appid,
+            lastModified: row.last_modified!,
+            priceChangeNumber: row.price_change_number!,
+          })),
+          env,
+          tigerChangeIntel ?? undefined
+        );
+        changed += result.changed;
+        enqueued += result.enqueued;
+        skipped += result.skipped;
+        promoted += result.promoted;
+      }
+    } else {
+      const acceptedBatchCount = Math.ceil(observation.rows.length / batchSize);
+      const expectedBatches = Math.max(
+        acceptedBatchCount,
+        observation.rejections.length > 0 ? 1 : 0
       );
-      changed += result.changed;
-      enqueued += result.enqueued;
-      skipped += result.skipped;
-      promoted += result.promoted;
+
+      for (let batchIndex = 0; batchIndex < expectedBatches; batchIndex++) {
+        const rows = observation.rows.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize);
+        const rejections = batchIndex === 0 ? observation.rejections : [];
+        const result = await processObservedHintBatch({
+          batchHash: buildCatalogBatchHash(rows, rejections),
+          batchIndex,
+          mode,
+          rejections,
+          rows,
+          scan: scan!,
+          tiger: tiger!,
+          tigerChangeIntel: tigerChangeIntel!,
+          verifyParity: batchIndex > scan!.lastCommittedBatch,
+        });
+        changed += result.changed;
+        enqueued += result.enqueued;
+        skipped += result.committed.unknownRows;
+        promoted += result.promoted;
+      }
+
+      await tiger!.catalogObservation.completeScan({
+        expectedBatches,
+        expectedSourceRows: observation.sourceRowCount,
+        inputHash: buildCatalogInputHash(observation),
+        reconciliationOutcome: {
+          status: mode === 'shadow' ? 'pending_daily_parity' : 'not_applicable',
+        },
+        scanId: scan!.id,
+      });
     }
 
     if (jobId) {
-      await updateSyncJobRecord(supabase ?? ({} as SupabaseClient), jobId, {
-        completed_at: new Date().toISOString(),
+      await updateJob(jobId, {
+        completed_at: now().toISOString(),
         items_created: enqueued,
-        items_processed: hints.length,
+        items_processed: observation.sourceRowCount,
         items_skipped: skipped,
         items_succeeded: changed,
         status: 'completed',
@@ -340,17 +584,40 @@ async function main(): Promise<void> {
     }
 
     log.info('App change hints completed', {
-      totalHints: hints.length,
+      catalogObservationMode: mode,
+      totalHints: observation.sourceRowCount,
       changed,
       enqueued,
       promotedForReviews: promoted,
       skippedUnknownApps: skipped,
       durationSeconds: ((Date.now() - startTime) / 1000).toFixed(1),
     });
+
+    return {
+      changed,
+      enqueued,
+      promoted,
+      skipped,
+      totalHints: observation.sourceRowCount,
+    };
   } catch (error) {
+    if (scan && scan.status === 'running' && tiger) {
+      try {
+        await tiger.catalogObservation.failScan(
+          scan.id,
+          error instanceof Error ? error.message : String(error)
+        );
+      } catch (scanError) {
+        log.warn('Failed to mark durable catalog scan failed', {
+          scanError: scanError instanceof Error ? scanError.message : String(scanError),
+          scanId: scan.id,
+        });
+      }
+    }
+
     if (jobId) {
-      await updateSyncJobRecord(supabase ?? ({} as SupabaseClient), jobId, {
-        completed_at: new Date().toISOString(),
+      await updateJob(jobId, {
+        completed_at: now().toISOString(),
         error_message: error instanceof Error ? error.message : String(error),
         items_skipped: 0,
         status: 'failed',
@@ -361,7 +628,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  log.error('App change hints failed', { error });
-  process.exit(1);
-});
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectRun) {
+  runAppChangeHints().catch((error) => {
+    log.error('App change hints failed', { error });
+    process.exit(1);
+  });
+}
