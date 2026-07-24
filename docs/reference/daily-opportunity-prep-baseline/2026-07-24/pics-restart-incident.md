@@ -97,6 +97,11 @@ cursor. The durable intake must record such a response as `source_blocked`
 without creating work or advancing either cursor. The missing June interval
 cannot be reconstructed from the live PICS changes-since endpoint.
 
+The separately approved durable shadow capture subsequently proved that
+behavior in production Tiger. It retained one `source_blocked` parent row,
+created no downstream work, and left the canonical cursor unchanged. See
+[`durable-pics-shadow-capture.md`](./durable-pics-shadow-capture.md).
+
 ## Required Reconciliation
 
 - Independently reconstruct or bound the source app IDs for

@@ -69,6 +69,9 @@ are isolated in `apps-projection-refresh.md`.
 - `durable-pics-intake-schema-apply.md`: approved additive Tiger DDL, immutable
   source checksum, empty-object verification, unchanged PICS cursor, and
   stopped-runtime proof.
+- `durable-pics-shadow-capture.md`: approved fail-closed historical response
+  capture, retained `source_blocked` evidence, zero downstream work, unchanged
+  canonical cursor, and stopped-runtime proof.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
