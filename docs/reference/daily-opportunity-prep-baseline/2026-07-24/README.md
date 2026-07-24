@@ -50,8 +50,8 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 - Change Feed must prefer the Tiger/query-api contract whenever it is configured and available; stale Supabase fallback cannot remain the default production path.
 - Admin PICS health must report stale cursor progress instead of inferring “active” from the existence of a historical cursor.
 - The long-term Apps refresh owner is a fixed four-hour Tiger-native Timescale
-  job. Schema 0091 installs it disabled; install, smoke, and enable remain
-  separate production approvals. GitHub is manual fallback only.
+  job. Schema 0091 has installed job `1016` disabled and never run; smoke and
+  enable remain separate production approvals. GitHub is manual fallback only.
 - Tiger recovery capability is verified from the authenticated production console: automatic same-region backup and a continuous three-day PITR fork window are available. No Tiger database refresh is authorized until its separate operation-specific approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 
 ## Artifacts
@@ -101,6 +101,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 - `apps-projection-native-scheduler.md`: live scheduler capability checks,
   cost/architecture decision, disabled source contract, monitoring model, and
   remaining production approval gates.
+- `apps-projection-native-scheduler-schema-apply.md`: approved transactional
+  0091 apply, exact paused/never-run state, live `next_start` behavior,
+  projection drift, unchanged PICS cursor, and dual-Railway-service
+  containment.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

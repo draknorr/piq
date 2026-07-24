@@ -209,7 +209,9 @@ FROM public.alter_job(
 Disabling is a production metadata write and requires approval unless it is an
 active incident response already authorized by the operator. It does not
 cancel an in-progress refresh. Wait for the active run to finish or fail, then
-confirm `scheduled = false` and `next_start = 'infinity'`.
+confirm `scheduled = false` and `job_status = 'Paused'`. A disabled fixed
+schedule can retain the next calculated `:47` slot in `next_start`; that field
+alone is not evidence that the job is enabled.
 
 After disabling, the last successfully materialized data remains readable.
 Use the approval-gated GitHub manual workflow only after proving no native run
