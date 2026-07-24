@@ -1,3 +1,8 @@
+import type {
+  ChangeEventSignalFamily,
+  ChangeEventStoryKind,
+} from '@publisheriq/shared';
+
 export type EntityKind = 'game' | 'publisher' | 'developer';
 export type EntityPlatform = 'steam' | 'publisheriq';
 export type DataPlaneSource = 'supabase-postgres' | 'tiger';
@@ -159,23 +164,8 @@ export type ChangeActivitySort =
   | 'biggest-change'
   | 'most-commercial'
   | 'most-launch-relevant';
-export type ChangeActivitySignalFamily =
-  | 'announcement'
-  | 'release'
-  | 'pricing'
-  | 'store-page'
-  | 'media'
-  | 'taxonomy'
-  | 'platform'
-  | 'build';
-export type ChangeActivityStoryKind =
-  | 'announcement'
-  | 'commercial-move'
-  | 'launch-prep'
-  | 'store-refresh'
-  | 'taxonomy-shift'
-  | 'update-tease'
-  | 'change-roundup';
+export type ChangeActivitySignalFamily = ChangeEventSignalFamily;
+export type ChangeActivityStoryKind = ChangeEventStoryKind;
 export type ChangePattern =
   | 'marketing_push'
   | 'relaunch_pattern'

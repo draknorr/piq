@@ -75,6 +75,9 @@ are isolated in `apps-projection-refresh.md`.
 - `durable-pics-processing-validation.md`: read-only live Steam/Tiger contract
   checks, leased consumer and promotion failure injection, and proof that PR 4
   remained disabled and undeployed.
+- `readiness-events-windows-validation.md`: PR 5 live Tiger schema validation,
+  normalized readiness/lifecycle/event-registry decisions, signal-window
+  verification, and no-write rollout gates.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

@@ -1,5 +1,11 @@
 import type { QueryResultRow } from 'pg';
-import { logger, PublisherIQError } from '@publisheriq/shared';
+import {
+  CHANGE_EVENT_REGISTRY,
+  logger,
+  PublisherIQError,
+  resolveChangeEventDefinition,
+  resolveChangeEventType,
+} from '@publisheriq/shared';
 
 import type {
   ChangeActivitySignalFamily,
@@ -972,45 +978,21 @@ const GAME_TYPE_PREDICATE: Record<DataPlaneConfig['source'], string> = {
   tiger: "a.type = 'game'",
   'supabase-postgres': "a.type = 'game'::public.app_type",
 };
-const CHANGE_TYPES_BY_SIGNAL_FAMILY: Record<ChangeActivitySignalFamily, readonly string[]> = {
-  announcement: ['news_published', 'news_edited'],
-  build: ['build_id_changed', 'last_content_update_changed'],
-  media: [
-    'capsule_url_changed',
-    'header_url_changed',
-    'background_url_changed',
-    'screenshot_added',
-    'screenshot_removed',
-    'screenshot_reordered',
-    'trailer_added',
-    'trailer_removed',
-    'trailer_reordered',
-    'trailer_thumbnail_changed',
-  ],
-  platform: ['languages_changed', 'platforms_changed', 'controller_support_changed', 'steam_deck_status_changed'],
-  pricing: [
-    'price_change',
-    'discount_start',
-    'discount_end',
-    'dlc_references_changed',
-    'package_references_changed',
-  ],
-  release: ['release_date_text_change'],
-  'store-page': ['description_rewrite', 'short_description_rewrite'],
-  taxonomy: [
-    'tags_added',
-    'tags_removed',
-    'genres_changed',
-    'categories_changed',
-    'publisher_association_changed',
-    'developer_association_changed',
-  ],
-};
-const CHANGE_TYPE_TO_SIGNAL_FAMILY = Object.fromEntries(
-  Object.entries(CHANGE_TYPES_BY_SIGNAL_FAMILY).flatMap(([family, changeTypes]) =>
-    changeTypes.map((changeType) => [changeType, family])
-  )
-) as Record<string, ChangeActivitySignalFamily>;
+const CHANGE_TYPES_BY_SIGNAL_FAMILY = new Map<
+  ChangeActivitySignalFamily,
+  readonly string[]
+>(
+  [...new Set(CHANGE_EVENT_REGISTRY.map((entry) => entry.signalFamily))].map((family) => [
+    family,
+    [
+      ...new Set(
+        CHANGE_EVENT_REGISTRY
+          .filter((entry) => entry.signalFamily === family)
+          .map((entry) => entry.rawEventType)
+      ),
+    ],
+  ])
+);
 const RELATION_LOCATIONS: Record<
   DataPlaneConfig['source'],
   Record<DataPlaneRelationKey, RelationLocation>
@@ -1480,6 +1462,7 @@ function normalizeChangeSignalFamilies(value: unknown): ChangeActivitySignalFami
       || entry === 'taxonomy'
       || entry === 'platform'
       || entry === 'build'
+      || entry === 'unknown'
   );
 
   return [...new Set(families)];
@@ -1488,11 +1471,12 @@ function normalizeChangeSignalFamilies(value: unknown): ChangeActivitySignalFami
 function normalizeChangeStoryKinds(value: unknown): Array<
   | 'announcement'
   | 'commercial-move'
-  | 'launch-prep'
+  | 'release-prep'
   | 'store-refresh'
-  | 'taxonomy-shift'
-  | 'update-tease'
-  | 'change-roundup'
+  | 'positioning-shift'
+  | 'platform-expansion'
+  | 'build-activity'
+  | 'general-update'
 > {
   const storyKinds = toStringArray(value).filter(
     (
@@ -1500,18 +1484,20 @@ function normalizeChangeStoryKinds(value: unknown): Array<
     ): entry is
       | 'announcement'
       | 'commercial-move'
-      | 'launch-prep'
+      | 'release-prep'
       | 'store-refresh'
-      | 'taxonomy-shift'
-      | 'update-tease'
-      | 'change-roundup' =>
+      | 'positioning-shift'
+      | 'platform-expansion'
+      | 'build-activity'
+      | 'general-update' =>
       entry === 'announcement'
       || entry === 'commercial-move'
-      || entry === 'launch-prep'
+      || entry === 'release-prep'
       || entry === 'store-refresh'
-      || entry === 'taxonomy-shift'
-      || entry === 'update-tease'
-      || entry === 'change-roundup'
+      || entry === 'positioning-shift'
+      || entry === 'platform-expansion'
+      || entry === 'build-activity'
+      || entry === 'general-update'
   );
 
   return [...new Set(storyKinds)];
@@ -1519,7 +1505,7 @@ function normalizeChangeStoryKinds(value: unknown): Array<
 
 function normalizeChangeStoryKind(value: string | null | undefined): ChangeActivityStoryKind {
   const storyKinds = normalizeChangeStoryKinds(value ? [value] : []);
-  return storyKinds[0] ?? 'change-roundup';
+  return storyKinds[0] ?? 'general-update';
 }
 
 function resolveOwnersMidpoint(row: DailyMetricHistoryRow): number | null {
@@ -6420,8 +6406,7 @@ export class DataPlaneService {
     'burstStrength' | 'linkedNewsCount' | 'significanceReasons'
   > {
     const families = normalizeChangeSignalFamilies(
-      [...new Set(moment.events.map((event) => event.change_type))]
-        .map((changeType) => this.familyForChangeType(changeType))
+      moment.events.map((event) => this.familyForChangeType(event.change_type, event.source))
     );
     const evidence = this.buildChangeEvidenceSummary({
       eventCount: moment.events.length,
@@ -6795,15 +6780,22 @@ export class DataPlaneService {
     };
   }
 
-  private familyForChangeType(changeType: string): ChangeActivitySignalFamily {
-    return CHANGE_TYPE_TO_SIGNAL_FAMILY[changeType] ?? 'store-page';
+  private familyForChangeType(
+    changeType: string,
+    source?: string
+  ): ChangeActivitySignalFamily {
+    return source
+      ? resolveChangeEventDefinition(source, changeType).signalFamily
+      : resolveChangeEventType(changeType).signalFamily;
   }
 
   private familyMatchesSearchFilter(
     changeType: string,
-    signalFamilies: ChangeActivitySignalFamily[]
+    signalFamilies: ChangeActivitySignalFamily[],
+    source?: string
   ): boolean {
-    return signalFamilies.length === 0 || signalFamilies.includes(this.familyForChangeType(changeType));
+    return signalFamilies.length === 0
+      || signalFamilies.includes(this.familyForChangeType(changeType, source));
   }
 
   private changeTypesForSignalFamilies(
@@ -6813,7 +6805,9 @@ export class DataPlaneService {
       return [];
     }
 
-    return [...new Set(signalFamilies.flatMap((family) => CHANGE_TYPES_BY_SIGNAL_FAMILY[family] ?? []))];
+    return [...new Set(
+      signalFamilies.flatMap((family) => CHANGE_TYPES_BY_SIGNAL_FAMILY.get(family) ?? [])
+    )];
   }
 
   private defaultSignalFamiliesForSearchChangeView(
@@ -6902,18 +6896,21 @@ export class DataPlaneService {
 
     if (
       isReleased === false ||
-      families.includes('release') ||
-      families.includes('platform')
+      families.includes('release')
     ) {
-      return 'launch-prep';
+      return 'release-prep';
     }
 
     if (families.includes('taxonomy')) {
-      return 'taxonomy-shift';
+      return 'positioning-shift';
+    }
+
+    if (families.includes('platform')) {
+      return 'platform-expansion';
     }
 
     if (families.includes('build')) {
-      return 'update-tease';
+      return 'build-activity';
     }
 
     if (families.includes('pricing') && relatedAnnouncementCount > 0) {
@@ -6924,7 +6921,7 @@ export class DataPlaneService {
       return 'store-refresh';
     }
 
-    return 'change-roundup';
+    return 'general-update';
   }
 
   private buildSearchChangeHeadline(params: {
@@ -6938,7 +6935,7 @@ export class DataPlaneService {
       return params.directNews[0].title;
     }
 
-    if (params.storyKind === 'launch-prep') {
+    if (params.storyKind === 'release-prep') {
       return `${params.appName} showed launch-adjacent Steam changes.`;
     }
 
@@ -6950,11 +6947,15 @@ export class DataPlaneService {
       return `${params.appName} refreshed its Steam page presentation.`;
     }
 
-    if (params.storyKind === 'taxonomy-shift') {
+    if (params.storyKind === 'positioning-shift') {
       return `${params.appName} changed tags, genres, or platform positioning.`;
     }
 
-    if (params.storyKind === 'update-tease') {
+    if (params.storyKind === 'platform-expansion') {
+      return `${params.appName} expanded or changed platform support.`;
+    }
+
+    if (params.storyKind === 'build-activity') {
       return `${params.appName} showed update-adjacent Steam activity.`;
     }
 
@@ -7425,7 +7426,7 @@ export class DataPlaneService {
         });
 
     const filteredRows = rawRows.filter((row) =>
-      this.familyMatchesSearchFilter(row.change_type, params.signalFamilies)
+      this.familyMatchesSearchFilter(row.change_type, params.signalFamilies, row.source)
     );
     const moments = this.buildSearchChangeMoments(filteredRows);
     const newsRows = await this.queryNewsRowsByGids(
@@ -7444,7 +7445,7 @@ export class DataPlaneService {
             parseTimestamp(right.sort_time).getTime() - parseTimestamp(left.sort_time).getTime()
         );
       const families = [...new Set(
-        moment.events.map((event) => this.familyForChangeType(event.change_type))
+        moment.events.map((event) => this.familyForChangeType(event.change_type, event.source))
       )].sort();
 
       if (!this.matchesSearchChangeView(families, moment.isReleased, params.view)) {
@@ -7955,7 +7956,7 @@ export class DataPlaneService {
         if (
           families.includes('pricing') &&
           (families.includes('media') || families.includes('store-page')) &&
-          ((candidate.announcement_count ?? 0) > 0 || storyKinds.includes('launch-prep'))
+          ((candidate.announcement_count ?? 0) > 0 || storyKinds.includes('release-prep'))
         ) {
           confidence = 'high';
           reasons = [

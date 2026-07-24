@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Pool, type QueryResultRow } from 'pg';
+import {
+  CHANGE_EVENT_REGISTRY,
+  CHANGE_EVENT_REGISTRY_VERSION,
+  resolveChangeEventDefinition,
+} from '@publisheriq/shared';
 
 import { archiveJsonPayload, createChangeIntelArchiveStore } from './archive-store.js';
 import { hashNormalizedContent } from './hashing.js';
@@ -704,21 +709,29 @@ export class TigerChangeIntelRepository {
       return;
     }
 
-    const rows = events.map((event) => ({
-      after_value: event.afterValue ?? null,
-      appid,
-      before_value: event.beforeValue ?? null,
-      change_type: event.eventType,
-      context: event.context ?? {},
-      created_at: new Date().toISOString(),
-      media_version_id: options.mediaVersionId ? Number(options.mediaVersionId) : null,
-      news_item_gid: options.newsItemGid ?? null,
-      occurred_at: event.observedAt ?? new Date().toISOString(),
-      related_snapshot_id: options.relatedSnapshotId ? Number(options.relatedSnapshotId) : null,
-      source: event.source,
-      source_snapshot_id: options.sourceSnapshotId ? Number(options.sourceSnapshotId) : null,
-      trigger_cursor: options.triggerCursor ?? null,
-    }));
+    const rows = events.map((event) => {
+      const definition = resolveChangeEventDefinition(event.source, event.eventType);
+      return {
+        after_value: event.afterValue ?? null,
+        appid,
+        before_value: event.beforeValue ?? null,
+        change_type: event.eventType,
+        context: {
+          ...(event.context ?? {}),
+          event_registry_known: definition.isKnown,
+          event_registry_version: CHANGE_EVENT_REGISTRY_VERSION,
+          signal_family: definition.signalFamily,
+        },
+        created_at: new Date().toISOString(),
+        media_version_id: options.mediaVersionId ? Number(options.mediaVersionId) : null,
+        news_item_gid: options.newsItemGid ?? null,
+        occurred_at: event.observedAt ?? new Date().toISOString(),
+        related_snapshot_id: options.relatedSnapshotId ? Number(options.relatedSnapshotId) : null,
+        source: event.source,
+        source_snapshot_id: options.sourceSnapshotId ? Number(options.sourceSnapshotId) : null,
+        trigger_cursor: options.triggerCursor ?? null,
+      };
+    });
 
     await this.pool.query(
       `
@@ -1143,6 +1156,15 @@ export class TigerChangeIntelRepository {
           WHERE appid = $1
             AND burst_ended_at >= now() - make_interval(days => greatest($2::integer, 1)) - interval '90 minutes'
         ),
+        registry_entries AS (
+          SELECT *
+          FROM jsonb_to_recordset($3::jsonb) AS registry (
+            source text,
+            raw_event_type text,
+            signal_family text,
+            user_label text
+          )
+        ),
         classified_events AS (
           SELECT
             e.id,
@@ -1150,43 +1172,15 @@ export class TigerChangeIntelRepository {
             e.source,
             e.change_type,
             e.occurred_at,
-            CASE e.change_type
-              WHEN 'release_date_text_change' THEN 'release'
-              WHEN 'price_change' THEN 'pricing'
-              WHEN 'discount_start' THEN 'pricing'
-              WHEN 'discount_end' THEN 'pricing'
-              WHEN 'dlc_references_changed' THEN 'pricing'
-              WHEN 'package_references_changed' THEN 'pricing'
-              WHEN 'description_rewrite' THEN 'store-page'
-              WHEN 'short_description_rewrite' THEN 'store-page'
-              WHEN 'capsule_url_changed' THEN 'media'
-              WHEN 'header_url_changed' THEN 'media'
-              WHEN 'background_url_changed' THEN 'media'
-              WHEN 'screenshot_added' THEN 'media'
-              WHEN 'screenshot_removed' THEN 'media'
-              WHEN 'screenshot_reordered' THEN 'media'
-              WHEN 'trailer_added' THEN 'media'
-              WHEN 'trailer_removed' THEN 'media'
-              WHEN 'trailer_reordered' THEN 'media'
-              WHEN 'trailer_thumbnail_changed' THEN 'media'
-              WHEN 'tags_added' THEN 'taxonomy'
-              WHEN 'tags_removed' THEN 'taxonomy'
-              WHEN 'genres_changed' THEN 'taxonomy'
-              WHEN 'categories_changed' THEN 'taxonomy'
-              WHEN 'publisher_association_changed' THEN 'taxonomy'
-              WHEN 'developer_association_changed' THEN 'taxonomy'
-              WHEN 'languages_changed' THEN 'platform'
-              WHEN 'platforms_changed' THEN 'platform'
-              WHEN 'controller_support_changed' THEN 'platform'
-              WHEN 'steam_deck_status_changed' THEN 'platform'
-              WHEN 'news_published' THEN 'announcement'
-              WHEN 'news_edited' THEN 'announcement'
-              WHEN 'build_id_changed' THEN 'build'
-              WHEN 'last_content_update_changed' THEN 'build'
-              ELSE 'store-page'
-            END AS signal_family,
-            initcap(replace(e.change_type, '_', ' ')) AS highlight_label
+            COALESCE(registry.signal_family, 'unknown') AS signal_family,
+            COALESCE(
+              registry.user_label,
+              initcap(replace(replace(e.change_type, '_', ' '), '-', ' '))
+            ) AS highlight_label
           FROM events.app_change_events e
+          LEFT JOIN registry_entries registry
+            ON registry.source = e.source
+           AND registry.raw_event_type = e.change_type
           WHERE e.appid = $1
             AND e.source IN ('storefront', 'pics', 'media')
             AND e.occurred_at >= now() - make_interval(days => greatest($2::integer, 1)) - interval '90 minutes'
@@ -1359,7 +1353,18 @@ export class TigerChangeIntelRepository {
         )
         SELECT count(*) AS count FROM inserted
       `,
-      [appid, lookbackDays]
+      [
+        appid,
+        lookbackDays,
+        stringifyJsonValue(
+          CHANGE_EVENT_REGISTRY.map((entry) => ({
+            raw_event_type: entry.rawEventType,
+            signal_family: entry.signalFamily,
+            source: entry.source,
+            user_label: entry.label,
+          }))
+        ),
+      ]
     );
 
     return parseCount(rows[0]?.count);

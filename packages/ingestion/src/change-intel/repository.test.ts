@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   claimCaptureQueue,
   enqueueCaptureJobs,
+  insertChangeEvents,
   requeueStaleCaptureClaims,
   seedDiscoveredApps,
 } from './repository.js';
@@ -186,6 +187,36 @@ test('seedDiscoveredApps forwards normalized discovery payloads to the seed_disc
         placeholder_name: 'ELDEN RING (pending metadata)',
       },
     ],
+  });
+});
+
+test('change event writes carry the central registry version and explicit family', async () => {
+  let insertedRows: Array<Record<string, unknown>> = [];
+  const supabase = {
+    from(table: string) {
+      assert.equal(table, 'app_change_events');
+      return {
+        insert(rows: Array<Record<string, unknown>>) {
+          insertedRows = rows;
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  } as any;
+
+  await insertChangeEvents(supabase, 10, [
+    {
+      eventType: 'demo_references_changed',
+      source: 'storefront',
+      beforeValue: [],
+      afterValue: [20],
+    },
+  ]);
+
+  assert.deepEqual(insertedRows[0]?.context, {
+    event_registry_known: true,
+    event_registry_version: 'change-events/v1',
+    signal_family: 'release',
   });
 });
 

@@ -831,7 +831,12 @@ class TigerPICSDurablePromoter:
               related_snapshot_id,
               before_value,
               after_value,
-              coalesce(context, '{}'::jsonb),
+              coalesce(rows.context, '{}'::jsonb)
+                || jsonb_build_object(
+                  'event_registry_known', registry.is_known,
+                  'event_registry_version', registry.registry_version,
+                  'signal_family', registry.signal_family
+                ),
               trigger_cursor,
               %s,
               %s,
@@ -851,6 +856,10 @@ class TigerPICSDurablePromoter:
               context jsonb,
               trigger_cursor text
             )
+            CROSS JOIN LATERAL events.resolve_change_event_v1(
+              rows.source,
+              rows.change_type
+            ) registry
             """,
             (
                 archive.bucket,

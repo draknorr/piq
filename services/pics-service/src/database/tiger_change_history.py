@@ -486,7 +486,13 @@ class TigerPICSChangeHistoryStore:
                     SELECT
                       {id_select_sql}appid, source, change_type, occurred_at,
                       source_snapshot_id, related_snapshot_id, media_version_id,
-                      news_item_gid, before_value, after_value, COALESCE(context, '{{}}'::jsonb),
+                      news_item_gid, before_value, after_value,
+                      COALESCE(event_rows.context, '{{}}'::jsonb)
+                        || jsonb_build_object(
+                          'event_registry_known', registry.is_known,
+                          'event_registry_version', registry.registry_version,
+                          'signal_family', registry.signal_family
+                        ),
                       trigger_cursor, created_at
                     FROM jsonb_to_recordset(%s::jsonb) AS event_rows (
                       {id_record_sql}
@@ -504,6 +510,10 @@ class TigerPICSChangeHistoryStore:
                       trigger_cursor text,
                       created_at timestamptz
                     )
+                    CROSS JOIN LATERAL events.resolve_change_event_v1(
+                      event_rows.source,
+                      event_rows.change_type
+                    ) registry
                     {conflict_sql}
                     """,
                     (json.dumps(payload),),

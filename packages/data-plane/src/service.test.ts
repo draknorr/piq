@@ -1247,6 +1247,19 @@ test('searchChangeActivity narrows raw event queries by requested signal familie
   assert.equal(result.sufficientToAnswer, false);
 });
 
+test('change activity registry keeps unknown types unknown and maps demos to release', () => {
+  const service = createService();
+
+  assert.equal(
+    (service as any).familyForChangeType('demo_references_changed', 'storefront'),
+    'release'
+  );
+  assert.equal(
+    (service as any).familyForChangeType('new_unregistered_signal', 'storefront'),
+    'unknown'
+  );
+});
+
 test('searchChangeActivity passes app filters and all-history mode to raw event queries', async () => {
   const service = createService();
   let receivedParams: Record<string, unknown> | null = null;
