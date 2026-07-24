@@ -115,7 +115,7 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
   const ccuUpdatedLabel = data.ccuQualityStats.updatedAt
     ? `updated ${formatRelativeTime(data.ccuQualityStats.updatedAt)}`
     : null;
-  const picsStatus = getPicsRuntimeStatus(data.picsSyncState);
+  const picsStatus = getPicsRuntimeStatus(data.picsSyncState, data.picsServiceStatus);
 
   return (
     <div className="space-y-3">
@@ -427,13 +427,9 @@ export function AdminDashboard({ data }: { data: AdminDashboardData }) {
                 : 'text-text-muted'
             }`}
           >
-            {data.picsDataStats.isApproximate && picsStatus.label === 'Stalled'
-              ? 'cursor stalled; coverage approximate'
-              : data.picsDataStats.isApproximate
-                ? 'coverage is approximate'
-                : picsStatus.label === 'Stalled'
-                  ? 'cursor progress is stale'
-                  : 'live cursor progress'}
+            {data.picsDataStats.isApproximate
+              ? `${picsStatus.description}; coverage approximate`
+              : picsStatus.description}
           </span>
         }
       >

@@ -11,7 +11,6 @@ import {
   getAppsWithErrors,
   getSourceCompletionStats,
   getFullyCompletedAppsCount,
-  getPICSSyncState,
   getPICSDataStats,
   getCatalogControlStats,
   getCcuQualityStats,
@@ -29,6 +28,10 @@ import {
 import { getCachedDashboardData, setCachedDashboardData } from '@/lib/admin-dashboard-cache';
 import type { GuardrailTraceEntry, ToolAnswerContractSummary } from '@/lib/chat/chat-context-types';
 import { AdminDashboard } from './AdminDashboard';
+import {
+  getPicsServiceStatus,
+  type PicsServiceStatus,
+} from './pics-service-status';
 
 export const metadata: Metadata = {
   title: 'Admin',
@@ -85,6 +88,7 @@ export interface AdminDashboardData {
   recentJobs: SyncJob[];
   allJobs: SyncJob[];
   picsSyncState: PICSSyncState;
+  picsServiceStatus: PicsServiceStatus;
   picsDataStats: PICSDataStats;
   catalogControlStats: CatalogControlStats;
   ccuQualityStats: CcuQualityStats;
@@ -133,7 +137,7 @@ async function getTigerPicsSyncState(): Promise<PICSSyncState | null> {
       updatedAt: row.updated_at ?? null,
     };
   } catch (error) {
-    console.warn('Tiger PICS sync-state read failed; falling back to Supabase.', error);
+    console.warn('Tiger PICS sync-state read failed; reporting unavailable.', error);
     return null;
   }
 }
@@ -170,7 +174,6 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     fullyCompletedCount,
     runningJobs,
     allJobs,
-    picsSyncState,
     picsDataStats,
     ccuQualityStats,
     chatLogs,
@@ -196,7 +199,6 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
       )
       .order('started_at', { ascending: false })
       .limit(ALL_JOBS_LIMIT),
-    getPICSSyncState(supabase),
     // Pass totalApps to avoid re-fetching
     getPICSDataStats(supabase, totalApps),
     getCcuQualityStats(supabase, totalApps),
@@ -210,7 +212,10 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
       .limit(RECENT_CHAT_LOG_LIMIT),
   ]);
 
-  const tigerPicsSyncState = await getTigerPicsSyncState();
+  const [tigerPicsSyncState, picsServiceStatus] = await Promise.all([
+    getTigerPicsSyncState(),
+    getPicsServiceStatus(),
+  ]);
 
   const allJobsData = allJobs.data ?? [];
 
@@ -224,7 +229,11 @@ async function getAdminDashboardData(): Promise<AdminDashboardData | null> {
     runningJobs: runningJobs.data ?? [],
     recentJobs: allJobsData.slice(0, 10), // Derive from allJobs instead of separate query
     allJobs: allJobsData,
-    picsSyncState: tigerPicsSyncState ?? picsSyncState,
+    picsSyncState: tigerPicsSyncState ?? {
+      lastChangeNumber: 0,
+      updatedAt: null,
+    },
+    picsServiceStatus,
     picsDataStats: {
       ...picsDataStats,
       dataSource: 'approximate_fallback',

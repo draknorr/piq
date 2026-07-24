@@ -20,6 +20,10 @@ are isolated in `apps-projection-refresh.md`.
 ## Key observations
 
 - Tiger PICS remains stalled: `ops.pics_sync_state.last_change_number = 36631816` and `updated_at = 2026-06-16 22:05:18+00`.
+- Post-merge incident evidence is recorded in
+  [`pics-restart-incident.md`](./pics-restart-incident.md). The legacy monitor
+  was unintentionally restarted by Railway autodeploy, contained at cursor
+  `37,491,237`, stopped, and disconnected from its GitHub source.
 - Tiger backlog remains large: `ops.sync_status` has `93,557` syncable rows with no completed PICS sync.
 - Change-intel queue remains degraded: `179` non-dead queued records and `2,858` dead-lettered records were present in the refreshed snapshot.
 - `metrics.apps_page_projection` remains stale: `166,864` rows with newest `data_updated_at = 2026-05-04 03:47:38+00`.
