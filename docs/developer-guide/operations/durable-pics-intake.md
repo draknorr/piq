@@ -24,8 +24,16 @@ orchestration remain disabled by default with
 `PICS_PROCESSING_ENABLED=false`. The explicit production shadow setting is
 validation evidence, not approval for primary mode.
 
-Migration `0092_pics_cursor_checkpoint_reconciliation.sql` and its production
-data functions are not applied at this checkpoint. See
+Migration `0092_pics_cursor_checkpoint_reconciliation.sql` was applied on
+July 25, 2026 UTC. Its first separately approved checkpoint call failed before
+its first write because PL/pgSQL could not distinguish unqualified table
+columns from identically named `RETURNS TABLE` output variables. The
+single-transaction caller rolled back with the canonical cursor and all
+reconciliation controls unchanged.
+
+Migration `0093_fix_pics_reconciliation_function_ambiguity.sql` is the
+fail-closed forward repair. It must be reviewed, merged, and separately
+approved before another checkpoint call. See
 [Audited PICS Cursor Reconciliation](./pics-audited-cursor-reconciliation.md)
 for the recovery design and separate approval boundaries.
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -6,6 +7,55 @@ const RECONCILIATION_SQL_URL = new URL(
   "../sql/tiger-bootstrap/0092_pics_cursor_checkpoint_reconciliation.sql",
   import.meta.url,
 );
+const REPAIR_SQL_URL = new URL(
+  "../sql/tiger-bootstrap/0093_fix_pics_reconciliation_function_ambiguity.sql",
+  import.meta.url,
+);
+
+function extractFunctionBody(sql: string, signature: string): string {
+  const functionStart = sql.indexOf(signature);
+  assert.ok(functionStart >= 0, `missing function signature: ${signature}`);
+  const bodyStart = sql.indexOf("AS $$", functionStart);
+  assert.ok(bodyStart >= 0, `missing function body: ${signature}`);
+  const bodyEnd = sql.indexOf("$$;", bodyStart + 5);
+  assert.ok(bodyEnd >= 0, `missing function body terminator: ${signature}`);
+  return sql.slice(bodyStart + 5, bodyEnd);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function applyMigrationRepairs(
+  sourceBody: string,
+  repairSql: string,
+  variablePrefix: "apply" | "requeue" | "rollback",
+  expectedRepairCount: number,
+): string {
+  const assignment = `v_${variablePrefix}_repaired`;
+  const input = `v_${variablePrefix}_(?:source|repaired)`;
+  const replacementPattern = new RegExp(
+    `${assignment} := replace\\(\\s*${input},\\s*\\$old\\$([\\s\\S]*?)\\$old\\$,\\s*\\$new\\$([\\s\\S]*?)\\$new\\$\\s*\\);`,
+    "g",
+  );
+  const replacements = [...repairSql.matchAll(replacementPattern)];
+
+  assert.equal(
+    replacements.length,
+    expectedRepairCount,
+    `unexpected ${variablePrefix} repair count`,
+  );
+
+  return replacements.reduce((body, replacement) => {
+    const oldFragment = replacement[1];
+    const newFragment = replacement[2];
+    assert.ok(
+      body.includes(oldFragment),
+      `missing ${variablePrefix} source fragment: ${oldFragment}`,
+    );
+    return body.replace(oldFragment, newFragment);
+  }, sourceBody);
+}
 
 test("PICS cursor checkpoint requires forced-full gap and complete shadow-head evidence", async () => {
   const sql = await readFile(RECONCILIATION_SQL_URL, "utf8");
@@ -142,4 +192,106 @@ test("Reconciliation finalization requires exact parity and zero unresolved or d
   );
   assert.match(sql, /LOCK TABLE legacy\.apps IN SHARE MODE/);
   assert.match(sql, /newly discovered apps; extend the run before finalizing/);
+});
+
+test("PICS reconciliation ambiguity repair is pinned to 0092 and explicitly qualifies collisions", async () => {
+  const sourceSql = await readFile(RECONCILIATION_SQL_URL, "utf8");
+  const repairSql = await readFile(REPAIR_SQL_URL, "utf8");
+
+  const applyBody = extractFunctionBody(
+    sourceSql,
+    "CREATE OR REPLACE FUNCTION ops.apply_pics_reconciliation_checkpoint",
+  );
+  const requeueBody = extractFunctionBody(
+    sourceSql,
+    "CREATE OR REPLACE FUNCTION ops.requeue_pics_reconciliation_item",
+  );
+  const rollbackBody = extractFunctionBody(
+    sourceSql,
+    "CREATE OR REPLACE FUNCTION ops.rollback_unstarted_pics_reconciliation_checkpoint",
+  );
+
+  assert.equal(
+    sha256(applyBody),
+    "eb1393fdb0a02e5730dd408e1c0bd6f50fd5a13a0d146663db113c2b8d335969",
+  );
+  assert.equal(
+    sha256(requeueBody),
+    "e7ef5dc4c4a7454d0ff6d257812025958d5d70ae17d4ec396372ac5d257c3a41",
+  );
+  assert.equal(
+    sha256(rollbackBody),
+    "2c33a13cc98fe22f4869e2f8cdab94c114310aafa1a931362ec50f2df08e2177",
+  );
+
+  const repairedApply = applyMigrationRepairs(applyBody, repairSql, "apply", 2);
+  const repairedRequeue = applyMigrationRepairs(
+    requeueBody,
+    repairSql,
+    "requeue",
+    7,
+  );
+  const repairedRollback = applyMigrationRepairs(
+    rollbackBody,
+    repairSql,
+    "rollback",
+    3,
+  );
+
+  assert.notEqual(repairedApply, applyBody);
+  assert.notEqual(repairedRequeue, requeueBody);
+  assert.notEqual(repairedRollback, rollbackBody);
+  assert.equal(
+    sha256(repairedApply),
+    "9858f651739b591a9fd5d63ff8ba42ae6f6d0e3c523ff1c819fd346218ebd85d",
+  );
+  assert.equal(
+    sha256(repairedRequeue),
+    "ab6ab462582368468e549493cffd4e84700fdd0d8115ca5121394a63e36073e9",
+  );
+  assert.equal(
+    sha256(repairedRollback),
+    "6ad2c3f9e7b9dfdd90191fac35a2940040f9137aa03386208a515fee5c479ea1",
+  );
+
+  assert.doesNotMatch(
+    repairedApply,
+    /WHERE from_change_number = p_expected_cursor/,
+  );
+  assert.doesNotMatch(repairedApply, /WHERE checkpoint_id = v_checkpoint\.id/);
+  assert.doesNotMatch(repairedRequeue, /AND appid = p_appid/);
+  assert.doesNotMatch(repairedRequeue, /requeue_count = requeue_count \+ 1/);
+  assert.doesNotMatch(
+    repairedRollback,
+    /WHERE checkpoint_id = v_checkpoint\.id/,
+  );
+  assert.doesNotMatch(
+    repairedRollback,
+    /WHERE reconciliation_run_id = v_run\.id/,
+  );
+
+  assert.match(
+    repairSql,
+    /unexpected apply_pics_reconciliation_checkpoint source body; refusing repair/,
+  );
+  assert.match(
+    repairSql,
+    /unexpected requeue_pics_reconciliation_item source body; refusing repair/,
+  );
+  assert.match(
+    repairSql,
+    /unexpected rollback_unstarted_pics_reconciliation_checkpoint source body; refusing repair/,
+  );
+  assert.match(
+    repairSql,
+    /CREATE OR REPLACE FUNCTION ops\.apply_pics_reconciliation_checkpoint\(/,
+  );
+  assert.match(
+    repairSql,
+    /CREATE OR REPLACE FUNCTION ops\.requeue_pics_reconciliation_item\(/,
+  );
+  assert.match(
+    repairSql,
+    /CREATE OR REPLACE FUNCTION ops\.rollback_unstarted_pics_reconciliation_checkpoint\(/,
+  );
 });
