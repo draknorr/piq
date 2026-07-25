@@ -135,6 +135,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   cursor/manifest/promotion and per-app R2 evidence, failed parent-response
   archive gate, automatic rollback to the isolated shadow stream, retained
   recoverable claims, and the code-repair gate before another canary.
+- `pics-batch-archive-shadow-redeploy.md`: approved PR #61 merge and
+  genuine-service shadow replacement from exact merged source, direct
+  Tiger/R2 proof for repaired parent response archives, full isolated-stream
+  continuity, unchanged canonical/primary state, and duplicate containment.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
