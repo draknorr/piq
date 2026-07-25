@@ -1,6 +1,6 @@
 # Apps Projection Native Scheduler Enablement
 
-Status: **enabled; background-worker validation passed; natural cycles pending**
+Status: **enabled; background-worker and first natural execution passed**
 
 This record covers two separately approved production metadata writes:
 
@@ -93,8 +93,7 @@ The run completed successfully:
 
 This proves the actual Timescale automation worker can execute the procedure,
 record success and history, and return to the fixed schedule after a one-time
-next-start override. It does not prove that a naturally timed slot will fire,
-and it does not replace the three-healthy-daily-cycle cutover gate.
+next-start override.
 
 ## Post-run reconciliation
 
@@ -124,18 +123,86 @@ run. It rendered 50 data rows plus the table header, and the expected
 measurement included an intentional four-second settle and must not be treated
 as a route latency or compared with a median/p95 threshold.
 
-## Remaining gate
+## First natural execution
 
-The next natural slot is `2026-07-25T00:47:00Z`. Monitoring must still capture:
+The first natural fixed-schedule execution fired without an operator override
+at `2026-07-25T00:47:00.001542Z` and completed successfully at
+`2026-07-25T00:48:05.820258Z`.
 
-- a naturally triggered successful execution at a fixed `:47` UTC slot;
-- three healthy daily cycles;
-- exact source/projection/app-ID/filter parity after each checkpoint;
-- an eight-hour-or-better scheduler freshness clock;
-- no unexplained errors, prolonged runs, or route regressions; and
-- unchanged PICS cursor containment and stopped state for both Railway
-  services named `publisheriq`.
+Read-only verification at `2026-07-25T01:26:50.875460Z` proved:
 
-No Apps reader cutover is authorized by this record. After the three-cycle gate
-passes, `APP_PROJECTION_VERSION=v2` remains the lowest-risk first surface
-cutover and requires its own deployment approval.
+- scheduler history row `4056` succeeded;
+- duration was `65.818716` seconds, below the 45-minute maximum;
+- cumulative statistics were two runs, two successes, and zero failures;
+- no retry was required and `timescaledb_information.job_errors` returned no
+  row for job `1016`;
+- job state returned to `Scheduled`;
+- the next fixed slot is `2026-07-25T04:47:00Z`; and
+- no Apps projection refresh remained active.
+
+The procedure itself fails its transaction unless eligible-source, legacy,
+v2, app-ID, and filter-count parity are exact after both concurrent refreshes.
+Its successful completion therefore proves exact in-run parity. The bounded
+post-run checkpoint at `2026-07-25T01:27:40.625034Z` found:
+
+| Check                                                   | Result                                     |
+| ------------------------------------------------------- | ------------------------------------------ |
+| Legacy / v2 Apps projection rows                        | `224,066 / 224,066`                        |
+| Legacy IDs missing from v2 / v2 IDs missing from legacy | `0 / 0`                                    |
+| Expected / legacy / v2 filter rows                      | `585 / 585 / 585`                          |
+| Filter differences                                      | `0`                                        |
+| Newest projected source time                            | `2026-07-25T00:46:55.374201Z`              |
+| Latest metric date                                      | `2026-07-25`                               |
+| Eligible source rows at the later checkpoint            | `224,069`                                  |
+| Source IDs not yet projected                            | `3`, all written after the natural refresh |
+
+The three later source rows were independently updated after the scheduler
+finished:
+
+|    App ID | Name           | Source update                 |
+| --------: | -------------- | ----------------------------- |
+| `4732330` | Skelemancer TD | `2026-07-25T00:50:42.615924Z` |
+| `3759670` | no fox season  | `2026-07-25T00:53:10.124078Z` |
+| `4893300` | Hotel Infinity | `2026-07-25T00:53:11.971389Z` |
+
+This is explained post-refresh source movement within the fixed four-hour
+cadence, not an in-run parity failure. The next run will reconcile these rows.
+
+The authenticated production `/apps` route remained populated after the
+natural run. It rendered 50 game rows, reported `130.9K games`, and exposed the
+expected `/apps/730` Counter-Strike 2 link.
+
+## Concurrent containment evidence
+
+The production PICS topology changed under separate approval before this
+natural scheduler run. The genuine Railway `publisheriq` service was running
+in `PICS_WORK_MODE=shadow` on the isolated
+`shadow-fixed-2026-07-24-37517027` stream; it was not a canonical writer. A
+bounded Tiger checkpoint found:
+
+- 61 contiguous shadow batches from `37,517,027` through `37,518,432`;
+- exact source, durable, and stored parity at `1,275` app positions;
+- zero non-shadow batches, zero incomplete batches, zero invalid hashes, and
+  zero primary-cursor advances;
+- zero cursor gaps, missing work rows, per-app latest-watermark mismatches,
+  stale-product-payload errors, expired claims, or dead letters; and
+- the canonical cursor unchanged at `37,491,237`, with its original
+  `2026-07-24T02:52:52.693840Z` timestamp.
+
+Railway logs showed successful first-attempt reconnects followed by contiguous
+batch commits. The duplicate non-PICS `publisheriq` service in project
+`c36c95df-2284-4ffc-af85-cd3c31a3b8ea` remained source-disconnected and
+stopped with zero active deployments.
+
+## Accelerated gate
+
+The approved accelerated rollout required one healthy natural execution
+rather than three scheduler daily cycles. That gate has passed. No scheduler,
+database, Railway, or reader mutation was performed while collecting this
+evidence.
+
+`APP_PROJECTION_VERSION=v2` may now proceed to its separate deployment
+approval and surface-level verification. The fixed four-hour scheduler remains
+subject to ongoing health monitoring and should be rolled back only after
+fresh evidence of a missed/failed run, unexplained parity difference, or
+unsafe runtime behavior.

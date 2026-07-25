@@ -51,10 +51,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 - Admin PICS health must report stale cursor progress instead of inferring “active” from the existence of a historical cursor.
 - The long-term Apps refresh owner is a fixed four-hour Tiger-native Timescale
   job. Schema 0091 has installed job `1016`; its approved foreground smoke
-  passed, recurring execution was separately approved, and its first actual
-  background-worker validation passed. A naturally timed run and three healthy
-  daily cycles remain required before reader cutover. GitHub is manual fallback
-  only.
+  passed, recurring execution was separately approved, and both its forced
+  background-worker validation and first natural fixed-slot execution passed.
+  Under the separately approved accelerated gate, the Apps v2 reader cutover
+  may proceed to its own deployment approval. GitHub is manual fallback only.
 - Tiger recovery capability is verified from the authenticated production console: automatic same-region backup and a continuous three-day PITR fork window are available. No Tiger database refresh is authorized until its separate operation-specific approval. Supabase recovery evidence is required only before an auth-plane mutation or an approved migration that changes legacy Supabase rows.
 
 ## Artifacts
@@ -113,9 +113,9 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   history behavior, unchanged PICS cursor, and dual-Railway-service
   containment.
 - `apps-projection-native-scheduler-enable.md`: approved recurring enablement,
-  successful actual background-worker execution and history, exact
-  reconciliation, restored fixed cadence, and the remaining natural
-  three-cycle gate.
+  successful actual background-worker execution and first natural fixed-slot
+  run, exact in-run reconciliation, explained post-run source movement,
+  restored fixed cadence, live-route evidence, and the accelerated gate.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
