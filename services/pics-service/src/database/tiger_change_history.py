@@ -215,6 +215,37 @@ class S3ArchiveStore:
         body = response["Body"].read()
         return json.loads(body.decode("utf-8"))
 
+    def read_json_verified(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        expected_content_hash: str,
+        expected_byte_size: int,
+        expected_content_type: str,
+    ) -> Dict[str, Any]:
+        """Read one immutable JSON object and verify its retained R2 pointer."""
+
+        response = self._client.get_object(Bucket=bucket, Key=key)
+        body = response["Body"].read()
+        actual_content_type = str(response.get("ContentType") or "")
+        if len(body) != expected_byte_size:
+            raise ValueError(
+                f"Archive byte-size mismatch for {bucket}/{key}: "
+                f"expected {expected_byte_size}, received {len(body)}"
+            )
+        if _hash_body(body) != expected_content_hash:
+            raise ValueError(f"Archive SHA-256 mismatch for {bucket}/{key}")
+        if actual_content_type != expected_content_type:
+            raise ValueError(
+                f"Archive content-type mismatch for {bucket}/{key}: "
+                f"expected {expected_content_type!r}, received {actual_content_type!r}"
+            )
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"Archive JSON must be an object for {bucket}/{key}")
+        return payload
+
 
 class TigerPICSChangeHistoryStore:
     """Postgres writer for PICS history tables in Tiger."""
@@ -433,10 +464,7 @@ class TigerPICSChangeHistoryStore:
                     """,
                     (json.dumps(payload),),
                 )
-                return [
-                    {"appid": row["appid"], "id": row["id"]}
-                    for row in cursor.fetchall()
-                ]
+                return [{"appid": row["appid"], "id": row["id"]} for row in cursor.fetchall()]
 
     def insert_change_events(
         self,
