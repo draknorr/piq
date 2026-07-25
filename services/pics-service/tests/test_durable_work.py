@@ -308,6 +308,50 @@ def test_reconciliation_terminal_failure_records_dead_letter_disposition():
         and "WHEN %s = 'dead_letter'" in statement
     )
     assert "WHERE work_id = %s" in settlement[0]
+    assert "'workId', %s::bigint" in settlement[0]
+    assert "'reason', %s::text" in settlement[0]
+    assert "'attempts', %s::integer" in settlement[0]
+    assert "'maxAttempts', %s::integer" in settlement[0]
+    assert settlement[1][4:8] == (42, "payload_invalid", 2, 8)
+    assert settlement[1][-2:] == (42, 8)
+    assert connection.committed is True
+
+
+def test_reconciliation_retry_uses_typed_disposition_parameters():
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+
+    state = store.fail_claim(
+        claim=make_reconciliation_claim(),
+        worker_id="worker-1",
+        error_code="payload_missing",
+        error_message="retryable",
+        retryable=True,
+        retry_delay_seconds=30,
+    )
+
+    assert state == "retrying"
+    settlement = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+        and "WHEN %s = 'dead_letter'" in statement
+    )
+    assert "'workId', %s::bigint" in settlement[0]
+    assert "'reason', %s::text" in settlement[0]
+    assert "'attempts', %s::integer" in settlement[0]
+    assert "'maxAttempts', %s::integer" in settlement[0]
+    assert settlement[1][0:9] == (
+        "retrying",
+        "payload_missing",
+        "retryable",
+        "retrying",
+        42,
+        "payload_missing",
+        2,
+        8,
+        "retrying",
+    )
     assert settlement[1][-2:] == (42, 8)
     assert connection.committed is True
 

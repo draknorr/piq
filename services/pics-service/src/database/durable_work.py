@@ -628,10 +628,10 @@ class TigerPICSDurableWorkStore:
                 last_error_message = %s,
                 disposition = CASE
                   WHEN %s = 'dead_letter' THEN jsonb_build_object(
-                    'workId', %s,
-                    'reason', %s,
-                    'attempts', %s,
-                    'maxAttempts', %s
+                    'workId', %s::bigint,
+                    'reason', %s::text,
+                    'attempts', %s::integer,
+                    'maxAttempts', %s::integer
                   )
                   ELSE NULL
                 END,
