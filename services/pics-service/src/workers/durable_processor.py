@@ -153,7 +153,11 @@ class DurablePICSProcessor:
                 snapshots_changed += int(result["snapshot_changed"])
                 events_created += int(result["event_count"])
             except PICSPayloadValidationError as error:
-                if error.retryable:
+                final_source_omission = (
+                    error.error_code == "payload_missing"
+                    and claim.attempts >= claim.max_attempts
+                )
+                if error.retryable and not final_source_omission:
                     state = self._fail_claim(claim, error.error_code, str(error), True)
                     retried += int(state == "retrying")
                     dead_lettered += int(state == "dead_letter")
@@ -314,6 +318,8 @@ class DurablePICSProcessor:
             "stream_key": claim.stream_key,
             "work_mode": claim.work_mode,
             "claimed_through_change_number": (claim.claimed_through_change_number),
+            "attempts": claim.attempts,
+            "max_attempts": claim.max_attempts,
             "error_code": error.error_code,
             "error": str(error),
             "raw_payload": raw_payload,
