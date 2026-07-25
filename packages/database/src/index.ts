@@ -61,6 +61,8 @@ export {
   type CatalogObservationRow,
   type CatalogObservationWriteMode,
   type CatalogScanBatchResult,
+  type CatalogScanFinalizationPhase,
+  type CatalogScanFinalizationProgress,
   type CatalogScanKind,
   type CatalogScanSource,
   type CatalogScanStart,

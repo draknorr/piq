@@ -421,9 +421,15 @@ export interface CatalogAppUpsert {
 }
 
 export type CatalogObservationWriteMode = 'shadow' | 'primary';
+export type CatalogScanFinalizationPhase =
+  | 'not_started'
+  | 'catalog_state'
+  | 'catalog_readiness'
+  | 'ready_to_complete'
+  | 'completed';
 export type CatalogScanKind = 'incremental' | 'full';
 export type CatalogScanSource = 'steam_change_hints' | 'steam_applist';
-export type CatalogScanStatus = 'running' | 'completed' | 'failed';
+export type CatalogScanStatus = 'running' | 'finalizing' | 'completed' | 'failed';
 
 export interface CatalogObservationRow {
   appid: number;
@@ -463,6 +469,15 @@ export interface CatalogScanBatchResult {
   unchangedKnownRows: number;
   unknownAppids: number[];
   unknownRows: number;
+}
+
+export interface CatalogScanFinalizationProgress {
+  done: boolean;
+  phase: CatalogScanFinalizationPhase;
+  processedRows: number;
+  readinessRows: number;
+  stateRows: number;
+  status: CatalogScanStatus;
 }
 
 export interface AppSyncCandidate {
@@ -1104,6 +1119,54 @@ function parseCatalogScanBatchResult(value: unknown): CatalogScanBatchResult {
     unchangedKnownRows: readCount('unchanged_known_rows'),
     unknownAppids: readAppids('unknown_appids'),
     unknownRows: readCount('unknown_rows'),
+  };
+}
+
+function parseCatalogScanFinalizationProgress(value: unknown): CatalogScanFinalizationProgress {
+  const record = parseJsonRecord(value);
+  if (!record) {
+    throw new Error('Tiger catalog finalization returned an invalid result');
+  }
+
+  const phases = new Set<CatalogScanFinalizationPhase>([
+    'not_started',
+    'catalog_state',
+    'catalog_readiness',
+    'ready_to_complete',
+    'completed',
+  ]);
+  const statuses = new Set<CatalogScanStatus>(['running', 'finalizing', 'completed', 'failed']);
+  const phase =
+    typeof record.phase === 'string' && phases.has(record.phase as CatalogScanFinalizationPhase)
+      ? (record.phase as CatalogScanFinalizationPhase)
+      : null;
+  const status =
+    typeof record.status === 'string' && statuses.has(record.status as CatalogScanStatus)
+      ? (record.status as CatalogScanStatus)
+      : null;
+  const readCount = (key: string): number => {
+    const raw = record[key];
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new Error(`Tiger catalog finalization result has invalid ${key}`);
+    }
+    return parsed;
+  };
+
+  if (!phase || !status || typeof record.done !== 'boolean') {
+    throw new Error('Tiger catalog finalization result has invalid state');
+  }
+  if (record.done !== (status === 'completed' && phase === 'completed')) {
+    throw new Error('Tiger catalog finalization result has inconsistent completion state');
+  }
+
+  return {
+    done: record.done,
+    phase,
+    processedRows: readCount('processed_rows'),
+    readinessRows: readCount('readiness_rows'),
+    stateRows: readCount('state_rows'),
+    status,
   };
 }
 
@@ -1863,6 +1926,9 @@ export class TigerCatalogRepository {
 }
 
 export class TigerCatalogObservationRepository {
+  private static readonly DEFAULT_FINALIZATION_BATCH_SIZE = 1000;
+  private static readonly MAX_FINALIZATION_STEPS = 10000;
+
   constructor(private readonly pool: TigerWriterPool) {}
 
   async beginScan(params: {
@@ -1957,21 +2023,22 @@ export class TigerCatalogObservationRepository {
   async completeScan(params: {
     expectedBatches: number;
     expectedSourceRows: number;
+    finalizationBatchSize?: number;
     inputHash: string;
     reconciliationOutcome?: JsonRecord | null;
     scanId: string;
-  }): Promise<void> {
-    await runQuery(
+  }): Promise<CatalogScanFinalizationProgress> {
+    const { rows } = await runQuery<JsonResultRow>(
       this.pool,
-      'catalogObservation.completeScan',
+      'catalogObservation.beginFinalization',
       `
-        SELECT ops.complete_catalog_scan(
+        SELECT ops.begin_catalog_scan_finalization(
           $1::uuid,
           $2::integer,
           $3::integer,
           $4::text,
           $5::jsonb
-        )
+        ) AS result
       `,
       [
         params.scanId,
@@ -1981,6 +2048,47 @@ export class TigerCatalogObservationRepository {
         params.reconciliationOutcome ?? null,
       ]
     );
+
+    const initial = parseCatalogScanFinalizationProgress(rows[0]?.result);
+    if (initial.done) {
+      return initial;
+    }
+
+    return this.resumeScanFinalization({
+      batchSize: params.finalizationBatchSize,
+      scanId: params.scanId,
+    });
+  }
+
+  async resumeScanFinalization(params: {
+    batchSize?: number;
+    scanId: string;
+  }): Promise<CatalogScanFinalizationProgress> {
+    const batchSize =
+      params.batchSize ?? TigerCatalogObservationRepository.DEFAULT_FINALIZATION_BATCH_SIZE;
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 5000) {
+      throw new Error('Catalog finalization batch size must be between 1 and 5000');
+    }
+
+    for (let step = 0; step < TigerCatalogObservationRepository.MAX_FINALIZATION_STEPS; step += 1) {
+      const { rows } = await runQuery<JsonResultRow>(
+        this.pool,
+        'catalogObservation.advanceFinalization',
+        `
+          SELECT ops.advance_catalog_scan_finalization(
+            $1::uuid,
+            $2::integer
+          ) AS result
+        `,
+        [params.scanId, batchSize]
+      );
+      const progress = parseCatalogScanFinalizationProgress(rows[0]?.result);
+      if (progress.done) {
+        return progress;
+      }
+    }
+
+    throw new Error(`Catalog scan ${params.scanId} exceeded the bounded finalization step limit`);
   }
 
   async failScan(scanId: string, errorMessage: string): Promise<void> {

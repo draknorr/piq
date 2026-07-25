@@ -22,6 +22,7 @@ import {
   buildCatalogInputHash,
   buildCatalogScanRunKey,
   normalizeCatalogObservationRows,
+  readCatalogFinalizationBatchSize,
   readCatalogObservationMode,
 } from '../catalog-observation.js';
 import { refreshCcuQualityCacheSafely } from '../workers-support/ccu-quality-cache.js';
@@ -153,6 +154,7 @@ export async function runTigerAppListSync(
   const runSeenAt = new Date().toISOString();
   const batchSize = parsePositiveInteger(env.APPLIST_BATCH_SIZE, DEFAULT_APPLIST_BATCH_SIZE);
   const catalogObservationMode = readCatalogObservationMode(env);
+  const catalogFinalizationBatchSize = readCatalogFinalizationBatchSize(env);
 
   log.info('Starting Tiger App List sync', {
     githubRunId,
@@ -211,6 +213,40 @@ export async function runTigerAppListSync(
         source: 'steam_applist',
         sourceStartedAt: runSeenAt,
       });
+    }
+
+    if (catalogScan?.status === 'finalizing') {
+      await tiger.catalogObservation.resumeScanFinalization({
+        batchSize: catalogFinalizationBatchSize,
+        scanId: catalogScan.id,
+      });
+      updatedApps = observation.rows.length;
+
+      if (jobId) {
+        await tiger.ops.updateSyncJob(jobId, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          items_processed: totalApps,
+          items_succeeded: observation.rows.length,
+          items_failed: 0,
+          items_skipped: observation.rejections.length,
+          items_created: 0,
+          items_updated: observation.rows.length,
+          error_message: null,
+        });
+      }
+
+      log.info('Resumed durable AppList catalog finalization', {
+        catalogFinalizationBatchSize,
+        catalogScanId: catalogScan.id,
+      });
+      return {
+        errors: 0,
+        newApps: 0,
+        reviewPromotions: 0,
+        totalApps,
+        updatedApps,
+      };
     }
 
     const expectedBatches =
@@ -318,6 +354,7 @@ export async function runTigerAppListSync(
       await tiger.catalogObservation.completeScan({
         expectedBatches,
         expectedSourceRows: observation.sourceRowCount,
+        finalizationBatchSize: catalogFinalizationBatchSize,
         inputHash: buildCatalogInputHash(observation),
         reconciliationOutcome: {
           accepted_rows: observation.rows.length,

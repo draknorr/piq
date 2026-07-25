@@ -425,13 +425,53 @@ test('catalogObservation.commitBatch rejects malformed durable disposition detai
 });
 
 test('catalogObservation completion and failure call the guarded Tiger RPCs', async () => {
-  const pool = new CapturingPool([result(), result()]);
+  const inputHash = 'a'.repeat(64);
+  const pool = new CapturingPool([
+    result([
+      {
+        result: {
+          done: false,
+          phase: 'catalog_state',
+          processed_rows: 0,
+          readiness_rows: 0,
+          state_rows: 0,
+          status: 'finalizing',
+        },
+      },
+    ]),
+    result([
+      {
+        result: {
+          done: false,
+          phase: 'ready_to_complete',
+          processed_rows: 1500,
+          readiness_rows: 0,
+          state_rows: 1500,
+          status: 'finalizing',
+        },
+      },
+    ]),
+    result([
+      {
+        result: {
+          done: true,
+          phase: 'completed',
+          processed_rows: 0,
+          readiness_rows: 0,
+          state_rows: 1500,
+          status: 'completed',
+        },
+      },
+    ]),
+    result(),
+  ]);
   const writer = createTigerWriterForPool(pool);
 
-  await writer.catalogObservation.completeScan({
+  const completion = await writer.catalogObservation.completeScan({
     expectedBatches: 2,
     expectedSourceRows: 1500,
-    inputHash: 'scan-sha',
+    finalizationBatchSize: 250,
+    inputHash,
     reconciliationOutcome: { status: 'pending_daily_parity' },
     scanId: '00000000-0000-0000-0000-000000000101',
   });
@@ -440,19 +480,41 @@ test('catalogObservation completion and failure call the guarded Tiger RPCs', as
     'forced failure'
   );
 
-  assert.match(pool.calls[0]?.sql ?? '', /ops\.complete_catalog_scan/);
+  assert.equal(completion.done, true);
+  assert.equal(completion.stateRows, 1500);
+  assert.match(pool.calls[0]?.sql ?? '', /ops\.begin_catalog_scan_finalization/);
+  assert.match(pool.calls[0]?.sql ?? '', /\)\s+AS result/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /ops\.complete_catalog_scan\(/);
   assert.deepEqual(pool.calls[0]?.values, [
     '00000000-0000-0000-0000-000000000101',
     2,
     1500,
-    'scan-sha',
+    inputHash,
     { status: 'pending_daily_parity' },
   ]);
-  assert.match(pool.calls[1]?.sql ?? '', /ops\.fail_catalog_scan/);
-  assert.deepEqual(pool.calls[1]?.values, [
+  assert.match(pool.calls[1]?.sql ?? '', /ops\.advance_catalog_scan_finalization/);
+  assert.deepEqual(pool.calls[1]?.values, ['00000000-0000-0000-0000-000000000101', 250]);
+  assert.match(pool.calls[2]?.sql ?? '', /ops\.advance_catalog_scan_finalization/);
+  assert.match(pool.calls[3]?.sql ?? '', /ops\.fail_catalog_scan/);
+  assert.deepEqual(pool.calls[3]?.values, [
     '00000000-0000-0000-0000-000000000102',
     'forced failure',
   ]);
+});
+
+test('catalogObservation finalization rejects unsafe batch sizes before querying Tiger', async () => {
+  const pool = new CapturingPool();
+  const writer = createTigerWriterForPool(pool);
+
+  await assert.rejects(
+    writer.catalogObservation.resumeScanFinalization({
+      batchSize: 5001,
+      scanId: '00000000-0000-0000-0000-000000000101',
+    }),
+    /between 1 and 5000/
+  );
+
+  assert.equal(pool.calls.length, 0);
 });
 
 test('catalog.markStorefrontInaccessible updates apps and sync_status transactionally', async () => {
