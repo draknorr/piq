@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
+from uuid import UUID
 
 
 class PICSWorkStateError(RuntimeError):
@@ -27,6 +28,7 @@ class PICSWorkClaim:
     max_attempts: int
     claim_expires_at: datetime
     worker_id: str
+    reconciliation_run_id: Optional[UUID] = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +146,15 @@ class TigerPICSDurableWorkStore:
                             AND work.state IN ('pending', 'retrying')
                             AND work.next_attempt_at <= clock_timestamp()
                             AND work.attempts < work.max_attempts
+                            AND (
+                              work.reconciliation_run_id IS NULL
+                              OR EXISTS (
+                                SELECT 1
+                                FROM ops.pics_reconciliation_runs reconciliation
+                                WHERE reconciliation.id = work.reconciliation_run_id
+                                  AND reconciliation.status = 'active'
+                              )
+                            )
                           ORDER BY
                             CASE work.lane
                               WHEN 'new' THEN 0
@@ -183,7 +194,8 @@ class TigerPICSDurableWorkStore:
                           work.attempts,
                           work.max_attempts,
                           work.claim_expires_at,
-                          work.worker_id
+                          work.worker_id,
+                          work.reconciliation_run_id
                         """,
                         (
                             normalized_mode,
@@ -297,20 +309,32 @@ class TigerPICSDurableWorkStore:
                         ),
                     )
                     if not should_retry and claim.work_mode == "durable":
+                        readiness_provenance = {
+                            "workId": claim.id,
+                            "streamKey": claim.stream_key,
+                            "claimedThroughChangeNumber": (claim.claimed_through_change_number),
+                            "attempts": attempts,
+                            "maxAttempts": max_attempts,
+                        }
+                        if claim.reconciliation_run_id is not None:
+                            readiness_provenance["reconciliationRunId"] = str(
+                                claim.reconciliation_run_id
+                            )
                         self._upsert_readiness(
                             cursor,
                             appid=claim.appid,
                             status="failed",
                             blocking_reason=normalized_code,
                             retryable=False,
-                            provenance={
-                                "workId": claim.id,
-                                "streamKey": claim.stream_key,
-                                "claimedThroughChangeNumber": (claim.claimed_through_change_number),
-                                "attempts": attempts,
-                                "maxAttempts": max_attempts,
-                            },
+                            provenance=readiness_provenance,
                         )
+                    self._settle_reconciliation_failure(
+                        cursor,
+                        claim=claim,
+                        next_state=next_state,
+                        error_code=normalized_code,
+                        error_message=normalized_message,
+                    )
                     return next_state
 
     def block_claim(
@@ -364,6 +388,13 @@ class TigerPICSDurableWorkStore:
                             retryable=False,
                             provenance=readiness_provenance,
                         )
+                    self._settle_reconciliation_source_block(
+                        cursor,
+                        claim=claim,
+                        blocking_reason=normalized_reason,
+                        detail=normalized_detail,
+                        provenance=provenance,
+                    )
 
     def complete_shadow_claim(
         self,
@@ -418,8 +449,15 @@ class TigerPICSDurableWorkStore:
             archive_content_hash=str(row[4]),
         )
 
-    @staticmethod
-    def complete_locked_claim(cursor: Any, *, claim: PICSWorkClaim) -> str:
+    @classmethod
+    def complete_locked_claim(
+        cls,
+        cursor: Any,
+        *,
+        claim: PICSWorkClaim,
+        snapshot_id: Optional[int] = None,
+        source_change_number: Optional[int] = None,
+    ) -> str:
         """Settle a claim inside the caller's promotion transaction."""
 
         cursor.execute(
@@ -466,6 +504,12 @@ class TigerPICSDurableWorkStore:
         row = cursor.fetchone()
         if row is None:
             raise PICSWorkStateError(f"PICS work {claim.id} disappeared during completion")
+        cls._settle_reconciliation_completion(
+            cursor,
+            claim=claim,
+            snapshot_id=snapshot_id,
+            source_change_number=source_change_number,
+        )
         return str(row[0])
 
     def lock_claim_for_promotion(
@@ -538,6 +582,179 @@ class TigerPICSDurableWorkStore:
             """,
             (work_mode, stream_key),
         )
+        cursor.execute(
+            """
+            UPDATE ops.pics_reconciliation_items items
+            SET status = 'dead_letter',
+                last_error_code = 'lease_expired',
+                last_error_message = 'Worker lease expired before acknowledgement',
+                disposition = jsonb_build_object(
+                  'workId', work.id,
+                  'reason', 'lease_expired',
+                  'attempts', work.attempts,
+                  'maxAttempts', work.max_attempts
+                ),
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            FROM ops.pics_work_state work
+            WHERE work.reconciliation_run_id = items.run_id
+              AND work.appid = items.appid
+              AND work.work_mode = %s
+              AND work.stream_key = %s
+              AND work.state = 'dead_letter'
+              AND work.last_error_code = 'lease_expired'
+              AND items.status IN ('pending', 'completed')
+            """,
+            (work_mode, stream_key),
+        )
+
+    @staticmethod
+    def _settle_reconciliation_failure(
+        cursor: Any,
+        *,
+        claim: PICSWorkClaim,
+        next_state: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        cursor.execute(
+            """
+            UPDATE ops.pics_reconciliation_items
+            SET status = CASE
+                  WHEN %s = 'dead_letter' THEN 'dead_letter'
+                  ELSE 'pending'
+                END,
+                last_error_code = %s,
+                last_error_message = %s,
+                disposition = CASE
+                  WHEN %s = 'dead_letter' THEN jsonb_build_object(
+                    'workId', %s,
+                    'reason', %s,
+                    'attempts', %s,
+                    'maxAttempts', %s
+                  )
+                  ELSE NULL
+                END,
+                completed_at = CASE
+                  WHEN %s = 'dead_letter' THEN clock_timestamp()
+                  ELSE NULL
+                END,
+                updated_at = clock_timestamp()
+            WHERE work_id = %s
+              AND appid = %s
+              AND status IN ('pending', 'completed')
+            """,
+            (
+                next_state,
+                error_code,
+                error_message,
+                next_state,
+                claim.id,
+                error_code,
+                claim.attempts,
+                claim.max_attempts,
+                next_state,
+                claim.id,
+                claim.appid,
+            ),
+        )
+        if claim.reconciliation_run_id is not None and cursor.rowcount != 1:
+            raise PICSWorkStateError(
+                f"Reconciliation item for work {claim.id} disappeared during failure"
+            )
+
+    @staticmethod
+    def _settle_reconciliation_source_block(
+        cursor: Any,
+        *,
+        claim: PICSWorkClaim,
+        blocking_reason: str,
+        detail: str,
+        provenance: Optional[Dict[str, Any]],
+    ) -> None:
+        cursor.execute(
+            """
+            UPDATE ops.pics_reconciliation_items
+            SET status = 'source_blocked',
+                last_error_code = %s,
+                last_error_message = %s,
+                disposition = %s::jsonb,
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE work_id = %s
+              AND appid = %s
+              AND status IN ('pending', 'completed')
+            """,
+            (
+                blocking_reason,
+                detail,
+                json.dumps(
+                    {
+                        "workId": claim.id,
+                        "reason": blocking_reason,
+                        **(provenance or {}),
+                    },
+                    sort_keys=True,
+                    default=str,
+                ),
+                claim.id,
+                claim.appid,
+            ),
+        )
+        if claim.reconciliation_run_id is not None and cursor.rowcount != 1:
+            raise PICSWorkStateError(
+                f"Reconciliation item for work {claim.id} disappeared during source block"
+            )
+
+    @staticmethod
+    def _settle_reconciliation_completion(
+        cursor: Any,
+        *,
+        claim: PICSWorkClaim,
+        snapshot_id: Optional[int],
+        source_change_number: Optional[int],
+    ) -> None:
+        if claim.reconciliation_run_id is not None and (
+            snapshot_id is None or source_change_number is None
+        ):
+            raise PICSWorkStateError(
+                "Reconciliation completion requires snapshot and source change evidence"
+            )
+        if snapshot_id is None or source_change_number is None:
+            return
+        cursor.execute(
+            """
+            UPDATE ops.pics_reconciliation_items
+            SET status = 'completed',
+                completed_snapshot_id = %s,
+                source_change_number = %s,
+                last_error_code = NULL,
+                last_error_message = NULL,
+                disposition = jsonb_build_object(
+                  'workId', %s,
+                  'snapshotId', %s,
+                  'sourceChangeNumber', %s
+                ),
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE work_id = %s
+              AND appid = %s
+              AND status IN ('pending', 'completed')
+            """,
+            (
+                snapshot_id,
+                source_change_number,
+                claim.id,
+                snapshot_id,
+                source_change_number,
+                claim.id,
+                claim.appid,
+            ),
+        )
+        if claim.reconciliation_run_id is not None and cursor.rowcount != 1:
+            raise PICSWorkStateError(
+                f"Reconciliation item for work {claim.id} disappeared during completion"
+            )
 
     @staticmethod
     def _lock_claim(
@@ -664,6 +881,7 @@ class TigerPICSDurableWorkStore:
                 "max_attempts",
                 "claim_expires_at",
                 "worker_id",
+                "reconciliation_run_id",
             )
             values = dict(zip(keys, row))
         return PICSWorkClaim(
@@ -678,6 +896,11 @@ class TigerPICSDurableWorkStore:
             max_attempts=int(values["max_attempts"]),
             claim_expires_at=values["claim_expires_at"],
             worker_id=str(values["worker_id"]),
+            reconciliation_run_id=(
+                UUID(str(values["reconciliation_run_id"]))
+                if values.get("reconciliation_run_id") is not None
+                else None
+            ),
         )
 
     def _validate_identity(

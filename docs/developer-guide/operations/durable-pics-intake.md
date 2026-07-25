@@ -5,18 +5,29 @@
 `0088_durable_pics_intake.sql` was applied to Tiger production after explicit
 approval on July 24, 2026 UTC. PR #43 merged the intake implementation as
 commit `ac81b9d`. A separately approved historical shadow request produced one
-`source_blocked` parent row and zero batch-app, work, or readiness rows. No PICS
-service was restarted, and neither `shadow` nor `durable` is enabled in
-production.
+`source_blocked` parent row and zero batch-app, work, or readiness rows.
+
+The runtime changed later that day. At `2026-07-25 00:59 UTC`, the genuine
+Railway PICS service was running `PICS_WORK_MODE=shadow` with processing
+enabled on isolated stream `shadow-fixed-2026-07-24-37517027`. Its committed
+shadow head was `37,518,046`. The canonical Tiger cursor was still frozen at
+`37,491,237`; shadow processing had not advanced it or promoted primary state.
+The accidental non-PICS service with the same `publisheriq` name remained
+stopped and source-disconnected.
 
 At the July 24, 2026 UTC inspection, the canonical Tiger row was
 `ops.pics_sync_state.id = 1`, with `last_change_number = 37,491,237`. That value
 is incident evidence, not proof that the skipped interval was processed.
 
 Leased processing, completeness-aware promotion, and single-service
-orchestration are implemented on the PR 4 branch but remain disabled by
-default with `PICS_PROCESSING_ENABLED=false`. Code presence is not runtime
-approval.
+orchestration remain disabled by default with
+`PICS_PROCESSING_ENABLED=false`. The explicit production shadow setting is
+validation evidence, not approval for primary mode.
+
+Migration `0092_pics_cursor_checkpoint_reconciliation.sql` and its production
+data functions are not applied at this checkpoint. See
+[Audited PICS Cursor Reconciliation](./pics-audited-cursor-reconciliation.md)
+for the recovery design and separate approval boundaries.
 
 ## Architecture Decision
 
@@ -210,10 +221,11 @@ Before any production action:
 4. verify all created objects and prove the canonical cursor is unchanged;
 5. receive separate approval for any new shadow intake or processing run and
    a bounded comparison selected by item change number; and
-6. keep both Railway services named `publisheriq` stopped unless the exact
-   genuine PICS service ID is selected in an approved rollout.
+6. select the genuine PICS service by exact project and service ID; the
+   source-disconnected duplicate must remain stopped.
 
-`PICS_WORK_MODE=durable` and `PICS_PROCESSING_ENABLED=true` remain prohibited
-in production until PR 4 is merged, forced-restart tests pass, a recoverable
-full-state reconciliation plan replaces the retention-limited June replay, and
-the exact Railway rollout receives separate approval.
+`PICS_WORK_MODE=durable` remains prohibited until the audited checkpoint
+migration is merged and separately applied, fresh evidence identifies the
+exact source-blocked gap and healthy shadow-head batches, the checkpoint
+transaction receives separate approval, and the exact genuine-service Railway
+rollout receives separate approval.

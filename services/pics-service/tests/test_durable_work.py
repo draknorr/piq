@@ -1,5 +1,6 @@
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import pytest
 
@@ -12,8 +13,9 @@ from src.database.durable_work import (
 
 
 class FakeCursor(AbstractContextManager):
-    def __init__(self, *, fail_on=None):
+    def __init__(self, *, fail_on=None, reconciliation_item_rowcount=1):
         self.fail_on = fail_on
+        self.reconciliation_item_rowcount = reconciliation_item_rowcount
         self.events = []
         self.rowcount = 0
         self._rows = []
@@ -47,6 +49,7 @@ class FakeCursor(AbstractContextManager):
                     "max_attempts": 8,
                     "claim_expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
                     "worker_id": "worker-1",
+                    "reconciliation_run_id": None,
                 }
             ]
             self.rowcount = 1
@@ -59,6 +62,8 @@ class FakeCursor(AbstractContextManager):
         elif "RETURNING state" in normalized:
             self._row = ("completed",)
             self.rowcount = 1
+        elif normalized.startswith("UPDATE ops.pics_reconciliation_items"):
+            self.rowcount = self.reconciliation_item_rowcount
 
     def fetchall(self):
         return self._rows
@@ -122,6 +127,23 @@ def make_claim():
         max_attempts=8,
         claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         worker_id="worker-1",
+    )
+
+
+def make_reconciliation_claim():
+    return PICSWorkClaim(
+        id=42,
+        appid=8,
+        stream_key="primary",
+        work_mode="durable",
+        lane="catchup",
+        priority=100,
+        claimed_through_change_number=0,
+        attempts=2,
+        max_attempts=8,
+        claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        worker_id="worker-1",
+        reconciliation_run_id=UUID("11111111-1111-4111-8111-111111111111"),
     )
 
 
@@ -196,6 +218,121 @@ def test_heartbeat_only_extends_owned_unexpired_claims():
     )
     assert "claim_expires_at > clock_timestamp()" in statement
     assert "worker_id = %s" in statement
+
+
+def test_reconciliation_completion_requires_snapshot_and_source_change_evidence():
+    cursor = FakeCursor()
+
+    with pytest.raises(
+        PICSWorkStateError,
+        match="requires snapshot and source change evidence",
+    ):
+        TigerPICSDurableWorkStore.complete_locked_claim(
+            cursor,
+            claim=make_reconciliation_claim(),
+        )
+
+
+def test_reconciliation_completion_records_terminal_item_evidence():
+    cursor = FakeCursor()
+
+    next_state = TigerPICSDurableWorkStore.complete_locked_claim(
+        cursor,
+        claim=make_reconciliation_claim(),
+        snapshot_id=100,
+        source_change_number=17,
+    )
+
+    assert next_state == "completed"
+    settlement = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+        and "completed_snapshot_id = %s" in statement
+    )
+    assert settlement[1][0:2] == (100, 17)
+    assert settlement[1][-2:] == (42, 8)
+
+
+def test_live_claim_completion_settles_item_attached_after_claim():
+    cursor = FakeCursor()
+
+    next_state = TigerPICSDurableWorkStore.complete_locked_claim(
+        cursor,
+        claim=make_claim(),
+        snapshot_id=100,
+        source_change_number=21,
+    )
+
+    assert next_state == "completed"
+    settlement = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+        and "completed_snapshot_id = %s" in statement
+    )
+    assert "WHERE work_id = %s" in settlement[0]
+    assert settlement[1][-2:] == (41, 7)
+
+
+def test_known_reconciliation_claim_fails_closed_if_item_is_missing():
+    cursor = FakeCursor(reconciliation_item_rowcount=0)
+
+    with pytest.raises(PICSWorkStateError, match="disappeared during completion"):
+        TigerPICSDurableWorkStore.complete_locked_claim(
+            cursor,
+            claim=make_reconciliation_claim(),
+            snapshot_id=100,
+            source_change_number=17,
+        )
+
+
+def test_reconciliation_terminal_failure_records_dead_letter_disposition():
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+
+    state = store.fail_claim(
+        claim=make_reconciliation_claim(),
+        worker_id="worker-1",
+        error_code="payload_invalid",
+        error_message="terminal",
+        retryable=False,
+        retry_delay_seconds=30,
+    )
+
+    assert state == "dead_letter"
+    settlement = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+        and "WHEN %s = 'dead_letter'" in statement
+    )
+    assert "WHERE work_id = %s" in settlement[0]
+    assert settlement[1][-2:] == (42, 8)
+    assert connection.committed is True
+
+
+def test_reconciliation_source_block_records_terminal_disposition():
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+
+    store.block_claim(
+        claim=make_reconciliation_claim(),
+        worker_id="worker-1",
+        blocking_reason="missing_access_token",
+        detail="Steam requires a token",
+        provenance={"archive": {"key": "blocked.json"}},
+    )
+
+    settlement = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+        and "status = 'source_blocked'" in statement
+    )
+    assert "WHERE work_id = %s" in settlement[0]
+    assert settlement[1][-2:] == (42, 8)
+    assert connection.committed is True
 
 
 def test_retry_clears_lease_and_uses_bounded_next_attempt():
