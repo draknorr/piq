@@ -12,6 +12,64 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def _find_tiger_franchise_id(
+    cursor: Any,
+    franchise_name: str,
+    normalized_name: str,
+) -> Optional[int]:
+    cursor.execute(
+        """
+        SELECT id
+        FROM legacy.franchises
+        WHERE name = %s
+        LIMIT 1
+        """,
+        (franchise_name,),
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        return int(row[0])
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM legacy.franchises
+        WHERE normalized_name = %s
+        LIMIT 1
+        """,
+        (normalized_name,),
+    )
+    row = cursor.fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def resolve_tiger_franchise_id(cursor: Any, franchise_name: str) -> int:
+    """Resolve franchise identity without rewriting legacy names or IDs."""
+
+    normalized_name = _normalize_name(franchise_name)
+    existing_id = _find_tiger_franchise_id(cursor, franchise_name, normalized_name)
+    if existing_id is not None:
+        return existing_id
+
+    cursor.execute(
+        """
+        INSERT INTO legacy.franchises (name, normalized_name, updated_at)
+        VALUES (%s, %s, clock_timestamp())
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        (franchise_name, normalized_name),
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        return int(row[0])
+
+    concurrent_id = _find_tiger_franchise_id(cursor, franchise_name, normalized_name)
+    if concurrent_id is None:
+        raise RuntimeError(f"Unable to resolve Tiger franchise identity for {franchise_name!r}")
+    return concurrent_id
+
+
 class TigerPICSLatestStateStore:
     """Postgres writer for PICS latest-state tables in Tiger."""
 
@@ -61,7 +119,12 @@ class TigerPICSLatestStateStore:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT appid, name FROM legacy.apps WHERE appid = ANY(%s::int[]) AND name IS NOT NULL",
+                    """
+                    SELECT appid, name
+                    FROM legacy.apps
+                    WHERE appid = ANY(%s::int[])
+                      AND name IS NOT NULL
+                    """,
                     (list({int(appid) for appid in appids}),),
                 )
                 return {int(row[0]): str(row[1]) for row in cursor.fetchall() if row[1]}
@@ -204,7 +267,9 @@ class TigerPICSLatestStateStore:
                     ),
                 )
 
-    def replace_categories(self, appid: int, category_records: List[Dict[str, Any]], category_ids: List[int]) -> None:
+    def replace_categories(
+        self, appid: int, category_records: List[Dict[str, Any]], category_ids: List[int]
+    ) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 if category_records:
@@ -228,7 +293,13 @@ class TigerPICSLatestStateStore:
                         (appid, category_ids),
                     )
 
-    def replace_genres(self, appid: int, genre_records: List[Dict[str, Any]], genre_ids: List[int], primary_genre_id: Optional[int]) -> None:
+    def replace_genres(
+        self,
+        appid: int,
+        genre_records: List[Dict[str, Any]],
+        genre_ids: List[int],
+        primary_genre_id: Optional[int],
+    ) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 if genre_records:
@@ -254,7 +325,9 @@ class TigerPICSLatestStateStore:
                         (appid, primary_genre_id, genre_ids),
                     )
 
-    def replace_store_tags(self, appid: int, tag_records: List[Dict[str, Any]], tag_ids: List[int]) -> None:
+    def replace_store_tags(
+        self, appid: int, tag_records: List[Dict[str, Any]], tag_ids: List[int]
+    ) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 if tag_records:
@@ -286,20 +359,9 @@ class TigerPICSLatestStateStore:
                     )
 
     def upsert_franchise_link(self, appid: int, franchise_name: str) -> None:
-        normalized_name = _normalize_name(franchise_name)
         with self._connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO legacy.franchises (name, normalized_name, updated_at)
-                    VALUES (%s, %s, now())
-                    ON CONFLICT (normalized_name)
-                    DO UPDATE SET name = EXCLUDED.name, updated_at = now()
-                    RETURNING id
-                    """,
-                    (franchise_name, normalized_name),
-                )
-                franchise_id = cursor.fetchone()[0]
+                franchise_id = resolve_tiger_franchise_id(cursor, franchise_name)
                 cursor.execute(
                     """
                     INSERT INTO legacy.app_franchises (appid, franchise_id)
@@ -364,7 +426,10 @@ class TigerPICSLatestStateStore:
                     ON CONFLICT (appid)
                     DO UPDATE SET
                       last_pics_sync = EXCLUDED.last_pics_sync,
-                      pics_change_number = COALESCE(EXCLUDED.pics_change_number, ops.sync_status.pics_change_number),
+                      pics_change_number = COALESCE(
+                        EXCLUDED.pics_change_number,
+                        ops.sync_status.pics_change_number
+                      ),
                       updated_at = now()
                     """,
                     (pics_change_number, appids),
@@ -439,9 +504,7 @@ class TigerPICSLatestStateStore:
     def get_last_change_number(self) -> int:
         with self._connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT last_change_number FROM ops.pics_sync_state WHERE id = 1"
-                )
+                cursor.execute("SELECT last_change_number FROM ops.pics_sync_state WHERE id = 1")
                 row = cursor.fetchone()
                 return int(row[0]) if row else 0
 
