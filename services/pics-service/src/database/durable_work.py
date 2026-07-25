@@ -162,6 +162,10 @@ class TigerPICSDurableWorkStore:
                               ELSE 2
                             END,
                             work.priority DESC,
+                            CASE work.state
+                              WHEN 'retrying' THEN 0
+                              ELSE 1
+                            END,
                             work.next_attempt_at ASC,
                             work.dirty_since ASC,
                             work.id ASC
