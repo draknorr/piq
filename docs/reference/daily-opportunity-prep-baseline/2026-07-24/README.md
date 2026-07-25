@@ -139,6 +139,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   genuine-service shadow replacement from exact merged source, direct
   Tiger/R2 proof for repaired parent response archives, full isolated-stream
   continuity, unchanged canonical/primary state, and duplicate containment.
+- `pics-durable-canary-acceptance.md`: approved PR #63 durable canary on the
+  genuine service, exact canonical cursor and manifest evidence, direct parent
+  and product-payload R2 verification, protected processing-pass settlement,
+  transient reconnect recovery, and continuing automatic rollback controls.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
