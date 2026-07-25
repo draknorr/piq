@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
@@ -19,6 +18,7 @@ from .durable_work import (
     TigerPICSDurableWorkStore,
 )
 from .tiger_change_history import ArchivePointer, summarize_pics_snapshot
+from .tiger_latest_state import resolve_tiger_franchise_id
 
 
 @dataclass(frozen=True)
@@ -685,23 +685,7 @@ class TigerPICSDurablePromoter:
             franchises = cls._association_names(app.associations, "franchise")
             cursor.execute("DELETE FROM legacy.app_franchises WHERE appid = %s", (app.appid,))
             for franchise_name in franchises:
-                cursor.execute(
-                    """
-                    INSERT INTO legacy.franchises (
-                      name,
-                      normalized_name,
-                      updated_at
-                    )
-                    VALUES (%s, %s, clock_timestamp())
-                    ON CONFLICT (normalized_name)
-                    DO UPDATE SET
-                      name = EXCLUDED.name,
-                      updated_at = clock_timestamp()
-                    RETURNING id
-                    """,
-                    (franchise_name, cls._normalize_name(franchise_name)),
-                )
-                franchise_id = cursor.fetchone()[0]
+                franchise_id = resolve_tiger_franchise_id(cursor, franchise_name)
                 cursor.execute(
                     """
                     INSERT INTO legacy.app_franchises (appid, franchise_id)
@@ -903,7 +887,3 @@ class TigerPICSDurablePromoter:
                 if association.type == association_type and association.name.strip()
             }
         )
-
-    @staticmethod
-    def _normalize_name(value: str) -> str:
-        return re.sub(r"\s+", " ", value.strip().lower())

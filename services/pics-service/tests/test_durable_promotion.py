@@ -9,6 +9,10 @@ from src.database.durable_payload import validate_pics_product_payload
 from src.database.durable_promotion import TigerPICSDurablePromoter
 from src.database.durable_work import PICSWorkClaim, TigerPICSDurableWorkStore
 from src.database.tiger_change_history import ArchivePointer
+from src.database.tiger_latest_state import (
+    TigerPICSLatestStateStore,
+    resolve_tiger_franchise_id,
+)
 
 
 def make_payload():
@@ -50,6 +54,37 @@ def make_payload_with_absent_tags():
             "category": {},
             "genres": {},
             "associations": {},
+        },
+        "extended": {"listofdlc": ""},
+        "config": {},
+        "depots": {},
+    }
+    return validate_pics_product_payload(
+        appid=7,
+        claimed_through_change_number=20,
+        raw_payload=raw,
+    )
+
+
+def make_payload_with_franchise(franchise_name="Defender's  Quest"):
+    raw = {
+        "appid": 7,
+        "_change_number": 20,
+        "_missing_token": False,
+        "_sha": "a" * 40,
+        "_size": 100,
+        "common": {
+            "name": "Test app",
+            "type": "game",
+            "category": {},
+            "genres": {},
+            "store_tags": {},
+            "associations": {
+                "0": {
+                    "type": "franchise",
+                    "name": franchise_name,
+                }
+            },
         },
         "extended": {"listofdlc": ""},
         "config": {},
@@ -122,8 +157,21 @@ def make_reconciliation_payload():
 
 
 class FakeCursor(AbstractContextManager):
-    def __init__(self, *, fail_on=None):
+    def __init__(
+        self,
+        *,
+        fail_on=None,
+        franchise_exact_id=None,
+        franchise_normalized_id=None,
+        franchise_insert_id=None,
+        franchise_post_conflict_id=None,
+    ):
         self.fail_on = fail_on
+        self.franchise_exact_id = franchise_exact_id
+        self.franchise_normalized_id = franchise_normalized_id
+        self.franchise_insert_id = franchise_insert_id
+        self.franchise_post_conflict_id = franchise_post_conflict_id
+        self.franchise_insert_attempted = False
         self.events = []
         self.rowcount = 0
         self._row = None
@@ -155,6 +203,22 @@ class FakeCursor(AbstractContextManager):
             self.rowcount = 1
         elif normalized.startswith("UPDATE ops.pics_reconciliation_items"):
             self.rowcount = 1
+        elif normalized.startswith("SELECT id FROM legacy.franchises WHERE name = %s"):
+            if self.franchise_exact_id is not None:
+                self._row = (self.franchise_exact_id,)
+        elif normalized.startswith("SELECT id FROM legacy.franchises WHERE normalized_name = %s"):
+            franchise_id = (
+                self.franchise_post_conflict_id
+                if self.franchise_insert_attempted and self.franchise_post_conflict_id is not None
+                else self.franchise_normalized_id
+            )
+            if franchise_id is not None:
+                self._row = (franchise_id,)
+        elif normalized.startswith("INSERT INTO legacy.franchises"):
+            self.franchise_insert_attempted = True
+            if self.franchise_insert_id is not None:
+                self._row = (self.franchise_insert_id,)
+                self.rowcount = 1
 
     def fetchone(self):
         return self._row
@@ -271,6 +335,112 @@ def test_absent_relationship_family_never_deletes_existing_edges():
         statement.startswith("DELETE FROM legacy.app_steam_tags") for statement in statements
     )
     assert connection.committed is True
+
+
+def test_promotion_reuses_exact_franchise_name_with_legacy_normalization():
+    cursor = FakeCursor(franchise_exact_id=1669)
+    promoter, connection = make_promoter(cursor)
+
+    promoter.promote(
+        claim=make_claim(),
+        worker_id="worker-1",
+        payload=make_payload_with_franchise(),
+        previous_pointer=None,
+        previous_snapshot=None,
+        archive=archive_pointer(),
+    )
+
+    statements = [statement for statement, _ in cursor.events]
+    franchise_link = next(
+        params
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO legacy.app_franchises")
+    )
+    exact_lookup_index = statements.index(
+        "SELECT id FROM legacy.franchises WHERE name = %s LIMIT 1"
+    )
+    link_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO legacy.app_franchises")
+    )
+    assert exact_lookup_index < link_index
+    assert not any(
+        statement.startswith("INSERT INTO legacy.franchises") for statement in statements
+    )
+    assert franchise_link == (7, 1669)
+    assert connection.committed is True
+
+
+def test_franchise_resolution_prefers_exact_name_over_normalized_match():
+    cursor = FakeCursor(
+        franchise_exact_id=248260,
+        franchise_normalized_id=1790,
+    )
+
+    franchise_id = resolve_tiger_franchise_id(cursor, "Dying  Light")
+
+    statements = [statement for statement, _ in cursor.events]
+    assert franchise_id == 248260
+    assert statements == ["SELECT id FROM legacy.franchises WHERE name = %s LIMIT 1"]
+
+
+def test_franchise_resolution_reuses_normalized_identity_without_renaming():
+    cursor = FakeCursor(franchise_normalized_id=1790)
+
+    franchise_id = resolve_tiger_franchise_id(cursor, "  DYING   LIGHT ")
+
+    statements = [statement for statement, _ in cursor.events]
+    assert franchise_id == 1790
+    assert statements == [
+        "SELECT id FROM legacy.franchises WHERE name = %s LIMIT 1",
+        "SELECT id FROM legacy.franchises WHERE normalized_name = %s LIMIT 1",
+    ]
+
+
+def test_franchise_resolution_inserts_only_when_identity_is_new():
+    cursor = FakeCursor(franchise_insert_id=250000)
+
+    franchise_id = resolve_tiger_franchise_id(cursor, "New  Franchise")
+
+    insert = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO legacy.franchises")
+    )
+    assert franchise_id == 250000
+    assert "ON CONFLICT DO NOTHING" in insert[0]
+    assert insert[1] == ("New  Franchise", "new franchise")
+
+
+def test_franchise_resolution_recovers_from_concurrent_unique_conflict():
+    cursor = FakeCursor(franchise_post_conflict_id=6302)
+
+    franchise_id = resolve_tiger_franchise_id(cursor, "Movavi Software")
+
+    statements = [statement for statement, _ in cursor.events]
+    insert_statement = next(
+        statement
+        for statement in statements
+        if statement.startswith("INSERT INTO legacy.franchises")
+    )
+    assert franchise_id == 6302
+    assert "ON CONFLICT DO NOTHING" in insert_statement
+    assert statements.count("SELECT id FROM legacy.franchises WHERE name = %s LIMIT 1") == 2
+
+
+def test_tiger_latest_state_link_uses_shared_franchise_resolution():
+    cursor = FakeCursor(franchise_exact_id=1669)
+    connection = FakeConnection(cursor)
+    store = TigerPICSLatestStateStore("postgresql://unused")
+    store._connect = lambda: connection
+
+    store.upsert_franchise_link(7, "Defender's  Quest")
+
+    assert cursor.events[-1][1] == (7, 1669)
+    assert not any(
+        statement.startswith("INSERT INTO legacy.franchises") for statement, _ in cursor.events
+    )
 
 
 def test_full_reconciliation_promotes_with_actual_payload_change_evidence():

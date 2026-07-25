@@ -1,0 +1,119 @@
+{
+  "bug_id": "20260725-075929-pics-franchise-name-uniqueness-collision",
+  "slug": "pics-franchise-name-uniqueness-collision",
+  "created_at": "2026-07-25T07:59:29.239647+00:00",
+  "status": "fixed",
+  "summary": "Durable PICS promotion retries app 252190 because the current normalizer collapses repeated whitespace while an existing Tiger franchise row owns the exact raw name with a legacy noncanonical normalized_name. The writer only handles normalized_name conflicts, so PostgreSQL rejects the insert on the separate unique name constraint.",
+  "triage_score": 2,
+  "triage_tier": 3,
+  "depth_classification": "broad",
+  "spawned_agents": [
+    "bug_mapper",
+    "runtime_reproducer",
+    "impact_analyst"
+  ],
+  "why_this_tier": "Database correctness contributed +2, the external PICS worker contributed +1, and the isolated franchise write paths contributed -1. The database-correctness override required three independent read-only assessments.",
+  "observed_facts": [
+    "At 2026-07-25T08:03:24.978925Z, primary work row 8176 for app 252190 was retrying at attempt 5/8 with PostgreSQL franchises_name_key collision evidence.",
+    "The conflicting persisted row is legacy.franchises.id 1669 with name and normalized_name both equal to the double-space form Defender's  Quest.",
+    "The current Python normalizer converts Defender's  Quest to the single-space value defender's quest.",
+    "App 252190 is already linked to franchise 1669, and franchise 1669 is shared by two apps.",
+    "Tiger enforces separate unique constraints on legacy.franchises.name and legacy.franchises.normalized_name.",
+    "Both Tiger franchise writer paths insert the raw name plus the current normalized value but handle only normalized_name conflicts.",
+    "At 2026-07-25T08:08:45.323155Z, Tiger had 14613 franchise rows, including 16 whose stored normalized_name differs from the current normalizer.",
+    "The same source-of-truth check found two groups, containing four rows, where distinct exact names collapse to the same current normalized value.",
+    "The 16 stale franchise rows are linked to 19 apps.",
+    "App 252190 remains PICS-pending and retryable; the failed promotion transaction did not partially delete its existing franchise relationship.",
+    "The targeted pre-fix PICS baseline passed 16 tests.",
+    "The shared exact-first resolver is covered in both durable promotion and Tiger latest-state relationship sync.",
+    "The post-fix targeted suite passed 22 tests and the complete PICS suite passed 108 tests."
+  ],
+  "reproduction_status": {
+    "state": "reproduced",
+    "summary": "Read-only Tiger evidence and the current normalizer reproduce the exact stale-normalization precondition: an exact raw-name owner exists under a legacy normalized value, while the writer attempts the same unique name under a different current normalized value.",
+    "evidence_paths": [
+      "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/db/live-franchise-collision.md",
+      "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/reproduction/normalizer-and-write-path.md",
+      "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/tests/pytest-baseline.md",
+      "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/tests/post-fix-validation.md"
+    ]
+  },
+  "owning_files": [
+    "services/pics-service/src/database/durable_promotion.py",
+    "services/pics-service/src/database/tiger_latest_state.py",
+    "services/pics-service/tests/test_durable_promotion.py"
+  ],
+  "affected_surfaces": [
+    "durable PICS canonical promotion",
+    "Tiger PICS latest-state relationship sync",
+    "legacy.franchises identity preservation",
+    "legacy.app_franchises relationship preservation",
+    "PICS retries and dead-letter timing",
+    "PICS readiness and reconciliation progress"
+  ],
+  "db_checks": [
+    {
+      "status": "run",
+      "purpose": "Verify the exact production retry, existing franchise identity, and existing app relationships.",
+      "sql": "SELECT id, appid, state, attempts, max_attempts, last_error_code, last_error_message FROM ops.pics_work_state WHERE id=8176 LIMIT 1; SELECT f.id, f.name, f.normalized_name, count(af.appid) FROM legacy.franchises f LEFT JOIN legacy.app_franchises af ON af.franchise_id=f.id WHERE f.id=1669 GROUP BY f.id, f.name, f.normalized_name LIMIT 1;",
+      "result_summary": "Work row 8176 was retrying at attempt 5/8 with an exact raw-name uniqueness error. Franchise 1669 owns that raw name under a legacy double-space normalized value and remains linked to two apps.",
+      "artifact_path": "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/db/live-franchise-collision.md"
+    },
+    {
+      "status": "run",
+      "purpose": "Measure whether stale normalization and canonical collisions require a broader data repair.",
+      "sql": "SELECT count(*), count(*) FILTER (WHERE normalized_name <> regexp_replace(lower(btrim(name)), '[[:space:]]+', ' ', 'g')) FROM legacy.franchises; WITH canonical AS (SELECT regexp_replace(lower(btrim(name)), '[[:space:]]+', ' ', 'g') AS current_normalized FROM legacy.franchises), collisions AS (SELECT current_normalized, count(*) AS rows FROM canonical GROUP BY current_normalized HAVING count(*)>1) SELECT count(*), sum(rows) FROM collisions;",
+      "result_summary": "Tiger had 14613 franchise rows and 16 legacy noncanonical normalized values. Two canonical collision groups contain four rows: Dying Light/Dying  Light and Movavi Software/Movavi  Software. A mass data rewrite or silent merge would be unsafe and is outside this fix.",
+      "artifact_path": "bugfixes/20260725-075929-pics-franchise-name-uniqueness-collision/artifacts/db/live-franchise-collision.md"
+    }
+  ],
+  "root_cause_hypotheses": [
+    {
+      "label": "The writer handles only normalized-name conflicts even though the table independently enforces unique raw names.",
+      "confidence": "high",
+      "evidence": "The existing row owns the exact raw name under a legacy normalized value; the current code attempts that name under a new normalized value and PostgreSQL reports franchises_name_key rather than franchises_normalized_name_key."
+    },
+    {
+      "label": "The PICS payload contains a malformed or incomplete association family.",
+      "confidence": "low",
+      "evidence": "The source value matches the persisted raw franchise name exactly, the existing relationship is valid, and failure occurs only at uniqueness enforcement."
+    }
+  ],
+  "fix_options": [
+    {
+      "title": "Resolve existing raw or normalized identity before insert",
+      "behavior_change": false,
+      "summary": "Prefer an existing exact-name row, otherwise reuse the current-normalized row, and only insert when neither identity exists. Use targetless conflict handling plus a second lookup for concurrent inserts.",
+      "tradeoffs": "Preserves IDs and relationships and handles both unique constraints without schema or data migration. Adds bounded lookup statements to the small franchise relationship path."
+    },
+    {
+      "title": "Canonicalize all stored normalized names",
+      "behavior_change": true,
+      "summary": "Rewrite legacy.franchises.normalized_name to the current Python normalization rule before processing.",
+      "tradeoffs": "Touches 8402 production rows, requires a separately approved migration and collision plan, and is unnecessary for safe idempotent ingestion."
+    },
+    {
+      "title": "Catch the raw-name exception and retry by name",
+      "behavior_change": false,
+      "summary": "Keep the current insert and recover only after PostgreSQL raises a unique violation.",
+      "tradeoffs": "PostgreSQL aborts the current transaction after the error, so recovery would require savepoints or transaction restart and would be more fragile."
+    }
+  ],
+  "recommended_fix": "Use one shared Tiger franchise resolver that selects exact name first, then current normalized_name; inserts with ON CONFLICT DO NOTHING only when no row exists; and reselects after an insert race. Exact-name precedence preserves distinct legacy IDs in the two live canonical-collision groups. Reuse it in durable promotion and the Tiger latest-state path. Do not mutate existing names or normalized values.",
+  "open_questions": [],
+  "verification_plan": [
+    "Add regression coverage for exact-name ownership with a stale normalized_name.",
+    "Add regression coverage for normalized-name reuse and conflict-safe post-insert lookup.",
+    "Prove durable promotion links the resolved existing franchise ID and remains atomic.",
+    "Run targeted durable-promotion and Tiger latest-state tests.",
+    "Run the complete PICS pytest suite and changed-file format/lint checks.",
+    "Review the final diff for schema changes, data rewrites, Supabase product writes, or relationship clearing.",
+    "Open a draft PR without merging or deploying it."
+  ],
+  "residual_risks": [
+    "Existing legacy normalized_name values remain noncanonical; this fix intentionally tolerates them instead of rewriting production identities.",
+    "Two live canonical collision groups remain intentionally distinct. Exact-name precedence preserves their current IDs; any identity merge requires a separate product-data decision and production-write approval.",
+    "Production row 8176 remains retrying until a separately approved deployment uses the merged fix.",
+    "Repository-wide Ruff and mypy have pre-existing failures outside this contained change; changed-file checks and the full runtime test suite pass."
+  ]
+}
