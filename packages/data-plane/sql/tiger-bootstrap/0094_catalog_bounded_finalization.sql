@@ -429,19 +429,27 @@ BEGIN
   END IF;
 
   IF v_run.finalization_phase = 'catalog_state' THEN
-    WITH candidate_ids AS (
-      SELECT state.appid
-      FROM ops.app_catalog_state state
-      WHERE state.last_observed_scan_id = v_run.id
-        AND state.appid > v_run.finalization_state_cursor_appid
-      UNION
-      SELECT state.appid
-      FROM ops.app_catalog_state state
-      WHERE state.last_full_observed_scan_id = v_run.id
-        AND state.appid > v_run.finalization_state_cursor_appid
+    WITH candidate_ids AS MATERIALIZED (
+      (
+        SELECT state.appid
+        FROM ops.app_catalog_state state
+        WHERE state.last_observed_scan_id = v_run.id
+          AND state.appid > v_run.finalization_state_cursor_appid
+        ORDER BY state.appid
+        LIMIT p_batch_size
+      )
+      UNION ALL
+      (
+        SELECT state.appid
+        FROM ops.app_catalog_state state
+        WHERE state.last_full_observed_scan_id = v_run.id
+          AND state.appid > v_run.finalization_state_cursor_appid
+        ORDER BY state.appid
+        LIMIT p_batch_size
+      )
     ),
     bounded AS MATERIALIZED (
-      SELECT candidate.appid
+      SELECT DISTINCT candidate.appid
       FROM candidate_ids candidate
       ORDER BY candidate.appid
       LIMIT p_batch_size

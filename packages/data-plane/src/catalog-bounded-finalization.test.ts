@@ -31,10 +31,10 @@ test('each catalog finalization statement has a hard app bound', async () => {
   const sql = await readFile(FINALIZATION_SQL_URL, 'utf8');
 
   assert.match(sql, /p_batch_size < 1 OR p_batch_size > 5000/);
-  assert.equal((sql.match(/LIMIT p_batch_size/g) ?? []).length, 2);
+  assert.equal((sql.match(/LIMIT p_batch_size/g) ?? []).length, 4);
   assert.match(
     sql,
-    /WITH candidate_ids AS \([\s\S]*bounded AS MATERIALIZED \([\s\S]*LIMIT p_batch_size[\s\S]*UPDATE ops\.app_catalog_state/
+    /WITH candidate_ids AS MATERIALIZED \([\s\S]*last_observed_scan_id = v_run\.id[\s\S]*LIMIT p_batch_size[\s\S]*UNION ALL[\s\S]*last_full_observed_scan_id = v_run\.id[\s\S]*LIMIT p_batch_size[\s\S]*bounded AS MATERIALIZED \([\s\S]*SELECT DISTINCT candidate\.appid[\s\S]*LIMIT p_batch_size[\s\S]*UPDATE ops\.app_catalog_state/
   );
   assert.match(
     sql,
