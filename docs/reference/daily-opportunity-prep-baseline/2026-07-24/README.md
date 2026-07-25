@@ -116,6 +116,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   successful actual background-worker execution and first natural fixed-slot
   run, exact in-run reconciliation, explained post-run source movement,
   restored fixed cadence, live-route evidence, and the accelerated gate.
+- `pics-audited-reconciliation-schema-apply.md`: approved transactional 0092
+  Tiger apply, exact schema verification, empty reconciliation controls,
+  unchanged canonical cursor, continuing isolated shadow parity, and
+  dual-Railway-service topology proof.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

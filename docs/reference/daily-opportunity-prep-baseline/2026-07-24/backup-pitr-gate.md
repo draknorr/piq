@@ -225,6 +225,37 @@ does not require this gate.
   PICS cursor remained unchanged; and both same-named Railway services stayed
   stopped. See `versioned-consumer-projection-refresh.md`.
 
+## Approval Record: Audited PICS Reconciliation Schema 0092
+
+- Proposed operation: apply
+  `packages/data-plane/sql/tiger-bootstrap/0092_pics_cursor_checkpoint_reconciliation.sql`
+  to Tiger production with `psql --single-transaction`.
+- Affected objects: additive cursor-checkpoint, reconciliation-run, and
+  reconciliation-item tables; a progress view; five transaction functions;
+  and reconciliation provenance on `ops.pics_work_state`.
+- Reason: install the audited, fail-closed transaction boundary needed to
+  reconcile the frozen canonical cursor without returning to the lossy
+  in-memory monitor.
+- Risk level: medium. The operation changes the production catalog and takes
+  brief DDL locks, but does not invoke a checkpoint, start reconciliation,
+  advance a cursor, deploy a service, or change product state.
+- Recovery recheck: the authenticated Tiger console still reported automatic
+  same-region backup and a continuous three-day PITR fork window; the recovery
+  form enabled `Create recovery fork` for a current selectable restore point.
+  No recovery fork was created.
+- Failure rollback: `--single-transaction` rolls back the entire file if any
+  statement or lock acquisition fails.
+- Post-success rollback: keep the new controls empty and unused. Destructive
+  removal requires separate approval.
+- Explicit approval reference: the user wrote `I approve 0092` after the
+  change, reason, risk, and rollback terms were presented in the current Codex
+  task.
+- Outcome: applied successfully; every expected object, function, constraint,
+  and index was verified; all reconciliation controls remained empty; the
+  canonical cursor stayed at `37,491,237`; and the genuine PICS service
+  continued isolated shadow processing while the duplicate service remained
+  stopped. See `pics-audited-reconciliation-schema-apply.md`.
+
 Repository artifacts must not contain credentials, private profile fields, or
 downloaded production backups. Access-controlled evidence may be linked from
 this file after verification.
