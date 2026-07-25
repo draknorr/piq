@@ -51,13 +51,17 @@ reconciliation work through the additive Tiger records.
 - durable intake stages one complete upstream response with PostgreSQL binary
   `COPY`; source positions, duplicate app IDs, item change numbers, and token
   requirements remain auditable
+- the exact upstream response manifest is archived to R2 before the Tiger
+  transaction begins; the transaction must retain its immutable bucket, key,
+  SHA-256, byte count, and content type before it can advance any cursor
 - Tiger recomputes the item count, distinct count, and SHA-256 before and after
   the permanent child-row insert
 - the response's echoed starting cursor and force-full flags are retained;
   cursor mismatch or forced-full app responses are recorded as
   `source_blocked` without creating work or advancing a cursor
-- a cursor mismatch, manifest mismatch, timeout, or worker termination rolls
-  back the batch and leaves the primary cursor unchanged
+- an archive failure prevents the Tiger transaction from starting; a cursor
+  mismatch, manifest mismatch, timeout, or worker termination rolls back the
+  batch and leaves the primary cursor unchanged
 - shadow streams use their committed batch history as a restart cursor and
   cannot use the canonical `primary` stream key
 - durable and shadow work rows are isolated by work mode, so replay cannot make

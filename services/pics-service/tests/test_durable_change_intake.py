@@ -19,10 +19,12 @@ fake_pics_module.PICSChange = object
 sys.modules.setdefault("src.steam.pics", fake_pics_module)
 
 from src.database.durable_intake import (  # noqa: E402
+    PICSArchiveReference,
     PICSSourceAppChange,
     PersistedPICSBatch,
     hash_pics_app_changes,
 )
+from src.database.tiger_change_history import ArchivePointer  # noqa: E402
 from src.workers.durable_change_intake import (  # noqa: E402
     DurableChangeIntakeWorker,
 )
@@ -51,6 +53,7 @@ class FakeFetcher:
             change_number=self.change_number,
             app_changes=[change.appid for change in self.app_changes],
             app_change_details=self.app_changes,
+            package_changes=[],
             since_change_number=self.response_since,
             force_full_update=self.force_full_update,
             force_full_app_update=self.force_full_app_update,
@@ -95,7 +98,26 @@ class FakeStore:
         )
 
 
-def make_worker(store):
+class FakeArchiveStore:
+    def __init__(self, *, error=None):
+        self.error = error
+        self.calls = []
+        self.pointer = ArchivePointer(
+            bucket="pics-archive",
+            key="pics-change-response/test.json",
+            content_hash="b" * 64,
+            byte_size=456,
+            content_type="application/json",
+        )
+
+    def write_json(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.pointer
+
+
+def make_worker(store, archive_store=None):
     worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
     worker._work_mode = "shadow"
     worker._stream_key = "replay-test"
@@ -108,6 +130,7 @@ def make_worker(store):
         ],
     )
     worker._store = store
+    worker._archive_store = archive_store or FakeArchiveStore()
     worker._last_committed_batch = None
     return worker
 
@@ -117,8 +140,16 @@ def test_poll_once_returns_later_cursor_only_after_store_commit():
     worker = make_worker(store)
 
     assert worker.poll_once(10) == 20
+    expected_archive = PICSArchiveReference(
+        bucket=worker._archive_store.pointer.bucket,
+        key=worker._archive_store.pointer.key,
+        content_hash=worker._archive_store.pointer.content_hash,
+        byte_size=worker._archive_store.pointer.byte_size,
+        content_type=worker._archive_store.pointer.content_type,
+    )
     assert store.calls == [
         {
+            "archive": expected_archive,
             "from_change_number": 10,
             "to_change_number": 20,
             "response_since_change_number": 10,
@@ -134,6 +165,44 @@ def test_poll_once_returns_later_cursor_only_after_store_commit():
             "lane": "live",
         }
     ]
+    archive_call = worker._archive_store.calls[0]
+    assert archive_call["kind"] == "pics-change-response"
+    assert archive_call["content_hash"] is None
+    assert archive_call["payload"] == {
+        "_archive_schema_version": "pics-change-response/v2",
+        "stream_key": "replay-test",
+        "work_mode": "shadow",
+        "lane": "live",
+        "from_change_number": 10,
+        "to_change_number": 20,
+        "response_since_change_number": 10,
+        "source_app_count": 2,
+        "distinct_app_count": 2,
+        "app_changes_sha256": hash_pics_app_changes(
+            [
+                PICSSourceAppChange(7, 11, False),
+                PICSSourceAppChange(9, 20, True),
+            ]
+        ),
+        "force_full_update": False,
+        "force_full_app_update": False,
+        "force_full_package_update": False,
+        "app_changes": [
+            {
+                "source_index": 0,
+                "appid": 7,
+                "change_number": 11,
+                "needs_token": False,
+            },
+            {
+                "source_index": 1,
+                "appid": 9,
+                "change_number": 20,
+                "needs_token": True,
+            },
+        ],
+        "package_changes": [],
+    }
     assert worker._last_committed_batch.to_change_number == 20
 
 
@@ -144,6 +213,19 @@ def test_poll_once_does_not_return_a_later_cursor_when_persistence_fails():
     with pytest.raises(RuntimeError, match="database unavailable"):
         worker.poll_once(10)
 
+    assert worker._last_committed_batch is None
+
+
+def test_poll_once_does_not_persist_or_advance_when_archive_fails():
+    store = FakeStore()
+    archive_store = FakeArchiveStore(error=RuntimeError("archive unavailable"))
+    worker = make_worker(store, archive_store)
+
+    with pytest.raises(RuntimeError, match="archive unavailable"):
+        worker.poll_once(10)
+
+    assert len(archive_store.calls) == 1
+    assert store.calls == []
     assert worker._last_committed_batch is None
 
 

@@ -131,6 +131,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   dependency-locked merged `main`, exact Railway build/runtime evidence,
   continuing isolated shadow parity, unchanged canonical/primary state, and
   duplicate-service containment.
+- `pics-durable-canary-rollback.md`: approved durable canary, exact
+  cursor/manifest/promotion and per-app R2 evidence, failed parent-response
+  archive gate, automatic rollback to the isolated shadow stream, retained
+  recoverable claims, and the code-repair gate before another canary.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
