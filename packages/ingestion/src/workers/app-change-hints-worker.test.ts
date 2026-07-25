@@ -132,6 +132,76 @@ test('runAppChangeHints shadow mode durably disposes unknown IDs and changed hin
   assert.equal(jobUpdates.at(-1)?.status, 'completed');
 });
 
+test('runAppChangeHints resumes finalization before fetching a new source page', async () => {
+  const resumedScans: Array<Record<string, unknown>> = [];
+  const jobUpdates: Array<Record<string, unknown>> = [];
+  let fetchCount = 0;
+
+  const tiger = {
+    catalogObservation: {
+      beginScan: async () => ({
+        committedThrough: 1_721_789_100,
+        id: '55555555-5555-4555-8555-555555555555',
+        lastCommittedBatch: 0,
+        requestedIfModifiedSince: 1_721_788_800,
+        scanKind: 'incremental' as const,
+        sourceStartedAt: '2024-07-24T00:05:00.000Z',
+        status: 'finalizing' as const,
+      }),
+      resumeScanFinalization: async (values: Record<string, unknown>) => {
+        resumedScans.push(values);
+        return {
+          done: true,
+          phase: 'completed' as const,
+          processedRows: 0,
+          readinessRows: 0,
+          stateRows: 2,
+          status: 'completed' as const,
+        };
+      },
+    },
+  } as unknown as TigerWriter;
+
+  const tigerChangeIntel = {
+    createSyncJobRecord: async () => 'job-resume',
+    updateSyncJobRecord: async (_id: string, values: Record<string, unknown>) => {
+      jobUpdates.push(values);
+    },
+  } as unknown as TigerChangeIntelRepository;
+
+  const result = await runAppChangeHints({
+    env: {
+      CATALOG_FINALIZATION_BATCH_SIZE: '300',
+      CATALOG_OBSERVATION_MODE: 'shadow',
+      DATA_READ_TARGET: 'tiger',
+      DATA_WRITE_TARGET: 'tiger',
+      GITHUB_RUN_ID: 'run-resume',
+    } as NodeJS.ProcessEnv,
+    fetchHints: async () => {
+      fetchCount += 1;
+      return [];
+    },
+    getTiger: () => tiger,
+    getTigerChangeIntel: () => tigerChangeIntel,
+  });
+
+  assert.deepEqual(result, {
+    changed: 0,
+    enqueued: 0,
+    promoted: 0,
+    skipped: 0,
+    totalHints: 0,
+  });
+  assert.equal(fetchCount, 0);
+  assert.deepEqual(resumedScans, [
+    {
+      batchSize: 300,
+      scanId: '55555555-5555-4555-8555-555555555555',
+    },
+  ]);
+  assert.equal(jobUpdates.at(-1)?.status, 'completed');
+});
+
 test('runAppChangeHints off mode does not rewrite unchanged hint timestamps', async () => {
   const upsertedAppids: number[] = [];
 

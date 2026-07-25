@@ -6,6 +6,7 @@ import {
   buildCatalogBatchHash,
   buildCatalogScanRunKey,
   normalizeCatalogObservationRows,
+  readCatalogFinalizationBatchSize,
   readCatalogObservationMode,
 } from './catalog-observation.js';
 
@@ -24,6 +25,25 @@ test('readCatalogObservationMode defaults off and fails closed on unknown values
       } as NodeJS.ProcessEnv),
     /expected off, shadow, or primary/
   );
+});
+
+test('readCatalogFinalizationBatchSize is bounded and fails closed', () => {
+  assert.equal(readCatalogFinalizationBatchSize({} as NodeJS.ProcessEnv), 1000);
+  assert.equal(
+    readCatalogFinalizationBatchSize({
+      CATALOG_FINALIZATION_BATCH_SIZE: ' 2500 ',
+    } as NodeJS.ProcessEnv),
+    2500
+  );
+  for (const value of ['0', '5001', '1.5', 'not-a-number']) {
+    assert.throws(
+      () =>
+        readCatalogFinalizationBatchSize({
+          CATALOG_FINALIZATION_BATCH_SIZE: value,
+        } as NodeJS.ProcessEnv),
+      /integer between 1 and 5000/
+    );
+  }
 });
 
 test('buildCatalogScanRunKey is stable for a GitHub workflow retry', () => {

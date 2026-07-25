@@ -15,6 +15,9 @@ export interface NormalizedCatalogObservation {
   sourceRowCount: number;
 }
 
+const DEFAULT_CATALOG_FINALIZATION_BATCH_SIZE = 1000;
+const MAX_CATALOG_FINALIZATION_BATCH_SIZE = 5000;
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
@@ -60,6 +63,19 @@ export function readCatalogObservationMode(
   throw new Error(
     `Unsupported CATALOG_OBSERVATION_MODE=${env.CATALOG_OBSERVATION_MODE}; expected off, shadow, or primary`
   );
+}
+
+export function readCatalogFinalizationBatchSize(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CATALOG_FINALIZATION_BATCH_SIZE?.trim();
+  if (!raw) {
+    return DEFAULT_CATALOG_FINALIZATION_BATCH_SIZE;
+  }
+
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CATALOG_FINALIZATION_BATCH_SIZE) {
+    throw new Error('CATALOG_FINALIZATION_BATCH_SIZE must be an integer between 1 and 5000');
+  }
+  return value;
 }
 
 export function buildCatalogScanRunKey(

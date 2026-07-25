@@ -25,6 +25,7 @@ import {
   buildCatalogInputHash,
   buildCatalogScanRunKey,
   normalizeCatalogObservationRows,
+  readCatalogFinalizationBatchSize,
   readCatalogObservationMode,
   type CatalogObservationMode,
 } from '../catalog-observation.js';
@@ -449,6 +450,7 @@ export async function runAppChangeHints(
   const batchSize =
     Number.isFinite(parsedBatchSize) && parsedBatchSize > 0 ? parsedBatchSize : 1000;
   const mode = readCatalogObservationMode(env);
+  const catalogFinalizationBatchSize = readCatalogFinalizationBatchSize(env);
   const tigerPrimary = shouldUseTigerPrimary(env);
   if (mode !== 'off' && !tigerPrimary) {
     throw new Error('Catalog observation requires Tiger to be the primary change-intel writer');
@@ -483,6 +485,30 @@ export async function runAppChangeHints(
         source: 'steam_change_hints',
         sourceStartedAt: now().toISOString(),
       });
+      if (scan.status === 'finalizing') {
+        await tiger!.catalogObservation.resumeScanFinalization({
+          batchSize: catalogFinalizationBatchSize,
+          scanId: scan.id,
+        });
+        const resumedResult: AppChangeHintsResult = {
+          changed: 0,
+          enqueued: 0,
+          promoted: 0,
+          skipped: 0,
+          totalHints: 0,
+        };
+        if (jobId) {
+          await updateJob(jobId, {
+            completed_at: now().toISOString(),
+            items_created: 0,
+            items_processed: 0,
+            items_skipped: 0,
+            items_succeeded: 0,
+            status: 'completed',
+          });
+        }
+        return resumedResult;
+      }
       if (scan.status === 'completed') {
         const completedResult: AppChangeHintsResult = {
           changed: 0,
@@ -564,6 +590,7 @@ export async function runAppChangeHints(
       await tiger!.catalogObservation.completeScan({
         expectedBatches,
         expectedSourceRows: observation.sourceRowCount,
+        finalizationBatchSize: catalogFinalizationBatchSize,
         inputHash: buildCatalogInputHash(observation),
         reconciliationOutcome: {
           status: mode === 'shadow' ? 'pending_daily_parity' : 'not_applicable',
@@ -601,7 +628,7 @@ export async function runAppChangeHints(
       totalHints: observation.sourceRowCount,
     };
   } catch (error) {
-    if (scan && scan.status === 'running' && tiger) {
+    if (scan && scan.status !== 'completed' && tiger) {
       try {
         await tiger.catalogObservation.failScan(
           scan.id,

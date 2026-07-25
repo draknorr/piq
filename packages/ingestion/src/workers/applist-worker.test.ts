@@ -186,6 +186,141 @@ test('runTigerAppListSync uses the durable catalog ledger in shadow mode', async
   );
 });
 
+test('runTigerAppListSync resumes finalization without replaying committed batches', async () => {
+  const resumedScans: Array<Record<string, unknown>> = [];
+  const jobUpdates: SyncJobUpdate[] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleSyncJobs: async () => 0,
+      createSyncJob: async () => 'job-resume',
+      updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
+        jobUpdates.push(values);
+        return 1;
+      },
+    },
+    catalog: {
+      listExistingAppids: async () => [100],
+      upsertApps: async () => {
+        throw new Error('committed catalog rows must not replay');
+      },
+    },
+    catalogObservation: {
+      beginScan: async () => ({
+        committedThrough: 1_721_788_800,
+        id: '33333333-3333-4333-8333-333333333333',
+        lastCommittedBatch: 0,
+        requestedIfModifiedSince: null,
+        scanKind: 'full' as const,
+        sourceStartedAt: '2024-07-24T00:00:00.000Z',
+        status: 'finalizing' as const,
+      }),
+      commitBatch: async () => {
+        throw new Error('committed catalog batches must not replay');
+      },
+      completeScan: async () => {
+        throw new Error('finalization preparation must not replay');
+      },
+      resumeScanFinalization: async (values: Record<string, unknown>) => {
+        resumedScans.push(values);
+        return {
+          done: true,
+          phase: 'completed' as const,
+          processedRows: 0,
+          readinessRows: 0,
+          stateRows: 1,
+          status: 'completed' as const,
+        };
+      },
+      failScan: async () => undefined,
+    },
+  } as unknown as TigerWriter;
+
+  const result = await runTigerAppListSync({
+    env: {
+      APPLIST_BATCH_SIZE: '2',
+      CATALOG_FINALIZATION_BATCH_SIZE: '250',
+      CATALOG_OBSERVATION_MODE: 'shadow',
+      DATA_WRITE_TARGET: 'tiger',
+      GITHUB_RUN_ID: 'run-resume',
+    } as NodeJS.ProcessEnv,
+    fetchSteamAppList: async () => [{ appid: 100, name: 'Existing App' }],
+    getTiger: () => tiger,
+  });
+
+  assert.deepEqual(result, {
+    errors: 0,
+    newApps: 0,
+    reviewPromotions: 0,
+    totalApps: 1,
+    updatedApps: 1,
+  });
+  assert.deepEqual(resumedScans, [
+    {
+      batchSize: 250,
+      scanId: '33333333-3333-4333-8333-333333333333',
+    },
+  ]);
+  assert.equal(jobUpdates.at(-1)?.status, 'completed');
+});
+
+test('runTigerAppListSync leaves failed finalization resumable', async () => {
+  const failedScans: Array<{ errorMessage: string; scanId: string }> = [];
+  const jobUpdates: SyncJobUpdate[] = [];
+
+  const tiger = {
+    ops: {
+      abandonStaleSyncJobs: async () => 0,
+      createSyncJob: async () => 'job-resume-failure',
+      updateSyncJob: async (_id: string, values: SyncJobUpdate) => {
+        jobUpdates.push(values);
+        return 1;
+      },
+    },
+    catalog: {
+      listExistingAppids: async () => [100],
+    },
+    catalogObservation: {
+      beginScan: async () => ({
+        committedThrough: 1_721_788_800,
+        id: '44444444-4444-4444-8444-444444444444',
+        lastCommittedBatch: 0,
+        requestedIfModifiedSince: null,
+        scanKind: 'full' as const,
+        sourceStartedAt: '2024-07-24T00:00:00.000Z',
+        status: 'finalizing' as const,
+      }),
+      resumeScanFinalization: async () => {
+        throw new Error('injected finalization chunk failure');
+      },
+      failScan: async (scanId: string, errorMessage: string) => {
+        failedScans.push({ errorMessage, scanId });
+      },
+    },
+  } as unknown as TigerWriter;
+
+  await assert.rejects(
+    runTigerAppListSync({
+      env: {
+        CATALOG_OBSERVATION_MODE: 'shadow',
+        DATA_WRITE_TARGET: 'tiger',
+        GITHUB_RUN_ID: 'run-resume-failure',
+      } as NodeJS.ProcessEnv,
+      fetchSteamAppList: async () => [{ appid: 100, name: 'Existing App' }],
+      getTiger: () => tiger,
+    }),
+    /injected finalization chunk failure/
+  );
+
+  assert.deepEqual(failedScans, [
+    {
+      errorMessage: 'injected finalization chunk failure',
+      scanId: '44444444-4444-4444-8444-444444444444',
+    },
+  ]);
+  assert.equal(jobUpdates.at(-1)?.status, 'failed');
+});
+
 test('runAppListSync rejects catalog observation on the Supabase legacy path', async () => {
   await assert.rejects(
     runAppListSync({
