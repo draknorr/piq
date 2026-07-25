@@ -123,6 +123,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 - `pics-0093-function-repair-apply.md`: approved transactional repair of the
   three audited reconciliation function bodies, exact pre/post body hashes,
   preserved signatures, and unchanged canonical/reconciliation state.
+- `pics-audited-reconciliation-checkpoint-apply.md`: approved high-risk
+  checkpoint transaction, exact gap/head evidence and manifest, canonical
+  cursor advance, inert full-state primary queue, readiness provenance, and
+  open pre-processing rollback proof.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.

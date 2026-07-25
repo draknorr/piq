@@ -131,9 +131,10 @@ or R2 object was changed.
 
 ## Next gate
 
-Migration 0093 is installed and inert. The next production write is a fresh
-call to `ops.apply_pics_reconciliation_checkpoint(...)` using live cursor and
-batch evidence. That transaction deliberately advances the canonical cursor
-and creates a large primary reconciliation queue, so it remains a separate
-high-risk action requiring fresh bounded evidence, exact arguments, a rollback
-window, and explicit approval.
+Migration 0093 was installed and remained inert until the separately approved
+checkpoint transaction. That checkpoint was later applied and verified; see
+`pics-audited-reconciliation-checkpoint-apply.md`.
+
+The next production mutation is the separately approved Railway cutover of the
+genuine PICS service to durable primary mode. Until then, the primary queue is
+inert and the pre-processing checkpoint rollback window remains open.
