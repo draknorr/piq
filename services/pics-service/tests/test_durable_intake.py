@@ -2,6 +2,7 @@
 
 import sys
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -16,12 +17,15 @@ from src.database.durable_intake import (
     PICSSourceAppChange,
     PICSBatchReconciliationError,
     PICSCursorMismatchError,
+    PICSReplayProvenance,
     TigerPICSDurableIntakeStore,
     hash_pics_app_changes,
 )  # noqa: E402
 
 
 BATCH_ID = UUID("11111111-1111-4111-8111-111111111111")
+SOURCE_BATCH_ID = UUID("22222222-2222-4222-8222-222222222222")
+GAP_BATCH_ID = UUID("33333333-3333-4333-8333-333333333333")
 ARCHIVE = PICSArchiveReference(
     bucket="pics-archive",
     key="pics-change-response/test.json",
@@ -128,6 +132,138 @@ class FakeCursor(AbstractContextManager):
             len({change.appid for change in changes}),
             hash_pics_app_changes(changes),
         )
+
+
+class ReplayFakeCursor(FakeCursor):
+    def __init__(self, *, primary_cursor=10, existing_batch=None):
+        super().__init__(
+            primary_cursor=primary_cursor,
+            existing_batch=existing_batch,
+        )
+        self.source_changes = [
+            app_change(1, 6),
+            app_change(7, 11),
+            app_change(9, 20, True),
+        ]
+        self.recovered_changes = [
+            app_change(7, 11),
+            app_change(9, 20, True),
+        ]
+        self.replay = PICSReplayProvenance(
+            source_batch_id=SOURCE_BATCH_ID,
+            gap_evidence_batch_id=GAP_BATCH_ID,
+            source_stream_key="shadow-reviewed",
+            source_from_change_number=5,
+            source_to_change_number=20,
+            plan_sha256="d" * 64,
+            requested_by="operator@example.com",
+            source_archive=PICSArchiveReference(
+                bucket="pics-archive",
+                key="shadow/source.json",
+                content_hash="e" * 64,
+                byte_size=789,
+                content_type="application/json",
+            ),
+            gap_archive=PICSArchiveReference(
+                bucket="pics-archive",
+                key="primary/gap.json",
+                content_hash="f" * 64,
+                byte_size=100,
+                content_type="application/json",
+            ),
+        )
+
+    def execute(self, query, params=None):
+        super().execute(query, params)
+        normalized = " ".join(query.split())
+        if normalized.startswith("SELECT stream_key, work_mode, from_change_number") and params == (
+            SOURCE_BATCH_ID,
+        ):
+            self._next_row = (
+                "shadow-reviewed",
+                "shadow",
+                5,
+                20,
+                5,
+                3,
+                3,
+                3,
+                hash_pics_app_changes(self.source_changes),
+                False,
+                False,
+                True,
+                "committed",
+                "pics-archive",
+                "shadow/source.json",
+                "e" * 64,
+                789,
+                "application/json",
+            )
+        elif (
+            "FROM ops.pics_change_batch_apps" in normalized
+            and normalized.startswith("SELECT count(*)::integer")
+            and params == (SOURCE_BATCH_ID,)
+        ):
+            self._next_row = (
+                3,
+                3,
+                hash_pics_app_changes(self.source_changes),
+            )
+        elif normalized.startswith("WITH recovered AS"):
+            self._next_row = (
+                2,
+                2,
+                hash_pics_app_changes(self.recovered_changes),
+            )
+        elif normalized.startswith(
+            "SELECT stream_key, work_mode, from_change_number"
+        ) and params == (GAP_BATCH_ID,):
+            self._next_row = (
+                "primary",
+                "durable",
+                10,
+                10,
+                False,
+                True,
+                False,
+                "source_blocked",
+                False,
+                "pics-archive",
+                "primary/gap.json",
+                "f" * 64,
+                100,
+                "application/json",
+            )
+        elif normalized.startswith("SELECT min(recovered_from_change_number)"):
+            self._next_row = (None, None, None, None, None, None, None, None)
+        elif (
+            "FROM ops.pics_shadow_gap_replay_provenance" in normalized
+            and "WHERE primary_batch_id = %s" in normalized
+        ):
+            self._next_row = (
+                SOURCE_BATCH_ID,
+                GAP_BATCH_ID,
+                "shadow-reviewed",
+                5,
+                20,
+                10,
+                20,
+                2,
+                2,
+                hash_pics_app_changes(self.recovered_changes),
+                "d" * 64,
+                "operator@example.com",
+                "pics-archive",
+                "shadow/source.json",
+                "e" * 64,
+                789,
+                "application/json",
+                "pics-archive",
+                "primary/gap.json",
+                "f" * 64,
+                100,
+                "application/json",
+            )
 
 
 class FakeTransaction(AbstractContextManager):
@@ -626,3 +762,173 @@ def test_committed_batch_retry_rejects_missing_archive_provenance():
 
     assert connection.committed is False
     assert connection.rolled_back is True
+
+
+def test_shadow_gap_replay_provenance_commits_before_work_and_cursor():
+    cursor = ReplayFakeCursor(primary_cursor=10)
+    store, connection = make_store(cursor)
+
+    result = store.persist_batch(
+        archive=ARCHIVE,
+        from_change_number=10,
+        to_change_number=20,
+        response_since_change_number=10,
+        app_changes=cursor.recovered_changes,
+        force_full_update=False,
+        force_full_app_update=False,
+        force_full_package_update=False,
+        work_mode="durable",
+        stream_key="primary",
+        replay_provenance=cursor.replay,
+    )
+
+    statements = [query for query, _ in cursor.events]
+    child_insert = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO ops.pics_change_batch_apps")
+    )
+    provenance_insert = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO ops.pics_shadow_gap_replay_provenance")
+    )
+    work_upsert = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("WITH incoming AS")
+    )
+    cursor_update = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("UPDATE ops.pics_sync_state")
+    )
+    assert child_insert < provenance_insert < work_upsert < cursor_update
+    assert result.primary_cursor_advanced is True
+    assert connection.committed is True
+    assert connection.rolled_back is False
+
+
+def test_shadow_gap_replay_provenance_failure_rolls_back_cursor_transaction():
+    cursor = ReplayFakeCursor(primary_cursor=10)
+    cursor.fail_on = "INSERT INTO ops.pics_shadow_gap_replay_provenance"
+    store, connection = make_store(cursor)
+
+    with pytest.raises(RuntimeError, match="injected transaction failure"):
+        store.persist_batch(
+            archive=ARCHIVE,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=cursor.recovered_changes,
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="durable",
+            stream_key="primary",
+            replay_provenance=cursor.replay,
+        )
+
+    statements = [query for query, _ in cursor.events]
+    assert not any(statement.startswith("UPDATE ops.pics_sync_state") for statement in statements)
+    assert connection.committed is False
+    assert connection.rolled_back is True
+
+
+def test_shadow_gap_replay_source_archive_drift_rolls_back_cursor_transaction():
+    cursor = ReplayFakeCursor(primary_cursor=10)
+    source_archive = replace(cursor.replay.source_archive, content_hash="0" * 64)
+    replay = replace(cursor.replay, source_archive=source_archive)
+    store, connection = make_store(cursor)
+
+    with pytest.raises(
+        PICSBatchReconciliationError,
+        match="not complete archived shadow evidence",
+    ):
+        store.persist_batch(
+            archive=ARCHIVE,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=cursor.recovered_changes,
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="durable",
+            stream_key="primary",
+            replay_provenance=replay,
+        )
+
+    statements = [query for query, _ in cursor.events]
+    assert not any(statement.startswith("UPDATE ops.pics_sync_state") for statement in statements)
+    assert connection.committed is False
+    assert connection.rolled_back is True
+
+
+def test_shadow_gap_replay_provenance_is_idempotently_reconciled():
+    changes = [app_change(7, 11), app_change(9, 20, True)]
+    existing = (
+        BATCH_ID,
+        "durable",
+        "live",
+        10,
+        2,
+        2,
+        2,
+        hash_pics_app_changes(changes),
+        False,
+        False,
+        False,
+        True,
+        "committed",
+        True,
+        ARCHIVE.bucket,
+        ARCHIVE.key,
+        ARCHIVE.content_hash,
+        ARCHIVE.byte_size,
+        ARCHIVE.content_type,
+    )
+    cursor = ReplayFakeCursor(primary_cursor=20, existing_batch=existing)
+    store, connection = make_store(cursor)
+
+    result = store.persist_batch(
+        archive=ARCHIVE,
+        from_change_number=10,
+        to_change_number=20,
+        response_since_change_number=10,
+        app_changes=changes,
+        force_full_update=False,
+        force_full_app_update=False,
+        force_full_package_update=False,
+        work_mode="durable",
+        stream_key="primary",
+        replay_provenance=cursor.replay,
+    )
+
+    assert result.idempotent_replay is True
+    assert cursor.copied_rows == []
+    assert connection.committed is True
+
+
+def test_replay_provenance_rejects_nonprimary_or_incomplete_batches_before_io():
+    cursor = ReplayFakeCursor(primary_cursor=10)
+    store, connection = make_store(cursor)
+
+    with pytest.raises(ValueError, match="complete durable primary"):
+        store.persist_batch(
+            archive=ARCHIVE,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=cursor.recovered_changes,
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="shadow",
+            stream_key="shadow-reviewed",
+            replay_provenance=cursor.replay,
+        )
+
+    assert cursor.events == []
+    assert connection.committed is False
+    assert connection.rolled_back is False

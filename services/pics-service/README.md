@@ -59,6 +59,10 @@ reconciliation work through the additive Tiger records.
 - the response's echoed starting cursor and force-full flags are retained;
   cursor mismatch or forced-full app responses are recorded as
   `source_blocked` without creating work or advancing a cursor
+- an operator-reviewed shadow-gap replay can recover a later retention gap
+  only from an exact complete shadow chain; every derived R2 response records
+  its source archive and every primary batch records matching Tiger provenance
+  in the same transaction as work creation and cursor advancement
 - an archive failure prevents the Tiger transaction from starting; a cursor
   mismatch, manifest mismatch, timeout, or worker termination rolls back the
   batch and leaves the primary cursor unchanged
@@ -121,6 +125,49 @@ through Steam's current cursor; use the retained per-item change numbers to
 select a bounded comparison interval. Do not treat a forced-full response,
 echoed-cursor mismatch, or retention-limited empty response as proof that an
 old gap was reconstructed.
+
+## Reviewed Shadow-Gap Replay
+
+`src.shadow_gap_replay` is an operator command, not an automatic service
+fallback. It requires:
+
+- one archived durable-primary `source_blocked` force-full batch
+- one explicitly selected complete shadow batch covering the primary cursor
+- one non-primary source stream and an exact ending batch cursor
+- an operator identity and a bounded maximum batch count
+
+The first invocation is read-only and prints a credential-free deterministic
+plan:
+
+```bash
+python -m src.shadow_gap_replay \
+  --gap-evidence-batch-id GAP_UUID \
+  --source-stream-key REVIEWED_SHADOW_STREAM \
+  --first-source-batch-id OVERLAPPING_SOURCE_BATCH_UUID \
+  --expected-start-change-number START_CURSOR \
+  --target-change-number TARGET_CURSOR \
+  --requested-by OPERATOR_ID
+```
+
+Execution remains disabled unless `--execute-plan-sha256` exactly matches that
+fresh dry-run. Supplying the hash performs R2 and Tiger writes and still
+requires a separately approved production write window:
+
+```bash
+python -m src.shadow_gap_replay \
+  ...same reviewed arguments... \
+  --execute-plan-sha256 REVIEWED_PLAN_SHA256
+```
+
+Before planning or execution, apply
+`0095_pics_shadow_gap_replay_provenance.sql` in its own approved Tiger schema
+window. The command verifies each source R2 object's hash, byte count, content
+type, response fields, and ordered app manifest, and verifies the gap-evidence
+R2 object before any replay write. An overlapping first batch is trimmed to app
+entries strictly after the primary cursor and reindexed before hashing. Each
+replay step is a normal durable intake transaction, so a failure leaves the
+cursor at the last committed source boundary. A rerun is accepted only when the
+stored provenance is the exact completed prefix of the same plan.
 
 ## Key Configuration
 
