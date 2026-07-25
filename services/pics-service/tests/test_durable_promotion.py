@@ -1,6 +1,7 @@
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -77,6 +78,49 @@ def make_claim():
     )
 
 
+def make_reconciliation_claim():
+    return PICSWorkClaim(
+        id=42,
+        appid=7,
+        stream_key="primary",
+        work_mode="durable",
+        lane="catchup",
+        priority=100,
+        claimed_through_change_number=0,
+        attempts=1,
+        max_attempts=8,
+        claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        worker_id="worker-1",
+        reconciliation_run_id=UUID("11111111-1111-4111-8111-111111111111"),
+    )
+
+
+def make_reconciliation_payload():
+    raw = {
+        "appid": 7,
+        "_change_number": 20,
+        "_missing_token": False,
+        "_sha": "a" * 40,
+        "_size": 100,
+        "common": {
+            "name": "Test app",
+            "type": "game",
+            "category": {},
+            "genres": {},
+            "store_tags": {},
+            "associations": {},
+        },
+        "extended": {"listofdlc": ""},
+        "config": {},
+        "depots": {},
+    }
+    return validate_pics_product_payload(
+        appid=7,
+        claimed_through_change_number=0,
+        raw_payload=raw,
+    )
+
+
 class FakeCursor(AbstractContextManager):
     def __init__(self, *, fail_on=None):
         self.fail_on = fail_on
@@ -108,6 +152,8 @@ class FakeCursor(AbstractContextManager):
             self.rowcount = 1
         elif "RETURNING state" in normalized:
             self._row = ("completed",)
+            self.rowcount = 1
+        elif normalized.startswith("UPDATE ops.pics_reconciliation_items"):
             self.rowcount = 1
 
     def fetchone(self):
@@ -227,6 +273,42 @@ def test_absent_relationship_family_never_deletes_existing_edges():
     assert connection.committed is True
 
 
+def test_full_reconciliation_promotes_with_actual_payload_change_evidence():
+    cursor = FakeCursor()
+    promoter, connection = make_promoter(cursor)
+
+    result = promoter.promote(
+        claim=make_reconciliation_claim(),
+        worker_id="worker-1",
+        payload=make_reconciliation_payload(),
+        previous_pointer=None,
+        previous_snapshot=None,
+        archive=archive_pointer(),
+    )
+
+    snapshot = next(
+        params
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO docs.app_source_snapshots")
+    )
+    sync_status = next(
+        params
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO ops.sync_status")
+    )
+    settlement = next(
+        params
+        for statement, params in cursor.events
+        if statement.startswith("UPDATE ops.pics_reconciliation_items")
+    )
+
+    assert snapshot[6:8] == ("full_state_reconciliation", "20")
+    assert sync_status == (7, 20)
+    assert settlement[0:2] == (100, 20)
+    assert result.completed_through_change_number == 0
+    assert connection.committed is True
+
+
 def test_pics_event_writes_resolve_the_shared_tiger_registry_version():
     cursor = FakeCursor()
 
@@ -234,6 +316,7 @@ def test_pics_event_writes_resolve_the_shared_tiger_registry_version():
         cursor,
         claim=make_claim(),
         snapshot_id=100,
+        source_change_number=20,
         previous_pointer=None,
         archive=archive_pointer(),
         events=[

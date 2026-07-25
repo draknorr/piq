@@ -138,12 +138,13 @@ class TigerPICSDurablePromoter:
                     self._update_sync_status(
                         cursor,
                         appid=claim.appid,
-                        change_number=claim.claimed_through_change_number,
+                        change_number=payload.source_change_number,
                     )
                     event_count = self._insert_events(
                         cursor,
                         claim=claim,
                         snapshot_id=snapshot_id,
+                        source_change_number=payload.source_change_number,
                         previous_pointer=previous_pointer,
                         archive=archive,
                         events=diff_events,
@@ -162,6 +163,8 @@ class TigerPICSDurablePromoter:
                             payload.extracted.source_evidence
                         ),
                     }
+                    if claim.reconciliation_run_id is not None:
+                        provenance["reconciliationRunId"] = str(claim.reconciliation_run_id)
                     if archive is not None:
                         provenance["archive"] = {
                             "bucket": archive.bucket,
@@ -174,11 +177,13 @@ class TigerPICSDurablePromoter:
                         cursor,
                         appid=claim.appid,
                         provenance=provenance,
-                        source_at=None,
+                        source_at=observed_at,
                     )
                     next_state = self._work_store.complete_locked_claim(
                         cursor,
                         claim=claim,
+                        snapshot_id=snapshot_id,
+                        source_change_number=payload.source_change_number,
                     )
 
         return PICSPromotionResult(
@@ -280,7 +285,7 @@ class TigerPICSDurablePromoter:
               %s,
               %s,
               %s,
-              'durable_change_monitor',
+              %s,
               %s,
               %s::jsonb,
               %s,
@@ -299,7 +304,12 @@ class TigerPICSDurablePromoter:
                 observed_at,
                 payload.normalized_snapshot_sha256,
                 previous_pointer.id if previous_pointer else None,
-                str(claim.claimed_through_change_number),
+                (
+                    "full_state_reconciliation"
+                    if claim.reconciliation_run_id is not None
+                    else "durable_change_monitor"
+                ),
+                str(payload.source_change_number),
                 json.dumps(
                     summarize_pics_snapshot(payload.normalized_snapshot),
                     sort_keys=True,
@@ -553,9 +563,11 @@ class TigerPICSDurablePromoter:
                         else None
                     ),
                     app.steam_deck.tested_build_id,
-                    json.dumps(app.steam_deck.tests, sort_keys=True, default=str)
-                    if app.steam_deck.tests is not None
-                    else None,
+                    (
+                        json.dumps(app.steam_deck.tests, sort_keys=True, default=str)
+                        if app.steam_deck.tests is not None
+                        else None
+                    ),
                 ),
             )
 
@@ -773,6 +785,7 @@ class TigerPICSDurablePromoter:
         *,
         claim: PICSWorkClaim,
         snapshot_id: int,
+        source_change_number: int,
         previous_pointer: Optional[PICSLatestSnapshot],
         archive: Optional[ArchivePointer],
         events: list[Any],
@@ -797,8 +810,14 @@ class TigerPICSDurablePromoter:
                     "workId": claim.id,
                     "streamKey": claim.stream_key,
                     "claimedThroughChangeNumber": (claim.claimed_through_change_number),
+                    "sourceChangeNumber": source_change_number,
+                    **(
+                        {"reconciliationRunId": str(claim.reconciliation_run_id)}
+                        if claim.reconciliation_run_id is not None
+                        else {}
+                    ),
                 },
-                "trigger_cursor": str(claim.claimed_through_change_number),
+                "trigger_cursor": str(source_change_number),
             }
             for event in events
         ]

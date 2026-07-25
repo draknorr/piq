@@ -979,7 +979,22 @@ class TigerPICSDurableIntakeStore:
                 ) THEN EXCLUDED.priority
                 ELSE greatest(ops.pics_work_state.priority, EXCLUDED.priority)
               END,
+              first_batch_id = coalesce(
+                ops.pics_work_state.first_batch_id,
+                EXCLUDED.first_batch_id
+              ),
               latest_batch_id = EXCLUDED.latest_batch_id,
+              reconciliation_run_id = CASE
+                WHEN ops.pics_work_state.reconciliation_run_id IS NULL THEN NULL
+                WHEN EXISTS (
+                  SELECT 1
+                  FROM ops.pics_reconciliation_runs reconciliation
+                  WHERE reconciliation.id =
+                    ops.pics_work_state.reconciliation_run_id
+                    AND reconciliation.status = 'active'
+                ) THEN ops.pics_work_state.reconciliation_run_id
+                ELSE NULL
+              END,
               latest_change_number = greatest(
                 ops.pics_work_state.latest_change_number,
                 EXCLUDED.latest_change_number
@@ -1047,6 +1062,38 @@ class TigerPICSDurableIntakeStore:
                 received_at,
             ),
         )
+        if work_mode == "durable":
+            cursor.execute(
+                """
+                UPDATE ops.pics_reconciliation_items items
+                SET status = 'pending',
+                    completed_snapshot_id = NULL,
+                    source_change_number = NULL,
+                    last_error_code = NULL,
+                    last_error_message = NULL,
+                    disposition = NULL,
+                    requeue_count = items.requeue_count + 1,
+                    last_requeued_at = clock_timestamp(),
+                    last_requeued_by = 'durable_live_intake',
+                    last_requeue_reason =
+                      'newer source batch ' || %s::text,
+                    completed_at = NULL,
+                    updated_at = clock_timestamp()
+                FROM ops.pics_work_state work
+                JOIN ops.pics_reconciliation_runs reconciliation
+                  ON reconciliation.id = work.reconciliation_run_id
+                 AND reconciliation.status = 'active'
+                WHERE items.run_id = work.reconciliation_run_id
+                  AND items.appid = work.appid
+                  AND work.latest_batch_id = %s
+                  AND items.status IN (
+                    'completed',
+                    'source_blocked',
+                    'dead_letter'
+                  )
+                """,
+                (batch_id, batch_id),
+            )
 
     @staticmethod
     def _mark_pics_readiness_pending(

@@ -272,14 +272,26 @@ def test_work_upsert_uses_each_apps_staged_change_numbers():
     )
 
     work_query, work_params = next(
-        (query, params)
-        for query, params in cursor.events
-        if query.startswith("WITH incoming AS")
+        (query, params) for query, params in cursor.events if query.startswith("WITH incoming AS")
     )
 
     assert "min(source_change_number) AS first_change_number" in work_query
     assert "max(source_change_number) AS latest_change_number" in work_query
     assert "incoming.first_change_number, incoming.latest_change_number" in work_query
+    assert "first_batch_id = coalesce(" in work_query
+    assert "ops.pics_work_state.first_batch_id" in work_query
+    assert "reconciliation.status = 'active'" in work_query
+    assert "THEN ops.pics_work_state.reconciliation_run_id" in work_query
+    requeue_query = next(
+        query
+        for query, _params in cursor.events
+        if query.startswith("UPDATE ops.pics_reconciliation_items")
+    )
+    assert "last_requeued_by = 'durable_live_intake'" in requeue_query
+    assert "work.latest_batch_id = %s" in requeue_query
+    assert "'completed'," in requeue_query
+    assert "'source_blocked'," in requeue_query
+    assert "'dead_letter'" in requeue_query
     assert len(work_params) == 8
     assert 20 not in work_params
     assert connection.committed is True
@@ -385,6 +397,9 @@ def test_shadow_batch_never_updates_primary_cursor_or_canonical_readiness():
     assert not any(statement.startswith("UPDATE ops.pics_sync_state") for statement in statements)
     assert not any(
         statement.startswith("INSERT INTO ops.app_data_readiness") for statement in statements
+    )
+    assert not any(
+        statement.startswith("UPDATE ops.pics_reconciliation_items") for statement in statements
     )
     assert connection.committed is True
 

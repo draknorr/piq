@@ -39,8 +39,12 @@ legacy compatibility only and are not used by durable intake.
 
 Durable processing is independently gated by
 `PICS_PROCESSING_ENABLED=false`. Do not enable `PICS_WORK_MODE=durable` or
-processing in production until PR 4 is merged, forced-restart and parity gates
-pass, and the exact rollout is separately approved.
+primary processing in production until the durable intake and audited
+checkpoint schemas are applied, forced-restart and parity gates pass, and the
+exact checkpoint and genuine-service rollout are separately approved. Service
+code that supports reconciliation must not be deployed before
+`0092_pics_cursor_checkpoint_reconciliation.sql`, because settlement resolves
+reconciliation work through the additive Tiger records.
 
 ## Runtime Behavior
 
