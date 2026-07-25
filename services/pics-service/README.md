@@ -105,6 +105,13 @@ PICS_SHADOW_START_CHANGE_NUMBER=36631816 \
 python -m src.main
 ```
 
+## Reproducible Dependencies
+
+Production Docker builds pin Poetry `2.4.1`, require the committed
+`poetry.lock`, and fail when the lockfile no longer matches `pyproject.toml`.
+Change dependencies intentionally with the pinned Poetry version, regenerate
+the lockfile, and run the complete PICS test suite before deployment.
+
 Steam accepts no ending cursor for `get_changes_since`. The response runs
 through Steam's current cursor; use the retained per-item change numbers to
 select a bounded comparison interval. Do not treat a forced-full response,
