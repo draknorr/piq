@@ -1,0 +1,110 @@
+{
+  "bug_id": "20260725-071946-pics-retry-work-starves-behind-pending-backlog",
+  "slug": "pics-retry-work-starves-behind-pending-backlog",
+  "created_at": "2026-07-25T07:19:46.620095+00:00",
+  "status": "fixed",
+  "summary": "Eligible PICS retry rows could starve behind an older pending backlog because claim_work compared next_attempt_at before distinguishing retrying from pending. The fix prefers retrying rows only after preserving lane and priority precedence.",
+  "triage_score": 2,
+  "triage_tier": 3,
+  "depth_classification": "broad",
+  "spawned_agents": [
+    "bug_mapper",
+    "runtime_reproducer",
+    "impact_analyst"
+  ],
+  "why_this_tier": "Database correctness contributed +2, the external background worker contributed +1, and the already isolated owning function contributed -1. The database-correctness override required three independent read-only assessments.",
+  "observed_facts": [
+    "claim_work filters pending and retrying rows together but orders lane, priority, next_attempt_at, dirty_since, and ID without a state preference.",
+    "The processor calls claim_work separately for the live/new lane group and the catch-up lane, so lane quotas remain isolated.",
+    "At 2026-07-25T07:21:40.498166Z, live Tiger had 281353 catch-up pending rows and 31 catch-up retrying rows at priority 100.",
+    "The catch-up pending rows had next_attempt_at 2026-07-25T03:23:23.169921Z, earlier than every retry row, so the current first 20 candidates contained zero retries.",
+    "Live Tiger also had 876 live pending rows and 35 live retrying rows at priority 200.",
+    "The three claims interrupted by the approved quota redeploy remained eligible attempts 1/8 lease_expired retries.",
+    "The current and proposed query plans have the same parallel sequential-scan, bounded-sort, and gather-merge shape; estimated cost changed by less than one percent.",
+    "The targeted durable-work baseline passed 14 tests before the fix.",
+    "The fix adds retry-state ordering after lane and priority and before next_attempt_at.",
+    "The post-fix targeted suite passed 15 tests and the complete PICS suite passed 102 tests."
+  ],
+  "reproduction_status": {
+    "state": "reproduced",
+    "summary": "Live Tiger and a minimal ordering simulation both show an equally prioritized pending row with an older next_attempt_at is selected before an eligible retry row.",
+    "evidence_paths": [
+      "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/db/live-retry-ordering.md",
+      "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/db/claim-order-query-plan.md",
+      "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/reproduction/current-ordering.md",
+      "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/tests/pytest-durable-work-baseline.md",
+      "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/tests/post-fix-validation.md"
+    ]
+  },
+  "owning_files": [
+    "services/pics-service/src/database/durable_work.py",
+    "services/pics-service/src/workers/durable_processor.py",
+    "services/pics-service/tests/test_durable_work.py"
+  ],
+  "affected_surfaces": [
+    "durable PICS live/new claim quota",
+    "durable PICS catch-up claim quota",
+    "lease-expiry recovery",
+    "retry and dead-letter timing",
+    "PICS reconciliation progress",
+    "PICS readiness timing"
+  ],
+  "db_checks": [
+    {
+      "status": "run",
+      "purpose": "Prove the current claim order starves eligible retries behind same-lane, same-priority pending work.",
+      "sql": "SELECT lane, priority, state, count(*) AS rows, min(next_attempt_at), max(next_attempt_at) FROM ops.pics_work_state WHERE stream_key='primary' AND state IN ('pending','retrying') GROUP BY lane, priority, state ORDER BY lane, priority DESC, state LIMIT 30;",
+      "result_summary": "Catch-up had 281353 pending and 31 retrying rows at priority 100. Every pending row's next_attempt_at preceded the retry rows, and the current first 20 ordered candidates were all pending.",
+      "artifact_path": "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/db/live-retry-ordering.md"
+    },
+    {
+      "status": "run",
+      "purpose": "Compare current and proposed query-plan cost before choosing whether a new index or migration is required.",
+      "sql": "EXPLAIN SELECT work.id FROM ops.pics_work_state work WHERE work.work_mode='durable' AND work.stream_key='primary' AND work.lane=ANY(ARRAY['catchup']::text[]) AND work.state IN ('pending','retrying') AND work.next_attempt_at<=clock_timestamp() AND work.attempts<work.max_attempts ORDER BY CASE work.lane WHEN 'new' THEN 0 WHEN 'live' THEN 1 ELSE 2 END, work.priority DESC, CASE work.state WHEN 'retrying' THEN 0 ELSE 1 END, work.next_attempt_at, work.dirty_since, work.id LIMIT 40;",
+      "result_summary": "The proposed state tie-breaker retained the current plan shape and changed estimated cost by less than one percent, so no new index or schema migration is justified.",
+      "artifact_path": "bugfixes/20260725-071946-pics-retry-work-starves-behind-pending-backlog/artifacts/db/claim-order-query-plan.md"
+    }
+  ],
+  "root_cause_hypotheses": [
+    {
+      "label": "Missing retry-state tie-breaker",
+      "confidence": "high",
+      "evidence": "The owning SQL admits both states but orders next_attempt_at before any state distinction; live data has an older pending timestamp across the backlog and therefore excludes retries from the bounded claim."
+    }
+  ],
+  "fix_options": [
+    {
+      "title": "Add retry-before-pending after lane and priority",
+      "behavior_change": true,
+      "summary": "Insert a deterministic retry-state CASE after priority and before next_attempt_at in the existing candidate ORDER BY.",
+      "tradeoffs": "Smallest change; preserves lane, priority, quotas, leases, and response shapes. Equally prioritized fresh pending work is delayed by the bounded number of eligible retries."
+    },
+    {
+      "title": "Split retry and pending candidates with a new retry index",
+      "behavior_change": true,
+      "summary": "Claim retries and pending work through separate candidate CTEs backed by an additive partial index.",
+      "tradeoffs": "More code and a production schema migration for no demonstrated plan benefit at current scale."
+    },
+    {
+      "title": "Leave ordering unchanged and repair queues operationally",
+      "behavior_change": false,
+      "summary": "Keep the current SQL and manually requeue or reprioritize retry rows.",
+      "tradeoffs": "Does not fix the defect, violates durable queue ownership, requires repeated production writes, and risks inconsistent reconciliation."
+    }
+  ],
+  "recommended_fix": "Add retry-before-pending as a tie-breaker only after lane and priority in claim_work, with regression coverage proving lane and priority remain ahead of state and retry state remains ahead of next_attempt_at. No schema migration is needed.",
+  "open_questions": [],
+  "verification_plan": [
+    "Add a targeted SQL-order regression test in test_durable_work.py.",
+    "Run PYTHONPATH=. pytest tests/test_durable_work.py -q.",
+    "Run the complete PICS pytest suite.",
+    "Run Python compilation or the repository's PICS validation commands.",
+    "Review the final diff for any lane, priority, quota, lease, or settlement changes.",
+    "Open a draft PR without deploying it."
+  ],
+  "residual_risks": [
+    "A burst of eligible retries can temporarily displace equally prioritized fresh pending work within the same lane, but the existing per-lane quota and max-attempt controls remain bounded.",
+    "Existing production retries will not drain under the new order until a separately approved deployment uses the fix.",
+    "The current claim query already uses a sequential scan and bounded sort; this fix does not address broader future queue-scale optimization."
+  ]
+}

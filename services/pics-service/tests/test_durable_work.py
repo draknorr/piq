@@ -182,6 +182,31 @@ def test_claim_recovers_expired_leases_before_skip_locked_claim():
     assert connection.committed is True
 
 
+def test_claim_prioritizes_retrying_within_the_same_lane_and_priority():
+    cursor = FakeCursor()
+    store, _connection = make_store(cursor)
+
+    store.claim_work(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        worker_id="worker-1",
+        lane_group="live",
+        limit=10,
+        lease_seconds=300,
+    )
+
+    statement = next(
+        statement for statement, _ in cursor.events if statement.startswith("WITH candidates AS")
+    )
+    lane_order = statement.index("CASE work.lane")
+    priority_order = statement.index("work.priority DESC")
+    retry_order = statement.index("CASE work.state WHEN 'retrying' THEN 0 ELSE 1 END")
+    next_attempt_order = statement.index("work.next_attempt_at ASC")
+
+    assert lane_order < priority_order < retry_order < next_attempt_order
+    assert "FOR UPDATE OF work SKIP LOCKED" in statement
+
+
 def test_claim_failure_rolls_back_the_recovery_and_claim_transaction():
     cursor = FakeCursor(fail_on="WITH candidates AS")
     store, connection = make_store(cursor)
