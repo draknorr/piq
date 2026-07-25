@@ -8,7 +8,9 @@ with no app IDs. Advancing the cursor without another durable record would
 erase the only visible evidence of the gap.
 
 Migration `0092_pics_cursor_checkpoint_reconciliation.sql` provides the
-recovery path:
+recovery path. Migration
+`0093_fix_pics_reconciliation_function_ambiguity.sql` repairs three helper
+functions from 0092 without changing their signatures or semantics:
 
 1. prove the old interval is unavailable from a retained `source_blocked`
    shadow batch;
@@ -72,12 +74,13 @@ terminal disposition.
 
 ## Approval Boundaries
 
-There are three independent production mutations. Approval for one does not
+There are four independent production mutations. Approval for one does not
 authorize the next:
 
 1. apply additive Tiger migration `0092`;
-2. call `ops.apply_pics_reconciliation_checkpoint(...)`; and
-3. change and deploy the genuine Railway PICS service in durable primary mode.
+2. apply forward repair migration `0093`;
+3. call `ops.apply_pics_reconciliation_checkpoint(...)`; and
+4. change and deploy the genuine Railway PICS service in durable primary mode.
 
 Before each action, record the exact change, reason, risk, rollback, recovery
 evidence, and explicit approval. Do not use Supabase, do not restart the lossy
@@ -101,7 +104,27 @@ destructive and requires another approval.
 
 Deploying the new service code before this schema exists is prohibited.
 
+Before calling the checkpoint, apply 0093 under its own approval. The repair
+migration:
+
+- checks the exact installed 0092 source-body SHA-256 for the checkpoint,
+  rollback, and reviewed-requeue helpers;
+- refuses to run if any body differs from the reviewed source;
+- replaces only the unqualified references that collide with `RETURNS TABLE`
+  output variables;
+- verifies the exact repaired body SHA-256 in the same transaction; and
+- preserves function identity, ownership, grants, inputs, outputs, and
+  behavior, while refreshing the comments to record the repair.
+
+The repair is required because the first production checkpoint attempt on
+July 25, 2026 UTC failed at its initial lookup with
+`column reference "from_change_number" is ambiguous`. The single transaction
+made no checkpoint, queue, readiness, or cursor change. Do not retry the
+checkpoint against the unrepaired 0092 functions.
+
 ## 2. Fresh Evidence and Checkpoint
+
+This section is gate 3 after both schema migrations above.
 
 Use one bounded read-only transaction immediately before proposing arguments:
 
