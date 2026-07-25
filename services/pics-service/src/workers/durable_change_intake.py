@@ -10,9 +10,12 @@ from typing import Optional
 from ..config.settings import settings
 from ..database.durable_intake import (
     PersistedPICSBatch,
+    PICSArchiveReference,
     PICSSourceAppChange,
     TigerPICSDurableIntakeStore,
+    hash_pics_app_changes,
 )
+from ..database.tiger_change_history import S3ArchiveStore
 from ..health.server import HealthServer
 from ..steam.client import PICSSteamClient
 from ..steam.pics import PICSFetcher
@@ -48,6 +51,7 @@ class DurableChangeIntakeWorker:
         self._steam = PICSSteamClient()
         self._fetcher: Optional[PICSFetcher] = None
         self._store = TigerPICSDurableIntakeStore.from_settings(settings)
+        self._archive_store = S3ArchiveStore.from_env()
         self._health = health_server
         self._running = False
         self._consecutive_poll_failures = 0
@@ -58,6 +62,7 @@ class DurableChangeIntakeWorker:
             DurablePICSProcessor(
                 work_mode=self._work_mode,
                 stream_key=self._stream_key,
+                archive_store=self._archive_store,
             )
             if settings.pics_processing_enabled
             else None
@@ -150,7 +155,18 @@ class DurableChangeIntakeWorker:
             )
             for change in changes.app_change_details
         ]
+        archive = self._archive_change_response(
+            from_change_number=last_change,
+            to_change_number=changes.change_number,
+            response_since_change_number=changes.since_change_number,
+            app_changes=source_app_changes,
+            package_changes=changes.package_changes,
+            force_full_update=changes.force_full_update,
+            force_full_app_update=changes.force_full_app_update,
+            force_full_package_update=changes.force_full_package_update,
+        )
         committed = self._store.persist_batch(
+            archive=archive,
             from_change_number=last_change,
             to_change_number=changes.change_number,
             response_since_change_number=changes.since_change_number,
@@ -186,6 +202,65 @@ class DurableChangeIntakeWorker:
             committed.idempotent_replay,
         )
         return committed.to_change_number
+
+    def _archive_change_response(
+        self,
+        *,
+        from_change_number: int,
+        to_change_number: int,
+        response_since_change_number: int,
+        app_changes: list[PICSSourceAppChange],
+        package_changes: list[int],
+        force_full_update: bool,
+        force_full_app_update: bool,
+        force_full_package_update: bool,
+    ) -> PICSArchiveReference:
+        """Archive an exact response before its Tiger transaction can advance."""
+
+        app_changes_sha256 = hash_pics_app_changes(app_changes)
+        document = {
+            "_archive_schema_version": "pics-change-response/v2",
+            "stream_key": self._stream_key,
+            "work_mode": self._work_mode,
+            "lane": self._lane,
+            "from_change_number": from_change_number,
+            "to_change_number": to_change_number,
+            "response_since_change_number": response_since_change_number,
+            "source_app_count": len(app_changes),
+            "distinct_app_count": len({change.appid for change in app_changes}),
+            "app_changes_sha256": app_changes_sha256,
+            "force_full_update": force_full_update,
+            "force_full_app_update": force_full_app_update,
+            "force_full_package_update": force_full_package_update,
+            "app_changes": [
+                {
+                    "source_index": source_index,
+                    "appid": change.appid,
+                    "change_number": change.change_number,
+                    "needs_token": change.needs_token,
+                }
+                for source_index, change in enumerate(app_changes)
+            ],
+            "package_changes": [int(package_id) for package_id in package_changes],
+        }
+        pointer = self._archive_store.write_json(
+            content_hash=None,
+            key_parts=[
+                self._stream_key,
+                str(from_change_number),
+                str(to_change_number),
+                app_changes_sha256,
+            ],
+            kind="pics-change-response",
+            payload=document,
+        )
+        return PICSArchiveReference(
+            bucket=pointer.bucket,
+            key=pointer.key,
+            content_hash=pointer.content_hash,
+            byte_size=pointer.byte_size,
+            content_type=pointer.content_type,
+        )
 
     def stop(self) -> None:
         """Signal the intake leader to stop after its current operation."""

@@ -32,7 +32,7 @@ class PICSSourceAppChange:
 
 @dataclass(frozen=True)
 class PICSArchiveReference:
-    """Optional immutable archive reference for a PICS change response."""
+    """Required immutable archive reference for a PICS change response."""
 
     bucket: str
     key: str
@@ -190,6 +190,7 @@ class TigerPICSDurableIntakeStore:
     def persist_batch(
         self,
         *,
+        archive: PICSArchiveReference,
         from_change_number: int,
         to_change_number: int,
         response_since_change_number: int,
@@ -201,7 +202,6 @@ class TigerPICSDurableIntakeStore:
         stream_key: str,
         lane: str = "live",
         received_at: Optional[datetime] = None,
-        archive: Optional[PICSArchiveReference] = None,
     ) -> PersistedPICSBatch:
         """Persist one complete upstream response and conditionally advance the cursor."""
 
@@ -275,6 +275,7 @@ class TigerPICSDurableIntakeStore:
                             force_full_package_update=package_force_full,
                             source_complete=source_complete,
                             status=batch_status,
+                            archive=archive,
                             primary_cursor=primary_cursor,
                             from_change_number=source_cursor,
                             to_change_number=target_cursor,
@@ -499,9 +500,9 @@ class TigerPICSDurableIntakeStore:
                 )
 
     @staticmethod
-    def _validate_archive(archive: Optional[PICSArchiveReference]) -> None:
+    def _validate_archive(archive: PICSArchiveReference) -> None:
         if archive is None:
-            return
+            raise ValueError("PICS archive reference is required before intake")
         if (
             not archive.bucket.strip()
             or not archive.key.strip()
@@ -567,7 +568,12 @@ class TigerPICSDurableIntakeStore:
               force_full_package_update,
               source_complete,
               status,
-              primary_cursor_advanced
+              primary_cursor_advanced,
+              archive_bucket,
+              archive_key,
+              archive_content_hash,
+              archive_byte_size,
+              archive_content_type
             FROM ops.pics_change_batches
             WHERE stream_key = %s
               AND from_change_number = %s
@@ -592,6 +598,7 @@ class TigerPICSDurableIntakeStore:
         force_full_package_update: bool,
         source_complete: bool,
         status: str,
+        archive: PICSArchiveReference,
         primary_cursor: Optional[int],
         from_change_number: int,
         to_change_number: int,
@@ -629,6 +636,26 @@ class TigerPICSDurableIntakeStore:
         if actual != expected:
             raise PICSBatchReconciliationError(
                 "Existing PICS batch does not match the replayed source manifest"
+            )
+        if any(existing[index] is None for index in range(14, 19)):
+            raise PICSBatchReconciliationError(
+                "Existing PICS batch is missing its required archive"
+            )
+        existing_archive = (
+            str(existing[14]),
+            str(existing[16]),
+            int(existing[17]),
+            str(existing[18]),
+        )
+        expected_archive = (
+            archive.bucket,
+            archive.content_hash,
+            archive.byte_size,
+            archive.content_type,
+        )
+        if not existing[15] or existing_archive != expected_archive:
+            raise PICSBatchReconciliationError(
+                "Existing PICS batch does not match the replayed archive"
             )
         expected_primary_cursor = to_change_number if source_complete else from_change_number
         if work_mode == "durable" and primary_cursor != expected_primary_cursor:
@@ -760,7 +787,7 @@ class TigerPICSDurableIntakeStore:
         force_full_package_update: bool,
         source_complete: bool,
         status: str,
-        archive: Optional[PICSArchiveReference],
+        archive: PICSArchiveReference,
     ) -> UUID:
         cursor.execute(
             """
@@ -814,11 +841,11 @@ class TigerPICSDurableIntakeStore:
                 force_full_app_update,
                 force_full_package_update,
                 source_complete,
-                archive.bucket if archive else None,
-                archive.key if archive else None,
-                archive.content_hash if archive else None,
-                archive.byte_size if archive else None,
-                archive.content_type if archive else None,
+                archive.bucket,
+                archive.key,
+                archive.content_hash,
+                archive.byte_size,
+                archive.content_type,
                 work_mode == "durable" and source_complete,
                 status,
             ),

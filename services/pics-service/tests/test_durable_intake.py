@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config.settings import Settings, resolve_pics_work_mode  # noqa: E402
 from src.database.durable_intake import (
+    PICSArchiveReference,
     PICSSourceAppChange,
     PICSBatchReconciliationError,
     PICSCursorMismatchError,
@@ -21,6 +22,13 @@ from src.database.durable_intake import (
 
 
 BATCH_ID = UUID("11111111-1111-4111-8111-111111111111")
+ARCHIVE = PICSArchiveReference(
+    bucket="pics-archive",
+    key="pics-change-response/test.json",
+    content_hash="a" * 64,
+    byte_size=123,
+    content_type="application/json",
+)
 
 
 def app_change(appid, change_number, needs_token=False):
@@ -197,11 +205,35 @@ def test_pics_product_targets_default_to_tiger():
     assert Settings.model_fields["pics_latest_state_target"].default == "tiger"
 
 
+def test_persist_batch_requires_archive_before_opening_transaction():
+    cursor = FakeCursor(primary_cursor=10)
+    store, connection = make_store(cursor)
+
+    with pytest.raises(ValueError, match="archive reference is required"):
+        store.persist_batch(
+            archive=None,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=[app_change(7, 11)],
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="durable",
+            stream_key="primary",
+        )
+
+    assert cursor.events == []
+    assert connection.committed is False
+    assert connection.rolled_back is False
+
+
 def test_persist_batch_copies_every_source_position_before_cursor_update():
     cursor = FakeCursor(primary_cursor=10)
     store, connection = make_store(cursor)
 
     result = store.persist_batch(
+        archive=ARCHIVE,
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=10,
@@ -256,6 +288,7 @@ def test_work_upsert_uses_each_apps_staged_change_numbers():
     store, connection = make_store(cursor)
 
     store.persist_batch(
+        archive=ARCHIVE,
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=10,
@@ -313,6 +346,7 @@ def test_each_durable_intake_failure_boundary_rolls_back(failure_boundary):
 
     with pytest.raises(RuntimeError, match="injected transaction failure"):
         store.persist_batch(
+            archive=ARCHIVE,
             from_change_number=10,
             to_change_number=20,
             response_since_change_number=10,
@@ -337,6 +371,7 @@ def test_staging_manifest_mismatch_rolls_back_before_batch_insert():
 
     with pytest.raises(PICSBatchReconciliationError, match="Staged"):
         store.persist_batch(
+            archive=ARCHIVE,
             from_change_number=10,
             to_change_number=20,
             response_since_change_number=10,
@@ -361,6 +396,7 @@ def test_mismatched_primary_cursor_fails_before_staging():
 
     with pytest.raises(PICSCursorMismatchError, match="batch begins at 10"):
         store.persist_batch(
+            archive=ARCHIVE,
             from_change_number=10,
             to_change_number=20,
             response_since_change_number=10,
@@ -381,6 +417,7 @@ def test_shadow_batch_never_updates_primary_cursor_or_canonical_readiness():
     store, connection = make_store(cursor)
 
     result = store.persist_batch(
+        archive=ARCHIVE,
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=10,
@@ -421,6 +458,7 @@ def test_incomplete_source_response_is_retained_without_work_or_cursor_advance(
     store, connection = make_store(cursor)
 
     result = store.persist_batch(
+        archive=ARCHIVE,
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=response_since_change_number,
@@ -455,6 +493,7 @@ def test_package_only_force_full_does_not_block_app_cursor():
     store, _connection = make_store(cursor)
 
     result = store.persist_batch(
+        archive=ARCHIVE,
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=10,
@@ -477,6 +516,7 @@ def test_complete_response_rejects_app_change_outside_cursor_range():
 
     with pytest.raises(PICSBatchReconciliationError, match="outside"):
         store.persist_batch(
+            archive=ARCHIVE,
             from_change_number=10,
             to_change_number=20,
             response_since_change_number=10,
@@ -510,11 +550,23 @@ def test_exact_committed_batch_retry_is_idempotent():
         True,
         "committed",
         True,
+        ARCHIVE.bucket,
+        ARCHIVE.key,
+        ARCHIVE.content_hash,
+        ARCHIVE.byte_size,
+        ARCHIVE.content_type,
     )
     cursor = FakeCursor(primary_cursor=20, existing_batch=existing)
     store, connection = make_store(cursor)
 
     result = store.persist_batch(
+        archive=PICSArchiveReference(
+            bucket=ARCHIVE.bucket,
+            key="pics-change-response/replayed-on-another-day.json",
+            content_hash=ARCHIVE.content_hash,
+            byte_size=ARCHIVE.byte_size,
+            content_type=ARCHIVE.content_type,
+        ),
         from_change_number=10,
         to_change_number=20,
         response_since_change_number=10,
@@ -530,3 +582,47 @@ def test_exact_committed_batch_retry_is_idempotent():
     assert result.idempotent_replay is True
     assert cursor.copied_rows == []
     assert connection.committed is True
+
+
+def test_committed_batch_retry_rejects_missing_archive_provenance():
+    app_changes = [app_change(7, 20)]
+    existing = (
+        BATCH_ID,
+        "durable",
+        "live",
+        10,
+        1,
+        1,
+        1,
+        hash_pics_app_changes(app_changes),
+        False,
+        False,
+        False,
+        True,
+        "committed",
+        True,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    cursor = FakeCursor(primary_cursor=20, existing_batch=existing)
+    store, connection = make_store(cursor)
+
+    with pytest.raises(PICSBatchReconciliationError, match="missing its required archive"):
+        store.persist_batch(
+            archive=ARCHIVE,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=app_changes,
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="durable",
+            stream_key="primary",
+        )
+
+    assert connection.committed is False
+    assert connection.rolled_back is True
