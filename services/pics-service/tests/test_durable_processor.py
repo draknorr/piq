@@ -1,6 +1,8 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.database.durable_work import PICSWorkClaim
 from src.database.tiger_change_history import ArchivePointer
 from src.workers.durable_processor import DurablePICSProcessor
@@ -76,6 +78,12 @@ class FakeArchiveStore:
         raise AssertionError("No previous snapshot should be read")
 
 
+class FailingArchiveStore(FakeArchiveStore):
+    def write_json(self, **kwargs):
+        self.writes.append(kwargs)
+        raise RuntimeError("R2 unavailable")
+
+
 class FakeWorkStore:
     def __init__(self, claim):
         self.claim = claim
@@ -105,7 +113,8 @@ class FakeWorkStore:
 
     def fail_claim(self, **kwargs):
         self.failed.append(kwargs)
-        return "retrying"
+        claim = kwargs["claim"]
+        return "retrying" if claim.attempts < claim.max_attempts else "dead_letter"
 
 
 def test_shadow_processor_validates_archives_and_acknowledges_without_promoting():
@@ -179,6 +188,80 @@ def test_missing_product_response_is_retried():
     assert len(work_store.failed) == 1
     assert work_store.failed[0]["error_code"] == "payload_missing"
     assert work_store.failed[0]["retryable"] is True
+
+
+def test_final_missing_product_response_is_archived_and_source_blocked():
+    claim = make_claim(attempts=3)
+    work_store = FakeWorkStore(claim)
+    archive_store = FakeArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FakeFetcher(None))
+
+    assert stats.source_blocked == 1
+    assert stats.retried == 0
+    assert stats.dead_lettered == 0
+    assert stats.completed == 0
+    assert len(work_store.failed) == 0
+    assert len(work_store.blocked) == 1
+    assert work_store.blocked[0]["blocking_reason"] == "payload_missing"
+    assert work_store.blocked[0]["provenance"]["archive"]["key"] == "test/1.json"
+    assert archive_store.writes[0]["kind"] == "pics-product-payload-blocked"
+    blocked_document = archive_store.writes[0]["payload"]
+    assert blocked_document["appid"] == 7
+    assert blocked_document["attempts"] == 3
+    assert blocked_document["max_attempts"] == 3
+    assert blocked_document["error_code"] == "payload_missing"
+    assert blocked_document["raw_payload"] is None
+
+
+def test_other_final_retryable_validation_error_still_dead_letters():
+    claim = make_claim(attempts=3)
+    work_store = FakeWorkStore(claim)
+    archive_store = FakeArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FakeFetcher(make_payload(appid=8)))
+
+    assert stats.source_blocked == 0
+    assert stats.retried == 0
+    assert stats.dead_lettered == 1
+    assert len(work_store.blocked) == 0
+    assert len(work_store.failed) == 1
+    assert work_store.failed[0]["error_code"] == "appid_mismatch"
+    assert archive_store.writes == []
+
+
+def test_final_missing_product_response_requires_durable_archive_evidence():
+    claim = make_claim(attempts=3)
+    work_store = FakeWorkStore(claim)
+    archive_store = FailingArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    with pytest.raises(RuntimeError, match="R2 unavailable"):
+        processor.process_once(FakeFetcher(None))
+
+    assert len(archive_store.writes) == 1
+    assert len(work_store.blocked) == 0
+    assert len(work_store.failed) == 0
 
 
 def test_batch_fetch_failure_releases_claim_for_bounded_retry():
