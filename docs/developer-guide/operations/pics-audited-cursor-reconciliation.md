@@ -24,7 +24,7 @@ functions from 0092 without changing their signatures or semantics:
 This design uses the existing Tiger work queue, R2 archive, and one genuine
 Railway PICS service. It adds no queue vendor or permanent service.
 
-## Current Source-of-Truth Checkpoint
+## Initial Source-of-Truth Checkpoint
 
 The following facts were captured read-only at `2026-07-25 00:59 UTC`. They
 are evidence, not reusable thresholds or function arguments:
@@ -47,6 +47,24 @@ product refreshes. Finalization therefore requires an exact manually reviewed
 source-blocked count, verifier identity, and note.
 
 Supabase is not a product-data source or target in this procedure.
+
+## Applied Production State
+
+The separately approved checkpoint was applied on July 25, 2026 UTC:
+
+- checkpoint `a58a5a0e-26d9-48bf-9a20-693380208fdc`;
+- reconciliation run `54e2444b-2fc4-472a-b686-1173703f9212`;
+- cursor `37,491,237` to `37,519,592`;
+- `282,630` manifest items and linked pending primary work rows; and
+- manifest SHA-256
+  `228f499f2755a4eb8b484d63b688ee44130b8bfe560a3a26b8b050e8edb2c301`.
+
+The genuine PICS service remains on its isolated shadow stream, so the primary
+queue is intentionally inert and the pre-processing rollback window remains
+open. The duplicate non-PICS service remains stopped. See
+`docs/reference/daily-opportunity-prep-baseline/2026-07-24/pics-audited-reconciliation-checkpoint-apply.md`
+for the approved arguments, preflight, transaction result, postconditions, and
+rollback proof.
 
 ## Records and Invariants
 
