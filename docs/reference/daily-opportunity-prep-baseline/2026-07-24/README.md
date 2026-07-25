@@ -127,6 +127,10 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   checkpoint transaction, exact gap/head evidence and manifest, canonical
   cursor advance, inert full-state primary queue, readiness provenance, and
   open pre-processing rollback proof.
+- `pics-locked-shadow-redeploy.md`: approved genuine-service replacement from
+  dependency-locked merged `main`, exact Railway build/runtime evidence,
+  continuing isolated shadow parity, unchanged canonical/primary state, and
+  duplicate-service containment.
 - `railway-pics-service-topology.md`: disambiguation and final containment
   state for both Railway services named `publisheriq`.
 - `verification.md`: passing checks, pre-existing verifier/lint findings, and unresolved external gates.
