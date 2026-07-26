@@ -4,22 +4,27 @@ import { logger } from '@publisheriq/shared';
 
 import { loadDataPlaneConfig, type DataPlaneConfig } from './config.js';
 
-let pool: Pool | null = null;
+const pools = new Map<string, Pool>();
 
 export function getDataPlanePool(config: DataPlaneConfig = loadDataPlaneConfig()): Pool {
-  if (!pool) {
-    pool = new Pool({
-      application_name: 'publisheriq-data-plane',
-      connectionString: config.connectionString,
-      max: config.maxPoolSize,
-      statement_timeout: config.statementTimeoutMs,
-    });
-
-    pool.on('error', (error) => {
-      logger.error('Data-plane pool error', { error });
-    });
+  const key = poolKey(config);
+  const existing = pools.get(key);
+  if (existing) {
+    return existing;
   }
 
+  const pool = new Pool({
+    application_name: 'publisheriq-data-plane',
+    connectionString: config.connectionString,
+    max: config.maxPoolSize,
+    statement_timeout: config.statementTimeoutMs,
+  });
+
+  pool.on('error', (error) => {
+    logger.error('Data-plane pool error', { error });
+  });
+
+  pools.set(key, pool);
   return pool;
 }
 
@@ -45,10 +50,20 @@ export async function runQuery<T extends QueryResultRow>(
 }
 
 export async function shutdownPool(): Promise<void> {
-  if (!pool) {
+  if (pools.size === 0) {
     return;
   }
 
-  await pool.end();
-  pool = null;
+  const openPools = [...pools.values()];
+  pools.clear();
+  await Promise.all(openPools.map((pool) => pool.end()));
+}
+
+function poolKey(config: DataPlaneConfig): string {
+  return [
+    config.source,
+    config.connectionString,
+    config.maxPoolSize,
+    config.statementTimeoutMs,
+  ].join('\0');
 }

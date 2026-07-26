@@ -1,0 +1,24 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm --filter @publisheriq/shared build && pnpm --filter @publisheriq/data-plane build && pnpm --filter @publisheriq/research-mcp build",
+    "watchPatterns": [
+      "/apps/research-mcp/**",
+      "/packages/data-plane/**",
+      "/packages/shared/**",
+      "/package.json",
+      "/pnpm-lock.yaml",
+      "/pnpm-workspace.yaml",
+      "/tsconfig.json",
+      "/turbo.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @publisheriq/research-mcp start",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}

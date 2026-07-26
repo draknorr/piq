@@ -1,0 +1,105 @@
+{
+  "manifest_version": "0.3",
+  "name": "publisheriq-research",
+  "display_name": "PublisherIQ Research",
+  "version": "0.1.2",
+  "description": "Claude Desktop connector for governed PublisherIQ research evidence packs.",
+  "long_description": "Connects Claude Desktop to the hosted PublisherIQ Research MCP gateway. Claude can request format-neutral evidence packs, current snapshots, YouTube coverage, market/genre evidence, optional prior-work search, and governed read-only analysis without direct database credentials.",
+  "author": {
+    "name": "PublisherIQ"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/proxy.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/proxy.js"
+      ],
+      "env": {
+        "RESEARCH_MCP_URL": "${user_config.research_mcp_url}",
+        "RESEARCH_MCP_BEARER_TOKEN": "${user_config.research_mcp_bearer_token}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_report_instructions",
+      "description": "Return optional PublisherIQ writing guidance, confidence rules, and source-use guidance."
+    },
+    {
+      "name": "search_report_archive",
+      "description": "Search optional indexed prior work when available."
+    },
+    {
+      "name": "build_game_research_pack",
+      "description": "Build a format-neutral game evidence pack."
+    },
+    {
+      "name": "build_genre_growth_pack",
+      "description": "Build a genre/tag growth evidence pack."
+    },
+    {
+      "name": "build_youtube_creator_pack",
+      "description": "Build a per-game YouTube creator coverage pack."
+    },
+    {
+      "name": "build_company_diligence_pack",
+      "description": "Build a company diligence evidence pack."
+    },
+    {
+      "name": "build_unreleased_opportunity_pack",
+      "description": "Build an unreleased opportunity evidence pack."
+    },
+    {
+      "name": "build_report_recreation_pack",
+      "description": "Build an optional prior-work recreation pack when archive metadata is available."
+    },
+    {
+      "name": "get_publisheriq_data_dictionary",
+      "description": "Return allowed schemas, common tables, ranking defaults, key columns, and safe SQL templates for SQL-backed PublisherIQ questions."
+    },
+    {
+      "name": "query_publisheriq_data",
+      "description": "Answer arbitrary PublisherIQ data questions with governed read-only SQL. For broad released-game rankings use metrics.apps_page_projection; for Steam tag filters such as indie join legacy.app_steam_tags to legacy.steam_tags."
+    },
+    {
+      "name": "run_readonly_analysis",
+      "description": "Run governed read-only SQL analysis when role and server-side sandbox settings allow it."
+    }
+  ],
+  "tools_generated": true,
+  "keywords": [
+    "publisheriq",
+    "steam",
+    "research",
+    "evidence",
+    "games"
+  ],
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "research_mcp_url": {
+      "type": "string",
+      "title": "PublisherIQ Research MCP URL",
+      "description": "Hosted PublisherIQ Research MCP endpoint.",
+      "required": true,
+      "default": "https://publisheriq-research-mcp-prod-production.up.railway.app/mcp"
+    },
+    "research_mcp_bearer_token": {
+      "type": "string",
+      "title": "PublisherIQ Research MCP Bearer Token",
+      "description": "Bearer token for the hosted PublisherIQ Research MCP endpoint.",
+      "required": true,
+      "sensitive": true
+    }
+  }
+}

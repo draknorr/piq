@@ -194,6 +194,67 @@ test('query-api routes semantic-search requests to the data-plane service', asyn
   );
 });
 
+test('query-api exposes optional research archive search behind existing auth', async () => {
+  const previousArchiveScan = process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+  try {
+    await withServer(createDataPlaneStub(), 'secret-token', async (origin) => {
+      const unauthorized = await fetch(`${origin}/v1/research/report-archive/search`, {
+        body: JSON.stringify({ query: 'tag genre market shifts' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      assert.equal(unauthorized.status, 401);
+
+      const response = await fetch(`${origin}/v1/research/report-archive/search`, {
+        body: JSON.stringify({ query: 'tag genre market shifts', limit: 2 }),
+        headers: {
+          authorization: 'Bearer secret-token',
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        items: Array<{ artifactCount: number }>;
+        totalMatches: number;
+      };
+      assert.equal(payload.totalMatches, 0);
+      assert.deepEqual(payload.items, []);
+    });
+  } finally {
+    if (previousArchiveScan === undefined) {
+      delete process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM;
+    } else {
+      process.env.RESEARCH_ARCHIVE_SCAN_FILESYSTEM = previousArchiveScan;
+    }
+  }
+});
+
+test('query-api keeps readonly research SQL disabled unless explicitly enabled', async () => {
+  await withServer(createDataPlaneStub(), null, async (origin) => {
+    const response = await fetch(`${origin}/v1/research/readonly-analysis`, {
+      body: JSON.stringify({
+        expectedRows: 10,
+        purpose: 'test',
+        sql: 'SELECT appid FROM legacy.apps LIMIT 10',
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-publisheriq-research-role': 'researcher',
+      },
+      method: 'POST',
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), {
+      code: 'RESEARCH_SQL_SANDBOX_DISABLED',
+      error: 'Read-only research SQL sandbox is disabled for this environment.',
+    });
+  });
+});
+
 test('query-api falls back to the source service for resolve-entities when the Tiger primary throws', async () => {
   await withServer(
     createDataPlaneStub({

@@ -1,0 +1,10 @@
+{
+  "name": "@publisheriq/research-mcp-claude-extension",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pack": "npx @anthropic-ai/mcpb pack",
+    "test": "node --test test/*.test.js"
+  }
+}
