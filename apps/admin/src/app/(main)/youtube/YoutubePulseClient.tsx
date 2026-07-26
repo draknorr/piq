@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -112,6 +112,48 @@ function formatAbsoluteTime(value: string | null): string {
     minute: '2-digit',
     month: 'short',
   });
+}
+
+function formatServerTime(value: string | null): string {
+  const date = parseDateSafe(value);
+  if (!date) {
+    return 'Unknown';
+  }
+
+  return date.toLocaleString('en-US', {
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    month: 'short',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  });
+}
+
+const subscribeToHydration = (): (() => void) => () => undefined;
+const getClientHydrationSnapshot = (): boolean => true;
+const getServerHydrationSnapshot = (): boolean => false;
+
+function HydrationSafeTime({
+  format,
+  value,
+}: {
+  format: 'absolute' | 'relative';
+  value: string | null;
+}) {
+  const isHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+  const parsed = parseDateSafe(value);
+  const label = isHydrated
+    ? format === 'relative'
+      ? formatRelativeTime(value)
+      : formatAbsoluteTime(value)
+    : formatServerTime(value);
+
+  return <time dateTime={parsed?.toISOString()}>{label}</time>;
 }
 
 function formatContentClass(value: YoutubeContentClass | null): string {
@@ -351,7 +393,12 @@ function GameActivityRow({
           </Link>
           <p className="mt-1 truncate text-[11px] text-text-secondary">
             {latest
-              ? `${latest.channelTitle} · ${formatRelativeTime(latest.publishedAt)}`
+              ? (
+                <>
+                  {latest.channelTitle} ·{' '}
+                  <HydrationSafeTime format="relative" value={latest.publishedAt} />
+                </>
+              )
               : 'No videos matched for this game'}
           </p>
         </div>
@@ -480,7 +527,8 @@ function VideoEvidence({
                   {video.title}
                 </p>
                 <p className="mt-1 truncate text-[11px] text-text-secondary">
-                  {video.channelTitle} · {formatAbsoluteTime(video.publishedAt)}
+                  {video.channelTitle} ·{' '}
+                  <HydrationSafeTime format="absolute" value={video.publishedAt} />
                 </p>
               </div>
               <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-muted" />
@@ -960,7 +1008,8 @@ function VideoDrawer({
                         <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-muted sm:hidden" />
                       </div>
                       <p className="mt-1 truncate text-[11px] text-text-secondary">
-                        {video.channelTitle} · {formatAbsoluteTime(video.publishedAt)}
+                        {video.channelTitle} ·{' '}
+                        <HydrationSafeTime format="absolute" value={video.publishedAt} />
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         <Badge variant={getFormatVariant(video.contentClass)} size="sm">
@@ -1105,7 +1154,8 @@ export function YoutubePulseClient({
             Current sort: {formatSortLabel(activeSort)}
           </span>
           <span className="border border-border-subtle bg-surface/65 px-2 py-1 text-text-secondary">
-            Snapshot: {formatAbsoluteTime(pulse.summary.latestSnapshotAt)}
+            Snapshot:{' '}
+            <HydrationSafeTime format="absolute" value={pulse.summary.latestSnapshotAt} />
           </span>
         </div>
       </div>
