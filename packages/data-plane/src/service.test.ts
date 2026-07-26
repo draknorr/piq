@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DataPlaneService } from './service.js';
+import { DataPlaneService, mergeInsightsPeakRows } from './service.js';
 
 function createService(): DataPlaneService {
   return new DataPlaneService({
@@ -124,6 +124,27 @@ test("getInsightsDashboard normalizes inputs and preserves the three existing UI
   assert.equal(result.newestGames[0]?.name, "newest:30d:growth");
   assert.equal(result.trendingGames[0]?.name, "trending:30d");
   assert.equal(result.provenance.source, "tiger");
+});
+
+test("mergeInsightsPeakRows keeps the exact maximum across non-overlapping windows", () => {
+  assert.deepEqual(
+    mergeInsightsPeakRows([
+      [
+        { appid: 20, peak_ccu: 40 },
+        { appid: 10, peak_ccu: "100" },
+      ],
+      [
+        { appid: 30, peak_ccu: 60 },
+        { appid: 10, peak_ccu: 90 },
+        { appid: 20, peak_ccu: "80" },
+      ],
+    ]),
+    [
+      { appid: 10, peakCcu: 100 },
+      { appid: 20, peakCcu: 80 },
+      { appid: 30, peakCcu: 60 },
+    ],
+  );
 });
 
 test("getProductHealth keeps summary requests bounded and identifies the selected projection", async () => {

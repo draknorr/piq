@@ -206,6 +206,11 @@ interface InsightsPeriodAggregateRow extends QueryResultRow {
   sample_count: number | string;
 }
 
+interface InsightsPeakAggregateRow extends QueryResultRow {
+  appid: number;
+  peak_ccu: number | string;
+}
+
 interface InsightsSummaryRow extends QueryResultRow {
   avg_ccu: number | string | null;
   tier1_count: number | string;
@@ -1678,6 +1683,22 @@ function calculateInsightsTrend(values: number[]): 'up' | 'down' | 'stable' {
   if (changePercent > 5) return 'up';
   if (changePercent < -5) return 'down';
   return 'stable';
+}
+
+export function mergeInsightsPeakRows(
+  periods: InsightsPeakAggregateRow[][]
+): Array<{ appid: number; peakCcu: number }> {
+  const peaksByAppid = new Map<number, number>();
+  for (const rows of periods) {
+    for (const row of rows) {
+      const peakCcu = parseCountValue(row.peak_ccu);
+      peaksByAppid.set(row.appid, Math.max(peaksByAppid.get(row.appid) ?? 0, peakCcu));
+    }
+  }
+
+  return [...peaksByAppid.entries()]
+    .map(([appid, peakCcu]) => ({ appid, peakCcu }))
+    .sort((left, right) => left.appid - right.appid);
 }
 
 function normalizeOffset(value: number | undefined): number {
@@ -14060,6 +14081,113 @@ export class DataPlaneService {
     const tiers = this.relation('ccu_tier_assignments').sql;
     const metrics = this.relation('latest_daily_metrics').sql;
     const trends = this.relation('app_trends').sql;
+    if (timeRange === '30d') {
+      const asOf = new Date().toISOString();
+      const queryPeakHalf = (startDays: number, endDays: number | null) =>
+        runQuery<InsightsPeakAggregateRow>(
+          `
+            SELECT appid, max(player_count)::integer AS peak_ccu
+            FROM ${snapshots}
+            WHERE snapshot_time >= $1::timestamptz - make_interval(days => $2::integer)
+              AND (
+                $3::integer IS NULL
+                OR snapshot_time < $1::timestamptz - make_interval(days => $3::integer)
+              )
+            GROUP BY appid
+          `,
+          [asOf, startDays, endDays],
+          this.config
+        );
+      // A single exact 30-day peak scan exceeds the statement guardrail. Keep
+      // one fixed boundary, scan non-overlapping halves serially, then merge by
+      // appid before hydrating the same top-50 candidate contract.
+      const recentPeaks = await queryPeakHalf(15, null);
+      const priorPeaks = await queryPeakHalf(30, 15);
+      const snapshotPeaks = mergeInsightsPeakRows([recentPeaks.rows, priorPeaks.rows]);
+      const result = await runQuery<InsightsGameRow>(
+        `
+          WITH snapshot_peaks AS (
+            SELECT input.appid, input.peak_ccu
+            FROM unnest(
+              $1::integer[],
+              $2::integer[]
+            ) AS input(appid, peak_ccu)
+          ),
+          candidates AS (
+            SELECT
+              coalesce(snapshot.appid, tier.appid) AS appid,
+              coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0)::integer AS current_ccu,
+              row_number() OVER (
+                ORDER BY coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0) DESC,
+                  coalesce(snapshot.appid, tier.appid) ASC
+              ) AS candidate_rank
+            FROM snapshot_peaks snapshot
+            FULL OUTER JOIN ${tiers} tier ON tier.appid = snapshot.appid
+            WHERE coalesce(snapshot.peak_ccu, tier.recent_peak_ccu, 0) > 0
+            ORDER BY current_ccu DESC, appid ASC
+            LIMIT 50
+          ),
+          point_buckets AS (
+            SELECT
+              snapshot.appid,
+              snapshot.player_count,
+              ntile($3::integer) OVER (
+                PARTITION BY snapshot.appid
+                ORDER BY snapshot.snapshot_time
+              ) AS bucket
+            FROM ${snapshots} snapshot
+            JOIN candidates candidate ON candidate.appid = snapshot.appid
+            WHERE snapshot.snapshot_time >= $4::timestamptz - interval '30 days'
+          ),
+          sparkline AS (
+            SELECT appid, array_agg(bucket_peak ORDER BY bucket) AS ccu_sparkline
+            FROM (
+              SELECT appid, bucket, max(player_count)::integer AS bucket_peak
+              FROM point_buckets
+              GROUP BY appid, bucket
+            ) bucketed
+            GROUP BY appid
+          )
+          SELECT
+            candidate.appid,
+            app.name,
+            app.release_date::text,
+            app.is_free,
+            candidate.current_ccu,
+            candidate.current_ccu AS peak_ccu,
+            NULL::numeric AS recent_avg_ccu,
+            NULL::numeric AS prior_avg_ccu,
+            NULL::numeric AS growth_pct,
+            tier.ccu_tier,
+            tier.tier_reason,
+            tier.release_rank,
+            sparkline.ccu_sparkline,
+            metric.total_reviews,
+            metric.positive_reviews,
+            metric.price_cents,
+            metric.discount_percent,
+            metric.average_playtime_forever,
+            trend.review_velocity_7d
+          FROM candidates candidate
+          JOIN ${apps} app ON app.appid = candidate.appid
+          LEFT JOIN ${tiers} tier ON tier.appid = candidate.appid
+          LEFT JOIN ${metrics} metric ON metric.appid = candidate.appid
+          LEFT JOIN ${trends} trend ON trend.appid = candidate.appid
+          LEFT JOIN sparkline ON sparkline.appid = candidate.appid
+          ORDER BY candidate.candidate_rank
+        `,
+        [
+          snapshotPeaks.map((row) => row.appid),
+          snapshotPeaks.map((row) => row.peakCcu),
+          targetPoints,
+          asOf,
+        ],
+        this.config
+      );
+
+      return result.rows.map((row) => this.mapInsightsGameRow(row));
+    }
+
     const result = await runQuery<InsightsGameRow>(
       `
         WITH snapshot_peaks AS (
