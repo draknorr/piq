@@ -4,6 +4,13 @@ Captured during the first implementation slice on Friday, July 24, 2026 at `2026
 
 This baseline is read-only. No production mutation was performed while capturing it.
 
+> **Current closeout status:** this README preserves the original July 24
+> baseline. The reconciled status through merged PR #70 and live production
+> inspection on July 26 is in
+> [`tracker-readiness-handoff.md`](./tracker-readiness-handoff.md). Preparation
+> is active but not yet complete; do not use the historical observations below
+> as current runtime state.
+
 After capture and explicit user approvals, the two existing Apps materialized
 views were refreshed concurrently. The direct first refresh and later
 GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
@@ -59,6 +66,9 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 
 ## Artifacts
 
+- `tracker-readiness-handoff.md`: authoritative closeout status through PR #70,
+  current source ownership, durable contracts, operating snapshot, regression
+  evidence, rollback procedures, and explicit remaining preparation gates.
 - `implementation/manifest.json`: reproducible bounded Tiger/Supabase operational snapshot.
 - `implementation/tiger-schema.json` and `implementation/supabase-schema.json`: bounded schema inventories.
 - `post-implementation/manifest.json` and `protected-object-comparison.json`: second read-only capture and proof that all complete protected user-control key sets were unchanged.
