@@ -193,6 +193,19 @@ interface InsightsGameRow extends QueryResultRow {
   average_playtime_forever: number | string | null;
 }
 
+interface InsightsTrendCandidateRow extends QueryResultRow {
+  appid: number;
+  growth_pct: number;
+  prior_avg_ccu: number;
+  recent_avg_ccu: number;
+}
+
+interface InsightsPeriodAggregateRow extends QueryResultRow {
+  appid: number;
+  player_sum: number | string;
+  sample_count: number | string;
+}
+
 interface InsightsSummaryRow extends QueryResultRow {
   avg_ccu: number | string | null;
   tier1_count: number | string;
@@ -244,12 +257,7 @@ interface ProductAdminSummaryRow extends QueryResultRow {
   last_reviews_sync: string | null;
   last_steamspy_sync: string | null;
   last_storefront_sync: string | null;
-  pics_with_categories: number | string;
-  pics_with_franchises: number | string;
-  pics_with_genres: number | string;
-  pics_with_parent_app: number | string;
   pics_with_sync: number | string;
-  pics_with_tags: number | string;
   priority_high: number | string;
   priority_low: number | string;
   priority_medium: number | string;
@@ -261,6 +269,14 @@ interface ProductAdminSummaryRow extends QueryResultRow {
   queue_overdue: number | string;
   success_rate_7d: number | string | null;
   total_syncable: number | string;
+}
+
+interface ProductPicsSummaryRow extends QueryResultRow {
+  pics_with_categories: number | string;
+  pics_with_franchises: number | string;
+  pics_with_genres: number | string;
+  pics_with_parent_app: number | string;
+  pics_with_tags: number | string;
 }
 
 interface ProductCcuQualityRow extends QueryResultRow {
@@ -2554,12 +2570,13 @@ export class DataPlaneService {
     await this.assertContractRuntime('getInsightsDashboard');
     const timeRange = normalizeInsightsTimeRange(request.timeRange);
     const newestSort = request.newestSort === 'growth' ? 'growth' : 'release';
-    const [topGames, newestGames, trendingGames, summary] = await Promise.all([
+    const [topGames, newestGames, summary] = await Promise.all([
       this.queryTopInsightsGames(timeRange),
       this.queryNewestInsightsGames(timeRange, newestSort),
-      this.queryTrendingInsightsGames(timeRange),
       this.queryInsightsSummary(),
     ]);
+    // Avoid making the exact trend aggregate compete with the other snapshot reads.
+    const trendingGames = await this.queryTrendingInsightsGames(timeRange);
 
     return {
       newestGames,
@@ -14243,42 +14260,103 @@ export class DataPlaneService {
     const tiers = this.relation('ccu_tier_assignments').sql;
     const metrics = this.relation('latest_daily_metrics').sql;
     const trends = this.relation('app_trends').sql;
+    const queryRecentPeriod = () =>
+      runQuery<InsightsPeriodAggregateRow>(
+        `
+          SELECT
+            appid,
+            sum(player_count)::bigint AS player_sum,
+            count(*)::bigint AS sample_count
+          FROM ${snapshots}
+          WHERE snapshot_time >= now() - $1::interval
+          GROUP BY appid
+          HAVING avg(player_count) >= 10
+        `,
+        [recentInterval],
+        this.config
+      );
+    const queryPriorPeriod = () =>
+      runQuery<InsightsPeriodAggregateRow>(
+        `
+          SELECT
+            appid,
+            sum(player_count)::bigint AS player_sum,
+            count(*)::bigint AS sample_count
+          FROM ${snapshots}
+          WHERE snapshot_time >= now() - $1::interval
+            AND snapshot_time < now() - $2::interval
+          GROUP BY appid
+          HAVING avg(player_count) >= 10
+        `,
+        [priorInterval, recentInterval],
+        this.config
+      );
+    const [recentResult, priorResult] =
+      timeRange === '30d'
+        // Each 30-day half is safe alone but exceeds the statement guardrail under contention.
+        ? [await queryRecentPeriod(), await queryPriorPeriod()]
+        : await Promise.all([queryRecentPeriod(), queryPriorPeriod()]);
+    const priorByAppid = new Map(
+      priorResult.rows.map((row) => [
+        row.appid,
+        parseCountValue(row.player_sum) / parseCountValue(row.sample_count),
+      ])
+    );
+    const candidates: InsightsTrendCandidateRow[] = recentResult.rows
+      .flatMap((row) => {
+        const priorAverage = priorByAppid.get(row.appid);
+        if (priorAverage === undefined || priorAverage === 0) {
+          return [];
+        }
+        const recentAverage =
+          parseCountValue(row.player_sum) / parseCountValue(row.sample_count);
+        return [
+          {
+            appid: row.appid,
+            growth_pct:
+              Math.round(((recentAverage - priorAverage) / priorAverage) * 1000) / 10,
+            prior_avg_ccu: Math.round(priorAverage),
+            recent_avg_ccu: Math.round(recentAverage),
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          right.growth_pct - left.growth_pct || left.appid - right.appid
+      )
+      .slice(0, 50);
+
+    if (candidates.length === 0) {
+      return [];
+    }
+
     const result = await runQuery<InsightsGameRow>(
       `
-        WITH period_averages AS (
+        WITH candidates AS (
           SELECT
+            candidate.appid,
+            candidate.recent_avg_ccu,
+            candidate.prior_avg_ccu,
+            candidate.growth_pct,
+            candidate.candidate_rank
+          FROM unnest(
+            $3::integer[],
+            $4::integer[],
+            $5::integer[],
+            $6::numeric[]
+          ) WITH ORDINALITY AS candidate(
             appid,
-            avg(player_count) FILTER (
-              WHERE snapshot_time >= now() - $1::interval
-            ) AS recent_avg_ccu,
-            avg(player_count) FILTER (
-              WHERE snapshot_time >= now() - $2::interval
-                AND snapshot_time < now() - $1::interval
-            ) AS prior_avg_ccu
-          FROM ${snapshots}
-          WHERE snapshot_time >= now() - $2::interval
-          GROUP BY appid
-        ),
-        candidates AS (
-          SELECT
-            appid,
-            round(recent_avg_ccu)::integer AS recent_avg_ccu,
-            round(prior_avg_ccu)::integer AS prior_avg_ccu,
-            round(
-              ((recent_avg_ccu - prior_avg_ccu) / prior_avg_ccu) * 100,
-              1
-            ) AS growth_pct
-          FROM period_averages
-          WHERE recent_avg_ccu >= 10
-            AND prior_avg_ccu >= 10
-          ORDER BY growth_pct DESC, appid ASC
-          LIMIT 50
+            recent_avg_ccu,
+            prior_avg_ccu,
+            growth_pct,
+            candidate_rank
+          )
         ),
         point_buckets AS (
           SELECT
             snapshot.appid,
             snapshot.player_count,
-            ntile($3::integer) OVER (
+            ntile($2::integer) OVER (
               PARTITION BY snapshot.appid
               ORDER BY snapshot.snapshot_time
             ) AS bucket
@@ -14321,9 +14399,16 @@ export class DataPlaneService {
         LEFT JOIN ${metrics} metric ON metric.appid = candidate.appid
         LEFT JOIN ${trends} trend ON trend.appid = candidate.appid
         LEFT JOIN sparkline ON sparkline.appid = candidate.appid
-        ORDER BY candidate.growth_pct DESC, candidate.appid ASC
+        ORDER BY candidate.candidate_rank
       `,
-      [recentInterval, priorInterval, targetPoints],
+      [
+        recentInterval,
+        targetPoints,
+        candidates.map((row) => row.appid),
+        candidates.map((row) => row.recent_avg_ccu),
+        candidates.map((row) => row.prior_avg_ccu),
+        candidates.map((row) => row.growth_pct),
+      ],
       this.config
     );
 
@@ -14527,8 +14612,10 @@ export class DataPlaneService {
     const apps = this.relation('apps').sql;
     const metrics = this.relation('latest_daily_metrics').sql;
     const tiers = this.relation('ccu_tier_assignments').sql;
-    const summaryResult = await runQuery<ProductAdminSummaryRow>(
-      `
+    // Keep each aggregate below the statement timeout while preserving exact counts.
+    const [summaryResult, picsResult] = await Promise.all([
+      runQuery<ProductAdminSummaryRow>(
+        `
         WITH totals AS (
           SELECT count(*)::bigint AS total
           FROM ${syncStatus}
@@ -14689,40 +14776,6 @@ export class DataPlaneService {
             ) sources(source, source_order)
             GROUP BY source, source_order
           ) rows
-        ),
-        pics_relations AS (
-          SELECT
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_categories').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS with_categories,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_genres').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS with_genres,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_steam_tags').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS with_tags,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_franchises').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS with_franchises,
-            (
-              SELECT count(*)
-              FROM ${apps} app
-              JOIN ${syncStatus} status ON status.appid = app.appid
-              WHERE status.is_syncable = true
-                AND app.parent_appid IS NOT NULL
-            )::bigint AS with_parent_app
         )
         SELECT
           totals.total AS total_syncable,
@@ -14762,23 +14815,57 @@ export class DataPlaneService {
           sync_aggregates.last_histogram_sync::text,
           sync_aggregates.fully_completed AS fully_completed_count,
           sync_aggregates.with_pics_sync AS pics_with_sync,
-          pics_relations.with_categories AS pics_with_categories,
-          pics_relations.with_genres AS pics_with_genres,
-          pics_relations.with_tags AS pics_with_tags,
-          pics_relations.with_franchises AS pics_with_franchises,
-          pics_relations.with_parent_app AS pics_with_parent_app,
           completion.rows AS completion_stats
         FROM totals
         CROSS JOIN job_stats
         CROSS JOIN sync_aggregates
         CROSS JOIN completion
-        CROSS JOIN pics_relations
         LEFT JOIN latest_applist ON true
       `,
-      [],
-      this.config
-    );
+        [],
+        this.config
+      ),
+      runQuery<ProductPicsSummaryRow>(
+        `
+          SELECT
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_categories').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS pics_with_categories,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_genres').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS pics_with_genres,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_steam_tags').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS pics_with_tags,
+            (
+              SELECT count(DISTINCT relation.appid)
+              FROM ${this.relation('app_franchises').sql} relation
+              JOIN ${syncStatus} status ON status.appid = relation.appid
+              WHERE status.is_syncable = true
+            )::bigint AS pics_with_franchises,
+            (
+              SELECT count(*)
+              FROM ${apps} app
+              JOIN ${syncStatus} status ON status.appid = app.appid
+              WHERE status.is_syncable = true
+                AND app.parent_appid IS NOT NULL
+            )::bigint AS pics_with_parent_app
+        `,
+        [],
+        this.config
+      ),
+    ]);
     const summary = summaryResult.rows[0];
+    const picsSummary = picsResult.rows[0];
     const currentCatalogApps = parseCountValue(summary?.total_syncable);
     const [jobsResult, errorsResult, ccuResult, logsResult] = await Promise.all([
       runQuery<Record<string, unknown>>(
@@ -14969,12 +15056,12 @@ export class DataPlaneService {
         dataSource: 'live',
         isApproximate: false,
         totalApps: currentCatalogApps,
-        withCategories: parseCountValue(summary?.pics_with_categories),
-        withFranchises: parseCountValue(summary?.pics_with_franchises),
-        withGenres: parseCountValue(summary?.pics_with_genres),
-        withParentApp: parseCountValue(summary?.pics_with_parent_app),
+        withCategories: parseCountValue(picsSummary?.pics_with_categories),
+        withFranchises: parseCountValue(picsSummary?.pics_with_franchises),
+        withGenres: parseCountValue(picsSummary?.pics_with_genres),
+        withParentApp: parseCountValue(picsSummary?.pics_with_parent_app),
         withPicsSync: parseCountValue(summary?.pics_with_sync),
-        withTags: parseCountValue(summary?.pics_with_tags),
+        withTags: parseCountValue(picsSummary?.pics_with_tags),
       },
       priorityDistribution: {
         high: parseCountValue(summary?.priority_high),
