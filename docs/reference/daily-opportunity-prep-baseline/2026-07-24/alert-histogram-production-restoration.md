@@ -123,6 +123,12 @@ by `04:49:51Z`. Both workflows remained active, the default-branch cron
 expressions were still exact, GitHub reported Actions operational, and other
 repository schedule events enqueued after the same boundary. This does not
 invalidate the successful manual execution paths, but it leaves the natural
-schedule observation open. The tracker-readiness closeout records the
-distinction and must not treat the first schedule as passed until an actual
-`event=schedule` run completes.
+schedule observation open.
+
+The next hourly Alert slot reproduced the problem. PR #82 merged a fresh
+default-branch commit at `05:12:50Z`, before the `05:15` boundary, but no Alert
+`event=schedule` run existed by `05:26:05Z`. The workflow was still active and
+its most recent run remained the successful manual dispatch. This is now a
+repeatable natural-scheduler failure rather than only a delayed first trigger.
+The tracker-readiness closeout records the distinction and must not treat the
+schedule as passed until an actual natural run completes.
