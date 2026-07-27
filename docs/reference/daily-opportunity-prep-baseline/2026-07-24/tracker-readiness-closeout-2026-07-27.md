@@ -1,7 +1,7 @@
 # Daily Opportunity Preparation Closeout Status
 
 Status updated on 2026-07-27 UTC against `main` commit
-`129d8eb2988db2856cf7980bd9f872953b0753c5` (merged PR #80), plus the
+`858009400b9435889826bedb43b572496d08cac1` (merged PR #82), plus the
 separately approved production controls and database writes recorded below.
 
 ## Outcome
@@ -17,9 +17,9 @@ after PR #70:
 - Insights now reads current Tiger data and completes its 30-day Top Games
   queries without the earlier timeouts.
 - Apps projection job 1016 recovered to exact legacy/v2 parity.
-- Snapshot-aware scheduler migration 0096 is applied without changing or
-  prematurely running job 1016; its first natural fixed-slot run remains to be
-  observed.
+- Snapshot-aware scheduler migration 0096 is applied, and its first natural
+  fixed-slot run correctly handled concurrent source writes without a false
+  failure.
 - The corrected exact 100-app signal-window shadow cohort is populated and
   idempotency-verified.
 - Alert Detection is enabled on the approved Tiger/Supabase compatibility
@@ -28,12 +28,13 @@ after PR #70:
   successful fetches, zero failures, and three Steam-empty skips.
 - The three retained PICS dead letters now have explicit non-mutating operator
   dispositions.
+- Apps pagination, global page ranks, filter reset, and the corrected Admin
+  Actions URL are deployed.
 
 No current product reader needs to be rolled back. The remaining gates are
-the first natural 0096 scheduler observation, elapsed primary-cycle evidence,
-deployment of the final route fixes, and disposable-record coverage for
-mutating compatibility branches. They must not be relabeled as complete merely
-because the core site renders.
+successful natural Alert/Histogram schedule evidence, elapsed primary-cycle
+evidence, and disposable-record coverage for mutating compatibility branches.
+They must not be relabeled as complete merely because the core site renders.
 
 ## Closeout implementation ledger
 
@@ -49,6 +50,8 @@ because the core site renders.
 | #78 | Published the first reconciled readiness closeout and corrected signal-window manifest.                    |
 | #79 | Repaired the live verifier so one slow table probe no longer erases the remaining evidence.                |
 | #80 | Restored the approved Tiger-backed Alert Detection split and bounded twice-daily Review Histogram cadence. |
+| #81 | Deployed Apps pagination, corrected Admin Actions URLs, and published the first natural 0096 run evidence. |
+| #82 | Kept desktop/mobile Apps ranks continuous across pages and recorded the production route smoke.            |
 
 PR #69 remains an open documentation-only draft whose rollout narrative
 predates primary catalog/PICS operation and the PR #70 replay. It is not
@@ -56,22 +59,22 @@ current rollout truth.
 
 ## Current source ownership and runtime
 
-| Surface or domain                                      | Current source                                           | Verified status                                                                                                                                    |
-| ------------------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication and sessions                            | Supabase Auth                                            | Preserved. Protected-route redirects, authenticated sessions, and API `401` behavior remain intact.                                                |
-| Profiles, roles, pins, credits, retained alert records | Supabase compatibility plane                             | Preserved. This remains a legacy non-auth dependency, not the target authority.                                                                    |
-| Apps list and filters                                  | Tiger `metrics.apps_page_projection_v2`                  | Current and populated. Legacy projection remains available for rollback.                                                                           |
-| Dashboard product metrics                              | Tiger/query API                                          | Current.                                                                                                                                           |
-| Admin product and PICS health                          | Tiger/query API                                          | `ADMIN_PRODUCT_READ_TARGET=tiger`; current panels render without browser or server errors. Account administration remains on Supabase.             |
-| Insights product metrics                               | Tiger/query API                                          | `INSIGHTS_READ_TARGET=tiger`; 30-day Top Games and trend data render without browser or server errors.                                             |
-| Change Feed                                            | Tiger/query API                                          | Current with central event-registry semantics.                                                                                                     |
-| YouTube Pulse                                          | Tiger/query API                                          | Current; hydration repair is deployed and verified.                                                                                                |
-| PICS                                                   | Durable primary Railway service plus Tiger/R2            | `/health` is `OK`; `/status` reports durable primary, connected, processing enabled, and zero consecutive poll failures.                           |
-| Query API                                              | Railway/Tiger                                            | `/healthz` returned `ok: true` with Tiger provenance at `2026-07-27T01:49:28Z`.                                                                    |
-| Apps refresh                                           | Timescale job 1016                                       | Enabled on the fixed four-hour cadence; latest run successful.                                                                                     |
-| Signal windows                                         | Tiger manual bounded runner                              | Corrected 100-app shadow cohort is populated and idempotency-verified; no recurring cadence or reader cutover was introduced.                      |
-| Alert Detection                                        | Tiger metrics/state plus Supabase compatibility controls | Workflow and gate enabled; production run 30234116732 succeeded. Zero eligible entities is correct because all retained pins have alerts disabled. |
-| Review Histogram                                       | Tiger metrics and sync state                             | Workflow active at 04:15/16:15 UTC; production run 30234313903 processed 300 apps with zero failures.                                              |
+| Surface or domain                                      | Current source                                           | Verified status                                                                                                                            |
+| ------------------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Authentication and sessions                            | Supabase Auth                                            | Preserved. Protected-route redirects, authenticated sessions, and API `401` behavior remain intact.                                        |
+| Profiles, roles, pins, credits, retained alert records | Supabase compatibility plane                             | Preserved. This remains a legacy non-auth dependency, not the target authority.                                                            |
+| Apps list and filters                                  | Tiger `metrics.apps_page_projection_v2`                  | Current and populated; pagination, global ranks, and filter offset reset are deployed. Legacy projection remains available for rollback.   |
+| Dashboard product metrics                              | Tiger/query API                                          | Current.                                                                                                                                   |
+| Admin product and PICS health                          | Tiger/query API                                          | `ADMIN_PRODUCT_READ_TARGET=tiger`; current panels render without browser or server errors. Account administration remains on Supabase.     |
+| Insights product metrics                               | Tiger/query API                                          | `INSIGHTS_READ_TARGET=tiger`; 30-day Top Games and trend data render without browser or server errors.                                     |
+| Change Feed                                            | Tiger/query API                                          | Current with central event-registry semantics.                                                                                             |
+| YouTube Pulse                                          | Tiger/query API                                          | Current; hydration repair is deployed and verified.                                                                                        |
+| PICS                                                   | Durable primary Railway service plus Tiger/R2            | `/health` is `OK`; `/status` reports durable primary, connected, processing enabled, and zero consecutive poll failures.                   |
+| Query API                                              | Railway/Tiger                                            | `/healthz` returned `ok: true` with Tiger provenance at `2026-07-27T01:49:28Z`.                                                            |
+| Apps refresh                                           | Timescale job 1016                                       | Enabled on the fixed four-hour cadence; latest run successful.                                                                             |
+| Signal windows                                         | Tiger manual bounded runner                              | Corrected 100-app shadow cohort is populated and idempotency-verified; no recurring cadence or reader cutover was introduced.              |
+| Alert Detection                                        | Tiger metrics/state plus Supabase compatibility controls | Workflow and gate enabled; manual run 30234116732 succeeded. Expected 04:15 and 05:15 natural events did not enqueue.                      |
+| Review Histogram                                       | Tiger metrics and sync state                             | Workflow active at 04:15/16:15 UTC; manual run 30234313903 processed 300 apps with zero failures; the 04:15 natural event did not enqueue. |
 
 The exact PR #77 production deployment was `Ready` in Vercel and `Success` in
 Railway. An authenticated overlap smoke kept Admin and Insights open
@@ -80,15 +83,15 @@ corresponding server logs contained no hidden timeout or query failures.
 
 ## Phase status
 
-| Phase                              | Status                                                       | Current evidence                                                                                                                                                                                     | Exit gate still open                                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 0 — baseline and preservation      | Substantially complete                                       | Dated Tiger/Supabase/R2 manifests, protected-object comparisons, recovery evidence, ownership maps, and rollback records exist.                                                                      | Keep the final preservation comparison current when later approved writes occur.                                                     |
-| 1 — durable catalog                | Active; observation window incomplete                        | One complete primary full scan on 2026-07-26 committed 176,236 source rows. Completed full shadow evidence also exists on July 24 and 25.                                                            | Three complete healthy **primary** daily full cycles have not elapsed.                                                               |
-| 2 — durable PICS                   | Active; observation window incomplete                        | Durable primary is current, cursor-safe, archive-backed, and processing live plus catch-up lanes. The three historical dead letters have explicit preserved-terminal dispositions.                   | Three complete healthy daily primary cycles have not elapsed.                                                                        |
-| 3 — readiness, events, and windows | Substantially complete                                       | Readiness, registry, lifecycle, runner, boundary tests, runbooks, and a validated 100-app shadow population exist.                                                                                   | Product cadence and consumer cutover remain intentionally separate future decisions.                                                 |
-| 4 — current consumers              | Product readers complete; full compatibility gate incomplete | Apps, Dashboard, Admin, Insights, Change Feed, Chat, and YouTube use current intended product sources. Read-only route checks now include filters, entity details, and Unreleased timeline behavior. | Apps pagination and the corrected Admin Actions link await deployment; mutating compatibility branches need disposable test records. |
-| 5 — controls and cutovers          | Partial                                                      | Fail-closed modes exist; migration 0096 is applied; Alert and Histogram are active and production-smoked; dead letters are dispositioned.                                                            | First natural 0096 run and three-cycle evidence remain.                                                                              |
-| 6 — handoff                        | Current status published; final-ready verdict blocked        | This record reconciles PRs #39–#80 with live runtime, tests, limitations, and exact approval boundaries.                                                                                             | The verdict cannot become `Preparation complete` until Phases 1–5 pass.                                                              |
+| Phase                              | Status                                                       | Current evidence                                                                                                                                                                                                 | Exit gate still open                                                                 |
+| ---------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 0 — baseline and preservation      | Substantially complete                                       | Dated Tiger/Supabase/R2 manifests, protected-object comparisons, recovery evidence, ownership maps, and rollback records exist.                                                                                  | Keep the final preservation comparison current when later approved writes occur.     |
+| 1 — durable catalog                | Active; observation window incomplete                        | One complete primary full scan on 2026-07-26 committed 176,236 source rows. Completed full shadow evidence also exists on July 24 and 25.                                                                        | Three complete healthy **primary** daily full cycles have not elapsed.               |
+| 2 — durable PICS                   | Active; observation window incomplete                        | Durable primary is current, cursor-safe, archive-backed, and processing live plus catch-up lanes. The three historical dead letters have explicit preserved-terminal dispositions.                               | Three complete healthy daily primary cycles have not elapsed.                        |
+| 3 — readiness, events, and windows | Substantially complete                                       | Readiness, registry, lifecycle, runner, boundary tests, runbooks, and a validated 100-app shadow population exist.                                                                                               | Product cadence and consumer cutover remain intentionally separate future decisions. |
+| 4 — current consumers              | Product readers complete; full compatibility gate incomplete | Apps, Dashboard, Admin, Insights, Change Feed, Chat, and YouTube use current intended product sources. Read-only route checks now include pagination, filters, entity details, and Unreleased timeline behavior. | Mutating compatibility branches need disposable test records.                        |
+| 5 — controls and cutovers          | Partial                                                      | Fail-closed modes exist; migration 0096 is applied and naturally executed; Alert and Histogram are active and manually production-smoked; dead letters are dispositioned.                                        | Natural Alert/Histogram schedule events and three-cycle evidence remain.             |
+| 6 — handoff                        | Current status published; final-ready verdict blocked        | This record reconciles PRs #39–#82 with live runtime, tests, limitations, and exact approval boundaries.                                                                                                         | The verdict cannot become `Preparation complete` until Phases 1–5 pass.              |
 
 ## Live data snapshot
 
@@ -302,9 +305,12 @@ returns to filtered page 1. The Admin Actions URL helper now targets
 production link was not present to click.
 
 The page-2 smoke found that the `#` presentation still restarted at 1 rather
-than matching the global range. PR #82 carries the bounded pagination offset
-into desktop and mobile ranks and passes all 266 Admin tests plus the optimized
-production build. Its deployment and final page-2 rank smoke remain open.
+than matching the global range. PR #82 merged at
+`858009400b9435889826bedb43b572496d08cac1`; Query API Railway completed at
+`05:14:36Z` and Vercel at `05:14:58Z`. The final authenticated production
+smoke reached `/apps?offset=50`, rendered `Showing 51–100`, `Page 2 of 2,540`,
+and global ranks through `98`, `99`, and `100`. The route-fix deployment gate
+is complete.
 
 ## Remaining closeout actions
 
@@ -312,10 +318,9 @@ The user approved the signal shadow run, migration 0096 apply, hybrid
 Tiger-metrics Alert Detection port, and twice-daily 300-app Histogram cadence.
 All four approved actions are complete. The remaining actions are:
 
-1. merge, deploy, and production-smoke PR #82's global Apps rank continuity;
-2. capture successful natural Alert and Histogram schedule executions after
-   the missed `04:15` enqueue;
-3. provide a disposable account/record strategy before mutating pin, alert,
+1. choose and validate a repair for the missing natural Alert/Histogram
+   schedule events;
+2. provide a disposable account/record strategy before mutating pin, alert,
    account, and sign-out regression checks.
 
 Three complete healthy primary catalog and PICS daily cycles must then be
@@ -328,5 +333,4 @@ The current site is operational, the previously stale Admin and Insights
 product panels are current, and the YouTube hydration regression is fixed.
 The daily opportunity preparation is **close but not complete**. Declaring it
 ready today would still overclaim the natural Alert/Histogram schedule
-observation, PR #82 production smoke, mutating compatibility branches, and
-three-cycle gates.
+observation, mutating compatibility branches, and three-cycle gates.

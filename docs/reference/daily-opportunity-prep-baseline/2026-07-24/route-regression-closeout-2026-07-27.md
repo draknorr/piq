@@ -74,10 +74,15 @@ had a `github_run_id`, so the conditional external link was not rendered and
 this record does not overclaim a production click.
 
 The production page-2 smoke exposed one final presentation gap: the visible
-range was global, but the `#` column restarted at 1–50. PR #82 passes the page
-offset into both desktop and mobile ranks so page 2 renders 51–100. All 266
-Admin tests and the optimized production build pass; production deployment and
-one final rank smoke remain.
+range was global, but the `#` column restarted at 1–50. PR #82 passed the page
+offset into both desktop and mobile ranks and merged at
+`858009400b9435889826bedb43b572496d08cac1`. Query API Railway completed at
+`05:14:36Z` and Vercel at `05:14:58Z`.
+
+The final authenticated production smoke reached `/apps?offset=50`, rendered
+`Showing 51–100 of 126,993`, `Page 2 of 2,540`, and global row ranks through
+`98`, `99`, and `100`. The Apps pagination presentation and route deployment
+gate are complete.
 
 ## Intentionally open mutation and authorization checks
 
