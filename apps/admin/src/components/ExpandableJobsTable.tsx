@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { buildGitHubActionsRunUrl } from '@/lib/github-actions-url';
 
 export interface SyncJobDetail {
   id: string;
@@ -156,7 +157,7 @@ function JobRow({ job, isExpanded, onToggle }: { job: SyncJobDetail; isExpanded:
               {job.github_run_id && (
                 <div className="text-sm">
                   <a
-                    href={`https://github.com/draknorr/publisheriq/actions/runs/${job.github_run_id}`}
+                    href={buildGitHubActionsRunUrl(job.github_run_id)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-accent-primary hover:text-accent-primary-hover"

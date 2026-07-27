@@ -6,6 +6,7 @@ import { Command } from 'lucide-react';
 import { ToastProvider } from '@/components/ui/Toast';
 import { AppTypeToggle } from './AppTypeToggle';
 import { AppsTable } from './AppsTable';
+import { AppsPagination } from './AppsPagination';
 import { SearchBar } from './SearchBar';
 import { UnifiedFilterBar } from './UnifiedFilterBar';
 import { ContextBar } from './ContextBar';
@@ -23,6 +24,10 @@ import { useSparklineLoader } from '../hooks/useSparklineLoader';
 import { useAppsSelection } from '../hooks/useAppsSelection';
 import { useAppsCompare } from '../hooks/useAppsCompare';
 import { useAppsQuery, buildFilterParamsFromUrl } from '../hooks/useAppsQuery';
+import {
+  buildAppsPageUrl,
+  getAppsPaginationState,
+} from '../lib/apps-pagination';
 import { useAuthReady } from '@/hooks/useAuthReady';
 import { useCommandPalette } from '../hooks/useCommandPalette';
 import { useCommandPaletteShortcut } from '../hooks/useKeyboardShortcut';
@@ -80,6 +85,28 @@ function AppsPageClientInner({
   // Use React Query data if available, otherwise fall back to server data
   const apps = queryApps ?? initialData;
   const aggregateStats = queryStats ?? serverAggregateStats;
+  const pagination = useMemo(
+    () =>
+      getAppsPaginationState(
+        aggregateStats.total_games,
+        filterParams.limit,
+        filterParams.offset,
+        apps.length
+      ),
+    [
+      aggregateStats.total_games,
+      filterParams.limit,
+      filterParams.offset,
+      apps.length,
+    ]
+  );
+
+  const handlePageChange = useCallback(
+    (nextOffset: number) => {
+      router.push(buildAppsPageUrl(searchParams, nextOffset), { scroll: false });
+    },
+    [router, searchParams]
+  );
 
   // M6a: Selection state management
   const selection = useAppsSelection();
@@ -535,6 +562,13 @@ function AppsPageClientInner({
         hasFilters={advancedFilterCount > 0}
         hasPreset={activePreset}
         onClearFilters={clearAllFilters}
+      />
+
+      <AppsPagination
+        pagination={pagination}
+        totalItems={aggregateStats.total_games}
+        disabled={isLoadingData}
+        onPageChange={handlePageChange}
       />
 
       {/* M5b: Data Freshness Footer */}
