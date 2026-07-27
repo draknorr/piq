@@ -116,6 +116,13 @@ The Admin production surface subsequently rendered the completed
   `.github/workflows/histogram-sync.yml`. Existing histogram and sync-state
   rows remain intact.
 
-No rollback deletes data. The manual production smokes are complete. The first
-post-restoration natural scheduled executions remain separate operating
-evidence and are recorded in the tracker-readiness closeout when observed.
+No rollback deletes data. The manual production smokes are complete.
+
+The first post-restoration `04:15` natural schedule did not create either run
+by `04:49:51Z`. Both workflows remained active, the default-branch cron
+expressions were still exact, GitHub reported Actions operational, and other
+repository schedule events enqueued after the same boundary. This does not
+invalidate the successful manual execution paths, but it leaves the natural
+schedule observation open. The tracker-readiness closeout records the
+distinction and must not treat the first schedule as passed until an actual
+`event=schedule` run completes.

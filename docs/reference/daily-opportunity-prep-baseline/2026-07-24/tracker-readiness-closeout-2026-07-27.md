@@ -175,7 +175,28 @@ definition MD5 changed from `7869dad37e0a575e042db5df5151e88a` to
 `9fdc8e71ab143dcc3b148fe865fc11c3`; snapshot-aware markers are present. Job
 1016's schedule, config, runtime limit, retry policy, counters, and
 `2026-07-27T04:47:00Z` next start remained unchanged. The apply did not run the
-job. Its first natural execution under 0096 remains an open validation gate.
+job.
+
+The first natural execution under 0096 started without an operator override at
+`2026-07-27T04:47:00.002447Z` and completed successfully at
+`04:47:33.741259Z`:
+
+- duration: `33.738812` seconds;
+- cumulative runs / successes / failures: `18 / 15 / 3`, with no new failure;
+- final state: `Scheduled`;
+- next fixed slot: `2026-07-27T08:47:00Z`;
+- legacy / v2 projection rows: `226,253 / 226,253`;
+- legacy/v2 ID differences: `0 / 0`; and
+- expected / materialized filter rows: `586 / 586`, with zero differences.
+
+This natural run exercised the repaired concurrent-write branch rather than
+only the stable-source path. Two newly eligible source apps, `4861560` and
+`4873370`, were written at `04:47:05.739893Z` and `04:47:05.740204Z` while the
+refresh was running. The bounded checkpoint at `04:49:25.826249Z` therefore
+found `226,255` current source rows and the two later IDs not yet projected.
+Migration 0096 correctly deferred that exact mutable-source comparison while
+still enforcing exact legacy/v2 and filter parity, so the accepted source
+writes did not become another false scheduler failure.
 
 ## Signal-window execution
 
@@ -239,6 +260,13 @@ Both production smokes succeeded:
 Exact preflight hashes, Tiger job IDs, row counts, controls, and rollback are in
 [`alert-histogram-production-restoration.md`](./alert-histogram-production-restoration.md).
 
+The first post-restoration `04:15` natural schedule did not create an Alert or
+Histogram run by `04:49:51Z`. Both workflows were active, their default-branch
+crons remained `15 * * * *` and `15 4,16 * * *`, and other repository
+scheduled workflows did enqueue after the same boundary. The manual execution
+paths are healthy, but the natural GitHub schedule observation remains open
+and must not be recorded as passed.
+
 The follow-up verifier repair in PR #79 replaced full-table exact counts with
 explicitly labeled Timescale estimates plus indexed latest/recent probes. A
 read-only production run at `2026-07-27T02:07:52Z` completed every registered
@@ -276,9 +304,10 @@ The user approved the signal shadow run, migration 0096 apply, hybrid
 Tiger-metrics Alert Detection port, and twice-daily 300-app Histogram cadence.
 All four approved actions are complete. The remaining actions are:
 
-1. validate job 1016's first natural execution under migration 0096;
-2. merge, deploy, and production-smoke Apps pagination and the corrected Admin
+1. merge, deploy, and production-smoke Apps pagination and the corrected Admin
    GitHub Actions links; and
+2. capture successful natural Alert and Histogram schedule executions after
+   the missed `04:15` enqueue;
 3. provide a disposable account/record strategy before mutating pin, alert,
    account, and sign-out regression checks.
 
@@ -291,5 +320,6 @@ one day or with earlier shadow cycles.
 The current site is operational, the previously stale Admin and Insights
 product panels are current, and the YouTube hydration regression is fixed.
 The daily opportunity preparation is **close but not complete**. Declaring it
-ready today would still overclaim the natural scheduler observation, final
-route-fix deployment, mutating compatibility branches, and three-cycle gates.
+ready today would still overclaim the natural Alert/Histogram schedule
+observation, final route-fix deployment, mutating compatibility branches, and
+three-cycle gates.
