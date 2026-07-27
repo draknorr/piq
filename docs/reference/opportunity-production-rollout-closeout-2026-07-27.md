@@ -2,8 +2,9 @@
 
 This note records the production state of the Custom Daily Steam Opportunity
 Brief after the explicitly approved rollout. It separates completed rollout
-evidence from acceptance checks that still require a real result or external
-delivery targets.
+and rule-evaluation evidence from the remaining source-provenance acceptance
+check. Live email and Slack dispatch are not an acceptance requirement for
+this environment because no test destinations are configured.
 
 ## Change and deployment ledger
 
@@ -13,14 +14,17 @@ delivery targets.
 | Bootstrap SQL parameter repair        | PR #87, merge `a5d3716`                           |
 | Material-event queue parameter repair | PR #88, merge `d7f575d`                           |
 | Lease-safe bounded materialization    | PR #89, merge `e33b22b`                           |
+| Production rollout documentation      | PR #90, merge `4b04fb1`                           |
 | Opportunity worker deployment         | `d5a0079d-1747-47df-a60c-d42e957ea6ca`, `SUCCESS` |
-| Query API deployment                  | `389505f1-8302-47fc-8501-a58a0e113d1c`, `SUCCESS` |
+| Query API implementation deployment   | `389505f1-8302-47fc-8501-a58a0e113d1c`, `SUCCESS` |
+| Query API documentation deployment    | `b2f72190-75bf-4b25-af0b-17f4b6f22441`, `SUCCESS` |
 | Query API health                      | Tiger-backed `/healthz` returned `{"ok":true}`    |
 | Worker topology                       | one production replica                            |
 
-The worker and query API deployments both identify merge `e33b22b`. The
-previous successful deployments remained available while Railway built and
-started the replacements.
+The worker deployment identifies merge `e33b22b`. PR #90 did not touch watched
+worker files, so Railway correctly skipped a replacement. The query API
+deployment identifies merge `4b04fb1`; it compiled successfully, started
+Tiger-backed on port 8080, and passed `/healthz`.
 
 ## Applied production state
 
@@ -38,8 +42,73 @@ started the replacements.
 
 Authenticated production smoke completed bootstrap, preset clone/profile
 creation, preview, enable, pause, resume, and two successful daily run records.
-Both daily runs preceded material-event recovery and correctly produced zero
-results. They do not prove a canonical non-empty daily result.
+Both initial daily runs preceded material-event recovery and correctly produced
+zero results. A later explicitly approved schedule update triggered the first
+non-empty daily run; the profile automatically returned to its next 09:00 local
+schedule afterward.
+
+## Production rule evaluation
+
+The authenticated production profile editor loaded profile version 3 with:
+
+- one required `ALL` group: tags contain `Roguelike` and tags contain
+  `Deckbuilding`;
+- a high-weight preferred group for a playable demo;
+- a medium-weight preferred group for publisher game count at or below 10;
+- an adult-content exclusion; and
+- the configured material-event reappearance families.
+
+The production `Preview profile` action ran through the same tri-state rule
+engine as the worker. It returned 25 current full matches across 177,074 games.
+The required tags were available for 2% of the catalog; unknown required
+taxonomy remained pending rather than being treated as false. Representative
+matches included Epic Auto Towers, Wireworks, Dice Gun Commando, Dice A Million,
+Slay the Spire 2, and Apokerlypse.
+
+This proves the browser-authenticated profile contract, required `ALL` rule,
+readiness behavior, and shared preview evaluator against production Tiger data.
+The daily event-to-result integration evidence is recorded below.
+
+## First non-empty production daily run
+
+The user explicitly approved exactly one update to enabled profile
+`a77e184d-8215-4558-b815-f79123776fc4`:
+`next_evaluation_at = now()`. One row changed. The scheduler claimed work item
+`1274`, and daily run `b37b7f77-3e42-4bce-a555-123b1af114c3` completed at
+`2026-07-27T22:34:30.926033Z`.
+
+| Measure                       | Count |
+| ----------------------------- | ----: |
+| Candidate material events     |   171 |
+| Evaluated candidates          |   171 |
+| Canonical ranked results      |     3 |
+| Pending for missing readiness |   168 |
+| Suppressed results            |     0 |
+| Duplicate results             |     0 |
+
+All 168 pending candidates were missing the required `tags` field. The three
+results correctly matched both required tags:
+
+| Rank | App                                    | Score | Event                | Preference evidence   |
+| ---: | -------------------------------------- | ----: | -------------------- | --------------------- |
+|    1 | Frostrain 2 (`3690490`)                | 79.55 | platform expanded    | demo; small publisher |
+|    2 | 2 Fights in 2 Tight Spaces (`3734890`) | 68.30 | platform expanded    | none                  |
+|    3 | Toads of the Bayou (`2190400`)         | 62.60 | material build event | demo                  |
+
+Each result is high confidence, uses a 50-game released-peer cohort with full
+core-measurement coverage, labels the market conservatively as
+limited/high-confidence, persists missing-evidence fields, and identifies the
+rules, cohort, market, ranking, signal, and materiality calculation versions.
+This proves the required profile rules and daily evaluation pipeline on
+production data.
+
+The run also exposed one provenance defect: `legacy.apps`,
+`steam_storefront`, and `steam_pics` source timestamps were null even when
+Tiger readiness rows contained authoritative `source_at` values. The shared
+repository query discarded those timestamps before evaluation. The contained
+repair joins/selects the readiness timestamps and has repository/worker
+regression coverage. The three original results remain immutable; a new result
+after deployment is required to close live provenance acceptance.
 
 ## Material-event recovery
 
@@ -85,7 +154,7 @@ The production merge and closeout retained:
 - repository `pnpm check-types`: 13/13 tasks
 - repository `pnpm test`: 10/10 tasks
 - repository `pnpm lint`: zero errors; existing warnings remain
-- data-plane: 154/154 tests
+- data-plane: 156/156 tests, including source-provenance regressions
 - query API: 24/24 tests
 - change-intelligence: 46/46 tests
 - PICS Python 3.11: 130/130 tests
@@ -98,24 +167,30 @@ The live verifier still reports the pre-existing empty
 `ccu-demo-tiered-sync.yml` static warning, and optional Railway-variable checks
 when not requested. These are not opportunity rollout failures.
 
+The source-provenance repair adds two regression tests. Its validation reran
+the complete repository build (10/10 tasks), type-check (13/13), test (10/10),
+and lint (14/14) plus the data-plane ESM/declaration build. Lint retained only
+pre-existing warnings and zero errors.
+
 ## Remaining acceptance evidence
 
-The MVP implementation is deployed, but an unqualified production-complete
-claim requires:
+The remaining production acceptance focus is:
 
-1. the materialization cursor to reach current source time;
-2. a non-empty daily result for the smoke identity;
-3. track, dismiss, ignore, restore, viewed, and researching actions against
-   that real result;
-4. a live delayed-readiness/reappearance example;
-5. a verified Resend API key and from address plus an explicitly designated
-   test email recipient;
-6. an explicitly designated Slack incoming webhook;
-7. one email and one Slack summary containing canonical result links; and
-8. a duplicate dispatch attempt proving the persisted idempotency outcome.
+1. merge and deploy the contained source-provenance repair;
+2. allow normal scheduling to create a new qualifying immutable result (or use
+   a separately approved trigger if natural traffic does not produce one);
+3. verify non-null catalog/storefront/PICS timestamps where authoritative
+   readiness rows exist; and
+4. confirm that the website can replay that corrected record.
 
-No external destination should be invented or inferred. Delivery remains
-unconfigured until the user provides or designates those targets.
+Track, dismiss, ignore, restore, shared viewed/researching activity, delayed
+readiness, event-driven reappearance, and delivery idempotency retain their
+automated test coverage. They are not prerequisites for this production smoke.
+
+The user explicitly accepted omitting live email and Slack dispatch because no
+test email recipient or Slack webhook is configured. No external destination
+will be invented or inferred. Delivery remains unconfigured until the user
+provides or designates those targets.
 
 ## Rollback
 

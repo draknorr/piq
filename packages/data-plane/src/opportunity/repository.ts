@@ -47,6 +47,7 @@ interface PreviewAggregateRow extends QueryResultRow {
 interface RuleInputRow extends QueryResultRow {
   appid: number;
   app_type: string | null;
+  catalog_source_at: Date | string | null;
   categories: string[] | null;
   ccu_change_30d: string | number | null;
   ccu_change_7d: string | number | null;
@@ -64,6 +65,7 @@ interface RuleInputRow extends QueryResultRow {
   languages: unknown;
   market_status: string | null;
   name: string;
+  pics_source_at: Date | string | null;
   pics_status: string | null;
   platforms: string | null;
   positive_percentage: string | number | null;
@@ -76,6 +78,7 @@ interface RuleInputRow extends QueryResultRow {
   reviews_added_7d: string | number | null;
   source_max_metric_date: Date | string | null;
   steam_deck: string | null;
+  storefront_source_at: Date | string | null;
   storefront_status: string | null;
   tags: string[] | null;
   total_reviews: number | null;
@@ -231,27 +234,32 @@ function normalizeStringArray(value: unknown): string[] {
 function buildRuleInput(row: RuleInputRow): OpportunityEvaluationInput {
   const storefrontReady = row.storefront_status === "ready";
   const picsReady = row.pics_status === "ready";
+  const catalogSourceAt = iso(row.catalog_source_at);
+  const storefrontSourceAt = iso(row.storefront_source_at);
+  const picsSourceAt = iso(row.pics_source_at);
   const metricSourceAt = iso(row.source_max_metric_date);
   const fields: OpportunityEvaluationInput["fields"] = {
-    appid: knownField(row.appid, "legacy.apps", null),
-    name: knownField(row.name, "legacy.apps", null),
-    app_type: knownField(row.app_type, "legacy.apps", null),
+    appid: knownField(row.appid, "legacy.apps", catalogSourceAt),
+    name: knownField(row.name, "legacy.apps", catalogSourceAt),
+    app_type: knownField(row.app_type, "legacy.apps", catalogSourceAt),
   };
 
   const setStorefront = (field: OpportunityRuleField, value: unknown): void => {
     fields[field] = storefrontReady
-      ? knownField(value, "steam_storefront", null)
+      ? knownField(value, "steam_storefront", storefrontSourceAt)
       : unknownField(
           "steam_storefront",
           `Storefront readiness is ${row.storefront_status ?? "unknown"}.`,
+          storefrontSourceAt,
         );
   };
   const setPics = (field: OpportunityRuleField, value: unknown): void => {
     fields[field] = picsReady
-      ? knownField(value, "steam_pics", null)
+      ? knownField(value, "steam_pics", picsSourceAt)
       : unknownField(
           "steam_pics",
           `PICS readiness is ${row.pics_status ?? "unknown"}.`,
+          picsSourceAt,
         );
   };
   const setMetric = (
@@ -381,8 +389,11 @@ const RULE_INPUT_SELECT = `
         / ABS(sw.ccu_peak_first_30d)::numeric
     END AS ccu_change_30d,
     sw.source_max_metric_date,
+    readiness_catalog.source_at AS catalog_source_at,
     readiness_storefront.status AS storefront_status,
+    readiness_storefront.source_at AS storefront_source_at,
     readiness_pics.status AS pics_status,
+    readiness_pics.source_at AS pics_source_at,
     readiness_market.status AS market_status,
     COALESCE((
       SELECT array_agg(tag.name ORDER BY app_tag.rank NULLS LAST, tag.name)
@@ -439,6 +450,9 @@ const RULE_INPUT_SELECT = `
   FROM legacy.apps a
   LEFT JOIN legacy.latest_daily_metrics m ON m.appid = a.appid
   LEFT JOIN metrics.app_signal_windows_v1 sw ON sw.appid = a.appid
+  LEFT JOIN ops.app_data_readiness readiness_catalog
+    ON readiness_catalog.appid = a.appid
+    AND readiness_catalog.source = 'catalog'
   LEFT JOIN ops.app_data_readiness readiness_storefront
     ON readiness_storefront.appid = a.appid
     AND readiness_storefront.source = 'storefront'
