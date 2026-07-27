@@ -29,19 +29,20 @@ production.
 
 The bounded read-only production closeout on July 27 confirmed:
 
-| Check                                 | Live result                                     |
-| ------------------------------------- | ----------------------------------------------- |
-| Opportunity schema and launch presets | Applied; eight preset-health snapshots created  |
-| Smoke workspace                       | `f80bdd3a-7185-4f00-a9ee-48b80439acb1`          |
-| Smoke profile                         | `a77e184d-8215-4558-b815-f79123776fc4`, enabled |
-| Profile schedule                      | `America/Los_Angeles`, 09:00 local              |
-| Daily runs                            | 3 completed, 0 failed                           |
-| First non-empty daily evaluation      | 171 evaluated, 3 results, 168 pending           |
-| Canonical results                     | 3 immutable results                             |
-| Material events at 21:05 UTC          | 6,223 events / 6,223 distinct fingerprints      |
-| First post-fix bounded batch          | 350 events in `2m21.099s`                       |
-| Second post-fix bounded batch         | 323 events in `2m18.640s`                       |
-| External preferences / deliveries     | 0 / 0                                           |
+| Check                                 | Live result                                       |
+| ------------------------------------- | ------------------------------------------------- |
+| Opportunity schema and launch presets | Applied; eight preset-health snapshots created    |
+| Smoke workspace                       | `f80bdd3a-7185-4f00-a9ee-48b80439acb1`            |
+| Smoke profile                         | `a77e184d-8215-4558-b815-f79123776fc4`, enabled   |
+| Profile schedule                      | `America/Los_Angeles`, 09:00 local                |
+| Daily runs                            | 3 completed, 0 failed                             |
+| First non-empty daily evaluation      | 171 evaluated, 3 results, 168 pending             |
+| Canonical results                     | 3 immutable results                               |
+| First post-fix readiness cycle        | 181 completed, 1 resolved ineligible, 167 pending |
+| Material events at 21:05 UTC          | 6,223 events / 6,223 distinct fingerprints        |
+| First post-fix bounded batch          | 350 events in `2m21.099s`                         |
+| Second post-fix bounded batch         | 323 events in `2m18.640s`                         |
+| External preferences / deliveries     | 0 / 0                                             |
 
 ## Authoritative-state discrepancies
 
@@ -72,8 +73,17 @@ text where they differ:
    three immutable results correctly retain their pre-fix nulls; a merged-path
    read-only query against their production apps proves the corrected
    catalog/PICS timestamps, both present storefront timestamps, and the one
-   genuinely absent storefront row. A newly persisted post-fix result remains
-   the final time-gated acceptance artifact.
+   genuinely absent storefront row. The first complete post-fix readiness cycle
+   then processed 181 queue items without a worker error. `Immortal Generals`
+   (`4739690`) naturally moved from pending to ineligible after PICS tags became
+   available: both required `ALL` tag clauses failed, the adult exclusion
+   remained false, and the small-publisher preference passed. Its persisted
+   rule outcomes carry the real PICS source time
+   `2026-07-27T22:48:48.955Z` and storefront source time
+   `2026-07-27T20:47:54.851Z`. This directly proves post-fix tri-state
+   re-evaluation and rule provenance, but it correctly created no result. A
+   newly persisted post-fix matching result remains the final time-gated
+   acceptance artifact.
 
 ## Requirement-to-evidence matrix
 
@@ -98,7 +108,7 @@ text where they differ:
 | Per-user or per-profile delivery, quiet days, maximum results, explicit truncation, idempotency, and failure handling          | Delivery desk, preference-scoped assignment, outbox leases/retries/dead letters                                                                                          | Delivery-assignment, truncation, escaping, recovery, and idempotency tests                                                                | Verified                                                    |
 | Rare opt-in immediate alert is first-observed full match only                                                                  | Immediate material-event flag, immediate-only profile evaluation, channel opt-in                                                                                         | Worker policy tests                                                                                                                       | Verified                                                    |
 | Railway owns persistent schedule/queue/delivery; GitHub is bounded reconciliation only                                         | `railway-opportunity.json`, worker runner, manual `opportunity-reconcile.yml`                                                                                            | Production single-replica worker plus bounded/manual reconciliation tests                                                                 | Verified in code and production                             |
-| Existing product paths and legacy alert storage are preserved                                                                  | Additive migrations, separate `opportunity` schema, no legacy alert writes                                                                                               | Full build/type/lint/test, strict writer audit, 5/5 browser regression, Vercel and GitHub checks                                          | Verified after rollout                                      |
+| Existing product paths and legacy alert storage are preserved                                                                  | Additive migrations, separate `opportunity` schema, no legacy alert writes                                                                                               | Full build/type/lint/test, strict writer audit, 6/6 browser regression, Vercel and GitHub checks                                          | Verified after rollout                                      |
 
 ## Correctness findings closed during completion audit
 
@@ -196,6 +206,14 @@ profile remains on its normal `America/Los_Angeles` 09:00 schedule. Readiness
 rechecks may produce that artifact earlier if a pending tag-dependent candidate
 becomes evaluable; otherwise the next normal daily run supplies the opportunity.
 The prior one-row trigger approval was consumed and is not reused.
+
+The first post-fix readiness cycle is direct production evidence that the
+pending path is working rather than stalled: 181 work items completed without
+an error, one candidate resolved against newly available PICS tags and became
+ineligible with source-attributed rule outcomes, and 167 candidates remained
+pending instead of being converted to false. It did not happen to produce a
+qualifying match, so it cannot substitute for the remaining immutable-result
+check.
 
 Live email and Slack dispatch are explicitly accepted as untested in this
 environment because no test recipient or webhook is configured. Automated
