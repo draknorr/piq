@@ -284,6 +284,10 @@ interface ProductPicsSummaryRow extends QueryResultRow {
   pics_with_tags: number | string;
 }
 
+interface ProductPicsCountRow extends QueryResultRow {
+  count: number | string;
+}
+
 interface ProductCcuQualityRow extends QueryResultRow {
   confirmed_positive: number | string;
   confirmed_zero: number | string;
@@ -14813,8 +14817,27 @@ export class DataPlaneService {
     const apps = this.relation('apps').sql;
     const metrics = this.relation('latest_daily_metrics').sql;
     const tiers = this.relation('ccu_tier_assignments').sql;
-    // Keep each aggregate below the statement timeout while preserving exact counts.
-    const [summaryResult, picsResult] = await Promise.all([
+    const queryPicsRelationCount = (relation: string) =>
+      runQuery<ProductPicsCountRow>(
+        `
+          SELECT count(DISTINCT relation.appid)::bigint AS count
+          FROM ${relation} relation
+          JOIN ${syncStatus} status ON status.appid = relation.appid
+          WHERE status.is_syncable = true
+        `,
+        [],
+        this.config
+      );
+    // Keep every exact relation count in its own bounded statement so the
+    // largest PICS relation cannot make the combined Admin aggregate time out.
+    const [
+      summaryResult,
+      categoriesResult,
+      genresResult,
+      tagsResult,
+      franchisesResult,
+      parentResult,
+    ] = await Promise.all([
       runQuery<ProductAdminSummaryRow>(
         `
         WITH totals AS (
@@ -15026,47 +15049,30 @@ export class DataPlaneService {
         [],
         this.config
       ),
-      runQuery<ProductPicsSummaryRow>(
+      queryPicsRelationCount(this.relation('app_categories').sql),
+      queryPicsRelationCount(this.relation('app_genres').sql),
+      queryPicsRelationCount(this.relation('app_steam_tags').sql),
+      queryPicsRelationCount(this.relation('app_franchises').sql),
+      runQuery<ProductPicsCountRow>(
         `
-          SELECT
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_categories').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS pics_with_categories,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_genres').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS pics_with_genres,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_steam_tags').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS pics_with_tags,
-            (
-              SELECT count(DISTINCT relation.appid)
-              FROM ${this.relation('app_franchises').sql} relation
-              JOIN ${syncStatus} status ON status.appid = relation.appid
-              WHERE status.is_syncable = true
-            )::bigint AS pics_with_franchises,
-            (
-              SELECT count(*)
-              FROM ${apps} app
-              JOIN ${syncStatus} status ON status.appid = app.appid
-              WHERE status.is_syncable = true
-                AND app.parent_appid IS NOT NULL
-            )::bigint AS pics_with_parent_app
+          SELECT count(*)::bigint AS count
+          FROM ${apps} app
+          JOIN ${syncStatus} status ON status.appid = app.appid
+          WHERE status.is_syncable = true
+            AND app.parent_appid IS NOT NULL
         `,
         [],
         this.config
       ),
     ]);
     const summary = summaryResult.rows[0];
-    const picsSummary = picsResult.rows[0];
+    const picsSummary = {
+      pics_with_categories: categoriesResult.rows[0]?.count ?? 0,
+      pics_with_franchises: franchisesResult.rows[0]?.count ?? 0,
+      pics_with_genres: genresResult.rows[0]?.count ?? 0,
+      pics_with_parent_app: parentResult.rows[0]?.count ?? 0,
+      pics_with_tags: tagsResult.rows[0]?.count ?? 0,
+    } satisfies ProductPicsSummaryRow;
     const currentCatalogApps = parseCountValue(summary?.total_syncable);
     const [jobsResult, errorsResult, ccuResult, logsResult] = await Promise.all([
       runQuery<Record<string, unknown>>(
