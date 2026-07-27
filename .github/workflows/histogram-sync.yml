@@ -2,9 +2,9 @@ name: Review Histogram Sync
 
 on:
   schedule:
-    # Twice daily at 04:15 and 16:15 UTC.
-    - cron: '15 4 * * *'
-    - cron: '15 16 * * *'
+    # Twice daily at 04:23 and 16:23 UTC, outside the busy :15 window.
+    - cron: '23 4 * * *'
+    - cron: '23 16 * * *'
   workflow_dispatch:
     inputs:
       batch_size:

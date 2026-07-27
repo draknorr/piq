@@ -2,8 +2,8 @@ name: Alert Detection
 
 on:
   schedule:
-    # Run hourly at :15 (after CCU sync at :00)
-    - cron: '15 * * * *'
+    # Run hourly at :23 (after CCU sync at :00 and outside the busy :15 window)
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 concurrency:

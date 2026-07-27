@@ -66,7 +66,7 @@ All times are UTC:
 | Steam News Hot Refresh        | `news-hot-refresh.yml`              | every 10 minutes           | Hot news queue refresh into Tiger/R2                                                                     |
 | SteamSpy Sync                 | `steamspy-sync.yml`                 | 02:15 daily                | Owners, playtime, tags, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                             |
 | Embedding Sync                | `embedding-sync.yml`                | 03:00 daily                | Embeddings, Tiger status writer gated by `ENABLE_TIGER_EMBEDDING_WRITER`                                 |
-| Histogram Sync                | `histogram-sync.yml`                | 04:15 daily                | Monthly reviews, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                    |
+| Histogram Sync                | `histogram-sync.yml`                | 04:23, 16:23 daily         | Monthly reviews, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                    |
 | Reviews Sync                  | `reviews-sync.yml`                  | :15 every 2h               | Review counts, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |
 | Price Sync                    | `price-sync.yml`                    | 00:15, 06:15, 12:15, 18:15 | Price tracking, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                     |
 | Trends Calculation            | `trends-calculation.yml`            | 22:00 daily                | Trend metrics, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |
@@ -77,6 +77,7 @@ All times are UTC:
 | Refresh App Filter Data       | `refresh-app-filter-data.yml`       | 00,06,12,18:00             | Legacy `app_filter_data` refresh, gated by `ENABLE_LEGACY_SUPABASE_WRITERS`                              |
 | CCU Sync                      | `ccu-sync.yml`                      | :00 hourly                 | Tier 1+2 CCU, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                       |
 | CCU Daily Sync                | `ccu-daily-sync.yml`                | 04:30, 12:30, 20:30        | Tier 3 CCU rotation, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                |
+| Alert Detection               | `alert-detection.yml`               | :23 hourly                 | Retained alerts with Tiger metrics/state and Supabase delivery, gated by `ENABLE_TIGER_ALERT_WORKER`     |
 | CCU Cleanup                   | `ccu-cleanup.yml`                   | Sun 03:00                  | Legacy cleanup, gated by `ENABLE_LEGACY_SUPABASE_WRITERS`                                                |
 | Cleanup Reservations          | `cleanup-reservations.yml`          | :00 hourly                 | Stale credit reservation cleanup in Tiger ops                                                            |
 | Cleanup Chat Logs             | `cleanup-chat-logs.yml`             | 03:00 daily                | 7-day chat log cleanup in Tiger ops                                                                      |
