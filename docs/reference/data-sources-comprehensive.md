@@ -1500,6 +1500,7 @@ Reviews: Overwhelmingly Positive (93%)
 | ---------- | ------ | --------------- |
 | Storefront | 40     | 40/5min (8/min) |
 | Reviews    | 60     | 60/min          |
+| Histogram  | 5      | 1/sec            |
 | SteamSpy   | 60     | 1/sec           |
 
 ---
@@ -1513,7 +1514,7 @@ Reviews: Overwhelmingly Positive (93%)
 | 00:15 | `applist-sync`         | Master app list             |
 | 02:15 | `steamspy-sync`        | CCU, owners, playtime, tags |
 | 03:00 | `embedding-sync`       | Vector embeddings           |
-| 04:23, 16:23 | `histogram-sync` | Monthly review trends       |
+| 04:23, 16:23 baseline; every 3h at :23 with capacity v2 | `histogram-sync` | Tiered review histograms |
 | 04:30 | `ccu-daily-sync`       | Tier 3 CCU (1st rotation)   |
 | 05:00 | `interpolation`        | Review delta interpolation  |
 | 05:00 | `refresh-views`        | Materialized view refresh   |
