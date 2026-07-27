@@ -128,18 +128,32 @@ function eventDescription(event: OpportunityWorkerMaterialEvent): string {
   );
 }
 
-function eventLabel(params: {
+export function resolveOpportunityResultLabel(params: {
   event: OpportunityWorkerMaterialEvent;
   matches: Array<{
     evaluation: OpportunityProfileEvaluation;
     priorOutcome: "eligible" | "ineligible" | "pending" | "expired" | undefined;
   }>;
+  runWindowEnd: string;
+  runWindowStart: string;
   tracked: boolean;
 }): OpportunityResultLabel {
-  if (params.event.eventType === "first_observed") {
+  const observedAt = Date.parse(params.event.observedAt);
+  const eventIsInRunWindow =
+    Number.isFinite(observedAt) &&
+    observedAt >= Date.parse(params.runWindowStart) &&
+    observedAt < Date.parse(params.runWindowEnd);
+  const delayedByReadiness = params.matches.some(
+    (match) =>
+      match.priorOutcome === "pending" || match.priorOutcome === "expired",
+  );
+  if (delayedByReadiness) {
+    return "newly_qualified";
+  }
+  if (params.event.eventType === "first_observed" && eventIsInRunWindow) {
     return "newly_discovered";
   }
-  if (params.event.eventType === "released") {
+  if (params.event.eventType === "released" && eventIsInRunWindow) {
     return "newly_released";
   }
   if (
@@ -235,9 +249,13 @@ function buildEvidenceItems(
 function buildSourceTimestamps(
   input: OpportunityEvaluationInput,
   event: OpportunityWorkerMaterialEvent,
+  profileEvaluationAt: string,
 ): Record<string, string | null> {
   const timestamps: Record<string, string | null> = {
     materialEvent: event.observedAt,
+    materialEventEffectiveAt: event.effectiveAt,
+    materialEventObservedAt: event.observedAt,
+    profileEvaluationAt,
   };
   for (const evidence of Object.values(input.fields)) {
     if (!evidence) {
@@ -454,7 +472,7 @@ export class OpportunityWorker {
           ? "immediate"
           : item.kind === "daily_evaluation"
             ? "daily"
-            : "manual",
+            : "readiness",
       userId: item.userId,
       workspaceId: item.workspaceId,
     });
@@ -638,9 +656,11 @@ export class OpportunityWorker {
       market.explanation[0] ?? "Comparable-market coverage is limited.",
     ];
     const rank = calculateOpportunityRanking({ components, reasons });
-    const label = eventLabel({
+    const label = resolveOpportunityResultLabel({
       event: context.event,
       matches: eligible,
+      runWindowEnd: context.run.windowEnd,
+      runWindowStart: context.run.windowStart,
       tracked: context.priorState.tracked,
     });
     const missingEvidence = Array.from(
@@ -693,7 +713,11 @@ export class OpportunityWorker {
         reappearedAfterResultId: reappeared
           ? context.priorState.priorResultId
           : null,
-        sourceTimestamps: buildSourceTimestamps(context.input, context.event),
+        sourceTimestamps: buildSourceTimestamps(
+          context.input,
+          context.event,
+          new Date().toISOString(),
+        ),
         strongestEvidence,
         whyNow: `${eventDescription(context.event)} It now qualifies for ${matches.map((match) => match.profile.name).join(", ")}.`,
       },

@@ -74,7 +74,7 @@ export interface OpportunityPriorUserState {
 
 export interface OpportunityRunContext {
   id: string;
-  kind: "daily" | "immediate" | "manual" | "replay";
+  kind: "daily" | "immediate" | "manual" | "replay" | "readiness";
   windowEnd: string;
   windowStart: string;
 }
@@ -172,6 +172,42 @@ function asSignalFamily(value: string): OpportunitySignalFamily {
     : "unknown";
 }
 
+export function assignOpportunityDeliveryResults(
+  results: Array<{ id: string; profileIds: string[] }>,
+  preferences: Array<{
+    channel: "email" | "slack";
+    id: string;
+    maxResults: number;
+    profileId: string | null;
+  }>,
+): Map<string, { availableResultCount: number; resultIds: string[] }> {
+  const assignments = new Map<
+    string,
+    { availableResultCount: number; resultIds: string[] }
+  >();
+  const assignedByChannel = new Map<"email" | "slack", Set<string>>();
+  for (const preference of preferences) {
+    const assigned =
+      assignedByChannel.get(preference.channel) ?? new Set<string>();
+    assignedByChannel.set(preference.channel, assigned);
+    const available = results.filter(
+      (result) =>
+        !assigned.has(result.id) &&
+        (preference.profileId === null ||
+          result.profileIds.includes(preference.profileId)),
+    );
+    const selected = available
+      .slice(0, preference.maxResults)
+      .map((result) => result.id);
+    available.forEach((result) => assigned.add(result.id));
+    assignments.set(preference.id, {
+      availableResultCount: available.length,
+      resultIds: selected,
+    });
+  }
+  return assignments;
+}
+
 export class OpportunityWorkerRepository {
   readonly productRepository: OpportunityRepository;
 
@@ -267,6 +303,7 @@ export class OpportunityWorkerRepository {
             workspace_id,
             user_id,
             appid,
+            material_event_id,
             scheduled_for,
             priority,
             idempotency_key,
@@ -278,6 +315,7 @@ export class OpportunityWorkerRepository {
             pending.workspace_id,
             pending.user_id,
             pending.appid,
+            pending.material_event_id,
             pending.next_evaluation_at,
             250,
             'readiness:' || pending.user_id || ':' || pending.appid || ':' ||
@@ -791,7 +829,7 @@ export class OpportunityWorkerRepository {
   }
 
   async createRunContext(params: {
-    kind: "daily" | "immediate" | "manual" | "replay";
+    kind: "daily" | "immediate" | "manual" | "replay" | "readiness";
     userId: string;
     workspaceId: string;
   }): Promise<OpportunityRunContext> {
@@ -1836,43 +1874,95 @@ export class OpportunityWorkerRepository {
         [params.run.id, params.userId],
       );
 
-      const resultIds = await client.query<QueryResultRow & { id: string }>(
+      const resultIds = await client.query<
+        QueryResultRow & { id: string; profile_ids: string[] }
+      >(
         `
-          SELECT id
-          FROM opportunity.results
-          WHERE run_id = $1
-            AND user_id = $2
-          ORDER BY rank NULLS LAST, score DESC NULLS LAST, appid
+          SELECT
+            result.id,
+            COALESCE(
+              array_agg(DISTINCT match.profile_id)
+                FILTER (WHERE match.profile_id IS NOT NULL),
+              '{}'::uuid[]
+            ) AS profile_ids
+          FROM opportunity.results result
+          LEFT JOIN opportunity.result_profile_matches match
+            ON match.result_id = result.id
+          WHERE result.user_id = $2
+            AND (
+              result.run_id = $1
+              OR (
+                $3::text = 'daily'
+                AND result.created_at >= $4
+                AND result.created_at < $5
+              )
+            )
+          GROUP BY result.id
+          ORDER BY
+            result.score DESC NULLS LAST,
+            result.appid,
+            result.id
           LIMIT 500
         `,
-        [params.run.id, params.userId],
+        [
+          params.run.id,
+          params.userId,
+          params.run.kind,
+          params.run.windowStart,
+          params.run.windowEnd,
+        ],
       );
       const preferences = await client.query<
         QueryResultRow & {
           channel: "email" | "slack";
           id: string;
           max_results: number;
+          profile_id: string | null;
           quiet_day_behavior: "skip" | "send_empty";
         }
       >(
         `
-          SELECT id, channel, max_results, quiet_day_behavior
+          SELECT
+            id,
+            profile_id,
+            channel,
+            max_results,
+            quiet_day_behavior
           FROM opportunity.channel_preferences
           WHERE workspace_id = $1
             AND user_id = $2
-            AND profile_id IS NULL
             AND channel IN ('email', 'slack')
             AND enabled
             AND ($3::boolean = false OR immediate_full_match_enabled)
-          ORDER BY channel
-          LIMIT 10
+            AND $4::boolean
+          ORDER BY channel, profile_id NULLS LAST, id
+          LIMIT 100
         `,
-        [params.workspaceId, params.userId, params.run.kind === "immediate"],
+        [
+          params.workspaceId,
+          params.userId,
+          params.run.kind === "immediate",
+          params.run.kind !== "readiness",
+        ],
+      );
+      const assignments = assignOpportunityDeliveryResults(
+        resultIds.rows.map((row) => ({
+          id: row.id,
+          profileIds: row.profile_ids,
+        })),
+        preferences.rows.map((preference) => ({
+          channel: preference.channel,
+          id: preference.id,
+          maxResults: preference.max_results,
+          profileId: preference.profile_id,
+        })),
       );
       for (const preference of preferences.rows) {
-        const selectedIds = resultIds.rows
-          .slice(0, preference.max_results)
-          .map((row) => row.id);
+        const assignment = assignments.get(preference.id) ?? {
+          availableResultCount: 0,
+          resultIds: [],
+        };
+        const selectedIds = assignment.resultIds;
         const shouldSkip =
           selectedIds.length === 0 && preference.quiet_day_behavior === "skip";
         await client.query(
@@ -1917,8 +2007,10 @@ export class OpportunityWorkerRepository {
             selectedIds,
             preference.id,
             JSON.stringify({
+              availableResultCount: assignment.availableResultCount,
               canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?run=${params.run.id}`,
-              resultCount: resultIds.rowCount,
+              resultCount: selectedIds.length,
+              truncated: assignment.availableResultCount > selectedIds.length,
               windowEnd: params.run.windowEnd,
               windowStart: params.run.windowStart,
             }),
@@ -1962,15 +2054,35 @@ export class OpportunityWorkerRepository {
       );
       await client.query(
         `
-          UPDATE opportunity.profiles
-          SET next_evaluation_at = now() + interval '24 hours',
+          WITH personal_schedule AS (
+            SELECT timezone, local_delivery_time
+            FROM opportunity.profiles
+            WHERE workspace_id = $1
+              AND owner_user_id = $2
+              AND status = 'enabled'
+            ORDER BY next_evaluation_at NULLS LAST, id
+            LIMIT 1
+          )
+          UPDATE opportunity.profiles profile
+          SET timezone = personal_schedule.timezone,
+              local_delivery_time = personal_schedule.local_delivery_time,
+              next_evaluation_at = opportunity.next_profile_evaluation_v1(
+                personal_schedule.timezone,
+                personal_schedule.local_delivery_time,
+                now()
+              ),
               updated_at = now()
-          WHERE workspace_id = $1
-            AND owner_user_id = $2
-            AND status = 'enabled'
+          FROM personal_schedule
+          WHERE profile.workspace_id = $1
+            AND profile.owner_user_id = $2
+            AND profile.status = 'enabled'
             AND $3::boolean
         `,
-        [params.workspaceId, params.userId, params.run.kind !== "immediate"],
+        [
+          params.workspaceId,
+          params.userId,
+          ["daily", "manual", "replay"].includes(params.run.kind),
+        ],
       );
       await client.query(
         `

@@ -114,6 +114,29 @@ CREATE INDEX IF NOT EXISTS idx_opportunity_profiles_due
 CREATE INDEX IF NOT EXISTS idx_opportunity_profiles_owner
     ON opportunity.profiles (owner_user_id, workspace_id, updated_at DESC);
 
+CREATE OR REPLACE FUNCTION opportunity.next_profile_evaluation_v1(
+    p_timezone text,
+    p_local_delivery_time time without time zone,
+    p_after timestamp with time zone DEFAULT now()
+)
+RETURNS timestamp with time zone
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE
+        WHEN (
+            (p_after AT TIME ZONE p_timezone)::date + p_local_delivery_time
+        ) AT TIME ZONE p_timezone > p_after
+        THEN (
+            (p_after AT TIME ZONE p_timezone)::date + p_local_delivery_time
+        ) AT TIME ZONE p_timezone
+        ELSE (
+            (p_after AT TIME ZONE p_timezone)::date + 1
+            + p_local_delivery_time
+        ) AT TIME ZONE p_timezone
+    END
+$$;
+
 CREATE TABLE IF NOT EXISTS opportunity.profile_versions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     profile_id uuid NOT NULL
@@ -297,7 +320,9 @@ CREATE TABLE IF NOT EXISTS opportunity.runs (
         REFERENCES opportunity.workspaces(id) ON DELETE RESTRICT,
     user_id uuid NOT NULL,
     run_kind text NOT NULL DEFAULT 'daily'
-        CHECK (run_kind IN ('daily', 'immediate', 'manual', 'replay')),
+        CHECK (
+            run_kind IN ('daily', 'immediate', 'manual', 'replay', 'readiness')
+        ),
     status text NOT NULL DEFAULT 'running'
         CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
     window_start timestamp with time zone NOT NULL,

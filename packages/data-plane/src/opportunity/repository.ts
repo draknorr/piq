@@ -86,10 +86,12 @@ interface ProfileRow extends QueryResultRow {
   description: string | null;
   id: string;
   immediate_full_match_enabled: boolean;
+  local_delivery_time: string;
   name: string;
   next_evaluation_at: Date | string | null;
   source_preset_name: string | null;
   status: OpportunityProfileSummary["status"];
+  timezone: string;
   updated_at: Date | string;
 }
 
@@ -125,6 +127,7 @@ interface LatestRunRow extends QueryResultRow {
   coverage_warnings: string[] | null;
   id: string;
   result_count: number;
+  run_kind: "daily" | "manual" | "replay";
   started_at: Date | string;
   status: "running" | "completed" | "failed" | "cancelled";
   window_end: Date | string;
@@ -636,6 +639,8 @@ export class OpportunityRepository {
           profile.name,
           profile.description,
           profile.status,
+          profile.timezone,
+          to_char(profile.local_delivery_time, 'HH24:MI') AS local_delivery_time,
           profile.immediate_full_match_enabled,
           profile.next_evaluation_at,
           profile.updated_at,
@@ -660,10 +665,12 @@ export class OpportunityRepository {
       description: row.description,
       id: row.id,
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
+      localDeliveryTime: row.local_delivery_time,
       name: row.name,
       nextEvaluationAt: iso(row.next_evaluation_at),
       sourcePresetName: row.source_preset_name,
       status: row.status,
+      timezone: row.timezone,
       updatedAt: iso(row.updated_at)!,
     }));
   }
@@ -707,6 +714,7 @@ export class OpportunityRepository {
       `
         SELECT
           run.id,
+          run.run_kind,
           run.status,
           run.window_start,
           run.window_end,
@@ -754,7 +762,9 @@ export class OpportunityRepository {
           app.name,
           result.event_label,
           result.event_fingerprint,
-          result.rank,
+          row_number() OVER (
+            ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+          )::integer AS rank,
           result.score,
           result.rank_components,
           result.confidence,
@@ -792,13 +802,20 @@ export class OpportunityRepository {
           ON match.result_id = result.id
         LEFT JOIN opportunity.profiles profile
           ON profile.id = match.profile_id
-        WHERE result.run_id = $1
-          AND result.user_id = $2
+        WHERE result.user_id = $2
+          AND (
+            result.run_id = $1
+            OR (
+              $5::text = 'daily'
+              AND result.created_at >= $3
+              AND result.created_at < $4
+            )
+          )
         GROUP BY result.id, app.name, market.potential_band
-        ORDER BY result.rank NULLS LAST, result.score DESC NULLS LAST, result.appid
+        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
         LIMIT 500
       `,
-      [run.id, userId],
+      [run.id, userId, run.window_start, run.window_end, run.run_kind],
     );
     const summaries = results.rows.map((row) => this.mapResult(row));
     const group = (label: OpportunityResultSummary["eventLabel"]) =>
@@ -840,7 +857,15 @@ export class OpportunityRepository {
         updated_at: Date | string | null;
       }
     >(`
-      WITH prepared AS (
+      WITH expected(source) AS (
+        VALUES
+          ('catalog'::text),
+          ('storefront'::text),
+          ('pics'::text),
+          ('market_metrics'::text),
+          ('creator'::text)
+      ),
+      prepared AS (
         SELECT
           source,
           MAX(processed_at) AS updated_at,
@@ -851,15 +876,20 @@ export class OpportunityRepository {
         GROUP BY source
       )
       SELECT
-        source,
-        updated_at,
+        expected.source,
+        prepared.updated_at,
         CASE
-          WHEN ready_count = 0 AND blocked_count > 0 THEN 'blocked'
-          WHEN updated_at IS NULL OR updated_at < now() - interval '36 hours' THEN 'delayed'
+          WHEN COALESCE(prepared.ready_count, 0) = 0
+            AND COALESCE(prepared.blocked_count, 0) > 0
+            THEN 'blocked'
+          WHEN prepared.updated_at IS NULL
+            OR prepared.updated_at < now() - interval '36 hours'
+            THEN 'delayed'
           ELSE 'healthy'
         END AS state
-      FROM prepared
-      ORDER BY source
+      FROM expected
+      LEFT JOIN prepared ON prepared.source = expected.source
+      ORDER BY expected.source
       LIMIT 20
     `);
 
@@ -1116,6 +1146,7 @@ export class OpportunityRepository {
     eventSubscriptions: OpportunitySignalFamily[];
     identity: OpportunityIdentity;
     immediateFullMatchEnabled: boolean;
+    localDeliveryTime: string;
     name: string;
     rules: OpportunityRuleSet;
     sourcePresetVersionId?: string | null;
@@ -1153,6 +1184,7 @@ export class OpportunityRepository {
             description,
             status,
             timezone,
+            local_delivery_time,
             next_evaluation_at,
             immediate_full_match_enabled
           )
@@ -1165,8 +1197,9 @@ export class OpportunityRepository {
             $6,
             $7,
             $8,
+            $9::time,
             CASE WHEN $7 = 'enabled' THEN now() ELSE NULL END,
-            $9
+            $10
           )
           RETURNING id
         `,
@@ -1179,10 +1212,43 @@ export class OpportunityRepository {
           params.description?.trim() || null,
           params.enabled ? "enabled" : "draft",
           params.timezone,
+          params.localDeliveryTime,
           params.immediateFullMatchEnabled,
         ],
       );
       const profileId = profile.rows[0]!.id;
+      await client.query(
+        `
+          UPDATE opportunity.profiles
+          SET timezone = $4,
+              local_delivery_time = $5::time,
+              next_evaluation_at = CASE
+                WHEN status = 'enabled'
+                  AND (
+                    timezone IS DISTINCT FROM $4
+                    OR local_delivery_time IS DISTINCT FROM $5::time
+                  )
+                  THEN opportunity.next_profile_evaluation_v1(
+                    $4,
+                    $5::time,
+                    now()
+                  )
+                ELSE next_evaluation_at
+              END,
+              updated_at = now()
+          WHERE workspace_id = $1
+            AND owner_user_id = $2
+            AND id <> $3
+            AND status <> 'archived'
+        `,
+        [
+          workspace.id,
+          params.identity.userId,
+          profileId,
+          params.timezone,
+          params.localDeliveryTime,
+        ],
+      );
       const version = await client.query<
         QueryResultRow & {
           calculation_config: Record<string, unknown>;
@@ -1316,6 +1382,7 @@ export class OpportunityRepository {
 
   async clonePreset(params: {
     identity: OpportunityIdentity;
+    localDeliveryTime: string;
     name?: string;
     presetId: string;
     timezone: string;
@@ -1356,6 +1423,7 @@ export class OpportunityRepository {
       eventSubscriptions: row.event_subscriptions,
       identity: params.identity,
       immediateFullMatchEnabled: false,
+      localDeliveryTime: params.localDeliveryTime,
       name: params.name?.trim() || row.name,
       rules: row.rules,
       sourcePresetVersionId: row.version_id,
@@ -1377,6 +1445,7 @@ export class OpportunityRepository {
         event_subscriptions: OpportunitySignalFamily[];
         id: string;
         immediate_full_match_enabled: boolean;
+        local_delivery_time: string;
         name: string;
         next_evaluation_at: Date | string | null;
         profile_version_id: string;
@@ -1394,6 +1463,7 @@ export class OpportunityRepository {
           profile.description,
           profile.status,
           profile.timezone,
+          to_char(profile.local_delivery_time, 'HH24:MI') AS local_delivery_time,
           profile.immediate_full_match_enabled,
           profile.next_evaluation_at,
           profile.updated_at,
@@ -1435,6 +1505,7 @@ export class OpportunityRepository {
       description: row.description,
       id: row.id,
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
+      localDeliveryTime: row.local_delivery_time,
       name: row.name,
       nextEvaluationAt: iso(row.next_evaluation_at),
       sourcePresetName: row.source_preset_name,
@@ -1449,6 +1520,7 @@ export class OpportunityRepository {
     eventSubscriptions: OpportunitySignalFamily[];
     identity: OpportunityIdentity;
     immediateFullMatchEnabled: boolean;
+    localDeliveryTime?: string;
     name: string;
     profileId: string;
     rules: OpportunityRuleSet;
@@ -1554,7 +1626,8 @@ export class OpportunityRepository {
               name = $3,
               description = $4,
               timezone = $5,
-              immediate_full_match_enabled = $6,
+              local_delivery_time = COALESCE($6::time, local_delivery_time),
+              immediate_full_match_enabled = $7,
               next_evaluation_at = CASE
                 WHEN status = 'enabled' THEN now()
                 ELSE next_evaluation_at
@@ -1568,9 +1641,44 @@ export class OpportunityRepository {
           params.name.trim(),
           params.description?.trim() || null,
           params.timezone,
+          params.localDeliveryTime ?? null,
           params.immediateFullMatchEnabled,
         ],
       );
+      if (params.localDeliveryTime !== undefined) {
+        await client.query(
+          `
+            UPDATE opportunity.profiles
+            SET timezone = $4,
+                local_delivery_time = $5::time,
+                next_evaluation_at = CASE
+                  WHEN status = 'enabled'
+                    AND (
+                      timezone IS DISTINCT FROM $4
+                      OR local_delivery_time IS DISTINCT FROM $5::time
+                    )
+                    THEN opportunity.next_profile_evaluation_v1(
+                      $4,
+                      $5::time,
+                      now()
+                    )
+                  ELSE next_evaluation_at
+                END,
+                updated_at = now()
+            WHERE workspace_id = $1
+              AND owner_user_id = $2
+              AND id <> $3
+              AND status <> 'archived'
+          `,
+          [
+            workspace.id,
+            params.identity.userId,
+            params.profileId,
+            params.timezone,
+            params.localDeliveryTime,
+          ],
+        );
+      }
       await client.query(
         `
           INSERT INTO opportunity.audit_log (
@@ -1834,6 +1942,7 @@ export class OpportunityRepository {
         missing_evidence: string[];
         official_news: OpportunityGameRecord["officialNews"];
         previous_appearances: OpportunityGameRecord["previousAppearances"];
+        provenance: OpportunityGameRecord["provenance"];
         recent_changes: OpportunityGameRecord["recentChanges"];
         rank: OpportunityGameRecord["rank"];
         result_summary: OpportunityResultSummary;
@@ -1893,6 +2002,43 @@ export class OpportunityRepository {
             'finalScore', canonical.score,
             'reasons', COALESCE(canonical.rank_components->'reasons', '[]'::jsonb)
           ) AS rank,
+          jsonb_build_object(
+            'calculationVersions', canonical.calculation_versions,
+            'sourceTimestamps', canonical.source_timestamps,
+            'run', jsonb_build_object(
+              'id', canonical_run.id,
+              'kind', canonical_run.run_kind,
+              'windowStart', canonical_run.window_start,
+              'windowEnd', canonical_run.window_end,
+              'startedAt', canonical_run.started_at,
+              'completedAt', canonical_run.completed_at,
+              'sourceWatermarks', canonical_run.source_watermarks,
+              'activeProfileVersions', canonical_run.active_profile_versions
+            ),
+            'triggeringEvent', CASE
+              WHEN triggering_event.id IS NULL THEN NULL
+              ELSE jsonb_build_object(
+                'eventType', triggering_event.event_type,
+                'signalFamily', triggering_event.signal_family,
+                'effectiveAt', triggering_event.effective_at,
+                'observedAt', triggering_event.observed_at,
+                'registryVersion', triggering_event.registry_version,
+                'classifierVersion', triggering_event.classifier_version
+              )
+            END,
+            'deliveries', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'channel', delivery.channel,
+                'deliveryKind', delivery.delivery_kind,
+                'status', delivery.status,
+                'createdAt', delivery.created_at,
+                'sentAt', delivery.sent_at
+              ) ORDER BY delivery.created_at, delivery.id)
+              FROM opportunity.deliveries delivery
+              WHERE canonical.id = ANY(delivery.result_ids)
+                AND delivery.user_id = canonical.user_id
+            ), '[]'::jsonb)
+          ) AS provenance,
           canonical.evidence_summary->'items' AS evidence,
           canonical.missing_evidence AS missing_evidence,
           canonical.evidence_summary->'currentMetrics' AS current_metrics,
@@ -1947,10 +2093,14 @@ export class OpportunityRepository {
             SELECT jsonb_agg(jsonb_build_object(
               'id', profile.id,
               'name', profile.name,
+              'profileVersionId', match.profile_version_id,
+              'profileVersion', version.version,
               'ruleOutcomes', match.rule_outcomes
             ) ORDER BY profile.name)
             FROM opportunity.result_profile_matches match
             JOIN opportunity.profiles profile ON profile.id = match.profile_id
+            JOIN opportunity.profile_versions version
+              ON version.id = match.profile_version_id
             WHERE match.result_id = canonical.id
           ), '[]'::jsonb) AS matched_profiles,
           COALESCE((
@@ -1993,13 +2143,17 @@ export class OpportunityRepository {
               'occurredAt', activity.occurred_at,
               'userDisplay', COALESCE(membership.identity_email, 'Team member')
             ) ORDER BY activity.occurred_at DESC)
-            FROM opportunity.team_activity activity
+            FROM (
+              SELECT recent.*
+              FROM opportunity.team_activity recent
+              WHERE recent.workspace_id = canonical.workspace_id
+                AND recent.appid = canonical.appid
+              ORDER BY recent.occurred_at DESC
+              LIMIT 100
+            ) activity
             LEFT JOIN opportunity.workspace_memberships membership
               ON membership.workspace_id = activity.workspace_id
               AND membership.user_id = activity.user_id
-            WHERE activity.workspace_id = canonical.workspace_id
-              AND activity.appid = canonical.appid
-            LIMIT 100
           ), '[]'::jsonb) AS team_activity,
           jsonb_build_object(
             'dismissedAt', game_state.dismissed_at,
@@ -2050,6 +2204,9 @@ export class OpportunityRepository {
           ) AS youtube_evidence
         FROM opportunity.results canonical
         JOIN legacy.apps app ON app.appid = canonical.appid
+        JOIN opportunity.runs canonical_run ON canonical_run.id = canonical.run_id
+        LEFT JOIN opportunity.material_events triggering_event
+          ON triggering_event.id = canonical.material_event_id
         LEFT JOIN opportunity.cohort_snapshots cohort
           ON cohort.id = canonical.cohort_snapshot_id
         LEFT JOIN opportunity.market_context_snapshots market
@@ -2090,6 +2247,7 @@ export class OpportunityRepository {
       missingEvidence: row.missing_evidence ?? [],
       officialNews: row.official_news,
       previousAppearances: row.previous_appearances,
+      provenance: row.provenance,
       recentChanges: row.recent_changes,
       rank: row.rank,
       result: row.result_summary,
@@ -2194,7 +2352,17 @@ export class OpportunityRepository {
             activity_type,
             note
           )
-          VALUES ($1, $2, $3, $4, $5)
+          SELECT $1, $2, $3, $4, $5
+          WHERE $4 <> 'viewed'
+            OR NOT EXISTS (
+              SELECT 1
+              FROM opportunity.team_activity recent
+              WHERE recent.workspace_id = $1
+                AND recent.user_id = $2
+                AND recent.appid = $3
+                AND recent.activity_type = 'viewed'
+                AND recent.occurred_at >= now() - interval '1 hour'
+            )
         `,
         [
           workspace.id,

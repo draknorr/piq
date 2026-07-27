@@ -5,11 +5,15 @@ import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityRuleSet,
 } from "./types.js";
-import { shouldSurfaceOpportunityMatch } from "./worker.js";
+import {
+  resolveOpportunityResultLabel,
+  shouldSurfaceOpportunityMatch,
+} from "./worker.js";
 import type {
   OpportunityWorkerMaterialEvent,
   OpportunityWorkerProfile,
 } from "./worker-repository.js";
+import { assignOpportunityDeliveryResults } from "./worker-repository.js";
 
 const RULES: OpportunityRuleSet = {
   excluded: [],
@@ -127,5 +131,184 @@ describe("opportunity worker event policy", () => {
       }),
       false,
     );
+  });
+
+  it("labels a delayed first-observation qualification as newly qualified", () => {
+    assert.equal(
+      resolveOpportunityResultLabel({
+        event: event({
+          eventType: "first_observed",
+          observedAt: "2026-07-27T01:30:30.000Z",
+          signalFamily: "release",
+        }),
+        matches: [
+          {
+            evaluation: {
+              excluded: false,
+              excludedOutcomes: [],
+              missingRequiredFields: [],
+              outcome: "eligible",
+              preferenceContribution: 0,
+              preferredOutcomes: [],
+              requiredOutcomes: [],
+            },
+            priorOutcome: "pending",
+          },
+        ],
+        runWindowEnd: "2026-07-27T01:31:00.000Z",
+        runWindowStart: "2026-07-27T01:30:00.000Z",
+        tracked: false,
+      }),
+      "newly_qualified",
+    );
+  });
+
+  it("preserves new-discovery and new-release labels inside the run window", () => {
+    const matches = [
+      {
+        evaluation: {
+          excluded: false,
+          excludedOutcomes: [],
+          missingRequiredFields: [],
+          outcome: "eligible" as const,
+          preferenceContribution: 0,
+          preferredOutcomes: [],
+          requiredOutcomes: [],
+        },
+        priorOutcome: undefined,
+      },
+    ];
+    const common = {
+      matches,
+      runWindowEnd: "2026-07-27T00:30:00.000Z",
+      runWindowStart: "2026-07-27T00:00:00.000Z",
+      tracked: false,
+    };
+    assert.equal(
+      resolveOpportunityResultLabel({
+        ...common,
+        event: event({
+          eventType: "first_observed",
+          observedAt: "2026-07-27T00:10:00.000Z",
+        }),
+      }),
+      "newly_discovered",
+    );
+    assert.equal(
+      resolveOpportunityResultLabel({
+        ...common,
+        event: event({
+          eventType: "released",
+          observedAt: "2026-07-27T00:10:00.000Z",
+        }),
+      }),
+      "newly_released",
+    );
+  });
+});
+
+describe("opportunity delivery preference scoping", () => {
+  it("applies profile-specific preferences before the user-wide fallback", () => {
+    const assignments = assignOpportunityDeliveryResults(
+      [
+        { id: "one", profileIds: ["profile-a", "profile-b"] },
+        { id: "two", profileIds: ["profile-b"] },
+        { id: "three", profileIds: ["profile-c"] },
+      ],
+      [
+        {
+          channel: "email",
+          id: "profile-email",
+          maxResults: 10,
+          profileId: "profile-a",
+        },
+        {
+          channel: "email",
+          id: "global-email",
+          maxResults: 10,
+          profileId: null,
+        },
+      ],
+    );
+
+    assert.deepEqual(assignments.get("profile-email"), {
+      availableResultCount: 1,
+      resultIds: ["one"],
+    });
+    assert.deepEqual(assignments.get("global-email"), {
+      availableResultCount: 2,
+      resultIds: ["two", "three"],
+    });
+  });
+
+  it("deduplicates within each channel but preserves cross-channel delivery", () => {
+    const assignments = assignOpportunityDeliveryResults(
+      [{ id: "one", profileIds: ["profile-a"] }],
+      [
+        {
+          channel: "email",
+          id: "email-a",
+          maxResults: 10,
+          profileId: "profile-a",
+        },
+        {
+          channel: "email",
+          id: "email-global",
+          maxResults: 10,
+          profileId: null,
+        },
+        {
+          channel: "slack",
+          id: "slack-global",
+          maxResults: 10,
+          profileId: null,
+        },
+      ],
+    );
+
+    assert.deepEqual(assignments.get("email-a"), {
+      availableResultCount: 1,
+      resultIds: ["one"],
+    });
+    assert.deepEqual(assignments.get("email-global"), {
+      availableResultCount: 0,
+      resultIds: [],
+    });
+    assert.deepEqual(assignments.get("slack-global"), {
+      availableResultCount: 1,
+      resultIds: ["one"],
+    });
+  });
+
+  it("reports the pre-limit result count for truncation notices", () => {
+    const assignments = assignOpportunityDeliveryResults(
+      [
+        { id: "one", profileIds: ["profile-a"] },
+        { id: "two", profileIds: ["profile-a"] },
+      ],
+      [
+        {
+          channel: "email",
+          id: "email",
+          maxResults: 1,
+          profileId: "profile-a",
+        },
+        {
+          channel: "email",
+          id: "global",
+          maxResults: 10,
+          profileId: null,
+        },
+      ],
+    );
+
+    assert.deepEqual(assignments.get("email"), {
+      availableResultCount: 2,
+      resultIds: ["one"],
+    });
+    assert.deepEqual(assignments.get("global"), {
+      availableResultCount: 0,
+      resultIds: [],
+    });
   });
 });

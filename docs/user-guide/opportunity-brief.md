@@ -45,6 +45,12 @@ as the daily evaluator and shows:
 Preview describes the current catalog. It does not promise what a historical
 daily report would have contained.
 
+Choose the profile's local daily time before saving. The timezone shown in the
+editor comes from your browser. Enabling starts the first evaluation
+immediately; later briefs follow that local schedule. Enabled profiles can be
+paused, resumed, or archived without deleting their versions or historical
+results.
+
 ## What appears in the daily brief
 
 A result can be:
@@ -78,7 +84,9 @@ Open any result to inspect:
 - before/after material changes;
 - recent official Steam news;
 - additive YouTube evidence, explicitly labeled as partial coverage;
-- missing evidence and calculation versions; and
+- missing evidence and calculation versions;
+- the exact run window, source watermarks, triggering-event timestamps, matched
+  profile version IDs, calculation versions, and delivery history; and
 - earlier appearances of the same game.
 
 Market-potential labels are directional. Reviews and CCU are proxies, not a
@@ -105,8 +113,11 @@ Website results are always canonical. You can additionally enable:
 - a Slack incoming-webhook URL.
 
 Choose a maximum result count and whether quiet days should be skipped or sent
-as an empty digest. Destinations are encrypted at rest. Slack URLs must use an
-approved Slack webhook host.
+as an empty digest. Delivery can cover all profiles in one combined brief or be
+scoped to one profile. A result that matches several profiles is included at
+most once per channel, and a limited summary states how many additional results
+remain on the canonical website. Destinations are encrypted at rest. Slack URLs
+must use an approved Slack webhook host.
 
 Delivery retries use a stable idempotency key. If Slack returns an ambiguous
 network failure after the request may have reached Slack, PublisherIQ fails

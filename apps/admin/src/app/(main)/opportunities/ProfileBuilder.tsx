@@ -279,15 +279,24 @@ function displayValue(value: OpportunityRuleClause["value"]): string {
 }
 
 interface ProfileBuilderProps {
+  defaultLocalDeliveryTime?: string;
+  defaultTimezone?: string;
   initialProfile?: OpportunityProfileDetail | null;
   onClose: () => void;
   onSaved: (profileId: string) => Promise<void>;
+  onStatusChanged: (
+    profileId: string,
+    status: "enabled" | "paused" | "archived",
+  ) => Promise<void>;
 }
 
 export function ProfileBuilder({
+  defaultLocalDeliveryTime,
+  defaultTimezone,
   initialProfile,
   onClose,
   onSaved,
+  onStatusChanged,
 }: ProfileBuilderProps) {
   const [name, setName] = useState(
     initialProfile?.name ?? "Untitled opportunity profile",
@@ -310,6 +319,9 @@ export function ProfileBuilder({
   const [immediate, setImmediate] = useState(
     initialProfile?.immediateFullMatchEnabled ?? false,
   );
+  const [localDeliveryTime, setLocalDeliveryTime] = useState(
+    initialProfile?.localDeliveryTime ?? defaultLocalDeliveryTime ?? "09:00",
+  );
   const [preview, setPreview] = useState<OpportunityPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -317,8 +329,9 @@ export function ProfileBuilder({
   const timezone = useMemo(
     () =>
       initialProfile?.timezone ??
+      defaultTimezone ??
       Intl.DateTimeFormat().resolvedOptions().timeZone,
-    [initialProfile?.timezone],
+    [defaultTimezone, initialProfile?.timezone],
   );
 
   const updateSection = (
@@ -376,6 +389,7 @@ export function ProfileBuilder({
         description,
         eventSubscriptions: subscriptions,
         immediateFullMatchEnabled: immediate,
+        localDeliveryTime,
         name,
         rules,
         timezone,
@@ -398,6 +412,37 @@ export function ProfileBuilder({
       await onSaved(version.profileId);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Save failed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const changeStatus = async (status: "enabled" | "paused" | "archived") => {
+    if (!initialProfile) {
+      return;
+    }
+    if (
+      status === "archived" &&
+      !window.confirm(
+        "Archive this profile? Its versions and historical results will be preserved.",
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await opportunityPost("set-profile-status", {
+        profileId: initialProfile.id,
+        status,
+      });
+      await onStatusChanged(initialProfile.id, status);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Profile status update failed.",
+      );
     } finally {
       setSaving(false);
     }
@@ -538,6 +583,23 @@ export function ProfileBuilder({
                 </span>
               </span>
             </label>
+            <div className="mt-5 grid gap-3 border-t border-border-subtle pt-5 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-end">
+              <label className="space-y-2">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+                  Personal daily brief time
+                </span>
+                <input
+                  type="time"
+                  value={localDeliveryTime}
+                  onChange={(event) => setLocalDeliveryTime(event.target.value)}
+                  className="w-full rounded-lg border border-border-muted bg-surface px-3 py-2.5 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15"
+                />
+              </label>
+              <p className="pb-2.5 text-xs leading-5 text-text-tertiary">
+                Shared by all your enabled profiles in {timezone}. The first run
+                starts immediately when you enable a profile.
+              </p>
+            </div>
           </div>
 
           {error && (
@@ -575,6 +637,26 @@ export function ProfileBuilder({
               <Check className="h-4 w-4" />
               {saving ? "Saving…" : "Save & enable"}
             </button>
+            {initialProfile?.status === "enabled" && (
+              <button
+                type="button"
+                onClick={() => changeStatus("paused")}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-lg border border-border-muted px-4 py-2.5 text-sm font-semibold text-text-secondary transition hover:border-border-prominent disabled:opacity-50"
+              >
+                Pause profile
+              </button>
+            )}
+            {initialProfile && initialProfile.status !== "archived" && (
+              <button
+                type="button"
+                onClick={() => changeStatus("archived")}
+                disabled={saving}
+                className="ml-auto inline-flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-semantic-error-text transition hover:bg-semantic-error-muted disabled:opacity-50"
+              >
+                Archive
+              </button>
+            )}
           </div>
         </div>
 

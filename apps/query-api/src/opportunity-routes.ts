@@ -161,6 +161,7 @@ export async function tryHandleOpportunityRequest(params: {
           enabled?: boolean;
           eventSubscriptions: OpportunitySignalFamily[];
           immediateFullMatchEnabled?: boolean;
+          localDeliveryTime?: string;
           name: string;
           rules: OpportunityRuleSet;
           sourcePresetVersionId?: string | null;
@@ -175,6 +176,7 @@ export async function tryHandleOpportunityRequest(params: {
       }
       case "/v1/opportunities/clone-preset": {
         const body = await readJsonBody<{
+          localDeliveryTime?: string;
           name?: string;
           presetId: string;
           timezone: string;
@@ -200,6 +202,7 @@ export async function tryHandleOpportunityRequest(params: {
           description?: string | null;
           eventSubscriptions: OpportunitySignalFamily[];
           immediateFullMatchEnabled: boolean;
+          localDeliveryTime?: string;
           name: string;
           profileId: string;
           rules: OpportunityRuleSet;

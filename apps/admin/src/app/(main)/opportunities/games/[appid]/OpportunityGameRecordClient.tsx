@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  Database,
   ExternalLink,
   Eye,
   Flag,
@@ -329,9 +330,15 @@ export function OpportunityGameRecordClient({
                   <h3 className="text-base font-semibold text-text-primary">
                     {profile.name}
                   </h3>
-                  <span className="rounded-full bg-semantic-success-muted px-2.5 py-1 text-[10px] font-semibold uppercase text-semantic-success-text">
-                    eligible
-                  </span>
+                  <div className="text-right">
+                    <span className="rounded-full bg-semantic-success-muted px-2.5 py-1 text-[10px] font-semibold uppercase text-semantic-success-text">
+                      eligible
+                    </span>
+                    <p className="mt-2 font-mono text-[10px] text-text-muted">
+                      v{profile.profileVersion} ·{" "}
+                      {profile.profileVersionId.slice(0, 8)}
+                    </p>
+                  </div>
                 </div>
                 <div className="mt-4 grid gap-5 md:grid-cols-3">
                   <RuleOutcomeColumn
@@ -573,6 +580,141 @@ export function OpportunityGameRecordClient({
                 </div>
               </div>
             ))}
+          </div>
+
+          <SectionHeader
+            icon={Database}
+            kicker="Reproduction contract"
+            title="Versions, windows, and delivery history"
+          />
+          <div className="grid gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted md:grid-cols-3">
+            <div className="bg-surface-raised p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Evaluation run
+              </p>
+              <p className="mt-3 text-sm font-medium text-text-primary">
+                {humanizeOpportunity(record.provenance.run.kind)}
+              </p>
+              <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                {formatOpportunityDate(record.provenance.run.windowStart)}
+                <br />
+                through {formatOpportunityDate(record.provenance.run.windowEnd)}
+              </p>
+              <p className="mt-3 break-all font-mono text-[10px] text-text-muted">
+                {record.provenance.run.id}
+              </p>
+            </div>
+            <div className="bg-surface-raised p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Triggering event
+              </p>
+              {record.provenance.triggeringEvent ? (
+                <>
+                  <p className="mt-3 text-sm font-medium text-text-primary">
+                    {humanizeOpportunity(
+                      record.provenance.triggeringEvent.eventType,
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                    Observed{" "}
+                    {formatOpportunityDate(
+                      record.provenance.triggeringEvent.observedAt,
+                    )}
+                    <br />
+                    Effective{" "}
+                    {formatOpportunityDate(
+                      record.provenance.triggeringEvent.effectiveAt,
+                    )}
+                  </p>
+                  <p className="mt-3 font-mono text-[10px] text-text-muted">
+                    {record.provenance.triggeringEvent.registryVersion} ·{" "}
+                    {record.provenance.triggeringEvent.classifierVersion}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-3 text-xs text-text-tertiary">
+                  No triggering event snapshot was linked.
+                </p>
+              )}
+            </div>
+            <div className="bg-surface-raised p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Calculation versions
+              </p>
+              <dl className="mt-3 space-y-2">
+                {Object.entries(record.provenance.calculationVersions).map(
+                  ([name, version]) => (
+                    <div
+                      key={name}
+                      className="flex items-start justify-between gap-3 text-xs"
+                    >
+                      <dt className="text-text-tertiary">
+                        {humanizeOpportunity(name)}
+                      </dt>
+                      <dd className="text-right font-mono text-text-secondary">
+                        {version}
+                      </dd>
+                    </div>
+                  ),
+                )}
+              </dl>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-6 md:grid-cols-2">
+            <section className="border-y border-border-subtle py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Source timestamps
+              </p>
+              <dl className="mt-3 space-y-2">
+                {Object.entries(record.provenance.sourceTimestamps).map(
+                  ([source, timestamp]) => (
+                    <div
+                      key={source}
+                      className="flex items-start justify-between gap-3 text-xs"
+                    >
+                      <dt className="text-text-tertiary">
+                        {humanizeOpportunity(source)}
+                      </dt>
+                      <dd className="text-right text-text-secondary">
+                        {formatOpportunityDate(timestamp)}
+                      </dd>
+                    </div>
+                  ),
+                )}
+              </dl>
+            </section>
+            <section className="border-y border-border-subtle py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Delivery projections
+              </p>
+              {record.provenance.deliveries.length === 0 ? (
+                <p className="mt-3 text-xs leading-5 text-text-tertiary">
+                  Website record only; no channel projection is linked yet.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {record.provenance.deliveries.map((delivery, index) => (
+                    <div
+                      key={`${delivery.channel}:${delivery.createdAt}:${index}`}
+                      className="flex items-start justify-between gap-3 text-xs"
+                    >
+                      <span className="text-text-secondary">
+                        {humanizeOpportunity(delivery.channel)} ·{" "}
+                        {humanizeOpportunity(delivery.deliveryKind)}
+                      </span>
+                      <span className="text-right text-text-tertiary">
+                        {humanizeOpportunity(delivery.status)}
+                        <br />
+                        {formatOpportunityDate(
+                          delivery.sentAt ?? delivery.createdAt,
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
         </div>
 

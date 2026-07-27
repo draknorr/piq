@@ -69,4 +69,13 @@ describe("opportunity Tiger migration", () => {
     }
     assert.match(presets, /ON CONFLICT \(preset_id, version\) DO NOTHING/);
   });
+
+  it("schedules profiles at a timezone-aware local delivery time", () => {
+    assert.match(
+      migration,
+      /CREATE OR REPLACE FUNCTION opportunity\.next_profile_evaluation_v1/,
+    );
+    assert.match(migration, /p_after AT TIME ZONE p_timezone/);
+    assert.match(migration, /p_local_delivery_time/);
+  });
 });

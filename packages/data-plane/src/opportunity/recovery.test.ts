@@ -6,6 +6,14 @@ const repositorySource = readFileSync(
   new URL("./worker-repository.ts", import.meta.url),
   "utf8",
 );
+const workerSource = readFileSync(
+  new URL("./worker.ts", import.meta.url),
+  "utf8",
+);
+const productRepositorySource = readFileSync(
+  new URL("./repository.ts", import.meta.url),
+  "utf8",
+);
 const migration = readFileSync(
   new URL(
     "../../sql/tiger-bootstrap/0097_opportunity_mvp.sql",
@@ -47,6 +55,63 @@ describe("opportunity failure recovery and preservation contracts", () => {
     );
   });
 
+  test("scheduled readiness rechecks retain the triggering material event", () => {
+    const scheduledReadiness = repositorySource.match(
+      /const readiness = await client\.query\([\s\S]*?RETURNING id[\s\S]*?\);/,
+    )?.[0];
+    assert.ok(scheduledReadiness);
+    assert.match(scheduledReadiness, /material_event_id/);
+    assert.match(scheduledReadiness, /pending\.material_event_id/);
+  });
+
+  test("completed daily runs return profiles to their local schedule", () => {
+    assert.match(
+      repositorySource,
+      /next_evaluation_at = opportunity\.next_profile_evaluation_v1\(/,
+    );
+    assert.doesNotMatch(
+      repositorySource,
+      /next_evaluation_at = now\(\) \+ interval '24 hours'/,
+    );
+    assert.match(
+      repositorySource,
+      /\["daily", "manual", "replay"\]\.includes\(params\.run\.kind\)/,
+    );
+    assert.match(repositorySource, /WITH personal_schedule AS/);
+    assert.match(
+      repositorySource,
+      /SET timezone = personal_schedule\.timezone/,
+    );
+  });
+
+  test("readiness rechecks cannot advance the durable daily cursor", () => {
+    assert.match(migration, /'replay', 'readiness'/);
+    assert.match(
+      repositorySource,
+      /run_kind IN \('daily', 'manual', 'replay'\)/,
+    );
+    assert.match(
+      workerSource,
+      /item\.kind === "daily_evaluation"[\s\S]*?"daily"[\s\S]*?: "readiness"/,
+    );
+    assert.match(repositorySource, /params\.run\.kind !== "readiness"/);
+  });
+
+  test("the next daily brief absorbs qualifications completed by readiness runs", () => {
+    assert.match(repositorySource, /\$3::text = 'daily'/);
+    assert.match(repositorySource, /result\.created_at >= \$4/);
+    assert.match(repositorySource, /result\.created_at < \$5/);
+    assert.match(productRepositorySource, /\$5::text = 'daily'/);
+    assert.match(productRepositorySource, /result\.created_at >= \$3/);
+    assert.match(productRepositorySource, /result\.created_at < \$4/);
+  });
+
+  test("delivery selection honors profile-scoped preferences", () => {
+    assert.match(repositorySource, /array_agg\(DISTINCT match\.profile_id\)/);
+    assert.match(repositorySource, /profile_id NULLS LAST/);
+    assert.doesNotMatch(repositorySource, /AND profile_id IS NULL/);
+  });
+
   test("new event reappearance clears dismissal without clearing ignore", () => {
     const reappearanceUpdate = repositorySource.match(
       /UPDATE opportunity\.user_game_state[\s\S]*?dismissed_event_fingerprint <> \$4[\s\S]*?\);/,
@@ -65,5 +130,41 @@ describe("opportunity failure recovery and preservation contracts", () => {
     assert.match(migration, /calculation_versions jsonb NOT NULL/);
     assert.match(migration, /source_timestamps jsonb NOT NULL/);
     assert.match(migration, /missing_evidence jsonb NOT NULL/);
+  });
+
+  test("the canonical record exposes the versions and timestamps needed to reproduce it", () => {
+    for (const field of [
+      "'calculationVersions'",
+      "'sourceTimestamps'",
+      "'activeProfileVersions'",
+      "'triggeringEvent'",
+      "'profileVersionId'",
+      "'profileVersion'",
+      "'deliveries'",
+    ]) {
+      assert.match(productRepositorySource, new RegExp(field));
+    }
+    assert.match(workerSource, /materialEventEffectiveAt/);
+    assert.match(workerSource, /materialEventObservedAt/);
+    assert.match(workerSource, /profileEvaluationAt/);
+  });
+
+  test("shared viewed activity is bounded and does not flood on page reload", () => {
+    assert.match(
+      productRepositorySource,
+      /FROM opportunity\.team_activity recent[\s\S]*?LIMIT 100/,
+    );
+    assert.match(
+      productRepositorySource,
+      /recent\.activity_type = 'viewed'[\s\S]*?interval '1 hour'/,
+    );
+  });
+
+  test("source health keeps missing expected sources visible", () => {
+    assert.match(productRepositorySource, /WITH expected\(source\) AS/);
+    assert.match(
+      productRepositorySource,
+      /LEFT JOIN prepared ON prepared\.source = expected\.source/,
+    );
   });
 });

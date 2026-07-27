@@ -216,16 +216,17 @@ export interface OpportunityProfileSummary {
   description: string | null;
   id: string;
   immediateFullMatchEnabled: boolean;
+  localDeliveryTime: string;
   name: string;
   nextEvaluationAt: string | null;
   sourcePresetName: string | null;
   status: "draft" | "enabled" | "paused" | "archived";
+  timezone: string;
   updatedAt: string;
 }
 
 export interface OpportunityProfileDetail extends OpportunityProfileSummary {
   currentVersionDetail: OpportunityProfileVersion;
-  timezone: string;
 }
 
 export interface OpportunityPresetSummary {
@@ -473,6 +474,8 @@ export interface OpportunityGameRecord {
   matchedProfiles: Array<{
     id: string;
     name: string;
+    profileVersion: number;
+    profileVersionId: string;
     ruleOutcomes: OpportunityProfileEvaluation;
   }>;
   missingEvidence: string[];
@@ -489,6 +492,41 @@ export interface OpportunityGameRecord {
     resultId: string;
     whyNow: string;
   }>;
+  provenance: {
+    calculationVersions: Record<string, string>;
+    deliveries: Array<{
+      channel: "email" | "slack";
+      createdAt: string;
+      deliveryKind: "daily_digest" | "immediate_full_match";
+      sentAt: string | null;
+      status:
+        | "pending"
+        | "claimed"
+        | "retrying"
+        | "sent"
+        | "skipped"
+        | "dead_letter";
+    }>;
+    run: {
+      activeProfileVersions: string[];
+      completedAt: string | null;
+      id: string;
+      kind: "daily" | "immediate" | "manual" | "replay" | "readiness";
+      sourceWatermarks: Record<string, unknown>;
+      startedAt: string;
+      windowEnd: string;
+      windowStart: string;
+    };
+    sourceTimestamps: Record<string, string | null>;
+    triggeringEvent: null | {
+      classifierVersion: string;
+      effectiveAt: string;
+      eventType: string;
+      observedAt: string;
+      registryVersion: string;
+      signalFamily: OpportunitySignalFamily;
+    };
+  };
   recentChanges: Array<{
     after: unknown;
     before: unknown;

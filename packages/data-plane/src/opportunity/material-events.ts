@@ -80,6 +80,29 @@ const TYPE_FIELDS: Record<string, OpportunityRuleField[]> = {
   tags_removed: ["tags"],
 };
 
+function demoReferences(
+  value: unknown,
+  path = "demo",
+  result = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    value.forEach((item) => {
+      result.add(`${path}:${JSON.stringify(item)}`);
+    });
+    return result;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, nested]) => {
+      demoReferences(nested, `${path}.${key}`, result);
+    });
+    return result;
+  }
+  if (value === true) {
+    result.add(`${path}:true`);
+  }
+  return result;
+}
+
 function mapEventType(
   events: OpportunitySourceEvent[],
 ): OpportunityMaterialEventType {
@@ -99,7 +122,16 @@ function mapEventType(
     return released ? "released" : "material_change";
   }
   if (rawTypes.has("demo_references_changed")) {
-    return "demo_added";
+    const demoAdded = events.some((event) => {
+      if (event.rawEventType !== "demo_references_changed") {
+        return false;
+      }
+      const before = demoReferences(event.beforeValue);
+      return [...demoReferences(event.afterValue)].some(
+        (reference) => !before.has(reference),
+      );
+    });
+    return demoAdded ? "demo_added" : "material_change";
   }
   if (rawTypes.has("release_date_text_change")) {
     return "release_timing_changed";

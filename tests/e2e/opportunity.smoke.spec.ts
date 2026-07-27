@@ -142,6 +142,8 @@ const GAME_RECORD = {
     {
       id: "profile-1",
       name: "Cozy scouting",
+      profileVersion: 1,
+      profileVersionId: "22222222-2222-4222-8222-222222222222",
       ruleOutcomes: {
         excluded: false,
         excludedOutcomes: [],
@@ -177,6 +179,48 @@ const GAME_RECORD = {
     },
   ],
   previousAppearances: [],
+  provenance: {
+    calculationVersions: {
+      cohort: "opportunity-cohort/v1",
+      evidence: "opportunity-evidence/v1",
+      market: "opportunity-market/v1",
+      ranking: "opportunity-ranking/v1",
+    },
+    deliveries: [
+      {
+        channel: "email",
+        createdAt: "2026-07-27T08:01:00.000Z",
+        deliveryKind: "daily_digest",
+        sentAt: "2026-07-27T08:01:10.000Z",
+        status: "sent",
+      },
+    ],
+    run: {
+      activeProfileVersions: ["22222222-2222-4222-8222-222222222222"],
+      completedAt: "2026-07-27T08:00:05.000Z",
+      id: "run-20260727",
+      kind: "daily",
+      sourceWatermarks: {
+        materialEventId: "event-fingerprint-1",
+      },
+      startedAt: "2026-07-27T08:00:00.000Z",
+      windowEnd: "2026-07-27T08:00:00.000Z",
+      windowStart: "2026-07-26T08:00:00.000Z",
+    },
+    sourceTimestamps: {
+      materialEventEffectiveAt: "2026-07-27T07:30:00.000Z",
+      materialEventObservedAt: "2026-07-27T07:31:00.000Z",
+      profileEvaluationAt: "2026-07-27T08:00:00.000Z",
+    },
+    triggeringEvent: {
+      classifierVersion: "opportunity-materiality/v1",
+      effectiveAt: "2026-07-27T07:30:00.000Z",
+      eventType: "demo_added",
+      observedAt: "2026-07-27T07:31:00.000Z",
+      registryVersion: "steam-change-event-registry/v1",
+      signalFamily: "release",
+    },
+  },
   rank: {
     components: {
       evidenceQuality: 0.8,
@@ -315,6 +359,7 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await expect(page.getByText("Demo now available")).toBeVisible();
   await expect(page.getByText("Five demos worth playing")).toBeVisible();
   await expect(page.getByText(/partial coverage/i)).toBeVisible();
+  await expect(page.getByText("Reproduction contract")).toBeVisible();
 });
 
 test("profile workshop previews with the same visible rule contract", async ({

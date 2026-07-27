@@ -42,8 +42,9 @@ Apply in this order only after a separately approved production-write window:
 
 `0097` creates the additive `opportunity` schema and its versioned control,
 event, run, result, state, queue, outbox, audit, cohort, market, and health
-tables. `0098` inserts immutable v1 versions for the eight launch presets and
-can be rerun safely.
+tables plus the timezone-aware `next_profile_evaluation_v1` scheduler.
+`0098` inserts immutable v1 versions for the eight launch presets and can be
+rerun safely.
 
 No checked-in command applies these files automatically. Before a production
 write, record:
@@ -173,11 +174,11 @@ GROUP BY status, channel
 ORDER BY channel, status
 LIMIT 20;
 
-SELECT status, kind, count(*) AS runs, max(completed_at) AS last_completed_at
+SELECT status, run_kind, count(*) AS runs, max(completed_at) AS last_completed_at
 FROM opportunity.runs
 WHERE created_at >= now() - interval '7 days'
-GROUP BY status, kind
-ORDER BY kind, status
+GROUP BY status, run_kind
+ORDER BY run_kind, status
 LIMIT 30;
 
 SELECT cursor_key, cursor_value, updated_at
@@ -200,6 +201,20 @@ Investigate:
 Queue failures use exponential backoff and dead-letter after the configured
 attempt ceiling. A failed run does not advance the user’s successful daily
 window.
+
+Readiness runs are deliberately separate from daily/manual/replay runs. They
+retain the original material-event ID, never advance the durable daily cursor,
+never move a profile's local schedule, and do not emit a standalone daily
+digest. A qualification completed by a readiness run is absorbed into the next
+daily website overview and channel summary.
+
+Profile schedules use an IANA timezone and local `HH:MM` delivery time. The
+first evaluation after enabling is immediate; later successful daily runs call
+`opportunity.next_profile_evaluation_v1`, which is daylight-saving aware.
+Channel preferences may be user-wide or profile-scoped. Profile-scoped
+preferences are evaluated first, and a canonical result is included at most
+once per channel. A summary that reaches its result limit includes an explicit
+truncation notice.
 
 ## Rollout
 

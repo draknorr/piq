@@ -119,12 +119,16 @@ export function OpportunityWorkspace() {
     setLoadingProfile(true);
     setError(null);
     try {
+      const schedule = data?.profiles[0];
       const version = await opportunityPost<{ profileId: string }>(
         "clone-preset",
         {
           name,
           presetId,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          localDeliveryTime: schedule?.localDeliveryTime ?? "09:00",
+          timezone:
+            schedule?.timezone ??
+            Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
       );
       await load();
@@ -140,6 +144,19 @@ export function OpportunityWorkspace() {
 
   const saved = async (profileId: string) => {
     await load();
+    await openProfile(profileId);
+  };
+
+  const profileStatusChanged = async (
+    profileId: string,
+    status: "enabled" | "paused" | "archived",
+  ) => {
+    await load();
+    if (status === "archived") {
+      setBuilderOpen(false);
+      setProfileDetail(null);
+      return;
+    }
     await openProfile(profileId);
   };
 
@@ -303,9 +320,12 @@ export function OpportunityWorkspace() {
           </div>
           <ProfileBuilder
             key={profileDetail?.currentVersionDetail.id ?? "new"}
+            defaultLocalDeliveryTime={data.profiles[0]?.localDeliveryTime}
+            defaultTimezone={data.profiles[0]?.timezone}
             initialProfile={profileDetail}
             onClose={() => setBuilderOpen(false)}
             onSaved={saved}
+            onStatusChanged={profileStatusChanged}
           />
         </div>
       )}
@@ -646,6 +666,9 @@ function ProfilesDesk({
                         : "Custom profile"}{" "}
                       · version {profile.currentVersion ?? 1}
                     </p>
+                    <p className="mt-1 text-xs text-text-muted">
+                      Daily at {profile.localDeliveryTime} {profile.timezone}
+                    </p>
                   </div>
                   <div className="text-xs text-text-muted md:text-right">
                     {profile.nextEvaluationAt
@@ -746,16 +769,21 @@ function DeliveryDesk({
   const [maxResults, setMaxResults] = useState(10);
   const [quietDay, setQuietDay] = useState<"skip" | "send_empty">("skip");
   const [immediate, setImmediate] = useState(false);
+  const [profileScope, setProfileScope] = useState("all");
   const [saving, setSaving] = useState<"email" | "slack" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const preferences = useMemo(
     () =>
       new Map(
         data.channelPreferences
-          .filter((preference) => preference.profileId === null)
+          .filter(
+            (preference) =>
+              preference.profileId ===
+              (profileScope === "all" ? null : profileScope),
+          )
           .map((preference) => [preference.channel, preference]),
       ),
-    [data.channelPreferences],
+    [data.channelPreferences, profileScope],
   );
 
   const configure = async (channel: "email" | "slack", enabled: boolean) => {
@@ -768,6 +796,7 @@ function DeliveryDesk({
         enabled,
         immediateFullMatchEnabled: immediate,
         maxResults,
+        profileId: profileScope === "all" ? null : profileScope,
         quietDayBehavior: quietDay,
       });
       setMessage(
@@ -796,6 +825,30 @@ function DeliveryDesk({
           Email and Slack carry a compact, personal selection. Every item links
           back to the complete canonical record on PublisherIQ.
         </p>
+
+        <label className="mt-8 block max-w-md">
+          <span className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+            Delivery scope
+          </span>
+          <select
+            value={profileScope}
+            onChange={(event) => setProfileScope(event.target.value)}
+            className="mt-2 block w-full rounded-lg border border-border-muted bg-surface px-3 py-2.5 text-sm text-text-primary outline-none focus:border-accent-primary"
+          >
+            <option value="all">All profiles (one combined brief)</option>
+            {data.profiles
+              .filter((profile) => profile.status !== "archived")
+              .map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+          </select>
+          <span className="mt-2 block text-xs leading-5 text-text-tertiary">
+            Profile-scoped destinations receive only that profile’s matches. A
+            result matched by several profiles is sent at most once per channel.
+          </span>
+        </label>
 
         <div className="mt-10 divide-y divide-border-muted border-y border-border-muted">
           <ChannelRow

@@ -44,6 +44,16 @@ function assertTimezone(timezone: string): void {
   }
 }
 
+export function normalizeOpportunityLocalDeliveryTime(
+  value: string | undefined,
+): string {
+  const normalized = value?.trim() || "09:00";
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
+    throw new Error("Daily delivery time must use 24-hour HH:MM format.");
+  }
+  return normalized;
+}
+
 function assertProfileName(name: string): void {
   const trimmed = name.trim();
   if (trimmed.length < 2 || trimmed.length > 120) {
@@ -204,6 +214,7 @@ export class OpportunityService {
       enabled?: boolean;
       eventSubscriptions: OpportunitySignalFamily[];
       immediateFullMatchEnabled?: boolean;
+      localDeliveryTime?: string;
       name: string;
       rules: OpportunityRuleSet;
       sourcePresetVersionId?: string | null;
@@ -220,6 +231,9 @@ export class OpportunityService {
       eventSubscriptions: assertSignalFamilies(params.eventSubscriptions),
       identity,
       immediateFullMatchEnabled: params.immediateFullMatchEnabled ?? false,
+      localDeliveryTime: normalizeOpportunityLocalDeliveryTime(
+        params.localDeliveryTime,
+      ),
       name: params.name,
       rules: params.rules,
       sourcePresetVersionId: params.sourcePresetVersionId,
@@ -229,13 +243,24 @@ export class OpportunityService {
 
   clonePreset(
     identity: OpportunityIdentity,
-    params: { name?: string; presetId: string; timezone: string },
+    params: {
+      localDeliveryTime?: string;
+      name?: string;
+      presetId: string;
+      timezone: string;
+    },
   ): Promise<OpportunityProfileVersion> {
     if (params.name) {
       assertProfileName(params.name);
     }
     assertTimezone(params.timezone);
-    return this.repository.clonePreset({ ...params, identity });
+    return this.repository.clonePreset({
+      ...params,
+      identity,
+      localDeliveryTime: normalizeOpportunityLocalDeliveryTime(
+        params.localDeliveryTime,
+      ),
+    });
   }
 
   getProfile(
@@ -251,6 +276,7 @@ export class OpportunityService {
       description?: string | null;
       eventSubscriptions: OpportunitySignalFamily[];
       immediateFullMatchEnabled: boolean;
+      localDeliveryTime?: string;
       name: string;
       profileId: string;
       rules: OpportunityRuleSet;
@@ -265,6 +291,10 @@ export class OpportunityService {
       ...params,
       eventSubscriptions: assertSignalFamilies(params.eventSubscriptions),
       identity,
+      localDeliveryTime:
+        params.localDeliveryTime === undefined
+          ? undefined
+          : normalizeOpportunityLocalDeliveryTime(params.localDeliveryTime),
     });
   }
 

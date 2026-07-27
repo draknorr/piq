@@ -18,6 +18,7 @@ export interface OpportunityDeliveryResult {
 }
 
 export interface OpportunityDeliveryWork {
+  availableResultCount: number;
   channel: "email" | "slack";
   deliveryKind: "daily_digest" | "immediate_full_match";
   destinationCiphertext: string;
@@ -49,6 +50,7 @@ interface ClaimedDeliveryRow extends QueryResultRow {
   id: string;
   idempotency_key: string;
   rendered_payload: {
+    availableResultCount?: number;
     canonicalOverviewUrl?: string;
   };
 }
@@ -197,6 +199,8 @@ export class OpportunityDeliveryRepository {
           [row.id],
         );
         deliveries.push({
+          availableResultCount:
+            row.rendered_payload.availableResultCount ?? results.rowCount ?? 0,
           channel: row.channel,
           deliveryKind: row.delivery_kind,
           destinationCiphertext: row.destination_ciphertext,
@@ -286,6 +290,13 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+function escapeSlackMrkdwn(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function humanize(value: string): string {
   return value.replaceAll("_", " ");
 }
@@ -305,6 +316,10 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
   const header = immediate
     ? "PublisherIQ found a new full match."
     : `${work.results.length} new ${work.results.length === 1 ? "result" : "results"} in your daily Steam opportunity brief.`;
+  const truncationNotice =
+    work.availableResultCount > work.results.length
+      ? `Showing the top ${work.results.length} of ${work.availableResultCount} results. Open PublisherIQ for the complete brief.`
+      : null;
   const resultText = work.results.map((result, index) => {
     const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
     return [
@@ -317,6 +332,7 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
   });
   const text = [
     header,
+    ...(truncationNotice ? [truncationNotice] : []),
     "",
     ...resultText.flatMap((result) => [result, ""]),
     `Open the complete brief: ${work.overviewUrl}`,
@@ -339,6 +355,11 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
       <p style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#0f766e">PublisherIQ Opportunity Brief</p>
       <h1 style="font-size:26px;line-height:1.2">${escapeHtml(header)}</h1>
       ${cards}
+      ${
+        truncationNotice
+          ? `<p style="margin-top:20px;color:#475569">${escapeHtml(truncationNotice)}</p>`
+          : ""
+      }
       <p style="margin-top:24px"><a href="${escapeHtml(work.overviewUrl)}" style="color:#0f766e;font-weight:600">Open the complete daily overview</a></p>
     </main>`;
   const slackBlocks: Array<Record<string, unknown>> = [
@@ -349,13 +370,21 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
       },
       type: "section",
     },
+    ...(truncationNotice
+      ? [
+          {
+            text: { text: truncationNotice, type: "mrkdwn" },
+            type: "context",
+          },
+        ]
+      : []),
     ...work.results.flatMap((result) => {
       const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
       return [
         { type: "divider" },
         {
           text: {
-            text: `*<${link}|${result.name}>* · ${humanize(result.eventLabel)}\n${result.whyNow}\n_${humanize(result.marketPotential)} market potential_`,
+            text: `*<${link}|${escapeSlackMrkdwn(result.name)}>* · ${humanize(result.eventLabel)}\n${escapeSlackMrkdwn(result.whyNow)}\n_${humanize(result.marketPotential)} market potential_`,
             type: "mrkdwn",
           },
           type: "section",

@@ -7,6 +7,7 @@ import {
 } from "./delivery.js";
 
 const DELIVERY: OpportunityDeliveryWork = {
+  availableResultCount: 1,
   channel: "email",
   deliveryKind: "daily_digest",
   destinationCiphertext: "encrypted",
@@ -41,5 +42,24 @@ describe("opportunity delivery rendering", () => {
 
     assert.match(rendered.html, /&lt;Game &amp; Friends&gt;/);
     assert.doesNotMatch(rendered.html, /<Game & Friends>/);
+  });
+
+  it("escapes untrusted Steam text in Slack mrkdwn", () => {
+    const rendered = renderOpportunityDelivery(DELIVERY);
+    const blocks = JSON.stringify(rendered.slackBlocks);
+
+    assert.match(blocks, /&lt;Game &amp; Friends&gt;/);
+    assert.doesNotMatch(blocks, /\|<Game & Friends>>/);
+  });
+
+  it("makes summary truncation explicit in every delivery projection", () => {
+    const rendered = renderOpportunityDelivery({
+      ...DELIVERY,
+      availableResultCount: 12,
+    });
+
+    assert.match(rendered.text, /top 1 of 12 results/);
+    assert.match(rendered.html, /top 1 of 12 results/);
+    assert.match(JSON.stringify(rendered.slackBlocks), /top 1 of 12 results/);
   });
 });

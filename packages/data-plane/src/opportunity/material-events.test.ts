@@ -86,4 +86,44 @@ describe("opportunity material event classifier", () => {
     assert.equal(moment.reevaluateEligibility, true);
     assert.equal(moment.createsDailyResult, false);
   });
+
+  it("distinguishes a demo addition from a demo removal", () => {
+    const added = groupOpportunitySourceEvents([
+      event({
+        afterValue: { demo_appids: [20] },
+        beforeValue: { demo_appids: [] },
+        rawEventType: "demo_references_changed",
+        signalFamily: "release",
+      }),
+    ])[0]!;
+    const removed = groupOpportunitySourceEvents([
+      event({
+        afterValue: { demo_appids: [] },
+        beforeValue: { demo_appids: [20] },
+        rawEventType: "demo_references_changed",
+        signalFamily: "release",
+      }),
+    ])[0]!;
+    const partiallyRemoved = groupOpportunitySourceEvents([
+      event({
+        afterValue: { demo_appids: [20] },
+        beforeValue: { demo_appids: [20, 30] },
+        rawEventType: "demo_references_changed",
+        signalFamily: "release",
+      }),
+    ])[0]!;
+    const replaced = groupOpportunitySourceEvents([
+      event({
+        afterValue: { demo_appids: [30] },
+        beforeValue: { demo_appids: [20] },
+        rawEventType: "demo_references_changed",
+        signalFamily: "release",
+      }),
+    ])[0]!;
+
+    assert.equal(added.eventType, "demo_added");
+    assert.equal(removed.eventType, "material_change");
+    assert.equal(partiallyRemoved.eventType, "material_change");
+    assert.equal(replaced.eventType, "demo_added");
+  });
 });
