@@ -290,13 +290,21 @@ The broader route pass is recorded in
 [`route-regression-closeout-2026-07-27.md`](./route-regression-closeout-2026-07-27.md).
 It verified current Apps filtering, publisher and developer details, Unreleased
 filter/detail/timeline behavior, and the other high-signal authenticated
-surfaces. It also found two final repair candidates:
+surfaces.
 
-- Apps did not expose the pagination required by its existing query contract;
-  bounded URL Previous/Next controls and offset reset now pass 266 Admin tests
-  plus the optimized Next production build; and
-- Admin job links still targeted the obsolete `draknorr/publisheriq`
-  repository; the candidate targets `draknorr/piq`.
+PR #81 merged at
+`149472cbd86554ab3d5568f6d75da8707de9b10e`; Vercel and the concurrently
+triggered Query API Railway deployment both completed successfully.
+Production Apps pagination now advances from `1–50` to `51–100` at
+`/apps?offset=50`, and applying `Free` from page 2 removes the offset and
+returns to filtered page 1. The Admin Actions URL helper now targets
+`draknorr/piq`; the latest visible jobs had no run ID, so the conditional
+production link was not present to click.
+
+The page-2 smoke found that the `#` presentation still restarted at 1 rather
+than matching the global range. PR #82 carries the bounded pagination offset
+into desktop and mobile ranks and passes all 266 Admin tests plus the optimized
+production build. Its deployment and final page-2 rank smoke remain open.
 
 ## Remaining closeout actions
 
@@ -304,8 +312,7 @@ The user approved the signal shadow run, migration 0096 apply, hybrid
 Tiger-metrics Alert Detection port, and twice-daily 300-app Histogram cadence.
 All four approved actions are complete. The remaining actions are:
 
-1. merge, deploy, and production-smoke Apps pagination and the corrected Admin
-   GitHub Actions links; and
+1. merge, deploy, and production-smoke PR #82's global Apps rank continuity;
 2. capture successful natural Alert and Histogram schedule executions after
    the missed `04:15` enqueue;
 3. provide a disposable account/record strategy before mutating pin, alert,
@@ -321,5 +328,5 @@ The current site is operational, the previously stale Admin and Insights
 product panels are current, and the YouTube hydration regression is fixed.
 The daily opportunity preparation is **close but not complete**. Declaring it
 ready today would still overclaim the natural Alert/Histogram schedule
-observation, final route-fix deployment, mutating compatibility branches, and
+observation, PR #82 production smoke, mutating compatibility branches, and
 three-cycle gates.
