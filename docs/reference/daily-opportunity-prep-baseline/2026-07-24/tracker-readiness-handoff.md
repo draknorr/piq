@@ -1,5 +1,8 @@
 # Daily Opportunity Tracker Readiness Handoff
 
+> Historical snapshot through PR #70. For current status through PR #77, use
+> [`tracker-readiness-closeout-2026-07-27.md`](./tracker-readiness-closeout-2026-07-27.md).
+
 Status captured on 2026-07-26 UTC against `origin/main` commit
 `404abcc54adc044afc337b5239dc007a49e86a86` (PR #70).
 
