@@ -1726,19 +1726,30 @@ async function collectTableFreshness(pool, columns, spec, days) {
 
   const relation = tableSql(spec.schema, spec.table);
   const timeColumn = quoteIdent(selectedTimeColumn);
-  const countResult = await pool.query(
-    `SELECT count(*)::bigint AS total_rows FROM ${relation}`,
+  const tableName = tableKey(spec.schema, spec.table);
+  const summaryResult = await pool.query(
+    `
+      SELECT
+        public.approximate_row_count($1::regclass)::bigint AS total_rows,
+        (
+          SELECT ${timeColumn}
+          FROM ${relation}
+          WHERE ${timeColumn} IS NOT NULL
+          ORDER BY ${timeColumn} DESC
+          LIMIT 1
+        ) AS latest_at,
+        EXISTS (
+          SELECT 1
+          FROM ${relation}
+          WHERE ${timeColumn} >= now() - ($2::int * interval '1 day')
+          LIMIT 1
+        ) AS has_recent_rows
+    `,
+    [tableName, days],
   );
-  const latestResult = await pool.query(
-    `SELECT max(${timeColumn}) AS latest_at FROM ${relation}`,
-  );
-  const recentResult = await pool.query(
-    `SELECT count(*)::bigint AS recent_rows FROM ${relation} WHERE ${timeColumn} >= now() - ($1::int * interval '1 day')`,
-    [days],
-  );
-  const latestAt = latestResult.rows[0]?.latest_at ?? null;
-  const totalRows = countResult.rows[0]?.total_rows ?? "0";
-  const recentRows = recentResult.rows[0]?.recent_rows ?? "0";
+  const latestAt = summaryResult.rows[0]?.latest_at ?? null;
+  const totalRows = summaryResult.rows[0]?.total_rows ?? "0";
+  const hasRecentRows = summaryResult.rows[0]?.has_recent_rows === true;
   const checks = [];
 
   if (latestAt === null) {
@@ -1747,11 +1758,11 @@ async function collectTableFreshness(pool, columns, spec, days) {
       "warn",
       `No freshness value found in ${tableKey(spec.schema, spec.table)}.${selectedTimeColumn}.`,
     );
-  } else if (Number(recentRows) > 0) {
+  } else if (hasRecentRows) {
     addCheck(
       checks,
       "pass",
-      `${recentRows} rows updated in the last ${days} day(s).`,
+      `At least one row was updated in the last ${days} day(s).`,
     );
   } else {
     addCheck(checks, "warn", `No rows updated in the last ${days} day(s).`);
@@ -1763,7 +1774,8 @@ async function collectTableFreshness(pool, columns, spec, days) {
       timeColumn: selectedTimeColumn,
       latestAt,
       totalRows,
-      recentRows,
+      totalRowsExact: false,
+      hasRecentRows,
     },
   ];
 
@@ -2108,9 +2120,25 @@ async function collectTigerLiveEvidence(options) {
     );
 
     for (const spec of TABLE_FRESHNESS_CHECKS.filter(isSourceLiveExpected)) {
-      evidence.push(
-        await collectTableFreshness(pool, columns, spec, options.days),
-      );
+      try {
+        evidence.push(
+          await collectTableFreshness(pool, columns, spec, options.days),
+        );
+      } catch (error) {
+        evidence.push({
+          id: spec.id,
+          label: spec.label,
+          status: "fail",
+          checks: [
+            {
+              status: "fail",
+              message: `Tiger freshness check failed for ${tableKey(spec.schema, spec.table)}.`,
+              detail: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          rows: [],
+        });
+      }
     }
   } catch (error) {
     addCheck(
@@ -2725,13 +2753,20 @@ function printEvidenceSection(title, section) {
         details.push(`latest=${formatDate(row.latestAt ?? row.latest_at)}`);
       }
       if (row.totalRows !== undefined) {
-        details.push(`rows=${row.totalRows}`);
+        details.push(
+          row.totalRowsExact === false
+            ? `estimated_rows=${row.totalRows}`
+            : `rows=${row.totalRows}`,
+        );
       }
       if (row.maxId !== undefined && row.maxId !== null) {
         details.push(`max_id=${row.maxId}`);
       }
       if (row.recentRows !== undefined) {
         details.push(`recent=${row.recentRows}`);
+      }
+      if (row.hasRecentRows !== undefined) {
+        details.push(`recent=${row.hasRecentRows ? "yes" : "no"}`);
       }
       if (row.rowsAfterCutover !== undefined) {
         details.push(`after_cutover=${row.rowsAfterCutover}`);
