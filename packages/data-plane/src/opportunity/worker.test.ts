@@ -6,14 +6,19 @@ import {
   type OpportunityRuleSet,
 } from "./types.js";
 import {
+  OpportunityWorker,
   resolveOpportunityResultLabel,
   shouldSurfaceOpportunityMatch,
 } from "./worker.js";
 import type {
   OpportunityWorkerMaterialEvent,
   OpportunityWorkerProfile,
+  OpportunityWorkItem,
 } from "./worker-repository.js";
-import { assignOpportunityDeliveryResults } from "./worker-repository.js";
+import {
+  assignOpportunityDeliveryResults,
+  OpportunityWorkerRepository,
+} from "./worker-repository.js";
 
 const RULES: OpportunityRuleSet = {
   excluded: [],
@@ -45,6 +50,57 @@ const PROFILE: OpportunityWorkerProfile = {
   versionId: "version",
   versionNumber: 1,
 };
+
+describe("opportunity worker materialization recovery", () => {
+  it("renews the active queue claim when materialization reports progress", async () => {
+    const item: OpportunityWorkItem = {
+      appid: null,
+      attempts: 1,
+      id: 495,
+      kind: "materialize_events",
+      lane: "material_change",
+      materialEventId: null,
+      payload: {},
+      profileId: null,
+      userId: null,
+      workspaceId: null,
+    };
+    const heartbeats: Array<[number, string]> = [];
+    const completed: Array<[number, string]> = [];
+    const repository = {
+      async claimWork(): Promise<OpportunityWorkItem[]> {
+        return [item];
+      },
+      async completeWork(workId: number, workerId: string): Promise<void> {
+        completed.push([workId, workerId]);
+      },
+      async heartbeatWork(workId: number, workerId: string): Promise<void> {
+        heartbeats.push([workId, workerId]);
+      },
+      async materializeEvents(
+        onProgress?: () => Promise<void>,
+      ): Promise<number> {
+        await onProgress?.();
+        return 1;
+      },
+      async scheduleWork(): Promise<number> {
+        return 0;
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      claimLimit: 8,
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "lease-test-worker",
+    });
+
+    assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
+    assert.deepEqual(heartbeats, [
+      [495, "lease-test-worker"],
+      [495, "lease-test-worker"],
+    ]);
+    assert.deepEqual(completed, [[495, "lease-test-worker"]]);
+  });
+});
 
 function event(
   values: Partial<OpportunityWorkerMaterialEvent> = {},

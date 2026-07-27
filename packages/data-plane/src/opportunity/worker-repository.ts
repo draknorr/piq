@@ -392,7 +392,10 @@ export class OpportunityWorkerRepository {
           SELECT work.id
           FROM opportunity.work_queue work
           JOIN eligible ON eligible.id = work.id
-          WHERE eligible.lane_rank <= GREATEST(1, CEIL($2::numeric / 4))
+          WHERE eligible.lane_rank <= CASE
+            WHEN work.kind = 'materialize_events' THEN 1
+            ELSE GREATEST(1, CEIL($2::numeric / 4))
+          END
           ORDER BY work.priority DESC, work.scheduled_for, work.id
           LIMIT $2
           FOR UPDATE OF work SKIP LOCKED
@@ -504,7 +507,7 @@ export class OpportunityWorkerRepository {
     );
   }
 
-  async materializeEvents(): Promise<number> {
+  async materializeEvents(onProgress?: () => Promise<void>): Promise<number> {
     const cursorResult = await this.pool.query<
       QueryResultRow & { cursor_value: Record<string, string> }
     >(
@@ -540,7 +543,7 @@ export class OpportunityWorkerRepository {
             AND id > $1
             AND ($1 > 0 OR observed_at >= $2::timestamptz)
           ORDER BY id
-          LIMIT 2000
+          LIMIT 100
         `,
         [catalogAfter, initialCutoff],
       ),
@@ -570,7 +573,7 @@ export class OpportunityWorkerRepository {
           WHERE id > $1
             AND ($1 > 0 OR occurred_at >= $2::timestamptz)
           ORDER BY id
-          LIMIT 2000
+          LIMIT 100
         `,
         [lifecycleAfter, initialCutoff],
       ),
@@ -607,7 +610,7 @@ export class OpportunityWorkerRepository {
           WHERE event.id > $1
             AND ($1 > 0 OR event.occurred_at >= $2::timestamptz)
           ORDER BY event.id
-          LIMIT 4000
+          LIMIT 500
         `,
         [rawAfter, initialCutoff],
       ),
@@ -658,12 +661,10 @@ export class OpportunityWorkerRepository {
     };
 
     await this.transaction(async (client) => {
+      let processedMoments = 0;
       for (const moment of moments) {
         const inserted = await this.insertMaterialMoment(client, moment);
-        if (!inserted) {
-          continue;
-        }
-        if (moment.eligibleForImmediate) {
+        if (inserted && moment.eligibleForImmediate) {
           await client.query(
             `
               INSERT INTO opportunity.work_queue (
@@ -694,7 +695,7 @@ export class OpportunityWorkerRepository {
             `,
             [moment.appid, inserted, moment.eventFingerprint],
           );
-        } else if (moment.reevaluateEligibility) {
+        } else if (inserted && moment.reevaluateEligibility) {
           await client.query(
             `
               INSERT INTO opportunity.work_queue (
@@ -725,6 +726,10 @@ export class OpportunityWorkerRepository {
             `,
             [moment.appid, inserted, moment.eventFingerprint],
           );
+        }
+        processedMoments += 1;
+        if (onProgress && processedMoments % 50 === 0) {
+          await onProgress();
         }
       }
       await client.query(
