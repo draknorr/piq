@@ -226,7 +226,7 @@ export async function getInsightsDashboardData(
       newestSort,
       timeRange,
     },
-    { timeoutMs: 60_000 },
+    { timeoutMs: 90_000 },
   );
   if (!result.ok || !result.data || result.data.provenance.source !== "tiger") {
     throw new Error(
