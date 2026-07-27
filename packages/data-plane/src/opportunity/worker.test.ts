@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  type OpportunityEvaluationInput,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityRuleSet,
 } from "./types.js";
@@ -11,6 +12,7 @@ import {
   shouldSurfaceOpportunityMatch,
 } from "./worker.js";
 import type {
+  OpportunityEvaluatedResult,
   OpportunityWorkerMaterialEvent,
   OpportunityWorkerProfile,
   OpportunityWorkItem,
@@ -259,6 +261,131 @@ describe("opportunity worker event policy", () => {
         }),
       }),
       "newly_released",
+    );
+  });
+});
+
+describe("opportunity worker result provenance", () => {
+  it("aggregates non-null source timestamps from evaluated evidence", async () => {
+    const repository = {
+      async getReleasedCohort(): Promise<{
+        confidence: "directional";
+        coverage: number;
+        fallbackTier: 5;
+        members: [];
+        signature: Record<string, unknown>;
+        sourceAt: null;
+      }> {
+        return {
+          confidence: "directional",
+          coverage: 0,
+          fallbackTier: 5,
+          members: [],
+          signature: {},
+          sourceAt: null,
+        };
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "provenance-test-worker",
+    });
+    const input: OpportunityEvaluationInput = {
+      appid: 42,
+      fields: {
+        appid: {
+          confidence: "high",
+          evidenceClass: "observed_fact",
+          source: "legacy.apps",
+          sourceAt: "2026-07-27T11:36:16.366Z",
+          state: "known",
+          value: 42,
+        },
+        is_released: {
+          confidence: "high",
+          evidenceClass: "observed_fact",
+          source: "steam_storefront",
+          sourceAt: "2026-07-27T11:39:00.832Z",
+          state: "known",
+          value: false,
+        },
+        tags: {
+          confidence: "high",
+          evidenceClass: "observed_fact",
+          source: "steam_pics",
+          sourceAt: "2026-07-27T20:31:16.500Z",
+          state: "known",
+          value: ["Roguelike"],
+        },
+      },
+      name: "Timestamp Test",
+    };
+    const evaluateGame = (
+      worker as unknown as {
+        evaluateGame(context: {
+          appid: number;
+          candidateOutcomes: Map<
+            string,
+            "eligible" | "ineligible" | "pending" | "expired"
+          >;
+          event: OpportunityWorkerMaterialEvent;
+          input: OpportunityEvaluationInput;
+          priorState: {
+            dismissedEventFingerprint: null;
+            ignored: false;
+            priorEventFingerprints: Set<string>;
+            priorResultId: null;
+            tracked: false;
+          };
+          profiles: OpportunityWorkerProfile[];
+          run: {
+            id: string;
+            kind: "daily";
+            windowEnd: string;
+            windowStart: string;
+          };
+        }): Promise<{
+          result: OpportunityEvaluatedResult | null;
+        }>;
+      }
+    ).evaluateGame.bind(worker);
+
+    const outcome = await evaluateGame({
+      appid: 42,
+      candidateOutcomes: new Map(),
+      event: event({
+        appid: 42,
+        observedAt: "2026-07-27T21:00:00.000Z",
+      }),
+      input,
+      priorState: {
+        dismissedEventFingerprint: null,
+        ignored: false,
+        priorEventFingerprints: new Set(),
+        priorResultId: null,
+        tracked: false,
+      },
+      profiles: [PROFILE],
+      run: {
+        id: "run",
+        kind: "daily",
+        windowEnd: "2026-07-27T22:00:00.000Z",
+        windowStart: "2026-07-27T20:00:00.000Z",
+      },
+    });
+
+    assert.ok(outcome.result);
+    assert.equal(
+      outcome.result.sourceTimestamps["legacy.apps"],
+      "2026-07-27T11:36:16.366Z",
+    );
+    assert.equal(
+      outcome.result.sourceTimestamps.steam_storefront,
+      "2026-07-27T11:39:00.832Z",
+    );
+    assert.equal(
+      outcome.result.sourceTimestamps.steam_pics,
+      "2026-07-27T20:31:16.500Z",
     );
   });
 });
