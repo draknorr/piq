@@ -105,6 +105,8 @@ Set a positive value only for intentional catch-up runs.
 
 ```bash
 BATCH_SIZE=500
+HISTOGRAM_MAX_RUNTIME_MINUTES=22
+HISTOGRAM_REQUEST_TIMEOUT_MS=15000
 MAX_PAGES=0
 CCU_DAILY_LIMIT=150000
 SYNC_COLLECTION=all
@@ -139,6 +141,7 @@ pnpm --filter @publisheriq/ingestion... build
 ## Related Documentation
 
 - [Running Workers](../../docs/developer-guide/workers/running-workers.md)
+- [Review Histogram Capacity Runbook](../../docs/developer-guide/workers/histogram-capacity.md)
 - [Steam Change Intelligence](../../docs/developer-guide/workers/steam-change-intelligence.md)
 - [Sync Pipeline](../../docs/developer-guide/architecture/sync-pipeline.md)
 - [YouTube Collector](../../packages/youtube/README.md)

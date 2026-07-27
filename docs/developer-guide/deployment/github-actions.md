@@ -39,6 +39,7 @@ Repository variables gate scheduled writers:
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ENABLE_TIGER_CATALOG_WRITERS=true`         | Allows scheduled catalog/storefront/app-list Tiger writers. Manual dispatch still works without this variable.                                          |
 | `ENABLE_TIGER_METRICS_WRITERS=true`         | Allows scheduled reviews, price, SteamSpy, CCU, trends, velocity, interpolation, and priority Tiger writers.                                            |
+| `ENABLE_HISTOGRAM_CAPACITY_V2=true`         | After a successful 1,200-app canary, enables six extra histogram runs/day and raises scheduled histogram batches from 300 to 1,200.                     |
 | `ENABLE_TIGER_EMBEDDING_WRITER=true`        | Allows scheduled embedding writer. Manual dispatch is the preferred smoke path.                                                                         |
 | `ENABLE_UNRELEASED_PROJECTION_REFRESH=true` | Allows the scheduled `/unreleased` projection refresh. Manual dispatch still works without this variable.                                               |
 | `ENABLE_LEGACY_SUPABASE_WRITERS=true`       | Allows explicitly legacy Supabase writer workflows such as old view refresh/cleanup repair jobs. Keep off unless there is an approved legacy operation. |
@@ -66,7 +67,7 @@ All times are UTC:
 | Steam News Hot Refresh        | `news-hot-refresh.yml`              | every 10 minutes           | Hot news queue refresh into Tiger/R2                                                                     |
 | SteamSpy Sync                 | `steamspy-sync.yml`                 | 02:15 daily                | Owners, playtime, tags, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                             |
 | Embedding Sync                | `embedding-sync.yml`                | 03:00 daily                | Embeddings, Tiger status writer gated by `ENABLE_TIGER_EMBEDDING_WRITER`                                 |
-| Histogram Sync                | `histogram-sync.yml`                | 04:23, 16:23 daily         | Monthly reviews, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                    |
+| Histogram Sync                | `histogram-sync.yml`                | 04:23, 16:23 baseline; 8/day with capacity v2 | Tiered monthly reviews; baseline gated by `ENABLE_TIGER_METRICS_WRITERS`, expansion by `ENABLE_HISTOGRAM_CAPACITY_V2` |
 | Reviews Sync                  | `reviews-sync.yml`                  | :15 every 2h               | Review counts, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |
 | Price Sync                    | `price-sync.yml`                    | 00:15, 06:15, 12:15, 18:15 | Price tracking, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                     |
 | Trends Calculation            | `trends-calculation.yml`            | 22:00 daily                | Trend metrics, Tiger writer gated by `ENABLE_TIGER_METRICS_WRITERS`                                      |

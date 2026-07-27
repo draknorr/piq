@@ -47,8 +47,8 @@ export const BATCH_SIZES = {
   /** Number of apps to fetch reviews for per worker run (targets ~42min at 1 req/sec) */
   REVIEWS_BATCH: 2500,
 
-  /** Number of apps to fetch histograms for per worker run */
-  HISTOGRAM_BATCH: 2000,
+  /** Histogram run cap (fits a 30-minute workflow at approximately 1 request/second) */
+  HISTOGRAM_BATCH: 1200,
 
   /** Number of apps to calculate trends for per batch (limited by Supabase 1000 row response limit ÷ ~26 avg histogram entries) */
   TRENDS_BATCH: 35,

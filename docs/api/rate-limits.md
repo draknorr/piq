@@ -88,15 +88,16 @@ const rateLimiter = new RateLimiter({
 **Implementation:**
 ```typescript
 const rateLimiter = new RateLimiter({
-  tokensPerInterval: 5,
-  interval: 5_000,
-  maxTokens: 5
+  requestsPerSecond: 1,
+  burst: 5
 });
 ```
 
 **Behavior:**
 - Initial burst of 5 requests
 - Then ~1 request/second
+- Every retry reacquires a token
+- Each request attempt has a 15-second timeout by default
 
 ### CCU API (v2.2+)
 

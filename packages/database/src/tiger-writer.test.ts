@@ -67,6 +67,49 @@ test('createSyncJob inserts into ops.sync_jobs', async () => {
   assert.deepEqual(pool.calls[0]?.values, ['storefront', 'run-123', null, 10]);
 });
 
+test('tryCreateSyncJobIfIdle atomically guards duplicate histogram runs', async () => {
+  const pool = new CapturingPool([result([{ id: 'job-guarded' }])]);
+  const writer = createTigerWriterForPool(pool);
+
+  const id = await writer.ops.tryCreateSyncJobIfIdle({
+    batchSize: 1200,
+    freshAfterIso: '2026-07-27T06:00:00.000Z',
+    githubRunId: 'run-guarded',
+    jobType: 'histogram',
+    lockKey: 'publisheriq:histogram-sync',
+  });
+
+  assert.equal(id, 'job-guarded');
+  assert.match(pool.calls[0]?.sql ?? '', /pg_try_advisory_xact_lock/);
+  assert.match(pool.calls[0]?.sql ?? '', /NOT EXISTS/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /GREATEST\(COALESCE\(updated_at, started_at\), started_at\)/
+  );
+  assert.deepEqual(pool.calls[0]?.values, [
+    'publisheriq:histogram-sync',
+    'histogram',
+    'run-guarded',
+    null,
+    1200,
+    '2026-07-27T06:00:00.000Z',
+  ]);
+});
+
+test('tryCreateSyncJobIfIdle returns null when a fresh job wins the guard', async () => {
+  const pool = new CapturingPool([result([])]);
+  const writer = createTigerWriterForPool(pool);
+
+  const id = await writer.ops.tryCreateSyncJobIfIdle({
+    batchSize: 1200,
+    freshAfterIso: '2026-07-27T06:00:00.000Z',
+    jobType: 'histogram',
+    lockKey: 'publisheriq:histogram-sync',
+  });
+
+  assert.equal(id, null);
+});
+
 test('updateSyncJob can persist metadata on ops.sync_jobs', async () => {
   const pool = new CapturingPool([result([], 1)]);
   const writer = createTigerWriterForPool(pool);
@@ -270,6 +313,131 @@ test('catalog.listAppsForSync calls the partitioned Tiger RPC when partitioned',
   assert.deepEqual(candidates, [{ appid: 30, priorityScore: 5 }]);
   assert.match(pool.calls[0]?.sql ?? '', /ops\.get_apps_for_sync_partitioned/);
   assert.deepEqual(pool.calls[0]?.values, ['storefront', 10, 6, 2]);
+});
+
+test('catalog.listHistogramSyncCandidates uses tier quotas and deterministic age ordering', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        appid: 10,
+        has_histogram: false,
+        lane: 'coverage_oldest',
+        last_histogram_sync: null,
+        priority_score: '25',
+        service_tier: 'medium_weekly',
+        total_reviews: '1200',
+      },
+      {
+        appid: 20,
+        has_histogram: true,
+        lane: 'active_daily',
+        last_histogram_sync: new Date('2026-07-25T00:00:00.000Z'),
+        priority_score: 100,
+        service_tier: 'active_daily',
+        total_reviews: 15000,
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const candidates = await writer.catalog.listHistogramSyncCandidates({
+    activeQuota: 480,
+    coverageQuota: 168,
+    limit: 1200,
+    longTailQuota: 324,
+    mediumQuota: 228,
+  });
+
+  assert.deepEqual(candidates, [
+    {
+      appid: 10,
+      hasHistogram: false,
+      lane: 'coverage_oldest',
+      lastHistogramSync: null,
+      priorityScore: 25,
+      serviceTier: 'medium_weekly',
+      totalReviews: 1200,
+    },
+    {
+      appid: 20,
+      hasHistogram: true,
+      lane: 'active_daily',
+      lastHistogramSync: '2026-07-25T00:00:00.000Z',
+      priorityScore: 100,
+      serviceTier: 'active_daily',
+      totalReviews: 15000,
+    },
+  ]);
+  assert.match(pool.calls[0]?.sql ?? '', /a\.type = 'game'/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /COALESCE\(last_histogram_sync, created_at\) ASC/
+  );
+  assert.match(pool.calls[0]?.sql ?? '', /coverage_oldest/);
+  assert.match(pool.calls[0]?.sql ?? '', /PARTITION BY service_tier/);
+  assert.match(pool.calls[0]?.sql ?? '', /ORDER BY lane_order, lane_rank, appid/);
+  assert.deepEqual(pool.calls[0]?.values, [1200, 480, 228, 324, 168]);
+});
+
+test('catalog.getHistogramBacklogSnapshot aggregates coverage and age by service tier', async () => {
+  const capturedAt = new Date('2026-07-27T07:00:00.000Z');
+  const pool = new CapturingPool([
+    result([
+      {
+        captured_at: capturedAt,
+        due_apps: '90',
+        never_synced: '5',
+        oldest_waiting_at: new Date('2026-06-01T00:00:00.000Z'),
+        service_tier: 'active_daily',
+        stale_30_days: '10',
+        stale_90_days: '2',
+        total_apps: '100',
+        with_histogram: '95',
+      },
+      {
+        captured_at: capturedAt,
+        due_apps: 180,
+        never_synced: 10,
+        oldest_waiting_at: new Date('2026-05-01T00:00:00.000Z'),
+        service_tier: 'medium_weekly',
+        stale_30_days: 50,
+        stale_90_days: 20,
+        total_apps: 200,
+        with_histogram: 180,
+      },
+      {
+        captured_at: capturedAt,
+        due_apps: 270,
+        never_synced: 15,
+        oldest_waiting_at: new Date('2026-04-01T00:00:00.000Z'),
+        service_tier: 'long_tail_monthly',
+        stale_30_days: 200,
+        stale_90_days: 100,
+        total_apps: 300,
+        with_histogram: 150,
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const snapshot = await writer.catalog.getHistogramBacklogSnapshot();
+
+  assert.equal(snapshot.capturedAt, '2026-07-27T07:00:00.000Z');
+  assert.equal(snapshot.totalApps, 600);
+  assert.equal(snapshot.dueApps, 540);
+  assert.equal(snapshot.neverSynced, 30);
+  assert.equal(snapshot.withHistogram, 425);
+  assert.equal(snapshot.stale30Days, 260);
+  assert.equal(snapshot.stale90Days, 122);
+  assert.equal(snapshot.oldestWaitingAt, '2026-04-01T00:00:00.000Z');
+  assert.equal(snapshot.tiers.active_daily.dueApps, 90);
+  assert.equal(snapshot.tiers.long_tail_monthly.withHistogram, 150);
+  assert.match(pool.calls[0]?.sql ?? '', /count\(due\.appid\)::integer AS due_apps/);
+  assert.match(
+    pool.calls[0]?.sql ?? '',
+    /min\(COALESCE\(due\.last_histogram_sync, due\.created_at\)\)/
+  );
+  assert.match(pool.calls[0]?.sql ?? '', /LIMIT 3/);
 });
 
 test('catalogObservation.beginScan requests a resumable incremental cursor', async () => {

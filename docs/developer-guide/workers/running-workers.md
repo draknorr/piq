@@ -123,5 +123,6 @@ pytest
 
 ## Related Documentation
 
+- [Review Histogram Capacity Runbook](./histogram-capacity.md)
 - [Steam Change Intelligence](./steam-change-intelligence.md)
 - [Sync Pipeline](../architecture/sync-pipeline.md)

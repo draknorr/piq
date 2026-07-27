@@ -669,7 +669,7 @@ PublisherIQ consolidates data from seven external sources organized in a three-t
 | **Steam Storefront API** | Developers, publishers, pricing, release dates, categories, genres, platforms (AUTHORITATIVE for developer/publisher names) | ~200 requests/5 min | Every 6-12 hours |
 | **Steam News API** | Public announcements, update posts, and recent-news history for change-intelligence search | App-dependent / recent only | Continuous / near real-time |
 | **Steam Reviews API** | Review counts, positive/negative totals, review score | 60 requests/min | 4-72 hours (velocity-based) |
-| **Steam Review Histogram** | Monthly review aggregates for trend analysis | 60 requests/min | Weekly |
+| **Steam Review Histogram** | Monthly review aggregates for trend analysis | 60 requests/min | Daily/weekly/monthly (activity tier) |
 | **Steam CCU API** | Exact concurrent player counts (replaced SteamSpy estimates in v2.2) | 1 request/sec | Hourly to daily (tiered) |
 
 #### Tier 2 - Enrichment

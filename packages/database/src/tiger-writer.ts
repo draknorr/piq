@@ -67,6 +67,28 @@ interface HistogramSyncStatusRow extends QueryResultRow {
   last_histogram_sync: Date | string | null;
 }
 
+interface HistogramSyncCandidateRow extends QueryResultRow {
+  appid: number;
+  has_histogram: boolean;
+  lane: string;
+  last_histogram_sync: Date | string | null;
+  priority_score: number | string | null;
+  service_tier: string;
+  total_reviews: number | string | null;
+}
+
+interface HistogramBacklogTierRow extends QueryResultRow {
+  captured_at: Date | string;
+  due_apps: number | string | null;
+  never_synced: number | string | null;
+  oldest_waiting_at: Date | string | null;
+  service_tier: string;
+  stale_30_days: number | string | null;
+  stale_90_days: number | string | null;
+  total_apps: number | string | null;
+  with_histogram: number | string | null;
+}
+
 interface CcuTierAssignmentRow extends QueryResultRow {
   appid: number;
   ccu_tier: number | string | null;
@@ -508,6 +530,42 @@ export interface CatalogScanFinalizationProgress {
 export interface AppSyncCandidate {
   appid: number;
   priorityScore: number;
+}
+
+export type HistogramServiceTier = 'active_daily' | 'medium_weekly' | 'long_tail_monthly';
+
+export type HistogramSelectionLane = 'coverage_oldest' | HistogramServiceTier | 'reallocated';
+
+export interface HistogramSyncCandidate {
+  appid: number;
+  hasHistogram: boolean;
+  lane: HistogramSelectionLane;
+  lastHistogramSync: string | null;
+  priorityScore: number;
+  serviceTier: HistogramServiceTier;
+  totalReviews: number;
+}
+
+export interface HistogramBacklogTierSnapshot {
+  dueApps: number;
+  neverSynced: number;
+  oldestWaitingAt: string | null;
+  stale30Days: number;
+  stale90Days: number;
+  totalApps: number;
+  withHistogram: number;
+}
+
+export interface HistogramBacklogSnapshot {
+  capturedAt: string;
+  dueApps: number;
+  neverSynced: number;
+  oldestWaitingAt: string | null;
+  stale30Days: number;
+  stale90Days: number;
+  tiers: Record<HistogramServiceTier, HistogramBacklogTierSnapshot>;
+  totalApps: number;
+  withHistogram: number;
 }
 
 export interface StorefrontSyncStatus {
@@ -1372,6 +1430,59 @@ export class TigerOpsRepository {
     return rows[0]?.id ? String(rows[0].id) : null;
   }
 
+  async tryCreateSyncJobIfIdle(
+    params: SyncJobCreateParams & {
+      freshAfterIso: string;
+      lockKey: string;
+    }
+  ): Promise<string | null> {
+    const { rows } = await runQuery<IdRow>(
+      this.pool,
+      'ops.tryCreateSyncJobIfIdle',
+      `
+        WITH lock_attempt AS MATERIALIZED (
+          SELECT pg_try_advisory_xact_lock(
+            hashtextextended($1::text, 0)
+          ) AS acquired
+        ),
+        inserted AS (
+          INSERT INTO ops.sync_jobs (
+            job_type, github_run_id, status, started_at, batch_size
+          )
+          SELECT
+            $2,
+            $3,
+            'running',
+            COALESCE($4::timestamptz, now()),
+            $5
+          FROM lock_attempt
+          WHERE acquired
+            AND NOT EXISTS (
+              SELECT 1
+              FROM ops.sync_jobs
+              WHERE job_type = $2
+                AND status = 'running'
+                AND GREATEST(COALESCE(updated_at, started_at), started_at)
+                  >= $6::timestamptz
+            )
+          RETURNING id
+        )
+        SELECT id
+        FROM inserted
+      `,
+      [
+        params.lockKey,
+        params.jobType,
+        params.githubRunId ?? null,
+        params.startedAt ?? null,
+        params.batchSize ?? null,
+        params.freshAfterIso,
+      ]
+    );
+
+    return rows[0]?.id ? String(rows[0].id) : null;
+  }
+
   async updateSyncJob(id: string, values: SyncJobUpdate): Promise<number> {
     const allowed = new Set([
       'completed_at',
@@ -1737,6 +1848,385 @@ export class TigerCatalogRepository {
       appid: row.appid,
       priorityScore: parseNumber(row.priority_score),
     }));
+  }
+
+  async listHistogramSyncCandidates(params: {
+    activeQuota: number;
+    coverageQuota: number;
+    limit: number;
+    longTailQuota: number;
+    mediumQuota: number;
+  }): Promise<HistogramSyncCandidate[]> {
+    const { rows } = await runQuery<HistogramSyncCandidateRow>(
+      this.pool,
+      'catalog.listHistogramSyncCandidates',
+      `
+        WITH base AS (
+          SELECT
+            s.appid,
+            s.created_at,
+            s.last_histogram_sync,
+            COALESCE(s.priority_score, 0)::integer AS priority_score,
+            COALESCE(s.review_velocity_tier, 'unknown') AS review_velocity_tier,
+            COALESCE(s.velocity_7d, 0)::numeric AS velocity_7d,
+            COALESCE(
+              ldm.total_reviews,
+              s.last_known_total_reviews,
+              0
+            )::integer AS total_reviews,
+            EXISTS (
+              SELECT 1
+              FROM metrics.review_histogram h
+              WHERE h.appid = s.appid
+            ) AS has_histogram
+          FROM ops.sync_status s
+          JOIN legacy.apps a ON a.appid = s.appid
+          LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = s.appid
+          WHERE COALESCE(s.is_syncable, true) = true
+            AND a.type = 'game'
+            AND COALESCE(a.is_released, false) = true
+            AND COALESCE(a.is_delisted, false) = false
+            AND COALESCE(
+              ldm.total_reviews,
+              s.last_known_total_reviews,
+              0
+            ) > 0
+            AND NOT (
+              COALESCE(s.last_error_source, '') = 'histogram'
+              AND COALESCE(s.last_error_at, '-infinity'::timestamptz)
+                > now() - INTERVAL '6 hours'
+            )
+        ),
+        classified AS (
+          SELECT
+            base.*,
+            CASE
+              WHEN review_velocity_tier IN ('high', 'medium')
+                OR velocity_7d >= 1
+                OR priority_score >= 100
+                OR total_reviews >= 10000
+                THEN 'active_daily'
+              WHEN priority_score >= 25
+                OR total_reviews >= 1000
+                THEN 'medium_weekly'
+              ELSE 'long_tail_monthly'
+            END::text AS service_tier
+          FROM base
+        ),
+        due AS (
+          SELECT
+            classified.*,
+            CASE service_tier
+              WHEN 'active_daily' THEN INTERVAL '24 hours'
+              WHEN 'medium_weekly' THEN INTERVAL '7 days'
+              ELSE INTERVAL '30 days'
+            END AS target_interval
+          FROM classified
+          WHERE COALESCE(
+            last_histogram_sync,
+            '-infinity'::timestamptz
+          ) <= now() - CASE service_tier
+            WHEN 'active_daily' THEN INTERVAL '24 hours'
+            WHEN 'medium_weekly' THEN INTERVAL '7 days'
+            ELSE INTERVAL '30 days'
+          END
+        ),
+        coverage_ranked AS (
+          SELECT
+            due.*,
+            row_number() OVER (
+              ORDER BY
+                CASE WHEN last_histogram_sync IS NULL THEN 0 ELSE 1 END,
+                CASE WHEN has_histogram THEN 1 ELSE 0 END,
+                COALESCE(last_histogram_sync, created_at) ASC,
+                total_reviews DESC,
+                priority_score DESC,
+                appid ASC
+            ) AS lane_rank
+          FROM due
+        ),
+        coverage_claims AS (
+          SELECT *
+          FROM coverage_ranked
+          ORDER BY lane_rank
+          LIMIT GREATEST($5::integer, 0)
+        ),
+        tier_ranked AS (
+          SELECT
+            due.*,
+            row_number() OVER (
+              PARTITION BY service_tier
+              ORDER BY
+                COALESCE(last_histogram_sync, created_at) ASC,
+                priority_score DESC,
+                total_reviews DESC,
+                appid ASC
+            ) AS lane_rank
+          FROM due
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM coverage_claims coverage
+            WHERE coverage.appid = due.appid
+          )
+        ),
+        tier_claims AS (
+          SELECT *
+          FROM tier_ranked
+          WHERE (service_tier = 'active_daily' AND lane_rank <= GREATEST($2::integer, 0))
+             OR (service_tier = 'medium_weekly' AND lane_rank <= GREATEST($3::integer, 0))
+             OR (service_tier = 'long_tail_monthly' AND lane_rank <= GREATEST($4::integer, 0))
+        ),
+        primary_claims AS (
+          SELECT
+            coverage.appid,
+            coverage.has_histogram,
+            coverage.last_histogram_sync,
+            coverage.priority_score,
+            coverage.service_tier,
+            coverage.total_reviews,
+            'coverage_oldest'::text AS lane,
+            0 AS lane_order,
+            coverage.lane_rank
+          FROM coverage_claims coverage
+
+          UNION ALL
+
+          SELECT
+            tier.appid,
+            tier.has_histogram,
+            tier.last_histogram_sync,
+            tier.priority_score,
+            tier.service_tier,
+            tier.total_reviews,
+            tier.service_tier AS lane,
+            CASE tier.service_tier
+              WHEN 'active_daily' THEN 1
+              WHEN 'medium_weekly' THEN 2
+              ELSE 3
+            END AS lane_order,
+            tier.lane_rank
+          FROM tier_claims tier
+        ),
+        reallocated AS (
+          SELECT
+            due.appid,
+            due.has_histogram,
+            due.last_histogram_sync,
+            due.priority_score,
+            due.service_tier,
+            due.total_reviews,
+            'reallocated'::text AS lane,
+            4 AS lane_order,
+            row_number() OVER (
+              ORDER BY
+                CASE WHEN due.last_histogram_sync IS NULL THEN 0 ELSE 1 END,
+                (
+                  EXTRACT(EPOCH FROM (
+                    now() - COALESCE(due.last_histogram_sync, due.created_at)
+                  ))
+                  / NULLIF(EXTRACT(EPOCH FROM due.target_interval), 0)
+                ) DESC NULLS FIRST,
+                CASE due.service_tier
+                  WHEN 'active_daily' THEN 0
+                  WHEN 'medium_weekly' THEN 1
+                  ELSE 2
+                END,
+                due.priority_score DESC,
+                due.total_reviews DESC,
+                due.appid ASC
+            ) AS lane_rank
+          FROM due
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM primary_claims selected
+            WHERE selected.appid = due.appid
+          )
+          ORDER BY
+            CASE WHEN due.last_histogram_sync IS NULL THEN 0 ELSE 1 END,
+            (
+              EXTRACT(EPOCH FROM (
+                now() - COALESCE(due.last_histogram_sync, due.created_at)
+              ))
+              / NULLIF(EXTRACT(EPOCH FROM due.target_interval), 0)
+            ) DESC NULLS FIRST,
+            due.appid ASC
+          LIMIT GREATEST(
+            $1::integer - (SELECT count(*)::integer FROM primary_claims),
+            0
+          )
+        ),
+        selected AS (
+          SELECT * FROM primary_claims
+          UNION ALL
+          SELECT * FROM reallocated
+        )
+        SELECT
+          appid,
+          has_histogram,
+          lane,
+          last_histogram_sync,
+          priority_score,
+          service_tier,
+          total_reviews
+        FROM selected
+        ORDER BY lane_order, lane_rank, appid
+        LIMIT GREATEST($1::integer, 0)
+      `,
+      [
+        params.limit,
+        params.activeQuota,
+        params.mediumQuota,
+        params.longTailQuota,
+        params.coverageQuota,
+      ]
+    );
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      hasHistogram: row.has_histogram,
+      lane: row.lane as HistogramSelectionLane,
+      lastHistogramSync: normalizeTimestamp(row.last_histogram_sync),
+      priorityScore: parseNumber(row.priority_score),
+      serviceTier: row.service_tier as HistogramServiceTier,
+      totalReviews: parseNumber(row.total_reviews),
+    }));
+  }
+
+  async getHistogramBacklogSnapshot(): Promise<HistogramBacklogSnapshot> {
+    const { rows } = await runQuery<HistogramBacklogTierRow>(
+      this.pool,
+      'catalog.getHistogramBacklogSnapshot',
+      `
+        WITH base AS (
+          SELECT
+            s.appid,
+            s.created_at,
+            s.last_histogram_sync,
+            COALESCE(s.priority_score, 0)::integer AS priority_score,
+            COALESCE(s.review_velocity_tier, 'unknown') AS review_velocity_tier,
+            COALESCE(s.velocity_7d, 0)::numeric AS velocity_7d,
+            COALESCE(
+              ldm.total_reviews,
+              s.last_known_total_reviews,
+              0
+            )::integer AS total_reviews,
+            EXISTS (
+              SELECT 1
+              FROM metrics.review_histogram h
+              WHERE h.appid = s.appid
+            ) AS has_histogram
+          FROM ops.sync_status s
+          JOIN legacy.apps a ON a.appid = s.appid
+          LEFT JOIN legacy.latest_daily_metrics ldm ON ldm.appid = s.appid
+          WHERE COALESCE(s.is_syncable, true) = true
+            AND a.type = 'game'
+            AND COALESCE(a.is_released, false) = true
+            AND COALESCE(a.is_delisted, false) = false
+            AND COALESCE(
+              ldm.total_reviews,
+              s.last_known_total_reviews,
+              0
+            ) > 0
+        ),
+        classified AS (
+          SELECT
+            base.*,
+            CASE
+              WHEN review_velocity_tier IN ('high', 'medium')
+                OR velocity_7d >= 1
+                OR priority_score >= 100
+                OR total_reviews >= 10000
+                THEN 'active_daily'
+              WHEN priority_score >= 25
+                OR total_reviews >= 1000
+                THEN 'medium_weekly'
+              ELSE 'long_tail_monthly'
+            END::text AS service_tier
+          FROM base
+        ),
+        due AS (
+          SELECT *
+          FROM classified
+          WHERE COALESCE(
+            last_histogram_sync,
+            '-infinity'::timestamptz
+          ) <= now() - CASE service_tier
+            WHEN 'active_daily' THEN INTERVAL '24 hours'
+            WHEN 'medium_weekly' THEN INTERVAL '7 days'
+            ELSE INTERVAL '30 days'
+          END
+        )
+        SELECT
+          now() AS captured_at,
+          classified.service_tier,
+          count(*)::integer AS total_apps,
+          count(*) FILTER (
+            WHERE classified.last_histogram_sync IS NULL
+          )::integer AS never_synced,
+          count(*) FILTER (
+            WHERE classified.has_histogram
+          )::integer AS with_histogram,
+          count(*) FILTER (
+            WHERE classified.last_histogram_sync <= now() - INTERVAL '30 days'
+          )::integer AS stale_30_days,
+          count(*) FILTER (
+            WHERE classified.last_histogram_sync <= now() - INTERVAL '90 days'
+          )::integer AS stale_90_days,
+          count(due.appid)::integer AS due_apps,
+          min(COALESCE(due.last_histogram_sync, due.created_at)) AS oldest_waiting_at
+        FROM classified
+        LEFT JOIN due ON due.appid = classified.appid
+        GROUP BY classified.service_tier
+        ORDER BY classified.service_tier
+        LIMIT 3
+      `
+    );
+
+    const emptyTier = (): HistogramBacklogTierSnapshot => ({
+      dueApps: 0,
+      neverSynced: 0,
+      oldestWaitingAt: null,
+      stale30Days: 0,
+      stale90Days: 0,
+      totalApps: 0,
+      withHistogram: 0,
+    });
+    const tiers: Record<HistogramServiceTier, HistogramBacklogTierSnapshot> = {
+      active_daily: emptyTier(),
+      long_tail_monthly: emptyTier(),
+      medium_weekly: emptyTier(),
+    };
+
+    for (const row of rows) {
+      tiers[row.service_tier as HistogramServiceTier] = {
+        dueApps: parseNumber(row.due_apps),
+        neverSynced: parseNumber(row.never_synced),
+        oldestWaitingAt: normalizeTimestamp(row.oldest_waiting_at),
+        stale30Days: parseNumber(row.stale_30_days),
+        stale90Days: parseNumber(row.stale_90_days),
+        totalApps: parseNumber(row.total_apps),
+        withHistogram: parseNumber(row.with_histogram),
+      };
+    }
+
+    const tierValues = Object.values(tiers);
+    const oldestWaitingAt =
+      tierValues
+        .map((tier) => tier.oldestWaitingAt)
+        .filter((value): value is string => value !== null)
+        .sort()[0] ?? null;
+
+    return {
+      capturedAt: normalizeTimestamp(rows[0]?.captured_at) ?? new Date().toISOString(),
+      dueApps: tierValues.reduce((sum, tier) => sum + tier.dueApps, 0),
+      neverSynced: tierValues.reduce((sum, tier) => sum + tier.neverSynced, 0),
+      oldestWaitingAt,
+      stale30Days: tierValues.reduce((sum, tier) => sum + tier.stale30Days, 0),
+      stale90Days: tierValues.reduce((sum, tier) => sum + tier.stale90Days, 0),
+      tiers,
+      totalApps: tierValues.reduce((sum, tier) => sum + tier.totalApps, 0),
+      withHistogram: tierValues.reduce((sum, tier) => sum + tier.withHistogram, 0),
+    };
   }
 
   async listExistingAppids(params: { afterAppid?: number; limit: number }): Promise<number[]> {

@@ -2,15 +2,16 @@ name: Review Histogram Sync
 
 on:
   schedule:
-    # Twice daily at 04:23 and 16:23 UTC, outside the busy :15 window.
-    - cron: '23 4 * * *'
-    - cron: '23 16 * * *'
+    # Baseline cadence remains active before the capacity-v2 rollout variable is enabled.
+    - cron: "23 4,16 * * *"
+    # Six additional runs/day are gated by ENABLE_HISTOGRAM_CAPACITY_V2.
+    - cron: "23 1,7,10,13,19,22 * * *"
   workflow_dispatch:
     inputs:
       batch_size:
-        description: 'Number of apps to process'
+        description: "Number of apps to process (worker cap: 1200)"
         required: false
-        default: '300'
+        default: "1200"
 
 concurrency:
   group: histogram-sync
@@ -23,7 +24,17 @@ env:
 
 jobs:
   sync:
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          vars.ENABLE_TIGER_METRICS_WRITERS == 'true' &&
+          (
+            github.event.schedule == '23 4,16 * * *' ||
+            vars.ENABLE_HISTOGRAM_CAPACITY_V2 == 'true'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -34,8 +45,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
+          node-version: "20"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -47,4 +58,10 @@ jobs:
         run: pnpm --filter @publisheriq/ingestion histogram-sync
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size || '300' }}
+          BATCH_SIZE: >-
+            ${{
+              github.event.inputs.batch_size ||
+              (vars.ENABLE_HISTOGRAM_CAPACITY_V2 == 'true' && '1200' || '300')
+            }}
+          HISTOGRAM_MAX_RUNTIME_MINUTES: "22"
+          HISTOGRAM_REQUEST_TIMEOUT_MS: "15000"
