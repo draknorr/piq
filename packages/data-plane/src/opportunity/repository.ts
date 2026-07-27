@@ -583,9 +583,9 @@ export class OpportunityRepository {
             object_id,
             after_state
           )
-          VALUES ($1, $2, 'workspace.provisioned', 'workspace', $1::text, $3::jsonb)
+          VALUES ($1, $2, 'workspace.provisioned', 'workspace', $4, $3::jsonb)
         `,
-        [row.id, identity.userId, JSON.stringify({ role: "owner" })],
+        [row.id, identity.userId, JSON.stringify({ role: "owner" }), row.id],
       );
 
       return { id: row.id, name: row.name, role: "owner" };
