@@ -1701,6 +1701,31 @@ export function mergeInsightsPeakRows(
     .sort((left, right) => left.appid - right.appid);
 }
 
+export function mergeInsightsPeriodAggregateRows(
+  periods: InsightsPeriodAggregateRow[][]
+): InsightsPeriodAggregateRow[] {
+  const aggregatesByAppid = new Map<number, { playerSum: number; sampleCount: number }>();
+  for (const rows of periods) {
+    for (const row of rows) {
+      const aggregate = aggregatesByAppid.get(row.appid) ?? {
+        playerSum: 0,
+        sampleCount: 0,
+      };
+      aggregate.playerSum += parseCountValue(row.player_sum);
+      aggregate.sampleCount += parseCountValue(row.sample_count);
+      aggregatesByAppid.set(row.appid, aggregate);
+    }
+  }
+
+  return [...aggregatesByAppid.entries()]
+    .map(([appid, aggregate]) => ({
+      appid,
+      player_sum: aggregate.playerSum,
+      sample_count: aggregate.sampleCount,
+    }))
+    .sort((left, right) => left.appid - right.appid);
+}
+
 function normalizeOffset(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return 0;
@@ -14419,18 +14444,66 @@ export class DataPlaneService {
         [priorInterval, recentInterval],
         this.config
       );
-    const [recentResult, priorResult] =
-      timeRange === '30d'
-        // Each 30-day half is safe alone but exceeds the statement guardrail under contention.
-        ? [await queryRecentPeriod(), await queryPriorPeriod()]
-        : await Promise.all([queryRecentPeriod(), queryPriorPeriod()]);
+    let recentRows: InsightsPeriodAggregateRow[];
+    let priorRows: InsightsPeriodAggregateRow[];
+    if (timeRange === '30d') {
+      const asOf = new Date().toISOString();
+      const queryPeriodSlice = (startDays: number, endDays: number | null) =>
+        runQuery<InsightsPeriodAggregateRow>(
+          `
+            SELECT
+              appid,
+              sum(player_count)::bigint AS player_sum,
+              count(*)::bigint AS sample_count
+            FROM ${snapshots}
+            WHERE snapshot_time >= $1::timestamptz - make_interval(days => $2::integer)
+              AND (
+                $3::integer IS NULL
+                OR snapshot_time < $1::timestamptz - make_interval(days => $3::integer)
+              )
+            GROUP BY appid
+          `,
+          [asOf, startDays, endDays],
+          this.config
+        );
+      // Keep the exact 30-day recent and prior averages while bounding every
+      // aggregate statement. The >=10 threshold is applied after merging each
+      // pair so an app cannot cross the threshold merely because of slicing.
+      const recentLatest = await queryPeriodSlice(15, null);
+      const recentEarlier = await queryPeriodSlice(30, 15);
+      const priorLatest = await queryPeriodSlice(45, 30);
+      const priorEarlier = await queryPeriodSlice(60, 45);
+      recentRows = mergeInsightsPeriodAggregateRows([
+        recentLatest.rows,
+        recentEarlier.rows,
+      ]).filter(
+        (row) =>
+          parseCountValue(row.sample_count) > 0 &&
+          parseCountValue(row.player_sum) / parseCountValue(row.sample_count) >= 10
+      );
+      priorRows = mergeInsightsPeriodAggregateRows([
+        priorLatest.rows,
+        priorEarlier.rows,
+      ]).filter(
+        (row) =>
+          parseCountValue(row.sample_count) > 0 &&
+          parseCountValue(row.player_sum) / parseCountValue(row.sample_count) >= 10
+      );
+    } else {
+      const [recentResult, priorResult] = await Promise.all([
+        queryRecentPeriod(),
+        queryPriorPeriod(),
+      ]);
+      recentRows = recentResult.rows;
+      priorRows = priorResult.rows;
+    }
     const priorByAppid = new Map(
-      priorResult.rows.map((row) => [
+      priorRows.map((row) => [
         row.appid,
         parseCountValue(row.player_sum) / parseCountValue(row.sample_count),
       ])
     );
-    const candidates: InsightsTrendCandidateRow[] = recentResult.rows
+    const candidates: InsightsTrendCandidateRow[] = recentRows
       .flatMap((row) => {
         const priorAverage = priorByAppid.get(row.appid);
         if (priorAverage === undefined || priorAverage === 0) {

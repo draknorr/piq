@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DataPlaneService, mergeInsightsPeakRows } from './service.js';
+import {
+  DataPlaneService,
+  mergeInsightsPeakRows,
+  mergeInsightsPeriodAggregateRows,
+} from './service.js';
 
 function createService(): DataPlaneService {
   return new DataPlaneService({
@@ -143,6 +147,27 @@ test("mergeInsightsPeakRows keeps the exact maximum across non-overlapping windo
       { appid: 10, peakCcu: 100 },
       { appid: 20, peakCcu: 80 },
       { appid: 30, peakCcu: 60 },
+    ],
+  );
+});
+
+test("mergeInsightsPeriodAggregateRows preserves exact sums and sample counts", () => {
+  assert.deepEqual(
+    mergeInsightsPeriodAggregateRows([
+      [
+        { appid: 20, player_sum: 200, sample_count: 10 },
+        { appid: 10, player_sum: "90", sample_count: "9" },
+      ],
+      [
+        { appid: 30, player_sum: 60, sample_count: 6 },
+        { appid: 10, player_sum: 110, sample_count: 11 },
+        { appid: 20, player_sum: "100", sample_count: "5" },
+      ],
+    ]),
+    [
+      { appid: 10, player_sum: 200, sample_count: 20 },
+      { appid: 20, player_sum: 300, sample_count: 15 },
+      { appid: 30, player_sum: 60, sample_count: 6 },
     ],
   );
 });
