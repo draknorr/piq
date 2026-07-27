@@ -224,22 +224,34 @@ interface ProductCatalogRow extends QueryResultRow {
   publisher_count: number | string;
 }
 
-interface ProductSourceHealthRow extends QueryResultRow {
+interface ProductSourceCaptureRow extends QueryResultRow {
   capture_dead_letter: number | string;
   capture_oldest_pending_at: string | null;
   capture_pending: number | string;
-  latest_unknown_at: string | null;
-  pics_cursor_updated_at: string | null;
-  pics_last_change_number: number | string | null;
+}
+
+interface ProductSourceProjectionRow extends QueryResultRow {
   projection_latest_source_at: string | null;
   projection_rows: number | string;
+}
+
+interface ProductSourceUnknownsRow extends QueryResultRow {
+  latest_unknown_at: string | null;
+  unknown_event_types: number | string;
+}
+
+interface ProductSourcePicsRow extends QueryResultRow {
+  pics_cursor_updated_at: string | null;
+  pics_last_change_number: number | string | null;
+  verified_at: string;
+}
+
+interface ProductSourceReadinessRow extends QueryResultRow {
   readiness: Array<{
     count: number | string;
     source: string;
     status: string;
   }> | null;
-  unknown_event_types: number | string;
-  verified_at: string;
 }
 
 interface ProductAdminSummaryRow extends QueryResultRow {
@@ -14676,9 +14688,17 @@ export class DataPlaneService {
     const captureWork = this.relation('ops_app_capture_work_state').sql;
     const readiness = this.relation('ops_app_data_readiness').sql;
     const picsState = this.relation('ops_pics_sync_state').sql;
-    const result = await runQuery<ProductSourceHealthRow>(
-      `
-        WITH capture AS (
+    // Keep independent health aggregates in bounded statements so their combined
+    // execution plan cannot exceed the production statement timeout.
+    const [
+      captureResult,
+      projectionResult,
+      unknownsResult,
+      readinessResult,
+      picsResult,
+    ] = await Promise.all([
+        runQuery<ProductSourceCaptureRow>(
+          `
           SELECT
             count(*) FILTER (
               WHERE dead_lettered_at IS NULL
@@ -14698,17 +14718,25 @@ export class DataPlaneService {
                 )
             ) AS oldest_pending_at
           FROM ${captureWork}
+        `,
+          [],
+          this.config
         ),
-        projection AS (
+        runQuery<ProductSourceProjectionRow>(
+          `
           SELECT
-            count(*)::bigint AS row_count,
-            max(data_updated_at) AS latest_source_at
+            count(*)::bigint AS projection_rows,
+            max(data_updated_at)::text AS projection_latest_source_at
           FROM ${projectionRelation}
+        `,
+          [],
+          this.config
         ),
-        unknowns AS (
+        runQuery<ProductSourceUnknownsRow>(
+          `
           SELECT
-            count(DISTINCT (event.source, event.change_type))::bigint AS event_types,
-            max(event.occurred_at) AS latest_unknown_at
+            count(DISTINCT (event.source, event.change_type))::bigint AS unknown_event_types,
+            max(event.occurred_at)::text AS latest_unknown_at
           FROM ${this.relation('events_app_change_events').sql} event
           LEFT JOIN ${this.relation('events_change_event_registry').sql} registry
             ON registry.registry_version = 'change-events/v1'
@@ -14717,73 +14745,77 @@ export class DataPlaneService {
            AND registry.deprecated_at IS NULL
           WHERE event.occurred_at >= now() - interval '30 days'
             AND registry.raw_event_type IS NULL
+        `,
+          [],
+          this.config
         ),
-        readiness_counts AS (
-          SELECT coalesce(
-            jsonb_agg(
-              jsonb_build_object(
-                'source', source,
-                'status', status,
-                'count', row_count
-              )
-              ORDER BY source, status
-            ),
-            '[]'::jsonb
-          ) AS rows
+        runQuery<ProductSourceReadinessRow>(
+          `
+          SELECT
+            coalesce(
+              jsonb_agg(
+                jsonb_build_object(
+                  'source', source,
+                  'status', status,
+                  'count', row_count
+                )
+                ORDER BY source, status
+              ),
+              '[]'::jsonb
+            ) AS readiness
           FROM (
             SELECT source, status, count(*)::bigint AS row_count
             FROM ${readiness}
             GROUP BY source, status
           ) grouped
-        )
-        SELECT
-          clock_timestamp()::text AS verified_at,
-          coalesce(pics.last_change_number, 0)::bigint AS pics_last_change_number,
-          pics.updated_at::text AS pics_cursor_updated_at,
-          capture.pending AS capture_pending,
-          capture.dead_letter AS capture_dead_letter,
-          capture.oldest_pending_at::text AS capture_oldest_pending_at,
-          projection.row_count AS projection_rows,
-          projection.latest_source_at::text AS projection_latest_source_at,
-          unknowns.event_types AS unknown_event_types,
-          unknowns.latest_unknown_at::text AS latest_unknown_at,
-          readiness_counts.rows AS readiness
-        FROM capture
-        CROSS JOIN projection
-        CROSS JOIN unknowns
-        CROSS JOIN readiness_counts
-        LEFT JOIN ${picsState} pics ON pics.id = 1
-        LIMIT 1
-      `,
-      [],
-      this.config
-    );
-    const row = result.rows[0];
+        `,
+          [],
+          this.config
+        ),
+        runQuery<ProductSourcePicsRow>(
+          `
+          SELECT
+            clock_timestamp()::text AS verified_at,
+            coalesce(pics.last_change_number, 0)::bigint AS pics_last_change_number,
+            pics.updated_at::text AS pics_cursor_updated_at
+          FROM (SELECT 1 AS id) singleton
+          LEFT JOIN ${picsState} pics ON pics.id = singleton.id
+          LIMIT 1
+        `,
+          [],
+          this.config
+        ),
+      ]);
+    const capture = captureResult.rows[0];
+    const projection = projectionResult.rows[0];
+    const unknowns = unknownsResult.rows[0];
+    const readinessCounts = readinessResult.rows[0];
+    const pics = picsResult.rows[0];
     return {
       captureQueue: {
-        deadLetter: parseCountValue(row?.capture_dead_letter),
-        oldestPendingAt: row?.capture_oldest_pending_at ?? null,
-        pending: parseCountValue(row?.capture_pending),
+        deadLetter: parseCountValue(capture?.capture_dead_letter),
+        oldestPendingAt: capture?.capture_oldest_pending_at ?? null,
+        pending: parseCountValue(capture?.capture_pending),
       },
       eventRegistry: {
-        latestUnknownAt: row?.latest_unknown_at ?? null,
-        unknownEventTypes: parseCountValue(row?.unknown_event_types),
+        latestUnknownAt: unknowns?.latest_unknown_at ?? null,
+        unknownEventTypes: parseCountValue(unknowns?.unknown_event_types),
       },
       pics: {
-        cursorUpdatedAt: row?.pics_cursor_updated_at ?? null,
-        lastChangeNumber: parseCountValue(row?.pics_last_change_number),
+        cursorUpdatedAt: pics?.pics_cursor_updated_at ?? null,
+        lastChangeNumber: parseCountValue(pics?.pics_last_change_number),
       },
       projection: {
-        latestSourceAt: row?.projection_latest_source_at ?? null,
+        latestSourceAt: projection?.projection_latest_source_at ?? null,
         relation: projectionRelation,
-        rowCount: parseCountValue(row?.projection_rows),
+        rowCount: parseCountValue(projection?.projection_rows),
       },
-      readiness: (row?.readiness ?? []).map((entry) => ({
+      readiness: (readinessCounts?.readiness ?? []).map((entry) => ({
         count: parseCountValue(entry.count),
         source: entry.source,
         status: entry.status,
       })),
-      verifiedAt: row?.verified_at ?? new Date().toISOString(),
+      verifiedAt: pics?.verified_at ?? new Date().toISOString(),
     };
   }
 
