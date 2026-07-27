@@ -69,11 +69,13 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
 - `tracker-readiness-handoff.md`: authoritative closeout status through PR #70,
   current source ownership, durable contracts, operating snapshot, regression
   evidence, rollback procedures, and explicit remaining preparation gates.
-- `tracker-readiness-closeout-2026-07-27.md`: current status through PR #77,
-  deployed reader and hydration repairs, scheduler migration 0096, fresh live
-  counts, final regression evidence, and exact remaining approval boundaries.
-- `signal-window-shadow-revised-manifest.md`: exact unexecuted 100-app shadow
-  proposal after the original transaction's atomic foreign-key rollback.
+- `tracker-readiness-closeout-2026-07-27.md`: current closeout ledger beginning
+  with PR #77, deployed reader and hydration repairs, scheduler migration 0096,
+  fresh live counts, regression evidence, and exact remaining gates.
+- `signal-window-shadow-revised-manifest.md`: corrected exact 100-app shadow
+  cohort, approved execution record, 300-row actual footprint, validation, and
+  idempotency hashes after the original transaction's atomic foreign-key
+  rollback.
 - `implementation/manifest.json`: reproducible bounded Tiger/Supabase operational snapshot.
 - `implementation/tiger-schema.json` and `implementation/supabase-schema.json`: bounded schema inventories.
 - `post-implementation/manifest.json` and `protected-object-comparison.json`: second read-only capture and proof that all complete protected user-control key sets were unchanged.

@@ -314,6 +314,31 @@ interface AlertDetectionStateRow extends QueryResultRow {
   trend_30d_direction_prev: string | null;
 }
 
+interface AlertEntityMetricsRow extends QueryResultRow {
+  ccu_7d_avg: number | string | null;
+  ccu_current: number | string | null;
+  discount_percent: number | string | null;
+  entity_id: number;
+  positive_ratio: number | string | null;
+  price_cents: number | string | null;
+  review_velocity: number | string | null;
+  total_reviews: number | string | null;
+  trend_30d_direction: string | null;
+}
+
+interface AlertSourceEventRow extends QueryResultRow {
+  alert_type: 'new_release' | 'price_change';
+  appid: number;
+  app_name: string | null;
+  current_value: number | string | null;
+  entity_id: number;
+  entity_type: string;
+  event_key: string;
+  occurred_at: Date | string;
+  previous_value: number | string | null;
+  source_data: unknown;
+}
+
 interface CreditResultRow extends QueryResultRow {
   new_balance: number | string;
   refunded?: number | string | null;
@@ -796,6 +821,36 @@ export interface PinnedAlertEntity {
   total_reviews: number | null;
   trend_30d_direction: string | null;
   user_id: string;
+}
+
+export interface AlertEntityMetrics {
+  ccu_7d_avg: number | null;
+  ccu_current: number | null;
+  discount_percent: number | null;
+  entity_id: number;
+  positive_ratio: number | null;
+  price_cents: number | null;
+  review_velocity: number | null;
+  total_reviews: number | null;
+  trend_30d_direction: string | null;
+}
+
+export interface AlertEntityKey {
+  entity_id: number;
+  entity_type: AlertEntityType;
+}
+
+export interface AlertSourceEvent {
+  alert_type: 'new_release' | 'price_change';
+  appid: number;
+  app_name: string | null;
+  current_value: number | null;
+  entity_id: number;
+  entity_type: AlertEntityType;
+  event_key: string;
+  occurred_at: string;
+  previous_value: number | null;
+  source_data: JsonRecord | null;
 }
 
 export interface UserPinRow {
@@ -4271,6 +4326,215 @@ export class TigerAlertsPinsChatRepository {
       total_reviews: parseNullableNumber(row.total_reviews),
       trend_30d_direction: row.trend_30d_direction,
       user_id: row.user_id,
+    }));
+  }
+
+  async listAlertEntityMetrics(entityIds: number[]): Promise<AlertEntityMetrics[]> {
+    if (entityIds.length === 0) {
+      return [];
+    }
+
+    const { rows } = await runQuery<AlertEntityMetricsRow>(
+      this.pool,
+      'alertsPinsChat.listAlertEntityMetrics',
+      `
+        WITH requested AS (
+          SELECT DISTINCT unnest($1::integer[]) AS appid
+        ),
+        ccu_7d AS (
+          SELECT
+            metrics.appid,
+            round(avg(metrics.ccu_peak))::integer AS ccu_7d_avg
+          FROM metrics.daily_metrics metrics
+          JOIN requested ON requested.appid = metrics.appid
+          WHERE metrics.metric_date BETWEEN current_date - 6 AND current_date
+            AND metrics.ccu_peak IS NOT NULL
+          GROUP BY metrics.appid
+        )
+        SELECT
+          requested.appid AS entity_id,
+          latest.ccu_peak AS ccu_current,
+          ccu_7d.ccu_7d_avg,
+          trends.review_velocity_7d AS review_velocity,
+          CASE
+            WHEN latest.total_reviews > 0
+              THEN latest.positive_reviews::numeric / latest.total_reviews::numeric
+            ELSE NULL
+          END AS positive_ratio,
+          latest.total_reviews,
+          apps.current_price_cents AS price_cents,
+          apps.current_discount_percent AS discount_percent,
+          trends.trend_30d_direction
+        FROM requested
+        LEFT JOIN legacy.apps apps ON apps.appid = requested.appid
+        LEFT JOIN legacy.latest_daily_metrics latest ON latest.appid = requested.appid
+        LEFT JOIN metrics.app_trends trends ON trends.appid = requested.appid
+        LEFT JOIN ccu_7d ON ccu_7d.appid = requested.appid
+        ORDER BY requested.appid
+      `,
+      [entityIds]
+    );
+
+    return rows.map((row) => ({
+      ccu_7d_avg: parseNullableNumber(row.ccu_7d_avg),
+      ccu_current: parseNullableNumber(row.ccu_current),
+      discount_percent: parseNullableNumber(row.discount_percent),
+      entity_id: row.entity_id,
+      positive_ratio: parseNullableNumber(row.positive_ratio),
+      price_cents: parseNullableNumber(row.price_cents),
+      review_velocity: parseNullableNumber(row.review_velocity),
+      total_reviews: parseNullableNumber(row.total_reviews),
+      trend_30d_direction: row.trend_30d_direction,
+    }));
+  }
+
+  async listRecentAlertSourceEvents(
+    entities: AlertEntityKey[],
+    since: string
+  ): Promise<AlertSourceEvent[]> {
+    if (entities.length === 0) {
+      return [];
+    }
+
+    const { rows } = await runQuery<AlertSourceEventRow>(
+      this.pool,
+      'alertsPinsChat.listRecentAlertSourceEvents',
+      `
+        WITH requested AS (
+          SELECT DISTINCT entity_type, entity_id
+          FROM jsonb_to_recordset($1::jsonb) AS rows (
+            entity_type text,
+            entity_id integer
+          )
+        ),
+        source_events AS (
+          SELECT
+            requested.entity_type,
+            requested.entity_id,
+            changes.appid,
+            apps.name AS app_name,
+            'price_change'::text AS alert_type,
+            changes.occurred_at,
+            'app_change_event:' || changes.id::text || ':' ||
+              changes.occurred_at::text AS event_key,
+            CASE
+              WHEN jsonb_typeof(changes.before_value) IN ('number', 'string')
+                AND (changes.before_value #>> '{}') ~ '^-?[0-9]+([.][0-9]+)?$'
+                THEN (changes.before_value #>> '{}')::numeric
+              ELSE NULL
+            END AS previous_value,
+            CASE
+              WHEN jsonb_typeof(changes.after_value) IN ('number', 'string')
+                AND (changes.after_value #>> '{}') ~ '^-?[0-9]+([.][0-9]+)?$'
+                THEN (changes.after_value #>> '{}')::numeric
+              ELSE NULL
+            END AS current_value,
+            jsonb_build_object(
+              'source', changes.source,
+              'changeType', changes.change_type,
+              'eventId', changes.id,
+              'occurredAt', changes.occurred_at,
+              'sourceSnapshotId', changes.source_snapshot_id
+            ) AS source_data
+          FROM events.app_change_events changes
+          JOIN requested
+            ON requested.entity_type = 'game'
+           AND requested.entity_id = changes.appid
+          LEFT JOIN legacy.apps apps ON apps.appid = changes.appid
+          WHERE changes.change_type = 'price_change'
+            AND changes.occurred_at >= $2::timestamptz
+
+          UNION ALL
+
+          SELECT
+            requested.entity_type,
+            requested.entity_id,
+            lifecycle.appid,
+            apps.name AS app_name,
+            'new_release'::text AS alert_type,
+            lifecycle.occurred_at,
+            lifecycle.idempotency_key AS event_key,
+            0::numeric AS previous_value,
+            1::numeric AS current_value,
+            jsonb_build_object(
+              'source', lifecycle.source,
+              'eventType', lifecycle.event_type,
+              'lifecycleEventId', lifecycle.id,
+              'occurredAt', lifecycle.occurred_at,
+              'sourceEventId', lifecycle.source_event_id
+            ) AS source_data
+          FROM events.app_lifecycle_events lifecycle
+          JOIN legacy.app_publishers relations ON relations.appid = lifecycle.appid
+          JOIN requested
+            ON requested.entity_type = 'publisher'
+           AND requested.entity_id = relations.publisher_id
+          LEFT JOIN legacy.apps apps ON apps.appid = lifecycle.appid
+          WHERE lifecycle.event_type = 'release_state_changed'
+            AND lifecycle.after_state @> '{"is_released": true}'::jsonb
+            AND lifecycle.occurred_at >= $2::timestamptz
+
+          UNION ALL
+
+          SELECT
+            requested.entity_type,
+            requested.entity_id,
+            lifecycle.appid,
+            apps.name AS app_name,
+            'new_release'::text AS alert_type,
+            lifecycle.occurred_at,
+            lifecycle.idempotency_key AS event_key,
+            0::numeric AS previous_value,
+            1::numeric AS current_value,
+            jsonb_build_object(
+              'source', lifecycle.source,
+              'eventType', lifecycle.event_type,
+              'lifecycleEventId', lifecycle.id,
+              'occurredAt', lifecycle.occurred_at,
+              'sourceEventId', lifecycle.source_event_id
+            ) AS source_data
+          FROM events.app_lifecycle_events lifecycle
+          JOIN legacy.app_developers relations ON relations.appid = lifecycle.appid
+          JOIN requested
+            ON requested.entity_type = 'developer'
+           AND requested.entity_id = relations.developer_id
+          LEFT JOIN legacy.apps apps ON apps.appid = lifecycle.appid
+          WHERE lifecycle.event_type = 'release_state_changed'
+            AND lifecycle.after_state @> '{"is_released": true}'::jsonb
+            AND lifecycle.occurred_at >= $2::timestamptz
+        )
+        SELECT DISTINCT ON (entity_type, entity_id, alert_type)
+          entity_type,
+          entity_id,
+          appid,
+          app_name,
+          alert_type,
+          occurred_at,
+          event_key,
+          previous_value,
+          current_value,
+          source_data
+        FROM source_events
+        ORDER BY
+          entity_type,
+          entity_id,
+          alert_type,
+          occurred_at DESC,
+          event_key DESC
+      `,
+      [jsonRows(entities as unknown as JsonRecord[]), since]
+    );
+
+    return rows.map((row) => ({
+      alert_type: row.alert_type,
+      appid: row.appid,
+      app_name: row.app_name,
+      current_value: parseNullableNumber(row.current_value),
+      entity_id: row.entity_id,
+      entity_type: parseAlertEntityType(row.entity_type),
+      event_key: row.event_key,
+      occurred_at: normalizeTimestamp(row.occurred_at) ?? new Date(0).toISOString(),
+      previous_value: parseNullableNumber(row.previous_value),
+      source_data: parseJsonRecord(row.source_data),
     }));
   }
 

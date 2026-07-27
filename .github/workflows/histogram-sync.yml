@@ -1,12 +1,16 @@
 name: Review Histogram Sync
 
 on:
+  schedule:
+    # Twice daily at 04:15 and 16:15 UTC.
+    - cron: '15 4 * * *'
+    - cron: '15 16 * * *'
   workflow_dispatch:
     inputs:
       batch_size:
         description: 'Number of apps to process'
         required: false
-        default: '100'
+        default: '300'
 
 concurrency:
   group: histogram-sync
@@ -21,7 +25,7 @@ jobs:
   sync:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_METRICS_WRITERS == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -43,4 +47,4 @@ jobs:
         run: pnpm --filter @publisheriq/ingestion histogram-sync
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size || '2000' }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '300' }}

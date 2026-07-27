@@ -133,6 +133,9 @@ function classifyWorkflow(filePath) {
   const changeIntelWriteTarget = extractEnvValue(text, 'CHANGE_INTEL_WRITE_TARGET');
   const picsChangeHistoryTarget = extractEnvValue(text, 'PICS_CHANGE_HISTORY_TARGET');
   const picsLatestStateTarget = extractEnvValue(text, 'PICS_LATEST_STATE_TARGET');
+  const alertMetricsReadTarget = extractEnvValue(text, 'ALERT_METRICS_READ_TARGET');
+  const alertStateWriteTarget = extractEnvValue(text, 'ALERT_STATE_WRITE_TARGET');
+  const alertDeliveryWriteTarget = extractEnvValue(text, 'ALERT_DELIVERY_WRITE_TARGET');
   const commands = extractRunCommands(text);
   const usesIngestion = workflowUsesIngestion(text);
   const usesSupabaseWrite = workflowUsesSupabaseWrite(text);
@@ -143,7 +146,16 @@ function classifyWorkflow(filePath) {
     dataWriteTarget === 'tiger' ||
     changeIntelWriteTarget === 'tiger' ||
     picsChangeHistoryTarget === 'tiger' ||
-    picsLatestStateTarget === 'tiger';
+    picsLatestStateTarget === 'tiger' ||
+    alertStateWriteTarget === 'tiger';
+  const approvedHybridAlertBoundary =
+    relPath(filePath) === '.github/workflows/alert-detection.yml' &&
+    alertMetricsReadTarget === 'tiger' &&
+    alertStateWriteTarget === 'tiger' &&
+    alertDeliveryWriteTarget === 'supabase' &&
+    hasTigerUrl &&
+    hasSupabaseServiceKey &&
+    commands.some((command) => command.includes('alert-detection'));
 
   let severity = 'ok';
   const notes = [];
@@ -158,6 +170,11 @@ function classifyWorkflow(filePath) {
   ) {
     severity = 'disabled';
     notes.push('Legacy Supabase writer is gated by ENABLE_LEGACY_SUPABASE_WRITERS.');
+  } else if (approvedHybridAlertBoundary) {
+    severity = 'reference';
+    notes.push(
+      'Approved hybrid alert boundary: Tiger metrics/state with retained Supabase user controls and alert delivery.'
+    );
   } else if (hasDatabaseUrl && active && usesDatabaseUrlSqlWrite && !hasTigerUrl) {
     severity = triggers.schedule ? 'blocker' : 'manual-risk';
     notes.push('Workflow uses DATABASE_URL for direct SQL write operations without a Tiger target.');
@@ -193,6 +210,9 @@ function classifyWorkflow(filePath) {
     changeIntelWriteTarget,
     picsChangeHistoryTarget,
     picsLatestStateTarget,
+    alertMetricsReadTarget,
+    alertStateWriteTarget,
+    alertDeliveryWriteTarget,
     usesIngestion,
     usesSupabaseWrite,
     usesDatabaseUrlSqlWrite,
@@ -258,10 +278,25 @@ function classifyCodePath(filePath) {
     return null;
   }
 
-  const severity = hasSupabaseServiceClient && (hasWriteOperation || hasRpc) ? 'manual-risk' : 'reference';
+  const approvedHybridAlertWorker =
+    relPath(filePath) === 'packages/ingestion/src/workers/alert-detection-worker.ts' &&
+    text.includes('ALERT_METRICS_READ_TARGET') &&
+    text.includes('ALERT_STATE_WRITE_TARGET') &&
+    text.includes('ALERT_DELIVERY_WRITE_TARGET') &&
+    text.includes("from('user_alerts')") &&
+    text.includes('getTigerWriter');
+  const severity = approvedHybridAlertWorker
+    ? 'reference'
+    : hasSupabaseServiceClient && (hasWriteOperation || hasRpc)
+      ? 'manual-risk'
+      : 'reference';
   const notes = [];
 
-  if (severity === 'manual-risk') {
+  if (approvedHybridAlertWorker) {
+    notes.push(
+      'Approved hybrid alert worker retains Supabase only for user controls and delivered alerts.'
+    );
+  } else if (severity === 'manual-risk') {
     notes.push('Static scan found Supabase service-client usage with write-like methods or RPC/table calls.');
   } else {
     notes.push('Static scan found Supabase configuration or service-client usage without obvious writes.');

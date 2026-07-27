@@ -277,11 +277,24 @@ const WORKFLOW_SOURCES = [
     workflow: "alert-detection.yml",
     schedule: true,
     commands: [/alert-detection/],
-    envEquals: { DATA_WRITE_TARGET: "tiger" },
-    requiredEnv: ["TIGER_PRIMARY_URL"],
+    envEquals: {
+      ALERT_METRICS_READ_TARGET: "tiger",
+      ALERT_STATE_WRITE_TARGET: "tiger",
+      ALERT_DELIVERY_WRITE_TARGET: "supabase",
+    },
+    requiredEnv: [
+      "TIGER_PRIMARY_URL",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_KEY",
+    ],
+    retainedSupabaseDelivery: true,
     optionalGate: "ENABLE_TIGER_ALERT_WORKER",
     liveJobTypes: ["alert_detection"],
-    evidence: ["ops.alert_detection_state", "legacy.user_alerts"],
+    evidence: [
+      "ops.alert_detection_state",
+      "ops.sync_jobs:alert_detection",
+      "Supabase public.user_alerts (retained user delivery truth)",
+    ],
   },
   {
     id: "review-interpolation",
@@ -1209,11 +1222,19 @@ function analyzeWorkflowSource(source) {
     SUPABASE_SERVICE_KEY_PATTERN.test(text) &&
     source.category !== REFERENCE_OR_DISABLED
   ) {
-    addCheck(
-      checks,
-      "fail",
-      "Supabase service credential is present on an active ingestion path.",
-    );
+    if (source.retainedSupabaseDelivery) {
+      addCheck(
+        checks,
+        "pass",
+        "Supabase service credential is intentionally retained only for alert controls and user_alerts delivery.",
+      );
+    } else {
+      addCheck(
+        checks,
+        "fail",
+        "Supabase service credential is present on an active ingestion path.",
+      );
+    }
   }
 
   const hasSupabaseDirectWrite =

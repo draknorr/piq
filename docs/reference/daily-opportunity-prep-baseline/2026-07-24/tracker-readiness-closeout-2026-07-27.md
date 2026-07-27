@@ -1,7 +1,8 @@
 # Daily Opportunity Preparation Closeout Status
 
-Status captured on 2026-07-27 UTC against `main` commit
-`846e8c6d6589319de5598ae3f874454d56f28eaf` (merged PR #77).
+Status updated on 2026-07-27 UTC against `main` commit
+`a23b412c74d490d8a137ddbb8b2d94b20bb89d58` (merged PR #79), plus the
+separately approved production writes recorded below.
 
 ## Outcome
 
@@ -16,8 +17,11 @@ after PR #70:
 - Insights now reads current Tiger data and completes its 30-day Top Games
   queries without the earlier timeouts.
 - Apps projection job 1016 recovered to exact legacy/v2 parity.
-- A snapshot-aware forward scheduler repair is merged, tested, and deliberately
-  unapplied pending a separate production-schema approval.
+- Snapshot-aware scheduler migration 0096 is applied without changing or
+  prematurely running job 1016; its first natural fixed-slot run remains to be
+  observed.
+- The corrected exact 100-app signal-window shadow cohort is populated and
+  idempotency-verified.
 
 No current product reader needs to be rolled back. The remaining gates are
 data-write approvals, elapsed operating evidence, retained alert/histogram
@@ -34,7 +38,9 @@ complete merely because the core site renders.
 | #74 | Bounded the 30-day Insights trend aggregates and raised the server timeout to the measured safe limit.           |
 | #75 | Split Admin PICS relation counts to avoid one large relation scan.                                               |
 | #76 | Split Admin source-health reads into independently bounded statements.                                           |
-| #77 | Added and tested forward migration 0096 for snapshot-aware Apps projection parity. The migration is not applied. |
+| #77 | Added and tested forward migration 0096 for snapshot-aware Apps projection parity.                                  |
+| #78 | Published the first reconciled readiness closeout and corrected signal-window manifest.                              |
+| #79 | Repaired the live verifier so one slow table probe no longer erases the remaining evidence.                           |
 
 PR #69 remains an open documentation-only draft whose rollout narrative
 predates primary catalog/PICS operation and the PR #70 replay. It is not
@@ -55,7 +61,7 @@ current rollout truth.
 | PICS                                                   | Durable primary Railway service plus Tiger/R2 | `/health` is `OK`; `/status` reports durable primary, connected, processing enabled, and zero consecutive poll failures.               |
 | Query API                                              | Railway/Tiger                                 | `/healthz` returned `ok: true` with Tiger provenance at `2026-07-27T01:49:28Z`.                                                        |
 | Apps refresh                                           | Timescale job 1016                            | Enabled on the fixed four-hour cadence; latest run successful.                                                                         |
-| Signal windows                                         | Tiger manual bounded runner                   | Schema and runner exist, but the table remains empty and no cadence is approved.                                                       |
+| Signal windows                                         | Tiger manual bounded runner                   | Corrected 100-app shadow cohort is populated and idempotency-verified; no recurring cadence or reader cutover was introduced.          |
 
 The exact PR #77 production deployment was `Ready` in Vercel and `Success` in
 Railway. An authenticated overlap smoke kept Admin and Insights open
@@ -69,9 +75,9 @@ corresponding server logs contained no hidden timeout or query failures.
 | 0 — baseline and preservation      | Substantially complete                                       | Dated Tiger/Supabase/R2 manifests, protected-object comparisons, recovery evidence, ownership maps, and rollback records exist.                        | Keep the final preservation comparison current when later approved writes occur.                                                                    |
 | 1 — durable catalog                | Active; observation window incomplete                        | One complete primary full scan on 2026-07-26 committed 176,236 source rows. Completed full shadow evidence also exists on July 24 and 25.              | Three complete healthy **primary** daily full cycles have not elapsed.                                                                              |
 | 2 — durable PICS                   | Active; observation and disposition incomplete               | Durable primary is current, cursor-safe, archive-backed, and processing live plus catch-up lanes. PR #70 left 408 immutable replay-provenance rows.    | Three complete healthy daily primary cycles have not elapsed; three dead letters require an operator disposition.                                   |
-| 3 — readiness, events, and windows | Partial                                                      | Readiness, registry, lifecycle, runner, boundary tests, and runbooks exist.                                                                            | `metrics.app_signal_windows_v1` has zero rows; the revised 100-app shadow transaction has not been approved or run.                                 |
-| 4 — current consumers              | Product readers complete; full compatibility gate incomplete | Apps, Dashboard, Admin, Insights, Change Feed, Chat, and YouTube use current intended product sources and high-signal route checks pass.               | Legacy non-auth controls are not reconciled to Tiger; the alert detector is disabled; the full mutating route matrix needs disposable test records. |
-| 5 — controls and cutovers          | Partial                                                      | Fail-closed reader/writer modes and non-destructive rollback flags exist. Catalog/PICS primary and Apps/Dashboard/Admin/Insights Tiger modes are live. | Migration 0096 is unapplied; three-cycle evidence is missing; histogram and alert ownership/cadence are unresolved.                                 |
+| 3 — readiness, events, and windows | Substantially complete                                        | Readiness, registry, lifecycle, runner, boundary tests, runbooks, and a validated 100-app shadow population exist.                                      | Product cadence and consumer cutover remain intentionally separate future decisions.                                                                |
+| 4 — current consumers              | Product readers complete; full compatibility gate incomplete | Apps, Dashboard, Admin, Insights, Change Feed, Chat, and YouTube use current intended product sources and high-signal route checks pass.               | The approved hybrid alert port needs deployment/live smoke; the full mutating route matrix needs disposable test records.                           |
+| 5 — controls and cutovers          | Partial                                                      | Fail-closed modes exist; migration 0096 is applied; the approved Alert/Histogram restoration is locally validated.                                     | First natural 0096 run, Alert/Histogram production smokes, three-cycle evidence, and dead-letter dispositions remain.                               |
 | 6 — handoff                        | Current status published; final-ready verdict blocked        | This record reconciles PRs #39–#77 with live runtime, tests, limitations, and exact approval boundaries.                                               | The verdict cannot become `Preparation complete` until Phases 1–5 pass.                                                                             |
 
 ## Live data snapshot
@@ -99,7 +105,9 @@ Captured at `2026-07-27T01:50:05Z`:
   `source_blocked`, and three failed;
 - overall readiness: 2,568 ready, 274,499 pending, 9,521
   `source_blocked`, and three failed;
-- signal windows: zero rows and zero creator-readiness rows;
+- signal windows at the original snapshot: zero rows and zero
+  creator-readiness rows; the approved follow-up shadow run later added the
+  exact 100 signal rows and 200 readiness rows described below;
 - Apps projections: 226,115 rows in both legacy and v2 after the successful
   retry;
 - Tiger retained controls: six pins, zero alerts, and zero detection-state
@@ -117,7 +125,7 @@ The PICS service remained healthy after the snapshot. At
 `2026-07-27T01:47:24Z`, `/status` reported cursor `37,547,482`, connected Steam,
 processing enabled, and zero consecutive poll failures.
 
-## Scheduler state and unapplied repair
+## Scheduler state and applied repair
 
 Job 1016 reported three failures and fourteen successes across seventeen runs.
 The 2026-07-27 fixed run failed twice because accepted source writes changed
@@ -136,11 +144,16 @@ race.
 PR #77 added
 `packages/data-plane/sql/tiger-bootstrap/0096_apps_projection_snapshot_aware_parity.sql`.
 It captures before/after source fingerprints, requires exact source parity when
-the source is stable, and always requires legacy/v2 and filter parity. It does
-not alter or run job 1016. Applying its `CREATE OR REPLACE PROCEDURE` remains a
-separate production schema write.
+the source is stable, and always requires legacy/v2 and filter parity.
 
-## Signal-window approval boundary
+The separately approved production apply completed atomically. The procedure
+definition MD5 changed from `7869dad37e0a575e042db5df5151e88a` to
+`9fdc8e71ab143dcc3b148fe865fc11c3`; snapshot-aware markers are present. Job
+1016's schedule, config, runtime limit, retry policy, counters, and
+`2026-07-27T04:47:00Z` next start remained unchanged. The apply did not run the
+job. Its first natural execution under 0096 remains an open validation gate.
+
+## Signal-window execution
 
 The originally approved 100-app shadow transaction failed its foreign-key
 check because seven selected IDs were absent from `legacy.apps`. The
@@ -151,42 +164,43 @@ The revised manifest is
 [`signal-window-shadow-revised-manifest.md`](./signal-window-shadow-revised-manifest.md).
 
 It keeps the approved `2026-07-26` as-of date and replaces only the seven
-non-canonical IDs with deterministic canonical PICS `source_blocked` apps. Its
-verified pre-state is exactly 100 distinct canonical apps, 15 PICS
-`source_blocked` cohort rows, zero signal rows, and zero creator-readiness rows.
-It has **not** been approved or executed.
+non-canonical IDs with deterministic canonical PICS `source_blocked` apps. A
+fail-closed preflight caught and corrected a 99-ID transcription error before
+any write. The executed 100-app cohort produced:
+
+- 100 `metrics.app_signal_windows_v1` rows;
+- 100 `market_metrics` readiness rows;
+- 100 `creator` readiness rows;
+- zero date, boundary, coverage, or provenance violations; and
+- identical semantic hashes across the required idempotency rerun.
+
+The manifest records the exact cohort, actual 300-row footprint, state counts,
+and semantic hashes.
 
 ## Regression and operational verification
 
-Validated on the merged PR #77 source:
+The original merged PR #77 source passed the full repository regression suite.
+The Alert/Histogram restoration candidate on top of merged PR #79 additionally
+passed:
 
 - `pnpm build`: 10/10 workspace tasks passed;
 - `pnpm check-types`: 13/13 workspace tasks passed;
 - `pnpm lint`: zero errors;
-- `pnpm test`: 10/10 workspace tasks passed, including data-plane 95/95 and
-  ingestion 102/102;
-- `pnpm --filter @publisheriq/ingestion test:change-intel`: 46/46 passed;
-- `pnpm test:e2e`: all three Playwright Chat smokes passed;
-- complete `services/pics-service` pytest: 130/130 passed;
-- production Admin and Insights authenticated overlap smoke: passed;
-- production YouTube hydration smoke: passed;
-- Vercel deployment: Ready;
-- Railway query API deployment and health: Success/healthy.
+- `pnpm test`: 10/10 workspace tasks passed, including database 55/55 and
+  ingestion 105/105;
+- bounded read-only production execution of both new Tiger alert queries;
+- static ingestion verifier: zero failures;
+- enforced writer audit: zero scheduled blockers.
 
-Two required audit commands correctly remain non-green:
+Previously merged live evidence remains valid: all three Playwright Chat
+smokes, 130 PICS tests, authenticated Admin/Insights overlap, YouTube hydration,
+Vercel readiness, and Railway query-API health passed.
 
-1. `pnpm supabase:writer-audit` reports one scheduled-code blocker:
-   `.github/workflows/alert-detection.yml` still contains the Supabase
-   service-key writer and no Tiger target. GitHub reports this workflow
-   `disabled_manually`; its last run was April 30, so it is not currently
-   writing, but retained alert detection is also not operating.
-2. `pnpm tiger:ingestion-verify -- --live` reports:
-   - Review Histogram has no current scheduled trigger;
-   - Alert Detection has no Tiger writer/gate;
-   - recent Tiger `ops.sync_jobs` has neither histogram nor alert-detection
-     work; and
-   - Review Histogram was last fetched on May 22 and Alert Detection has zero
-     Tiger state rows.
+The restoration changes the Alert static contract to the approved exact split:
+Tiger metrics/events/state/jobs and Supabase pins/preferences/delivered alerts.
+It restores Histogram at 04:15 and 16:15 UTC with a 300-app batch and
+30-minute cap. Neither path can be called production-verified until the merged
+workflow smokes finish.
 
 The follow-up verifier repair in PR #79 replaced full-table exact counts with
 explicitly labeled Timescale estimates plus indexed latest/recent probes. A
@@ -207,22 +221,17 @@ The read-only Supabase snapshot remains preserved:
   `2026-05-01T01:25:20Z`, and latest app update
   `2026-05-06T05:43:19Z`.
 
-## Remaining closeout decisions
+## Remaining closeout actions
 
-The following actions require explicit choices rather than silent changes:
+The user approved the signal shadow run, migration 0096 apply, hybrid
+Tiger-metrics Alert Detection port, and twice-daily 300-app Histogram cadence.
+The first two are complete. The remaining actions are:
 
-1. approve or reject the revised exact 100-app signal-window shadow manifest;
-2. separately approve or reject applying migration 0096 to production Tiger;
-3. choose the retained alert policy:
-   - migrate the existing detector to its prepared Tiger tables and re-enable
-     it behind a fail-closed gate;
-   - formally retain alert UI/data while keeping automated detection disabled;
-     or
-   - remove alerts only through a separately approved product change;
-4. choose a bounded Review Histogram cadence or formally record it as
-   manual/on-demand;
-5. disposition the three PICS dead letters; and
-6. provide a disposable account/record strategy before mutating pin, alert,
+1. merge, deploy, enable, and smoke the Alert Detection restoration;
+2. merge and smoke the 300-app Histogram restoration;
+3. validate job 1016's first natural execution under migration 0096;
+4. disposition the three PICS dead letters; and
+5. provide a disposable account/record strategy before mutating pin, alert,
    account, and sign-out regression checks.
 
 Three complete healthy primary catalog and PICS daily cycles must then be
@@ -234,5 +243,5 @@ one day or with earlier shadow cycles.
 The current site is operational, the previously stale Admin and Insights
 product panels are current, and the YouTube hydration regression is fixed.
 The daily opportunity preparation is **close but not complete**. Declaring it
-ready today would overclaim the signal-window, alert/histogram, scheduler,
-dead-letter, full-route, and three-cycle gates.
+ready today would still overclaim the alert/histogram production smokes,
+scheduler observation, dead-letter, full-route, and three-cycle gates.
