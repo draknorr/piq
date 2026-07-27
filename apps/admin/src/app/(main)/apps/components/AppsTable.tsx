@@ -35,6 +35,7 @@ import type { App, SortField, SortOrder } from '../lib/apps-types';
 
 interface AppsTableProps {
   apps: App[];
+  rankOffset?: number;
   sortField: SortField;
   sortOrder: SortOrder;
   onSort: (field: SortField) => void;
@@ -665,6 +666,7 @@ function AppRow({
 
 export function AppsTable({
   apps,
+  rankOffset = 0,
   sortField,
   sortOrder,
   onSort,
@@ -777,7 +779,7 @@ export function AppsTable({
           <MobileAppCard
             key={app.appid}
             app={app}
-            rank={index + 1}
+            rank={rankOffset + index + 1}
             isPinned={pinnedIds.has(app.appid)}
             onPin={() => handlePin(app)}
             isPinning={pinningIds.has(app.appid)}
@@ -830,7 +832,7 @@ export function AppsTable({
               <AppRow
                 key={app.appid}
                 app={app}
-                rank={index + 1}
+                rank={rankOffset + index + 1}
                 columns={columns}
                 sparklineLoader={sparklineLoader}
                 isSelected={isSelected?.(app.appid)}

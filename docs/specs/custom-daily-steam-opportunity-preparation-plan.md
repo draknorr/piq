@@ -1,7 +1,7 @@
 # Daily Opportunity Tracker Backend Preparation Plan
 
 > **Current execution status:** the evidence-backed closeout through merged PR
-> #80 is in
+> #81 and the final PR #82 pagination-rank follow-up is in
 > [`tracker-readiness-closeout-2026-07-27.md`](../reference/daily-opportunity-prep-baseline/2026-07-24/tracker-readiness-closeout-2026-07-27.md).
 > The production site and its Tiger product readers are operational, but the
 > preparation exit gates are not all complete.

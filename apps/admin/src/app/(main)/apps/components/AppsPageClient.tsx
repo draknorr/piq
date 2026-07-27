@@ -543,6 +543,7 @@ function AppsPageClientInner({
       {/* Apps Table */}
       <AppsTable
         apps={apps}
+        rankOffset={pagination.offset}
         sortField={sort}
         sortOrder={order}
         onSort={setSort}
