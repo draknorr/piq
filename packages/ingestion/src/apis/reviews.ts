@@ -135,24 +135,50 @@ export interface ReviewHistogramEntry {
   positiveRatio: number;
 }
 
+export type ReviewHistogramFetchResult =
+  | {
+      attempts: number;
+      entries: ReviewHistogramEntry[];
+      status: 'data';
+    }
+  | {
+      attempts: number;
+      entries: [];
+      status: 'empty';
+    }
+  | {
+      attempts: number;
+      entries: [];
+      errorCode: string;
+      errorMessage: string;
+      status: 'failed';
+      statusCode?: number;
+    };
+
+const DEFAULT_HISTOGRAM_REQUEST_TIMEOUT_MS = 15000;
+
 /**
  * Fetch review histogram for trend analysis
  * Returns monthly buckets of positive/negative reviews
  * Rate limit: ~60 requests per minute
  *
  * @param appid - Steam app ID
- * @returns Array of monthly histogram entries or null if failed
+ * @returns A structured data, empty, or failure outcome
  */
 export async function fetchReviewHistogram(
-  appid: number
-): Promise<ReviewHistogramEntry[] | null> {
-  await rateLimiters.histogram.acquire();
-
+  appid: number,
+  requestTimeoutMs = DEFAULT_HISTOGRAM_REQUEST_TIMEOUT_MS
+): Promise<ReviewHistogramFetchResult> {
   const url = `${API_URLS.STEAM_STORE}/appreviewhistogram/${appid}?l=english`;
+  let attempts = 0;
 
   try {
     const response = await withRetry(async () => {
-      const res = await fetch(url);
+      await rateLimiters.histogram.acquire();
+      attempts++;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
 
       if (!res.ok) {
         throw new ApiError(`Failed to fetch histogram for ${appid}`, res.status, url);
@@ -162,10 +188,16 @@ export async function fetchReviewHistogram(
     });
 
     if (response.success !== 1 || !response.results?.rollups) {
-      return null;
+      return {
+        attempts,
+        entries: [],
+        errorCode: 'invalid_response',
+        errorMessage: `Steam returned an invalid histogram response for ${appid}`,
+        status: 'failed',
+      };
     }
 
-    return response.results.rollups.map((entry) => {
+    const entries = response.results.rollups.map((entry) => {
       const total = entry.recommendations_up + entry.recommendations_down;
       return {
         monthStart: new Date(entry.date * 1000),
@@ -174,9 +206,20 @@ export async function fetchReviewHistogram(
         positiveRatio: total > 0 ? entry.recommendations_up / total : 0,
       };
     });
+
+    return entries.length > 0
+      ? { attempts, entries, status: 'data' }
+      : { attempts, entries: [], status: 'empty' };
   } catch (error) {
     log.error('Failed to fetch review histogram', { appid, error });
-    return null;
+    return {
+      attempts,
+      entries: [],
+      errorCode: error instanceof ApiError ? error.code : 'request_failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      status: 'failed',
+      ...(error instanceof ApiError ? { statusCode: error.statusCode } : {}),
+    };
   }
 }
 
