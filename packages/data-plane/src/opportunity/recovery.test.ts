@@ -31,6 +31,31 @@ describe("opportunity failure recovery and preservation contracts", () => {
       repositorySource,
       /claim_expires_at = now\(\) \+ interval '5 minutes'/,
     );
+    assert.match(
+      repositorySource,
+      /WHEN work\.kind = 'materialize_events' THEN 1/,
+    );
+    assert.match(
+      repositorySource,
+      /ELSE GREATEST\(1, CEIL\(\$2::numeric \/ 4\)\)/,
+    );
+  });
+
+  test("materialization batches stay bounded and renew their active lease", () => {
+    const materialization = repositorySource.match(
+      /async materializeEvents\([\s\S]*?return moments\.length;\s+\}/,
+    )?.[0];
+    assert.ok(materialization);
+    assert.equal(materialization.match(/LIMIT 100/g)?.length, 2);
+    assert.match(materialization, /LIMIT 500/);
+    assert.match(
+      materialization,
+      /processedMoments % 50 === 0[\s\S]*?await onProgress\(\)/,
+    );
+    assert.match(
+      workerSource,
+      /materializeEvents\(\(\) =>[\s\S]*?heartbeatWork\(item\.id, this\.workerId\)/,
+    );
   });
 
   test("failures back off, dead-letter, and preserve source-blocked state", () => {
@@ -66,10 +91,10 @@ describe("opportunity failure recovery and preservation contracts", () => {
 
   test("material-event fan-out binds queue parameters with their target types", () => {
     const immediateFanOut = repositorySource.match(
-      /if \(moment\.eligibleForImmediate\) \{[\s\S]*?\} else if \(moment\.reevaluateEligibility\)/,
+      /if \(inserted && moment\.eligibleForImmediate\) \{[\s\S]*?\} else if \(inserted && moment\.reevaluateEligibility\)/,
     )?.[0];
     const readinessFanOut = repositorySource.match(
-      /else if \(moment\.reevaluateEligibility\) \{[\s\S]*?ON CONFLICT \(idempotency_key\) DO NOTHING[\s\S]*?\);/,
+      /else if \(inserted && moment\.reevaluateEligibility\) \{[\s\S]*?ON CONFLICT \(idempotency_key\) DO NOTHING[\s\S]*?\);/,
     )?.[0];
 
     assert.ok(immediateFanOut);

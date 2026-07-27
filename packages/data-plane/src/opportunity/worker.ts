@@ -330,7 +330,9 @@ export class OpportunityWorker {
       await this.repository.heartbeatWork(item.id, this.workerId);
       switch (item.kind) {
         case "materialize_events":
-          await this.repository.materializeEvents();
+          await this.repository.materializeEvents(() =>
+            this.repository.heartbeatWork(item.id, this.workerId),
+          );
           await this.repository.completeWork(item.id, this.workerId);
           return;
         case "daily_evaluation":
