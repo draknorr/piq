@@ -52,6 +52,7 @@ They must not be relabeled as complete merely because the core site renders.
 | #80 | Restored the approved Tiger-backed Alert Detection split and bounded twice-daily Review Histogram cadence. |
 | #81 | Deployed Apps pagination, corrected Admin Actions URLs, and published the first natural 0096 run evidence. |
 | #82 | Kept desktop/mobile Apps ranks continuous across pages and recorded the production route smoke.            |
+| #83 | Recorded the completed route deployment and repeatable missing natural workflow schedule evidence.         |
 
 PR #69 remains an open documentation-only draft whose rollout narrative
 predates primary catalog/PICS operation and the PR #70 replay. It is not
@@ -86,12 +87,12 @@ corresponding server logs contained no hidden timeout or query failures.
 | Phase                              | Status                                                       | Current evidence                                                                                                                                                                                                 | Exit gate still open                                                                 |
 | ---------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 0 — baseline and preservation      | Substantially complete                                       | Dated Tiger/Supabase/R2 manifests, protected-object comparisons, recovery evidence, ownership maps, and rollback records exist.                                                                                  | Keep the final preservation comparison current when later approved writes occur.     |
-| 1 — durable catalog                | Active; observation window incomplete                        | One complete primary full scan on 2026-07-26 committed 176,236 source rows. Completed full shadow evidence also exists on July 24 and 25.                                                                        | Three complete healthy **primary** daily full cycles have not elapsed.               |
+| 1 — durable catalog                | Active; observation window incomplete                        | Two complete primary full scans on July 26 and 27 committed 176,236 and 176,272 source rows with matched reconciliation. Completed full shadow evidence also exists on July 24 and 25.                           | A third complete healthy **primary** daily full cycle has not elapsed.               |
 | 2 — durable PICS                   | Active; observation window incomplete                        | Durable primary is current, cursor-safe, archive-backed, and processing live plus catch-up lanes. The three historical dead letters have explicit preserved-terminal dispositions.                               | Three complete healthy daily primary cycles have not elapsed.                        |
 | 3 — readiness, events, and windows | Substantially complete                                       | Readiness, registry, lifecycle, runner, boundary tests, runbooks, and a validated 100-app shadow population exist.                                                                                               | Product cadence and consumer cutover remain intentionally separate future decisions. |
 | 4 — current consumers              | Product readers complete; full compatibility gate incomplete | Apps, Dashboard, Admin, Insights, Change Feed, Chat, and YouTube use current intended product sources. Read-only route checks now include pagination, filters, entity details, and Unreleased timeline behavior. | Mutating compatibility branches need disposable test records.                        |
 | 5 — controls and cutovers          | Partial                                                      | Fail-closed modes exist; migration 0096 is applied and naturally executed; Alert and Histogram are active and manually production-smoked; dead letters are dispositioned.                                        | Natural Alert/Histogram schedule events and three-cycle evidence remain.             |
-| 6 — handoff                        | Current status published; final-ready verdict blocked        | This record reconciles PRs #39–#82 with live runtime, tests, limitations, and exact approval boundaries.                                                                                                         | The verdict cannot become `Preparation complete` until Phases 1–5 pass.              |
+| 6 — handoff                        | Current status published; final-ready verdict blocked        | This record reconciles PRs #39–#83 with live runtime, tests, limitations, and exact approval boundaries.                                                                                                         | The verdict cannot become `Preparation complete` until Phases 1–5 pass.              |
 
 ## Live data snapshot
 
@@ -151,6 +152,27 @@ A bounded follow-up at `2026-07-27T03:40:27Z` found:
   and
 - catalog full-run evidence was unchanged at one successful July 26 primary
   cycle.
+
+A second bounded follow-up at `2026-07-27T05:38:24Z` found:
+
+- the July 27 primary full catalog run
+  [30236001047](https://github.com/draknorr/piq/actions/runs/30236001047)
+  completed at `04:06:42.871140Z`;
+- its 176,272 source rows reconciled as 176,254 accepted, 18 rejected, 176,253
+  known, and one observer-unknown row with outcome `status=matched`;
+- catalog therefore has two complete healthy primary full daily cycles, July
+  26 and 27, with zero failed full-primary runs;
+- July 27 PICS had reached 84 committed durable live batches and 3,913 source
+  apps, with zero source-blocked live batches;
+- the primary PICS cursor had advanced to `37,550,471` at
+  `05:36:37.853261Z`; and
+- durable work remained active with 22 claimed, 271,039 pending, one retrying,
+  10,268 completed, 5,443 `source_blocked`, and the same three preserved dead
+  letters.
+
+July 27 was still in progress at that checkpoint, so it is not counted as a
+complete PICS day. Catalog and PICS each still require one more elapsed,
+complete primary day before the three-cycle gate can pass.
 
 ## Scheduler state and applied repair
 
@@ -323,9 +345,9 @@ All four approved actions are complete. The remaining actions are:
 2. provide a disposable account/record strategy before mutating pin, alert,
    account, and sign-out regression checks.
 
-Three complete healthy primary catalog and PICS daily cycles must then be
-captured. That elapsed evidence cannot be substituted with multiple runs on
-one day or with earlier shadow cycles.
+One more complete healthy primary catalog day and one more complete healthy
+primary PICS day must then be captured. That elapsed evidence cannot be
+substituted with multiple runs on one day or with earlier shadow cycles.
 
 ## Verdict
 
