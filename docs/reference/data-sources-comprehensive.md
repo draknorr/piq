@@ -1513,7 +1513,7 @@ Reviews: Overwhelmingly Positive (93%)
 | 00:15 | `applist-sync`         | Master app list             |
 | 02:15 | `steamspy-sync`        | CCU, owners, playtime, tags |
 | 03:00 | `embedding-sync`       | Vector embeddings           |
-| 04:15 | `histogram-sync`       | Monthly review trends       |
+| 04:23, 16:23 | `histogram-sync` | Monthly review trends       |
 | 04:30 | `ccu-daily-sync`       | Tier 3 CCU (1st rotation)   |
 | 05:00 | `interpolation`        | Review delta interpolation  |
 | 05:00 | `refresh-views`        | Materialized view refresh   |

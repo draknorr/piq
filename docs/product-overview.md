@@ -696,14 +696,14 @@ The PICS service runs in `bulk_sync`, `first_pass`, or `change_monitor` mode dep
 | SteamSpy Sync | Daily 01:00 UTC | Full catalog | 4-6 hours |
 | Storefront Sync | 3x daily | Priority-based | 1-2 hours per 10K apps |
 | Reviews Sync | 3x daily | Velocity-based | 30-60 min per 10K apps |
-| Histogram Sync | Weekly | Full catalog | 15-30 min |
+| Histogram Sync | Daily 04:23 and 16:23 UTC | 300 apps | <30 min |
 | Trends Calculation | Daily 04:30 UTC | All apps | 5-10 min |
 | Priority Calculation | Daily 04:45 UTC | All apps | 5-10 min |
 | Velocity Calculation | 3x daily | All apps | 1-2 min |
 | Interpolation | Daily 05:00 UTC | Gap-fill | 5-10 min |
 | CCU Tiered Sync | Hourly | Tier 1+2 | 15-30 min |
 | CCU Daily Sync | 3x daily (04:30, 12:30, 20:30 UTC) | Tier 3 rotation | 6 hours |
-| Alert Detection | Hourly at :15 | All pinned entities | <10 min |
+| Alert Detection | Hourly at :23 | All pinned entities | <10 min |
 | Embedding Sync | Daily | All entities | 15-30 min |
 | Materialized View Refresh | Daily 05:00 UTC | All views | 5-10 min |
 | CCU Cleanup | Weekly Sun 3 AM UTC | Old snapshots | <5 min |

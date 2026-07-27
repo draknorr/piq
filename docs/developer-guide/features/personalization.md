@@ -663,8 +663,8 @@ name: Alert Detection
 
 on:
   schedule:
-    # Run hourly, 15 minutes after CCU sync
-    - cron: '15 * * * *'
+    # Run hourly at :23, after CCU sync and outside the busy :15 window
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 env:

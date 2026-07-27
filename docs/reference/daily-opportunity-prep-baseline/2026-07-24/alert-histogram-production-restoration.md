@@ -19,10 +19,10 @@ or any excluded tracker object.
 
 ## Production controls
 
-| Workflow                                | Production state | Gate                                                 | Schedule                |
+| Workflow                                | Production state | Gate                                                 | Approved schedule       |
 | --------------------------------------- | ---------------- | ---------------------------------------------------- | ----------------------- |
-| `.github/workflows/alert-detection.yml` | `active`         | repository variable `ENABLE_TIGER_ALERT_WORKER=true` | hourly at minute 15     |
-| `.github/workflows/histogram-sync.yml`  | `active`         | existing Tiger metrics-writer gate enabled           | `04:15` and `16:15` UTC |
+| `.github/workflows/alert-detection.yml` | `active`         | repository variable `ENABLE_TIGER_ALERT_WORKER=true` | hourly at minute 23     |
+| `.github/workflows/histogram-sync.yml`  | `active`         | existing Tiger metrics-writer gate enabled           | `04:23` and `16:23` UTC |
 
 Before enablement, Alert Detection was `disabled_manually` and its gate was
 false. Histogram remained active but had no current production evidence. The
@@ -132,3 +132,17 @@ its most recent run remained the successful manual dispatch. This is now a
 repeatable natural-scheduler failure rather than only a delayed first trigger.
 The tracker-readiness closeout records the distinction and must not treat the
 schedule as passed until an actual natural run completes.
+
+GitHub
+[documents](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+that scheduled events can be delayed or dropped during high load, especially
+near the start of an hour, and recommends choosing a different minute. The
+repository also had several unrelated schedules sharing minute 15. The
+approved repair therefore moves Alert from `15 * * * *` to `23 * * * *` and
+Histogram from `15 4,16 * * *` to `23 4,16 * * *`.
+This preserves the hourly and twice-daily cadences, changes no worker behavior
+or data target, and separates these jobs from the crowded minute-15 window.
+
+The repair is not considered verified until a natural Alert run and a natural
+Histogram run both enqueue and complete from the default branch. The first
+eligible boundaries after deployment are recorded in the readiness closeout.
