@@ -15,16 +15,17 @@ this environment because no test destinations are configured.
 | Material-event queue parameter repair | PR #88, merge `d7f575d`                           |
 | Lease-safe bounded materialization    | PR #89, merge `e33b22b`                           |
 | Production rollout documentation      | PR #90, merge `4b04fb1`                           |
-| Opportunity worker deployment         | `d5a0079d-1747-47df-a60c-d42e957ea6ca`, `SUCCESS` |
+| Source timestamp propagation          | PR #91, merge `13e327a`                           |
+| Opportunity worker deployment         | `aaf1f358-7a61-4c50-8262-2f3e121734f8`, `SUCCESS` |
 | Query API implementation deployment   | `389505f1-8302-47fc-8501-a58a0e113d1c`, `SUCCESS` |
-| Query API documentation deployment    | `b2f72190-75bf-4b25-af0b-17f4b6f22441`, `SUCCESS` |
+| Query API source-timestamp deployment | `d8474a1f-3002-43f6-97dc-b8c69d7a9cc8`, `SUCCESS` |
 | Query API health                      | Tiger-backed `/healthz` returned `{"ok":true}`    |
 | Worker topology                       | one production replica                            |
 
-The worker deployment identifies merge `e33b22b`. PR #90 did not touch watched
-worker files, so Railway correctly skipped a replacement. The query API
-deployment identifies merge `4b04fb1`; it compiled successfully, started
-Tiger-backed on port 8080, and passed `/healthz`.
+Both current service deployments identify merge `13e327a`. The worker started
+cleanly, scheduled one item, and completed its first claimed work with zero
+deliveries. The query API passed its Railway health gate and a direct
+Tiger-backed `/healthz` check.
 
 ## Applied production state
 
@@ -106,9 +107,21 @@ The run also exposed one provenance defect: `legacy.apps`,
 `steam_storefront`, and `steam_pics` source timestamps were null even when
 Tiger readiness rows contained authoritative `source_at` values. The shared
 repository query discarded those timestamps before evaluation. The contained
-repair joins/selects the readiness timestamps and has repository/worker
-regression coverage. The three original results remain immutable; a new result
-after deployment is required to close live provenance acceptance.
+repair in PR #91 joins/selects the readiness timestamps and has
+repository/worker regression coverage. The three original results remain
+immutable.
+
+After deployment, the merged repository path was run read only against the
+three production apps:
+
+| App       | Catalog                    | Storefront                   | PICS                       |
+| --------- | -------------------------- | ---------------------------- | -------------------------- |
+| `2190400` | `2026-07-27T04:04:43.827Z` | `2026-07-26T17:01:51.820Z`   | `2026-07-27T20:35:35.886Z` |
+| `3690490` | `2026-07-27T11:36:16.366Z` | `2026-07-27T11:39:00.832Z`   | `2026-07-27T20:31:16.500Z` |
+| `3734890` | `2026-07-27T04:04:43.827Z` | no row; remains unknown/null | `2026-07-27T20:31:11.702Z` |
+
+This proves the deployed rule-input contract uses real Tiger provenance and
+does not invent a storefront timestamp when the source row is absent.
 
 ## Material-event recovery
 
@@ -140,6 +153,12 @@ During both passes, `heartbeat_at` advanced and `claim_expires_at` returned to
 nearly five minutes. The worker claimed one new materialization row at a time.
 Cursor and event counts remained unchanged while each transaction was open,
 then advanced atomically at commit.
+
+At `2026-07-27T22:55:09.831039Z`, catalog and lifecycle cursors exactly matched
+their source heads (`176352` and `613`). The raw cursor was
+`1000001048164`, only 15 IDs behind the then-current moving source head
+`1000001048179`. Recent opportunity queue state contained only completed daily,
+materialization, and readiness work.
 
 Completed rows retain historical error fields from earlier attempts. Their
 `completed` state and completion timestamp are authoritative.
@@ -176,12 +195,17 @@ pre-existing warnings and zero errors.
 
 The remaining production acceptance focus is:
 
-1. merge and deploy the contained source-provenance repair;
-2. allow normal scheduling to create a new qualifying immutable result (or use
-   a separately approved trigger if natural traffic does not produce one);
-3. verify non-null catalog/storefront/PICS timestamps where authoritative
-   readiness rows exist; and
-4. confirm that the website can replay that corrected record.
+1. allow the next normal 09:00 America/Los_Angeles schedule to create a new
+   qualifying immutable result (or use a separately approved trigger if
+   natural traffic does not produce one); and
+2. verify the newly persisted record exposes the already-proven
+   catalog/storefront/PICS input timestamps.
+
+The authenticated website replayed dispatch `b37b7f77` with all three results.
+The Frostrain 2 record replayed the matching rule outcomes, decomposed rank,
+50-game cohort, market context, event ledger, calculation versions,
+missing-evidence state, and delivery history. Its null source timestamps remain
+visible as expected for immutable pre-fix evidence.
 
 Track, dismiss, ignore, restore, shared viewed/researching activity, delayed
 readiness, event-driven reappearance, and delivery idempotency retain their
