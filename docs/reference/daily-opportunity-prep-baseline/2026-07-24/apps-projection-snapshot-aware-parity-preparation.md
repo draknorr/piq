@@ -1,6 +1,7 @@
 # Apps Projection Snapshot-Aware Parity Preparation
 
-Status: prepared and tested locally; **not applied to Tiger**.
+Status: **approved and applied to production Tiger on 2026-07-27 UTC; next
+natural fixed-slot execution pending validation**.
 
 ## Why a forward migration is required
 
@@ -91,11 +92,40 @@ The static tests prove that 0096:
 - gates exact source parity on `NOT source_changed`; and
 - leaves v2 and filter parity mandatory after that conditional.
 
-## Approval boundary
+## Production apply
 
-This preparation does not authorize applying 0096. Applying it is a
-production `CREATE OR REPLACE PROCEDURE` schema write and requires a separate
-approval quoting the exact SQL file, risk, and rollback plan.
+The user separately approved applying the exact forward migration:
+
+`packages/data-plane/sql/tiger-bootstrap/0096_apps_projection_snapshot_aware_parity.sql`
+
+The bounded preflight recorded:
+
+- procedure definition MD5:
+  `7869dad37e0a575e042db5df5151e88a`;
+- snapshot-aware markers absent;
+- job 1016 scheduled every four hours with
+  `{"contract_version":"apps-projection-refresh/v1"}`;
+- maximum runtime 45 minutes, three retries, and 15-minute retry period;
+- 17 prior runs: 14 successes and 3 failures; and
+- next fixed start at `2026-07-27T04:47:00Z`.
+
+The migration ran atomically with `psql -1` and returned only the expected
+session settings, `CREATE PROCEDURE`, and `COMMENT`. It did not execute the job.
+
+Post-apply validation recorded:
+
+- procedure definition MD5:
+  `9fdc8e71ab143dcc3b148fe865fc11c3`;
+- snapshot-aware and source-change deferral markers present;
+- unchanged job ID, schedule, config, retry policy, run counters, and next
+  start; and
+- no foreground refresh or projection mutation caused by the apply.
+
+The remaining gate for this migration is observation of the first natural
+fixed-slot execution under the new procedure, followed by exact legacy/v2 and
+filter parity validation.
+
+## Rollback boundary
 
 If an applied replacement misbehaves, the immediate containment is to disable
 job 1016 after any active run ends. Restoring the prior 0091 procedure body or

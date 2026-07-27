@@ -1329,6 +1329,84 @@ test('alertsPinsChat.listPinnedEntitiesWithMetrics maps alert detection rows', a
   assert.match(pool.calls[0]?.sql ?? '', /LEFT JOIN ops\.alert_detection_state/);
 });
 
+test('alertsPinsChat.listAlertEntityMetrics reads bounded current Tiger metrics', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        ccu_7d_avg: '120',
+        ccu_current: '250',
+        discount_percent: '20',
+        entity_id: 10,
+        positive_ratio: '0.91',
+        price_cents: '1999',
+        review_velocity: '4.5',
+        total_reviews: '5000',
+        trend_30d_direction: 'up',
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const rows = await writer.alertsPinsChat.listAlertEntityMetrics([10]);
+
+  assert.equal(rows[0]?.entity_id, 10);
+  assert.equal(rows[0]?.ccu_7d_avg, 120);
+  assert.equal(rows[0]?.positive_ratio, 0.91);
+  assert.match(pool.calls[0]?.sql ?? '', /FROM metrics\.daily_metrics/);
+  assert.match(pool.calls[0]?.sql ?? '', /BETWEEN current_date - 6 AND current_date/);
+  assert.match(pool.calls[0]?.sql ?? '', /LEFT JOIN legacy\.latest_daily_metrics/);
+  assert.deepEqual(pool.calls[0]?.values, [[10]]);
+});
+
+test('alertsPinsChat.listRecentAlertSourceEvents maps price and related release events', async () => {
+  const pool = new CapturingPool([
+    result([
+      {
+        alert_type: 'price_change',
+        appid: 10,
+        app_name: 'Game',
+        current_value: '1999',
+        entity_id: 10,
+        entity_type: 'game',
+        event_key: 'change:1',
+        occurred_at: '2026-07-26T20:00:00.000Z',
+        previous_value: '2499',
+        source_data: { source: 'storefront' },
+      },
+      {
+        alert_type: 'new_release',
+        appid: 20,
+        app_name: 'New Game',
+        current_value: '1',
+        entity_id: 30,
+        entity_type: 'publisher',
+        event_key: 'release:1',
+        occurred_at: '2026-07-26T21:00:00.000Z',
+        previous_value: '0',
+        source_data: { source: 'lifecycle' },
+      },
+    ]),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  const rows = await writer.alertsPinsChat.listRecentAlertSourceEvents(
+    [
+      { entity_id: 10, entity_type: 'game' },
+      { entity_id: 30, entity_type: 'publisher' },
+    ],
+    '2026-07-26T19:00:00.000Z'
+  );
+
+  assert.equal(rows[0]?.previous_value, 2499);
+  assert.equal(rows[1]?.entity_type, 'publisher');
+  assert.equal(rows[1]?.app_name, 'New Game');
+  assert.match(pool.calls[0]?.sql ?? '', /events\.app_change_events/);
+  assert.match(pool.calls[0]?.sql ?? '', /legacy\.app_publishers/);
+  assert.match(pool.calls[0]?.sql ?? '', /legacy\.app_developers/);
+  assert.match(String(pool.calls[0]?.values?.[0]), /"entity_type":"game"/);
+  assert.equal(pool.calls[0]?.values?.[1], '2026-07-26T19:00:00.000Z');
+});
+
 test('alertsPinsChat inserts alerts with dedup do-nothing semantics', async () => {
   const pool = new CapturingPool([result([], 1)]);
   const writer = createTigerWriterForPool(pool);

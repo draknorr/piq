@@ -6,12 +6,22 @@ on:
     - cron: '15 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: alert-detection
+  cancel-in-progress: false
+
 env:
+  ALERT_METRICS_READ_TARGET: tiger
+  ALERT_STATE_WRITE_TARGET: tiger
+  ALERT_DELIVERY_WRITE_TARGET: supabase
+  ALERT_EVENT_LOOKBACK_MINUTES: '120'
+  TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
 jobs:
   detect:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_TIGER_ALERT_WORKER == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
