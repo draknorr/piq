@@ -36,12 +36,12 @@ Historical Tiger rollout/spec docs still exist under `docs/specs/`, but they are
 
 ## Latest Release
 
-**[v2.14 - Unreleased Games Tracker](releases/v2.14-unreleased-games.md)** (May 7, 2026)
+**[v2.15 - Custom Daily Steam Opportunity Brief](releases/v2.15-daily-opportunity-brief.md)** (July 27, 2026)
 
 Highlights:
-- new `/unreleased` workspace for upcoming Steam games, launch signals, media, news, timelines, and watchlist workflows
-- Tiger projection `metrics.unreleased_games_projection` serves fast filtering, sorting, and export
-- `/apps`, `/companies`, and `/unreleased` are Tiger-backed admin product reads; Supabase remains for auth/session/user-control surfaces and documented exceptions
+- new `/opportunities` workspace with personal profiles, daily results, and canonical evidence records
+- versioned presets, tri-state rules, durable material events, explainable ranking, cohorts, market context, and preset health
+- Tiger-owned queue/results/delivery state behind the authenticated query API, with Railway continuous work and bounded GitHub reconciliation
 
 ---
 
@@ -54,6 +54,7 @@ Highlights:
 - **[Insights Page](user-guide/insights-page.md)** - Top games, newest releases, trending, and personalized tabs
 - **[Games Page](user-guide/games-page.md)** - Game discovery and analytics
 - **[Unreleased Games](user-guide/unreleased-games.md)** - Upcoming game tracker and opportunity workflow
+- **[Daily Opportunity Brief](user-guide/opportunity-brief.md)** - Personal sourcing profiles and canonical daily matches
 - **[Companies Page](user-guide/companies-page.md)** - Unified publishers and developers
 - **[Chat Interface](user-guide/chat-interface.md)** - Natural language queries
 - **[Chat Query Examples](user-guide/chat-query-examples.md)** - Example prompts
@@ -108,6 +109,7 @@ Highlights:
 - **[Running Workers](developer-guide/workers/running-workers.md)** - Manual execution
 - **[Adding Workers](developer-guide/workers/adding-workers.md)** - Create new workers
 - **[Steam Change Intelligence](developer-guide/workers/steam-change-intelligence.md)** - Change-intel operations
+- **[Daily Opportunity Brief](developer-guide/workers/opportunity-brief.md)** - Tiger domain, Railway worker, delivery, and rollout
 
 ### Deployment
 
@@ -143,6 +145,7 @@ Highlights:
 
 ## Previous Releases
 
+- **[v2.14 - Unreleased Games Tracker](releases/v2.14-unreleased-games.md)** - upcoming Steam tracker and projection
 - **[v2.13 - Tiger Primary Ingestion](releases/v2.13-tiger-primary-ingestion.md)** - Tiger/R2 primary ingestion baseline
 - **[v2.12 - YouTube Coverage, Tiger Recovery, and Price Reliability](releases/v2.12-youtube-tiger-price-refresh.md)** - per-game YouTube chat coverage and Tiger recovery/pricing docs
 - **[v2.11 - Chat Contract Cutover and TigerData Operating Model](releases/v2.11-chat-contract-cutover.md)** - contract-first Tiger/query-api cutover baseline

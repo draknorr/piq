@@ -22,6 +22,7 @@ import {
   TrendingUp,
   Sparkles,
   Youtube,
+  Target,
   type LucideIcon,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts';
@@ -45,6 +46,7 @@ const mainNavItems: NavItem[] = [
   { href: '/insights', label: 'Insights', icon: TrendingUp },
   { href: '/youtube', label: 'YouTube Pulse', icon: Youtube },
   { href: '/changes', label: 'Change Feed', icon: Activity },
+  { href: '/opportunities', label: 'Opportunity Brief', icon: Target },
   { href: '/unreleased', label: 'Unreleased', icon: CalendarClock },
   { href: '/apps', label: 'Apps', icon: Gamepad2 },
   { href: '/companies?type=publisher', label: 'Publishers', icon: Building2 },

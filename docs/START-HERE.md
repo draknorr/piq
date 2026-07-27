@@ -8,6 +8,7 @@ Start with:
 - [User Guide](./user-guide/getting-started.md)
 - [Change Feed Guide](./user-guide/change-feed.md)
 - [Unreleased Games Guide](./user-guide/unreleased-games.md)
+- [Daily Opportunity Brief](./user-guide/opportunity-brief.md)
 - [Account Guide](./user-guide/account.md)
 
 ## I’m Administering PublisherIQ
@@ -30,6 +31,6 @@ Current data-plane rule: Tiger/R2 are primary for accepted incoming ingestion an
 
 ## Quick Links
 
-- [Latest Release Notes](./releases/v2.14-unreleased-games.md)
+- [Latest Release Notes](./releases/v2.15-daily-opportunity-brief.md)
 - [API Overview](./api/overview.md)
 - [Reference Docs](./reference/)

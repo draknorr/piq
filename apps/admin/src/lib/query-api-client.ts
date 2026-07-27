@@ -17,7 +17,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function postToQueryApi<T>(
   path: string,
   body: unknown,
-  options?: { timeoutMs?: number }
+  options?: {
+    identityAccessToken?: string;
+    timeoutMs?: number;
+  }
 ): Promise<QueryApiCallResult<T>> {
   const { baseUrl, reason } = resolveQueryApiBaseUrl();
   if (!baseUrl) {
@@ -36,6 +39,9 @@ export async function postToQueryApi<T>(
   const bearerToken = process.env.QUERY_API_BEARER_TOKEN?.trim();
   if (bearerToken) {
     headers.authorization = `Bearer ${bearerToken}`;
+  }
+  if (options?.identityAccessToken) {
+    headers['x-supabase-access-token'] = options.identityAccessToken;
   }
 
   try {
