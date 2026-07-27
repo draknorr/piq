@@ -64,6 +64,44 @@ describe("opportunity failure recovery and preservation contracts", () => {
     assert.match(scheduledReadiness, /pending\.material_event_id/);
   });
 
+  test("material-event fan-out binds queue parameters with their target types", () => {
+    const immediateFanOut = repositorySource.match(
+      /if \(moment\.eligibleForImmediate\) \{[\s\S]*?\} else if \(moment\.reevaluateEligibility\)/,
+    )?.[0];
+    const readinessFanOut = repositorySource.match(
+      /else if \(moment\.reevaluateEligibility\) \{[\s\S]*?ON CONFLICT \(idempotency_key\) DO NOTHING[\s\S]*?\);/,
+    )?.[0];
+
+    assert.ok(immediateFanOut);
+    assert.match(
+      immediateFanOut,
+      /profile\.owner_user_id,\s+\$1::integer,\s+\$2::uuid,/,
+    );
+    assert.match(
+      immediateFanOut,
+      /'event:' \|\| \$2::text \|\| ':user:'/,
+    );
+    assert.match(
+      immediateFanOut,
+      /jsonb_build_object\('eventFingerprint', \$3::text\)/,
+    );
+
+    assert.ok(readinessFanOut);
+    assert.match(
+      readinessFanOut,
+      /candidate\.user_id,\s+\$1::integer,\s+\$2::uuid,/,
+    );
+    assert.match(
+      readinessFanOut,
+      /'event:' \|\| \$2::text \|\| ':readiness:'/,
+    );
+    assert.match(
+      readinessFanOut,
+      /jsonb_build_object\('eventFingerprint', \$3::text\)/,
+    );
+    assert.match(readinessFanOut, /candidate\.appid = \$1::integer/);
+  });
+
   test("completed daily runs return profiles to their local schedule", () => {
     assert.match(
       repositorySource,

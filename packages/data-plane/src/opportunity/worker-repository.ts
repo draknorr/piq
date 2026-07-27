@@ -682,11 +682,11 @@ export class OpportunityWorkerRepository {
                 'new_observation',
                 profile.workspace_id,
                 profile.owner_user_id,
-                $1,
-                $2,
+                $1::integer,
+                $2::uuid,
                 1000,
-                'event:' || $2 || ':user:' || profile.owner_user_id,
-                jsonb_build_object('eventFingerprint', $3)
+                'event:' || $2::text || ':user:' || profile.owner_user_id,
+                jsonb_build_object('eventFingerprint', $3::text)
               FROM opportunity.profiles profile
               WHERE profile.status = 'enabled'
                 AND profile.immediate_full_match_enabled
@@ -713,13 +713,13 @@ export class OpportunityWorkerRepository {
                 'profile_readiness',
                 candidate.workspace_id,
                 candidate.user_id,
-                $1,
-                $2,
+                $1::integer,
+                $2::uuid,
                 300,
-                'event:' || $2 || ':readiness:' || candidate.user_id,
-                jsonb_build_object('eventFingerprint', $3)
+                'event:' || $2::text || ':readiness:' || candidate.user_id,
+                jsonb_build_object('eventFingerprint', $3::text)
               FROM opportunity.candidate_state candidate
-              WHERE candidate.appid = $1
+              WHERE candidate.appid = $1::integer
                 AND candidate.state = 'pending_readiness'
               ON CONFLICT (idempotency_key) DO NOTHING
             `,
