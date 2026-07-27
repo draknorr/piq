@@ -119,8 +119,8 @@ Do not configure an HTTP health check; this is a process worker.
 | ------------------------------------- | ---------------------------------- | ----------------------------------------------------------------- |
 | `TIGER_PRIMARY_URL`                   | required                           | Tiger connection                                                  |
 | `OPPORTUNITY_WEBSITE_BASE_URL`        | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                            |
-| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY` | optional                           | Enables encrypted email/Slack delivery                            |
-| `RESEND_API_KEY`                      | optional                           | Enables email provider calls                                      |
+| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY` | required for external delivery     | Enables encrypted email/Slack destinations                        |
+| `RESEND_API_KEY`                      | required before enabling email     | Enables email provider calls                                      |
 | `OPPORTUNITY_EMAIL_FROM`              | PublisherIQ default                | Verified Resend sender                                            |
 | `WORKER_ID`                           | generated UUID                     | Lease owner identity                                              |
 | `CLAIM_LIMIT`                         | `8`                                | Fair queue claims per poll, clamped by the repository             |
@@ -131,6 +131,11 @@ Do not configure an HTTP health check; this is a process worker.
 If the encryption key is absent, evaluations and website results still run, but
 delivery configuration and dispatch remain unavailable.
 
+If the encryption key is present but `RESEND_API_KEY` or a verified
+`OPPORTUNITY_EMAIL_FROM` is not accepted, keep email preferences disabled.
+Slack can be tested independently with an explicitly designated incoming
+webhook. Never invent a destination for a rollout smoke.
+
 ## Bounded GitHub reconciliation
 
 `.github/workflows/opportunity-reconcile.yml` is manual-only and requires:
@@ -139,8 +144,11 @@ delivery configuration and dispatch remain unavailable.
 - a non-empty production-write approval reference; and
 - one to ten materialization passes.
 
-Each pass reads at most 2,000 rows from each source stream, advances the durable
-materialization cursor, and stores grouped events. It cannot dispatch email or
+Each pass reads at most 100 catalog rows, 100 lifecycle rows, and 500 raw change
+rows, advances the durable materialization cursor, and stores grouped events.
+The same bounds are used by the Railway worker. The active queue claim is
+renewed every 50 processed moments, and one worker pass claims at most one
+global `materialize_events` trigger. Reconciliation cannot dispatch email or
 Slack and does not replace the Railway worker.
 
 Local command:
@@ -192,6 +200,8 @@ COMMIT;
 Investigate:
 
 - claimed rows whose lease is repeatedly expiring;
+- a materialization claim whose heartbeat does not advance during progress;
+- more than one active materialization claim owned by the same current worker;
 - growing retry/dead-letter counts by lane;
 - source-blocked work;
 - delivery rows exhausting retry attempts;
@@ -216,6 +226,11 @@ preferences are evaluated first, and a canonical result is included at most
 once per channel. A summary that reaches its result limit includes an explicit
 truncation notice.
 
+Historical `last_error_code` and `last_error_message` values are retained on a
+completed queue row. Use `state`, `completed_at`, and the current worker/lease
+fields to determine present health; retained error text is prior-attempt
+evidence, not a new failure.
+
 ## Rollout
 
 1. Confirm change-intelligence and PICS source readiness with read-only checks.
@@ -231,6 +246,11 @@ truncation notice.
    delivery per idempotency key.
 10. Review queue, run, source-health, cohort, and preset-health evidence before a
     broader rollout.
+
+The July 27 rollout completed steps 1–7 and the profile
+create/clone/preview/enable/pause/resume portion of step 8. A non-empty result,
+real-result state actions, and external provider sends remain open; see the
+[production rollout closeout](../../reference/opportunity-production-rollout-closeout-2026-07-27.md).
 
 ## Rollback
 
