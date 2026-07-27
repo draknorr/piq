@@ -1,0 +1,65 @@
+name: Opportunity Event Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      passes:
+        description: "Bounded source-event materialization passes (1-10)"
+        required: false
+        default: "1"
+      backup_pitr_verified:
+        description: "Tiger backup/PITR proof has been recorded"
+        required: true
+        type: boolean
+        default: false
+      approval_reference:
+        description: "Link or identifier for the explicit production-write approval"
+        required: true
+        type: string
+
+concurrency:
+  group: opportunity-event-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: >-
+      ${{
+        inputs.backup_pitr_verified == true
+        && inputs.approval_reference != ''
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+      OPPORTUNITY_RECONCILE_PASSES: ${{ inputs.passes }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Record production-write gate
+        env:
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+          BACKUP_PITR_VERIFIED: ${{ inputs.backup_pitr_verified }}
+        run: |
+          {
+            echo "Backup/PITR verified: $BACKUP_PITR_VERIFIED"
+            echo "Approval reference: $APPROVAL_REFERENCE"
+            echo "Requested passes: $OPPORTUNITY_RECONCILE_PASSES"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Materialize a bounded event batch
+        run: pnpm --filter @publisheriq/data-plane opportunity-reconcile

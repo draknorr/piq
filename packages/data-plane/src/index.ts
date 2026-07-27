@@ -4,4 +4,6 @@ export * from './contracts.js';
 export * from './errors.js';
 export * from './identity.js';
 export * from './legacy-relation-manifest.js';
+export * from './opportunity/index.js';
+export * from './pg.js';
 export * from './service.js';

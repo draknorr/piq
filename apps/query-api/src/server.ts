@@ -31,8 +31,17 @@ import {
   type SearchDocumentsRequest,
   type SemanticSearchRequest,
   type TraceMetricHistoryRequest,
+  getDataPlanePool,
+  loadOpportunityDestinationCipher,
+  OpportunityRepository,
+  OpportunityService,
 } from '@publisheriq/data-plane';
 import { logger, PublisherIQError } from '@publisheriq/shared';
+import {
+  loadOpportunityIdentityVerifier,
+  tryHandleOpportunityRequest,
+  type OpportunityIdentityVerifier,
+} from './opportunity-routes.js';
 
 let queryApiEnvLoaded = false;
 
@@ -316,10 +325,19 @@ function applyRelatedEntitiesFallbackSourceContext(params: {
 export function createQueryApiRequestHandler(params: {
   bearerToken: string | null;
   dataPlane: QueryApiService;
+  identityVerifier?: OpportunityIdentityVerifier | null;
+  opportunityService?: OpportunityService | null;
   relatedEntitiesFallback?: QueryApiService | null;
   sourceFallback?: QueryApiService | null;
 }): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
-  const { bearerToken, dataPlane, relatedEntitiesFallback = null, sourceFallback = null } = params;
+  const {
+    bearerToken,
+    dataPlane,
+    identityVerifier = null,
+    opportunityService = null,
+    relatedEntitiesFallback = null,
+    sourceFallback = null,
+  } = params;
 
   return async (request, response) => {
     try {
@@ -643,6 +661,18 @@ export function createQueryApiRequestHandler(params: {
         return;
       }
 
+      if (
+        await tryHandleOpportunityRequest({
+          identityVerifier,
+          opportunityService,
+          request,
+          response,
+          url,
+        })
+      ) {
+        return;
+      }
+
       if (request.method === 'GET' || request.method === 'POST') {
         sendJson(response, 404, { error: 'Route not found' });
         return;
@@ -682,6 +712,8 @@ export function createQueryApiServer(params?: {
   bearerToken?: string | null;
   config?: ReturnType<typeof loadQueryApiConfig> | null;
   dataPlane?: QueryApiService;
+  identityVerifier?: OpportunityIdentityVerifier | null;
+  opportunityService?: OpportunityService | null;
   relatedEntitiesFallback?: QueryApiService | null;
   sourceFallback?: QueryApiService | null;
 }): ReturnType<typeof createServer> {
@@ -694,6 +726,18 @@ export function createQueryApiServer(params?: {
         : loadQueryApiConfig()
     );
   const dataPlane = params?.dataPlane ?? new DataPlaneService(config!);
+  const opportunityService =
+    params?.opportunityService
+    ?? (
+      config?.source === 'tiger'
+        ? new OpportunityService(
+          new OpportunityRepository(getDataPlanePool(config)),
+          loadOpportunityDestinationCipher()
+        )
+        : null
+    );
+  const identityVerifier =
+    params?.identityVerifier ?? loadOpportunityIdentityVerifier();
   const relatedEntitiesFallback =
     params?.relatedEntitiesFallback
     ?? (
@@ -713,6 +757,8 @@ export function createQueryApiServer(params?: {
     createQueryApiRequestHandler({
       bearerToken: params?.bearerToken ?? config?.bearerToken ?? null,
       dataPlane,
+      identityVerifier,
+      opportunityService,
       relatedEntitiesFallback,
       sourceFallback,
     })

@@ -2,7 +2,7 @@
 
 > **Steam Data Analytics Platform with AI Chat Interface**
 
-PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, PICS, and matched Steam-scoped YouTube coverage into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, unreleased-game opportunity tracking, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, TigerData/R2 product-data paths, a TigerData-backed query-api, and a direct-to-Tiger YouTube collector, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, market shifts, creator pickup, and upcoming launch opportunities.
+PublisherIQ is an enterprise-grade analytics platform for Steam game data. It consolidates real-time data from Steam, SteamSpy, Steam News, PICS, and matched Steam-scoped YouTube coverage into a single dashboard with advanced filtering, AI-powered natural language querying, change-intelligence monitoring, unreleased-game tracking, custom daily opportunity briefs, and personalized alerting. Built on Next.js 15, Supabase, Cube.js, TigerData/R2 product-data paths, a TigerData-backed query-api, and a direct-to-Tiger YouTube collector, the platform tracks 200,000+ games, 15M+ daily metric records, and 5M+ concurrent user snapshots to deliver deep insight into game performance, publisher portfolios, market shifts, creator pickup, and upcoming launch opportunities.
 
 ---
 
@@ -46,6 +46,7 @@ PublisherIQ is a data analytics platform purpose-built for the Steam gaming ecos
 - **Creator Signal**: Inspect matched YouTube uploads, creator coverage, fastest-growing videos, content mix, and upload cadence for a tracked game
 - **Deep Discovery**: 12 preset views, 40+ filter parameters, and 6 computed insight metrics for finding hidden gems, tracking trends, and comparing games
 - **Unreleased Opportunity Tracking**: Identify upcoming games by release timing, media readiness, Steam news, change activity, publisher fit, and Opportunity Score
+- **Custom Daily Opportunity Briefs**: Define personal required, preferred, and excluded sourcing criteria, then receive replayable new or materially changed matches with transparent cohorts and market evidence
 - **Personalized Monitoring**: Pin games and companies, receive alerts on CCU spikes, trend reversals, review surges, and more
 
 ### Current Serving Model
