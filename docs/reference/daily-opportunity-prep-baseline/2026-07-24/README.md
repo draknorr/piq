@@ -126,6 +126,9 @@ GitHub-workflow verification are isolated in `apps-projection-refresh.md` and
   successful actual background-worker execution and first natural fixed-slot
   run, exact in-run reconciliation, explained post-run source movement,
   restored fixed cadence, live-route evidence, and the accelerated gate.
+- `apps-projection-snapshot-aware-parity-preparation.md`: current false-parity
+  retry evidence plus the prepared, locally tested, and explicitly unapplied
+  forward 0096 procedure replacement.
 - `pics-audited-reconciliation-schema-apply.md`: approved transactional 0092
   Tiger apply, exact schema verification, empty reconciliation controls,
   unchanged canonical cursor, continuing isolated shadow parity, and
