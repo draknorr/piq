@@ -257,10 +257,10 @@ const GAME_RECORD = {
   result: RESULT,
   teamActivity: [],
   userState: {
-    dismissedAt: null,
-    ignoredAt: null,
+    dismissedAt: null as string | null,
+    ignoredAt: null as string | null,
     researching: false,
-    trackedAt: null,
+    trackedAt: null as string | null,
   },
   youtubeEvidence: {
     coverage: "partial",
@@ -317,15 +317,63 @@ const PREVIEW = {
   warnings: ["Daily volume needs completed run history."],
 };
 
-async function installOpportunityMocks(page: Page): Promise<void> {
+async function installOpportunityMocks(
+  page: Page,
+  options: { statefulActions?: boolean } = {},
+): Promise<Array<{ body: Record<string, unknown>; operation: string }>> {
+  const actionRequests: Array<{
+    body: Record<string, unknown>;
+    operation: string;
+  }> = [];
+  const gameRecord = structuredClone(GAME_RECORD);
   await installChatFetchMocks(page, { chatResponses: [] });
   await page.route("**/api/opportunities/**", async (route: Route) => {
     const operation = new URL(route.request().url()).pathname.split("/").at(-1);
+    const body = (route.request().postDataJSON() ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (
+      options.statefulActions &&
+      (operation === "game-state" || operation === "team-activity")
+    ) {
+      actionRequests.push({ body, operation });
+      if (operation === "game-state") {
+        const timestamp = "2026-07-27T08:05:00.000Z";
+        switch (body.action) {
+          case "dismiss":
+            gameRecord.userState.dismissedAt = timestamp;
+            break;
+          case "ignore":
+            gameRecord.userState.ignoredAt = timestamp;
+            break;
+          case "restore":
+            gameRecord.userState.dismissedAt = null;
+            gameRecord.userState.ignoredAt = null;
+            break;
+          case "track":
+            gameRecord.userState.trackedAt = timestamp;
+            break;
+          case "untrack":
+            gameRecord.userState.trackedAt = null;
+            break;
+        }
+      } else {
+        gameRecord.userState.researching =
+          body.activityType === "researching_started";
+      }
+      await route.fulfill({
+        body: JSON.stringify({ ok: true }),
+        contentType: "application/json",
+        status: 200,
+      });
+      return;
+    }
     const payload =
       operation === "bootstrap"
         ? BOOTSTRAP
         : operation === "game-record"
-          ? GAME_RECORD
+          ? gameRecord
           : operation === "preview-profile"
             ? PREVIEW
             : {};
@@ -335,11 +383,13 @@ async function installOpportunityMocks(page: Page): Promise<void> {
       status: 200,
     });
   });
+  return actionRequests;
 }
 
 test("daily opportunity brief opens a replayable evidence record", async ({
   page,
 }) => {
+  test.slow();
   await installOpportunityMocks(page);
   await page.goto("/opportunities");
 
@@ -349,7 +399,7 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await expect(page.getByText(RESULT.name)).toBeVisible();
   await expect(page.getByText("1 signals worth opening")).toBeVisible();
 
-  await page.getByText(RESULT.name).click();
+  await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
   await expect(page).toHaveURL(
     new RegExp(`/opportunities/games/${RESULT.appid}\\?result=${RESULT.id}`),
     { timeout: 20_000 },
@@ -382,4 +432,66 @@ test("profile workshop previews with the same visible rule contract", async ({
     page.getByText(/current full matches across 200,000 games/i),
   ).toBeVisible();
   await expect(page.getByText(RESULT.name)).toBeVisible();
+});
+
+test("personal and team controls survive canonical-record reloads", async ({
+  page,
+}) => {
+  const actionRequests = await installOpportunityMocks(page, {
+    statefulActions: true,
+  });
+  await page.goto(`/opportunities/games/${RESULT.appid}?result=${RESULT.id}`);
+  await expect(page.getByRole("heading", { name: RESULT.name })).toBeVisible();
+
+  await page.getByRole("button", { name: "Track", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Tracked", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Tracked", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Track", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Researching", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Researching", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Research", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Dismiss", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Ignore", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Ignore", exact: true }),
+  ).toBeVisible();
+
+  expect(
+    actionRequests.map(({ body, operation }) => ({
+      action: body.action ?? body.activityType,
+      operation,
+    })),
+  ).toEqual([
+    { action: "track", operation: "game-state" },
+    { action: "untrack", operation: "game-state" },
+    { action: "researching_started", operation: "team-activity" },
+    { action: "researching_cleared", operation: "team-activity" },
+    { action: "dismiss", operation: "game-state" },
+    { action: "restore", operation: "game-state" },
+    { action: "ignore", operation: "game-state" },
+    { action: "restore", operation: "game-state" },
+  ]);
 });

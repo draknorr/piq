@@ -207,6 +207,17 @@ The Frostrain 2 record replayed the matching rule outcomes, decomposed rank,
 missing-evidence state, and delivery history. Its null source timestamps remain
 visible as expected for immutable pre-fix evidence.
 
+The first full post-fix readiness cycle completed 181 rechecks without a worker
+error. `Immortal Generals` (`4739690`) moved naturally from pending to
+ineligible when its PICS taxonomy became available. Both required `ALL` tag
+clauses failed against the observed Steam tags, the adult exclusion remained
+false, and the small-publisher preference passed. The persisted rule outcomes
+carry PICS source time `2026-07-27T22:48:48.955Z` and storefront source time
+`2026-07-27T20:47:54.851Z`. The other 167 candidates remained pending for tags.
+This proves post-fix tri-state re-evaluation and rule provenance in production;
+it correctly created no result, so the immutable-result timestamp check remains
+time-gated.
+
 Track, dismiss, ignore, restore, shared viewed/researching activity, delayed
 readiness, event-driven reappearance, and delivery idempotency retain their
 automated test coverage. They are not prerequisites for this production smoke.
