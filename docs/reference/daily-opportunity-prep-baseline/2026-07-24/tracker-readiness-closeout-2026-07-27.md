@@ -188,12 +188,12 @@ Two required audit commands correctly remain non-green:
    - Review Histogram was last fetched on May 22 and Alert Detection has zero
      Tiger state rows.
 
-The follow-up verifier repair replaced full-table exact counts with explicitly
-labeled Timescale estimates plus indexed latest/recent probes. A read-only
-production run at `2026-07-27T02:07:52Z` completed every registered freshness
-check without a statement timeout: 22 table surfaces were current, Review
-Histogram was stale, and Alert Detection was empty. Per-table error isolation
-now preserves the remaining evidence if any individual probe fails.
+The follow-up verifier repair in PR #79 replaced full-table exact counts with
+explicitly labeled Timescale estimates plus indexed latest/recent probes. A
+read-only production run at `2026-07-27T02:07:52Z` completed every registered
+freshness check without a statement timeout: 22 table surfaces were current,
+Review Histogram was stale, and Alert Detection was empty. Per-table error
+isolation now preserves the remaining evidence if any individual probe fails.
 
 The read-only Supabase snapshot remains preserved:
 
