@@ -567,6 +567,9 @@ export function useAppsFilters(): UseAppsFiltersReturn {
     (updates: Record<string, string | null>) => {
       const params = new URLSearchParams(searchParams.toString());
 
+      // A changed filter or sort invalidates the current result-page offset.
+      params.delete('offset');
+
       Object.entries(updates).forEach(([key, value]) => {
         if (value === null || value === '' || value === undefined) {
           params.delete(key);
@@ -606,6 +609,9 @@ export function useAppsFilters(): UseAppsFiltersReturn {
       // Set new debounced update (300ms per spec)
       urlUpdateTimeoutRef.current = setTimeout(() => {
         const params = new URLSearchParams(searchParams.toString());
+
+        // A changed filter or search invalidates the current result-page offset.
+        params.delete('offset');
 
         Object.entries(pendingUpdatesRef.current).forEach(([key, value]) => {
           if (value === null || value === '' || value === undefined) {

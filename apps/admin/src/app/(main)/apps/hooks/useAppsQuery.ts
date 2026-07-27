@@ -12,6 +12,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { App, AppsFilterParams, AggregateStats } from '../lib/apps-types';
+import { normalizeAppsPagination } from '../lib/apps-pagination';
 
 /**
  * Build URL search params from filter params
@@ -210,12 +211,17 @@ export function buildFilterParamsFromUrl(searchParams: URLSearchParams): AppsFil
       .filter(Boolean);
   };
 
+  const pagination = normalizeAppsPagination(
+    parseNumber(searchParams.get('limit')),
+    parseNumber(searchParams.get('offset'))
+  );
+
   return {
     type: (searchParams.get('type') as AppsFilterParams['type']) || 'game',
     sort: (searchParams.get('sort') as AppsFilterParams['sort']) || 'ccu_peak',
     order: (searchParams.get('order') as AppsFilterParams['order']) || 'desc',
-    limit: parseNumber(searchParams.get('limit')) ?? 50,
-    offset: parseNumber(searchParams.get('offset')) ?? 0,
+    limit: pagination.limit,
+    offset: pagination.offset,
     search: searchParams.get('search') || undefined,
 
     // Metric filters

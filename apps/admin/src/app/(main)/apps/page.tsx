@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/layout';
 import { AppsPageClient } from './components/AppsPageClient';
 import { getApps, getAggregateStats, getAppsByIdsWithFreshReviews, isTigerReadConfigured } from './lib/apps-queries';
 import { parseCompareParam } from './lib/apps-compare-utils';
+import { normalizeAppsPagination } from './lib/apps-pagination';
 import { TigerConfigRequired } from './lib/tiger-config-required';
 import type {
   App,
@@ -89,12 +90,18 @@ export default async function AppsPage({
       ? (publisherSizeParam as 'indie' | 'mid' | 'major')
       : undefined;
 
+  const pagination = normalizeAppsPagination(
+    parseNumber(params.limit),
+    parseNumber(params.offset)
+  );
+
   // Build filter params for query
   const filterParams: AppsFilterParams = {
     type,
     sort,
     order,
-    limit: 50,
+    limit: pagination.limit,
+    offset: pagination.offset,
     search,
     // Metric filters
     minCcu: parseNumber(params.minCcu),

@@ -5,11 +5,19 @@ Captured during the first implementation slice on Friday, July 24, 2026 at `2026
 This baseline is read-only. No production mutation was performed while capturing it.
 
 > **Current closeout status:** this README preserves the original July 24
-> baseline. The reconciled status through merged PR #77 and live production
+> baseline. The reconciled status through merged PR #80 and live production
 > inspection on July 27 is in
 > [`tracker-readiness-closeout-2026-07-27.md`](./tracker-readiness-closeout-2026-07-27.md).
 > Preparation is active but not yet complete; do not use the historical
 > observations below as current runtime state.
+
+Production-restoration and terminal-work decisions captured during the final
+closeout are recorded in:
+
+- [`alert-histogram-production-restoration.md`](./alert-histogram-production-restoration.md);
+- [`pics-dead-letter-disposition-2026-07-27.md`](./pics-dead-letter-disposition-2026-07-27.md);
+- [`route-regression-closeout-2026-07-27.md`](./route-regression-closeout-2026-07-27.md); and
+- [`signal-window-shadow-revised-manifest.md`](./signal-window-shadow-revised-manifest.md).
 
 After capture and explicit user approvals, the two existing Apps materialized
 views were refreshed concurrently. The direct first refresh and later

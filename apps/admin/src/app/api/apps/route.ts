@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
 import type { AppsFilterParams, AggregateStats } from '@/app/(main)/apps/lib/apps-types';
 import { getAggregateStats, getApps } from '@/app/(main)/apps/lib/apps-queries';
+import { normalizeAppsPagination } from '@/app/(main)/apps/lib/apps-pagination';
 
 /**
  * Default aggregate stats (used as fallback when stats query fails)
@@ -143,13 +144,18 @@ export async function GET(request: NextRequest) {
       .filter(Boolean);
   };
 
+  const pagination = normalizeAppsPagination(
+    parseNumber(searchParams.get('limit')),
+    parseNumber(searchParams.get('offset'))
+  );
+
   // Build filter params
   const params: AppsFilterParams = {
     type: (searchParams.get('type') as AppsFilterParams['type']) || 'game',
     sort: (searchParams.get('sort') as AppsFilterParams['sort']) || 'ccu_peak',
     order: (searchParams.get('order') as AppsFilterParams['order']) || 'desc',
-    limit: parseNumber(searchParams.get('limit')) ?? 50,
-    offset: parseNumber(searchParams.get('offset')) ?? 0,
+    limit: pagination.limit,
+    offset: pagination.offset,
     search: searchParams.get('search') || undefined,
 
     // Metric filters

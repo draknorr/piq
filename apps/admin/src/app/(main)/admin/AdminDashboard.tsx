@@ -9,6 +9,7 @@ import {
   formatDuration,
   type PriorityDistribution,
 } from '@/lib/sync-queries';
+import { buildGitHubActionsRunUrl } from '@/lib/github-actions-url';
 import type { AdminDashboardData, SyncJob, ChatQueryLog } from './page';
 import { getPicsRuntimeStatus } from './pics-health';
 import { CheckCircle2, MessageSquare, Search, Copy, ChevronDown, ChevronRight } from 'lucide-react';
@@ -788,7 +789,7 @@ function JobRow({
             {job.github_run_id && (
               <div className="col-span-2">
                 <a
-                  href={`https://github.com/draknorr/publisheriq/actions/runs/${job.github_run_id}`}
+                  href={buildGitHubActionsRunUrl(job.github_run_id)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-accent-primary hover:underline"

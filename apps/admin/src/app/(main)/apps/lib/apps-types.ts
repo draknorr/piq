@@ -269,6 +269,8 @@ export interface AppsSearchParams {
   type?: string;
   sort?: string;
   order?: string;
+  limit?: string;
+  offset?: string;
   search?: string;
   // M3: Presets and quick filters
   preset?: string;
