@@ -31,7 +31,21 @@ const BOOTSTRAP = {
       trackedUpdates: [],
     },
     matchedCount: 1,
-    presetHealthChanges: [],
+    presetHealthChanges: [
+      {
+        asOfDate: "2026-07-28T00:00:00.000Z",
+        evaluatedGames: 5_000,
+        explanation: [
+          "Only 9 of 5,000 evaluated released games have complete review-and-CCU signals (0% core coverage).",
+          "At least 10 measured games and 60% coverage are required for a market-health conclusion.",
+        ],
+        maximumEvaluated: 5_000,
+        name: "Extraction Shooter",
+        priorState: "quiet",
+        sampleCapped: true,
+        state: "insufficient_data",
+      },
+    ],
     profilesEvaluated: 1,
     runId: "run-20260727",
     status: "ready",
@@ -55,10 +69,21 @@ const BOOTSTRAP = {
     {
       description: "Cozy games with visible product readiness.",
       healthState: "growing",
+      healthUnavailableReason: null,
       id: "preset-1",
       name: "Cozy Sim",
       ruleSummary: ["Tags include Cozy", "Playable demo preferred"],
       slug: "cozy-sim",
+      version: 1,
+    },
+    {
+      description: "Upcoming games with a playable demo.",
+      healthState: null,
+      healthUnavailableReason: "unreleased_only",
+      id: "preset-2",
+      name: "Upcoming Games With Demos",
+      ruleSummary: ["Upcoming", "Playable demo required"],
+      slug: "upcoming-games-with-demos",
       version: 1,
     },
   ],
@@ -398,6 +423,11 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   ).toBeVisible();
   await expect(page.getByText(RESULT.name)).toBeVisible();
   await expect(page.getByText("1 signals worth opening")).toBeVisible();
+  await expect(page.getByText("Recent market health changes")).toBeVisible();
+  await expect(page.getByText("Quiet → Insufficient Data")).toBeVisible();
+  await expect(
+    page.getByText(/5,000-game evaluation cap reached/i),
+  ).toBeVisible();
 
   await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
   await expect(page).toHaveURL(
@@ -410,6 +440,16 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await expect(page.getByText("Five demos worth playing")).toBeVisible();
   await expect(page.getByText(/partial coverage/i)).toBeVisible();
   await expect(page.getByText("Reproduction contract")).toBeVisible();
+});
+
+test("labels presets that do not support released-market health", async ({
+  page,
+}) => {
+  await installOpportunityMocks(page);
+  await page.goto("/opportunities");
+
+  await page.getByRole("button", { name: "Profiles & presets" }).click();
+  await expect(page.getByText("Unreleased health model pending")).toBeVisible();
 });
 
 test("profile workshop previews with the same visible rule contract", async ({

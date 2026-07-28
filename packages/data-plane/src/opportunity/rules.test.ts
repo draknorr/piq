@@ -10,6 +10,7 @@ import {
 import {
   describeOpportunityRuleSet,
   evaluateOpportunityProfile,
+  supportsReleasedMarketHealth,
 } from "./rules.js";
 
 function known(value: unknown): OpportunityFieldValue {
@@ -111,6 +112,31 @@ function input(
 }
 
 describe("opportunity rule engine", () => {
+  it("excludes explicitly unreleased rule sets from released-market health", () => {
+    assert.equal(supportsReleasedMarketHealth(RULES), false);
+    assert.equal(
+      supportsReleasedMarketHealth({
+        ...RULES,
+        required: [
+          {
+            clauses: [
+              {
+                field: "is_released",
+                id: "released",
+                operator: "equals",
+                value: true,
+              },
+            ],
+            id: "release",
+            label: "Released",
+            operator: "all",
+          },
+        ],
+      }),
+      true,
+    );
+  });
+
   it("requires every required group and supports ALL inside a taxonomy group", () => {
     const result = evaluateOpportunityProfile(
       RULES,

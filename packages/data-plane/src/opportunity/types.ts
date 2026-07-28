@@ -232,6 +232,7 @@ export interface OpportunityProfileDetail extends OpportunityProfileSummary {
 export interface OpportunityPresetSummary {
   description: string | null;
   healthState: OpportunityPresetHealthState | null;
+  healthUnavailableReason: "unreleased_only" | null;
   id: string;
   name: string;
   ruleSummary: string[];
@@ -409,9 +410,12 @@ export interface OpportunityDailyOverview {
   matchedCount: number;
   presetHealthChanges: Array<{
     asOfDate: string;
+    evaluatedGames: number;
     explanation: string[];
+    maximumEvaluated: number;
     name: string;
     priorState: OpportunityPresetHealthState | null;
+    sampleCapped: boolean;
     state: OpportunityPresetHealthState;
   }>;
   profilesEvaluated: number;

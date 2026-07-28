@@ -134,9 +134,12 @@ export interface OpportunityBootstrap {
     matchedCount: number;
     presetHealthChanges: Array<{
       asOfDate: string;
+      evaluatedGames: number;
       explanation: string[];
+      maximumEvaluated: number;
       name: string;
       priorState: string | null;
+      sampleCapped: boolean;
       state: string;
     }>;
     profilesEvaluated: number;
@@ -168,6 +171,7 @@ export interface OpportunityBootstrap {
       | "surging"
       | "cooling"
       | null;
+    healthUnavailableReason: "unreleased_only" | null;
     id: string;
     name: string;
     ruleSummary: string[];

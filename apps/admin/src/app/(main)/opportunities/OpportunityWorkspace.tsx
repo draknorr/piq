@@ -545,7 +545,7 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
       {data.dailyOverview.presetHealthChanges.length > 0 && (
         <section className="mt-8 border-t border-border-muted pt-7">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-            Market health changes
+            Recent market health changes
           </p>
           <div className="mt-4 space-y-4">
             {data.dailyOverview.presetHealthChanges.map((change) => (
@@ -555,11 +555,22 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
                     {change.name}
                   </p>
                   <span className="text-[10px] uppercase text-accent-primary">
-                    {humanizeOpportunity(change.state)}
+                    {change.priorState
+                      ? `${humanizeOpportunity(change.priorState)} → ${humanizeOpportunity(change.state)}`
+                      : humanizeOpportunity(change.state)}
                   </span>
                 </div>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                  {formatOpportunityDate(change.asOfDate)}
+                </p>
                 <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                  {change.explanation.at(-1) ?? change.explanation[0]}
+                </p>
+                <p className="mt-1 text-[10px] leading-4 text-text-muted">
                   {change.explanation[0]}
+                  {change.sampleCapped
+                    ? ` ${change.maximumEvaluated.toLocaleString()}-game evaluation cap reached.`
+                    : ""}
                 </p>
               </div>
             ))}
@@ -717,9 +728,11 @@ function ProfilesDesk({
                     }`}
                   />
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                    {preset.healthState
-                      ? humanizeOpportunity(preset.healthState)
-                      : "Awaiting health run"}
+                    {preset.healthUnavailableReason === "unreleased_only"
+                      ? "Unreleased health model pending"
+                      : preset.healthState
+                        ? humanizeOpportunity(preset.healthState)
+                        : "Awaiting health run"}
                   </span>
                 </div>
                 <h3 className="mt-4 pr-10 text-lg font-semibold text-text-primary">
