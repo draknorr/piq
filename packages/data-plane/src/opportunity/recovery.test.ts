@@ -58,6 +58,35 @@ describe("opportunity failure recovery and preservation contracts", () => {
     );
   });
 
+  test("daily evaluation renews its lease and bounds repeated cohort work", () => {
+    assert.match(
+      workerSource,
+      /refreshSignalWindows\(\s*appids,\s*\{[\s\S]*?batchSize: EVALUATION_SIGNAL_REFRESH_BATCH_SIZE,[\s\S]*?heartbeatWork\(item\.id, this\.workerId\)/,
+    );
+    assert.match(
+      workerSource,
+      /index % EVALUATION_HEARTBEAT_GAME_INTERVAL === 0[\s\S]*?heartbeatWork\(item\.id, this\.workerId\)/,
+    );
+    assert.match(repositorySource, /tag_matches AS MATERIALIZED/);
+    assert.match(repositorySource, /genre_matches AS MATERIALIZED/);
+    assert.match(repositorySource, /LIMIT 51/);
+    assert.match(
+      repositorySource,
+      /\.filter\(\(row\) => row\.appid !== input\.appid\)[\s\S]*?\.slice\(0, 50\)/,
+    );
+    assert.match(repositorySource, /attempt <= 2/);
+    assert.match(repositorySource, /isStatementTimeout\(error\)/);
+    assert.match(repositorySource, /signal\.as_of_date < CURRENT_DATE - 1/);
+    assert.match(
+      repositorySource,
+      /signal\.calculation_version IS DISTINCT FROM 'signal-windows\/v1'/,
+    );
+    assert.match(
+      repositorySource,
+      /readiness\.version IS DISTINCT FROM 'signal-windows\/v1'/,
+    );
+  });
+
   test("failures back off, dead-letter, and preserve source-blocked state", () => {
     assert.match(repositorySource, /WHEN \$5 THEN 'source_blocked'/);
     assert.match(
@@ -102,10 +131,7 @@ describe("opportunity failure recovery and preservation contracts", () => {
       immediateFanOut,
       /profile\.owner_user_id,\s+\$1::integer,\s+\$2::uuid,/,
     );
-    assert.match(
-      immediateFanOut,
-      /'event:' \|\| \$2::text \|\| ':user:'/,
-    );
+    assert.match(immediateFanOut, /'event:' \|\| \$2::text \|\| ':user:'/);
     assert.match(
       immediateFanOut,
       /jsonb_build_object\('eventFingerprint', \$3::text\)/,
@@ -116,10 +142,7 @@ describe("opportunity failure recovery and preservation contracts", () => {
       readinessFanOut,
       /candidate\.user_id,\s+\$1::integer,\s+\$2::uuid,/,
     );
-    assert.match(
-      readinessFanOut,
-      /'event:' \|\| \$2::text \|\| ':readiness:'/,
-    );
+    assert.match(readinessFanOut, /'event:' \|\| \$2::text \|\| ':readiness:'/);
     assert.match(
       readinessFanOut,
       /jsonb_build_object\('eventFingerprint', \$3::text\)/,

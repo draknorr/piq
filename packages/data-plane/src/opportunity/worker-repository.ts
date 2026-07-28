@@ -134,6 +134,24 @@ export interface OpportunityPriorPresetHealth {
   state: OpportunityPresetHealthState | null;
 }
 
+interface OpportunityReleasedCohortRow extends QueryResultRow {
+  appid: number;
+  ccu_peak: number | null;
+  inclusion_score: string | number;
+  metric_date: Date | string | null;
+  name: string;
+  positive_percentage: string | number | null;
+  price_cents: number | null;
+  review_change_30d: string | number | null;
+  tag_overlap: number;
+  total_reviews: number | null;
+}
+
+export type OpportunityReleasedCohortCache = Map<
+  string,
+  Promise<OpportunityReleasedCohortRow[]>
+>;
+
 interface WorkRow extends QueryResultRow {
   appid: number | null;
   attempts: number;
@@ -170,6 +188,15 @@ function asSignalFamily(value: string): OpportunitySignalFamily {
   return supported.has(value as OpportunitySignalFamily)
     ? (value as OpportunitySignalFamily)
     : "unknown";
+}
+
+function isStatementTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "57014" &&
+    /statement timeout/i.test(error.message)
+  );
 }
 
 export function assignOpportunityDeliveryResults(
@@ -1183,7 +1210,122 @@ export class OpportunityWorkerRepository {
     );
   }
 
-  async getReleasedCohort(input: OpportunityEvaluationInput): Promise<{
+  createReleasedCohortCache(): OpportunityReleasedCohortCache {
+    return new Map();
+  }
+
+  private async loadReleasedCohortRows(params: {
+    genres: string[];
+    isFree: boolean;
+    price: number;
+    tags: string[];
+  }): Promise<OpportunityReleasedCohortRow[]> {
+    const values = [params.tags, params.genres, params.isFree, params.price];
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const result = await this.pool.query<OpportunityReleasedCohortRow>(
+          `
+            WITH tag_matches AS MATERIALIZED (
+              SELECT
+                app_tag.appid,
+                COUNT(1)::integer AS tag_overlap
+              FROM legacy.app_steam_tags app_tag
+              JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id
+              WHERE LOWER(tag.name) = ANY($1::text[])
+              GROUP BY app_tag.appid
+            ),
+            genre_matches AS MATERIALIZED (
+              SELECT
+                app_genre.appid,
+                COUNT(1)::integer AS genre_overlap
+              FROM legacy.app_genres app_genre
+              JOIN legacy.steam_genres genre
+                ON genre.genre_id = app_genre.genre_id
+              WHERE LOWER(genre.name) = ANY($2::text[])
+              GROUP BY app_genre.appid
+            ),
+            candidate_ids AS MATERIALIZED (
+              SELECT appid FROM tag_matches
+              UNION
+              SELECT appid FROM genre_matches
+              UNION
+              SELECT app.appid
+              FROM legacy.apps app
+              WHERE cardinality($1::text[]) = 0
+                AND cardinality($2::text[]) = 0
+                AND app.type = 'game'
+                AND app.is_released = true
+                AND COALESCE(app.is_delisted, false) = false
+            )
+            SELECT
+              app.appid,
+              app.name,
+              COALESCE(app.current_price_cents, metric.price_cents)
+                AS price_cents,
+              metric.total_reviews,
+              metric.positive_percentage,
+              metric.ccu_peak,
+              metric.metric_date,
+              signal.review_change_30d,
+              COALESCE(tag_matches.tag_overlap, 0)::integer AS tag_overlap,
+              (
+                0.45 * LEAST(
+                  1,
+                  COALESCE(tag_matches.tag_overlap, 0)::numeric /
+                    GREATEST(1, cardinality($1::text[]))
+                )
+                + 0.20 * LEAST(
+                  1,
+                  COALESCE(genre_matches.genre_overlap, 0)::numeric /
+                    GREATEST(1, cardinality($2::text[]))
+                )
+                + 0.10 * CASE
+                    WHEN $3::boolean = app.is_free THEN 1
+                    ELSE 0
+                  END
+                + 0.10 * CASE
+                    WHEN ABS(
+                      COALESCE(
+                        app.current_price_cents,
+                        metric.price_cents,
+                        0
+                      ) - $4
+                    ) <= 1000
+                      THEN 1
+                    ELSE 0
+                  END
+              ) AS inclusion_score
+            FROM candidate_ids candidate
+            JOIN legacy.apps app ON app.appid = candidate.appid
+            LEFT JOIN tag_matches ON tag_matches.appid = app.appid
+            LEFT JOIN genre_matches ON genre_matches.appid = app.appid
+            LEFT JOIN legacy.latest_daily_metrics metric
+              ON metric.appid = app.appid
+            LEFT JOIN metrics.app_signal_windows_v1 signal
+              ON signal.appid = app.appid
+            WHERE app.type = 'game'
+              AND app.is_released = true
+              AND COALESCE(app.is_delisted, false) = false
+              AND app.is_free = $3
+            ORDER BY inclusion_score DESC, app.appid
+            LIMIT 51
+          `,
+          values,
+        );
+        return result.rows;
+      } catch (error) {
+        if (attempt >= 2 || !isStatementTimeout(error)) {
+          throw error;
+        }
+      }
+    }
+    return [];
+  }
+
+  async getReleasedCohort(
+    input: OpportunityEvaluationInput,
+    cache: OpportunityReleasedCohortCache = this.createReleasedCohortCache(),
+  ): Promise<{
     confidence: "high" | "directional";
     coverage: number;
     fallbackTier: 1 | 2 | 3 | 4 | 5;
@@ -1201,107 +1343,31 @@ export class OpportunityWorkerRepository {
       .slice(0, 6);
     const price = Number(input.fields.price_cents?.value ?? 0);
     const isFree = input.fields.is_free?.value === true;
-    const result = await this.pool.query<
-      QueryResultRow & {
-        appid: number;
-        ccu_peak: number | null;
-        inclusion_score: string | number;
-        metric_date: Date | string | null;
-        name: string;
-        positive_percentage: string | number | null;
-        price_cents: number | null;
-        review_change_30d: string | number | null;
-        tag_overlap: number;
-        total_reviews: number | null;
-      }
-    >(
-      `
-        WITH candidate_ids AS (
-          SELECT app_tag.appid
-          FROM legacy.app_steam_tags app_tag
-          JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id
-          WHERE LOWER(tag.name) = ANY($1::text[])
-          UNION
-          SELECT app_genre.appid
-          FROM legacy.app_genres app_genre
-          JOIN legacy.steam_genres genre ON genre.genre_id = app_genre.genre_id
-          WHERE LOWER(genre.name) = ANY($2::text[])
-          UNION
-          SELECT app.appid
-          FROM legacy.apps app
-          WHERE cardinality($1::text[]) = 0
-            AND cardinality($2::text[]) = 0
-            AND app.type = 'game'
-            AND app.is_released = true
-            AND COALESCE(app.is_delisted, false) = false
-        ),
-        scored AS (
-          SELECT
-            app.appid,
-            app.name,
-            COALESCE(app.current_price_cents, metric.price_cents) AS price_cents,
-            metric.total_reviews,
-            metric.positive_percentage,
-            metric.ccu_peak,
-            metric.metric_date,
-            signal.review_change_30d,
-            (
-              SELECT COUNT(1)
-              FROM legacy.app_steam_tags overlap_tag
-              JOIN legacy.steam_tags tag ON tag.tag_id = overlap_tag.tag_id
-              WHERE overlap_tag.appid = app.appid
-                AND LOWER(tag.name) = ANY($1::text[])
-            ) AS tag_overlap,
-            (
-              0.45 * LEAST(1, (
-                SELECT COUNT(1)::numeric / GREATEST(1, cardinality($1::text[]))
-                FROM legacy.app_steam_tags overlap_tag
-                JOIN legacy.steam_tags tag ON tag.tag_id = overlap_tag.tag_id
-                WHERE overlap_tag.appid = app.appid
-                  AND LOWER(tag.name) = ANY($1::text[])
-              ))
-              + 0.20 * LEAST(1, (
-                SELECT COUNT(1)::numeric / GREATEST(1, cardinality($2::text[]))
-                FROM legacy.app_genres overlap_genre
-                JOIN legacy.steam_genres genre
-                  ON genre.genre_id = overlap_genre.genre_id
-                WHERE overlap_genre.appid = app.appid
-                  AND LOWER(genre.name) = ANY($2::text[])
-              ))
-              + 0.10 * CASE
-                  WHEN $3::boolean = app.is_free THEN 1
-                  ELSE 0
-                END
-              + 0.10 * CASE
-                  WHEN ABS(COALESCE(app.current_price_cents, metric.price_cents, 0) - $4) <= 1000
-                    THEN 1
-                  ELSE 0
-                END
-            ) AS inclusion_score
-          FROM candidate_ids candidate
-          JOIN legacy.apps app ON app.appid = candidate.appid
-          LEFT JOIN legacy.latest_daily_metrics metric ON metric.appid = app.appid
-          LEFT JOIN metrics.app_signal_windows_v1 signal ON signal.appid = app.appid
-          WHERE app.appid <> $5
-            AND app.type = 'game'
-            AND app.is_released = true
-            AND COALESCE(app.is_delisted, false) = false
-            AND app.is_free = $3
-        )
-        SELECT *
-        FROM scored
-        ORDER BY inclusion_score DESC, appid
-        LIMIT 50
-      `,
-      [
-        tags.map((tag) => tag.toLocaleLowerCase()),
-        genres.map((genre) => genre.toLocaleLowerCase()),
+    const normalizedTags = tags.map((tag) => tag.toLocaleLowerCase()).sort();
+    const normalizedGenres = genres
+      .map((genre) => genre.toLocaleLowerCase())
+      .sort();
+    const queryPrice = Number.isFinite(price) ? price : 0;
+    const cacheKey = JSON.stringify([
+      normalizedTags,
+      normalizedGenres,
+      isFree,
+      queryPrice,
+    ]);
+    let rowsPromise = cache.get(cacheKey);
+    if (!rowsPromise) {
+      rowsPromise = this.loadReleasedCohortRows({
+        genres: normalizedGenres,
         isFree,
-        Number.isFinite(price) ? price : 0,
-        input.appid,
-      ],
-    );
-    const members: OpportunityCohortMember[] = result.rows.map((row) => ({
+        price: queryPrice,
+        tags: normalizedTags,
+      });
+      cache.set(cacheKey, rowsPromise);
+    }
+    const rows = (await rowsPromise)
+      .filter((row) => row.appid !== input.appid)
+      .slice(0, 50);
+    const members: OpportunityCohortMember[] = rows.map((row) => ({
       appid: row.appid,
       ccuPeak: row.ccu_peak,
       inclusionReasons: [
@@ -1328,7 +1394,7 @@ export class OpportunityWorkerRepository {
     ).length;
     const coverage = members.length === 0 ? 0 : measured / members.length;
     const latestMetricDate =
-      result.rows
+      rows
         .map((row) => row.metric_date)
         .filter((value): value is Date | string => value !== null)
         .map(iso)
@@ -1368,24 +1434,59 @@ export class OpportunityWorkerRepository {
       batchSize?: number;
       onBatch?: () => Promise<void>;
     } = {},
-  ): Promise<void> {
+  ): Promise<number> {
     const bounded = Array.from(
       new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
     ).slice(0, 50_000);
     if (bounded.length === 0) {
-      return;
+      return 0;
+    }
+    const stale = await this.pool.query<
+      QueryResultRow & {
+        appid: number;
+      }
+    >(
+      `
+        WITH input AS (
+          SELECT DISTINCT ON (candidate.appid)
+            candidate.appid,
+            candidate.ordinality
+          FROM unnest($1::integer[]) WITH ORDINALITY
+            AS candidate(appid, ordinality)
+          ORDER BY candidate.appid, candidate.ordinality
+        )
+        SELECT input.appid
+        FROM input
+        LEFT JOIN metrics.app_signal_windows_v1 signal
+          ON signal.appid = input.appid
+        LEFT JOIN ops.app_data_readiness readiness
+          ON readiness.appid = input.appid
+          AND readiness.source = 'market_metrics'
+        WHERE signal.appid IS NULL
+          OR signal.as_of_date < CURRENT_DATE - 1
+          OR signal.calculation_version IS DISTINCT FROM 'signal-windows/v1'
+          OR readiness.appid IS NULL
+          OR readiness.version IS DISTINCT FROM 'signal-windows/v1'
+        ORDER BY input.ordinality
+      `,
+      [bounded],
+    );
+    const staleAppids = stale.rows.map((row) => row.appid);
+    if (staleAppids.length === 0) {
+      return 0;
     }
     const batchSize = Math.max(
       1,
       Math.min(5_000, Math.floor(options.batchSize ?? 5_000)),
     );
-    for (let offset = 0; offset < bounded.length; offset += batchSize) {
+    for (let offset = 0; offset < staleAppids.length; offset += batchSize) {
       await this.pool.query(
         `SELECT metrics.refresh_app_signal_windows_v1(CURRENT_DATE - 1, $1::integer[], 'signal-windows/v1')`,
-        [bounded.slice(offset, offset + batchSize)],
+        [staleAppids.slice(offset, offset + batchSize)],
       );
       await options.onBatch?.();
     }
+    return staleAppids.length;
   }
 
   async getPresetHealthTargets(): Promise<OpportunityPresetHealthTarget[]> {
