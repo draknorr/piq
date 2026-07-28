@@ -151,6 +151,112 @@ describe("opportunity worker materialization recovery", () => {
   });
 });
 
+describe("opportunity evaluation recovery", () => {
+  it("renews the queue lease during signal refresh and long game loops", async () => {
+    const item: OpportunityWorkItem = {
+      appid: null,
+      attempts: 1,
+      id: 496,
+      kind: "daily_evaluation",
+      lane: "daily",
+      materialEventId: null,
+      payload: {},
+      profileId: null,
+      userId: "user",
+      workspaceId: "workspace",
+    };
+    const events = Array.from({ length: 21 }, (_, index) =>
+      event({
+        appid: index + 1,
+        eventFingerprint: `fingerprint-${index + 1}`,
+        id: `event-${index + 1}`,
+      }),
+    );
+    const inputs = events.map((candidate) => ({
+      appid: candidate.appid,
+      fields: {
+        is_released: knownField(false),
+      },
+      name: `Game ${candidate.appid}`,
+    }));
+    let heartbeatCount = 0;
+    let persisted = false;
+    const repository = {
+      async claimWork(): Promise<OpportunityWorkItem[]> {
+        return [item];
+      },
+      createReleasedCohortCache() {
+        return new Map();
+      },
+      async createRunContext() {
+        return {
+          id: "run",
+          kind: "daily" as const,
+          windowEnd: "2026-07-28T16:00:00.000Z",
+          windowStart: "2026-07-27T16:00:00.000Z",
+        };
+      },
+      async failRun(): Promise<void> {
+        return;
+      },
+      async failWork(params: { error: string }): Promise<void> {
+        throw new Error(params.error);
+      },
+      async getActiveProfiles(): Promise<OpportunityWorkerProfile[]> {
+        return [];
+      },
+      async getCandidateOutcomes() {
+        return new Map();
+      },
+      async getPriorUserStates() {
+        return new Map();
+      },
+      async getRunMaterialEvents() {
+        return events;
+      },
+      async heartbeatWork(): Promise<void> {
+        heartbeatCount += 1;
+      },
+      async persistRunOutcome(params: {
+        evaluations: unknown[];
+        results: unknown[];
+      }): Promise<void> {
+        assert.equal(params.evaluations.length, 0);
+        assert.equal(params.results.length, 0);
+        persisted = true;
+      },
+      productRepository: {
+        async getRuleInputs(): Promise<OpportunityEvaluationInput[]> {
+          return inputs;
+        },
+      },
+      async refreshSignalWindows(
+        appids: number[],
+        options: { batchSize?: number; onBatch?: () => Promise<void> },
+      ): Promise<number> {
+        assert.deepEqual(
+          appids,
+          events.map((candidate) => candidate.appid),
+        );
+        assert.equal(options.batchSize, 500);
+        await options.onBatch?.();
+        return appids.length;
+      },
+      async scheduleWork(): Promise<number> {
+        return 0;
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "evaluation-lease-test-worker",
+    });
+
+    assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
+    assert.equal(heartbeatCount, 7);
+    assert.equal(persisted, true);
+  });
+});
+
 describe("opportunity preset health refresh", () => {
   it("hydrates a bounded released cohort and keeps missing core signals insufficient", async () => {
     const supportedRules: OpportunityRuleSet = {
@@ -236,10 +342,11 @@ describe("opportunity preset health refresh", () => {
       async refreshSignalWindows(
         appids: number[],
         options: { batchSize?: number; onBatch?: () => Promise<void> },
-      ): Promise<void> {
+      ): Promise<number> {
         refreshCalls.push(appids);
         assert.equal(options.batchSize, 500);
         await options.onBatch?.();
+        return appids.length;
       },
       async scheduleWork(): Promise<number> {
         return 0;
@@ -269,12 +376,21 @@ describe("opportunity preset health refresh", () => {
 
   it("deduplicates appids and refreshes them in bounded heartbeat batches", async () => {
     const batches: number[][] = [];
+    let stalenessChecks = 0;
     let progressCalls = 0;
     const pool = {
       query: async (
         text: string,
         values: readonly unknown[] = [],
-      ): Promise<{ rows: unknown[] }> => {
+      ): Promise<{ rows: Array<{ appid: number }> }> => {
+        if (text.includes("app_signal_windows_v1 signal")) {
+          stalenessChecks += 1;
+          assert.match(text, /app_data_readiness readiness/);
+          assert.match(text, /readiness\.source = 'market_metrics'/);
+          return {
+            rows: (values[0] as number[]).map((appid) => ({ appid })),
+          };
+        }
         assert.match(text, /refresh_app_signal_windows_v1/);
         batches.push(values[0] as number[]);
         return { rows: [] };
@@ -288,7 +404,7 @@ describe("opportunity preset health refresh", () => {
       0,
     ];
 
-    await repository.refreshSignalWindows(appids, {
+    const refreshed = await repository.refreshSignalWindows(appids, {
       batchSize: 500,
       onBatch: async () => {
         progressCalls += 1;
@@ -300,7 +416,157 @@ describe("opportunity preset health refresh", () => {
       [500, 500, 200],
     );
     assert.equal(new Set(batches.flat()).size, 1_200);
+    assert.equal(refreshed, 1_200);
     assert.equal(progressCalls, 3);
+    assert.equal(stalenessChecks, 1);
+  });
+
+  it("does not recompute current signal windows", async () => {
+    const queries: string[] = [];
+    let progressCalls = 0;
+    const pool = {
+      query: async (
+        text: string,
+      ): Promise<{ rows: Array<{ appid: number }> }> => {
+        queries.push(text);
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityWorkerRepository(pool);
+
+    const refreshed = await repository.refreshSignalWindows([1, 2, 3], {
+      batchSize: 2,
+      onBatch: async () => {
+        progressCalls += 1;
+      },
+    });
+
+    assert.equal(queries.length, 1);
+    assert.match(queries[0] ?? "", /signal\.as_of_date < CURRENT_DATE - 1/);
+    assert.match(
+      queries[0] ?? "",
+      /signal\.calculation_version IS DISTINCT FROM 'signal-windows\/v1'/,
+    );
+    assert.match(
+      queries[0] ?? "",
+      /readiness\.version IS DISTINCT FROM 'signal-windows\/v1'/,
+    );
+    assert.equal(refreshed, 0);
+    assert.equal(progressCalls, 0);
+  });
+});
+
+describe("released opportunity cohort lookup", () => {
+  function cohortRow(appid: number) {
+    return {
+      appid,
+      ccu_peak: appid * 10,
+      inclusion_score: 1 - appid / 100,
+      metric_date: `2026-07-${String((appid % 27) + 1).padStart(2, "0")}`,
+      name: `Peer ${appid}`,
+      positive_percentage: 80,
+      price_cents: 1_999,
+      review_change_30d: appid,
+      tag_overlap: 2,
+      total_reviews: appid * 100,
+    };
+  }
+
+  it("reuses an exact run-scoped cohort and excludes each subject game", async () => {
+    const queries: Array<{ sql: string; values: readonly unknown[] }> = [];
+    const rows = Array.from({ length: 51 }, (_, index) => cohortRow(index + 1));
+    const pool = {
+      query: async (
+        sql: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: typeof rows }> => {
+        queries.push({ sql, values });
+        return { rows };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityWorkerRepository(pool);
+    const cache = repository.createReleasedCohortCache();
+    const firstInput: OpportunityEvaluationInput = {
+      appid: 1,
+      fields: {
+        genres: knownField(["Indie", "Action"]),
+        is_free: knownField(false),
+        price_cents: knownField(1_999),
+        tags: knownField(["Roguelike", "Deckbuilder"]),
+      },
+      name: "First subject",
+    };
+    const secondInput: OpportunityEvaluationInput = {
+      ...firstInput,
+      appid: 2,
+      fields: {
+        ...firstInput.fields,
+        genres: knownField(["action", "indie"]),
+        tags: knownField(["deckbuilder", "roguelike"]),
+      },
+      name: "Second subject",
+    };
+
+    const first = await repository.getReleasedCohort(firstInput, cache);
+    const second = await repository.getReleasedCohort(secondInput, cache);
+
+    assert.equal(queries.length, 1);
+    assert.deepEqual(queries[0]?.values, [
+      ["deckbuilder", "roguelike"],
+      ["action", "indie"],
+      false,
+      1_999,
+    ]);
+    assert.match(queries[0]?.sql ?? "", /tag_matches AS MATERIALIZED/);
+    assert.match(queries[0]?.sql ?? "", /genre_matches AS MATERIALIZED/);
+    assert.match(queries[0]?.sql ?? "", /LIMIT 51/);
+    assert.doesNotMatch(
+      queries[0]?.sql ?? "",
+      /\(\s*SELECT COUNT\(1\)[\s\S]*?overlap_tag/,
+    );
+    assert.equal(first.members.length, 50);
+    assert.deepEqual(
+      first.members.map((member) => member.appid),
+      Array.from({ length: 50 }, (_, index) => index + 2),
+    );
+    assert.equal(second.members.length, 50);
+    assert.deepEqual(
+      second.members.map((member) => member.appid),
+      [1, ...Array.from({ length: 49 }, (_, index) => index + 3)],
+    );
+    assert.deepEqual(first.signature.tags, ["Roguelike", "Deckbuilder"]);
+    assert.deepEqual(second.signature.tags, ["deckbuilder", "roguelike"]);
+  });
+
+  it("retries only the timed-out cohort lookup once", async () => {
+    let calls = 0;
+    const pool = {
+      query: async (): Promise<{ rows: ReturnType<typeof cohortRow>[] }> => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(
+            new Error("canceling statement due to statement timeout"),
+            { code: "57014" },
+          );
+        }
+        return { rows: [cohortRow(2)] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityWorkerRepository(pool);
+
+    const cohort = await repository.getReleasedCohort({
+      appid: 1,
+      fields: {
+        is_free: knownField(false),
+      },
+      name: "Retry subject",
+    });
+
+    assert.equal(calls, 2);
+    assert.deepEqual(
+      cohort.members.map((member) => member.appid),
+      [2],
+    );
   });
 });
 

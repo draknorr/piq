@@ -22,6 +22,7 @@ import type {
   OpportunityEvaluatedMatch,
   OpportunityEvaluatedResult,
   OpportunityPriorUserState,
+  OpportunityReleasedCohortCache,
   OpportunityRunContext,
   OpportunityWorkerMaterialEvent,
   OpportunityWorkerProfile,
@@ -32,6 +33,8 @@ import { OpportunityWorkerRepository } from "./worker-repository.js";
 const PRESET_HEALTH_MAX_EVALUATED_GAMES = 5_000;
 const PRESET_HEALTH_MAX_REFRESHED_GAMES = 20_000;
 const PRESET_HEALTH_REFRESH_BATCH_SIZE = 500;
+const EVALUATION_HEARTBEAT_GAME_INTERVAL = 10;
+const EVALUATION_SIGNAL_REFRESH_BATCH_SIZE = 500;
 
 export interface OpportunityWorkerOptions {
   claimLimit?: number;
@@ -45,6 +48,7 @@ interface EvaluationContext {
     string,
     "eligible" | "ineligible" | "pending" | "expired"
   >;
+  cohortCache?: OpportunityReleasedCohortCache;
   event: OpportunityWorkerMaterialEvent;
   input: OpportunityEvaluationInput;
   priorState: OpportunityPriorUserState;
@@ -401,17 +405,21 @@ export class OpportunityWorker {
         .map((input) => input.appid)
         .filter((appid) => !refreshedAppids.has(appid))
         .slice(0, remainingRefreshCapacity);
+      let refreshedSignalWindows = 0;
       if (appidsToRefresh.length > 0) {
-        await this.repository.refreshSignalWindows(appidsToRefresh, {
-          batchSize: PRESET_HEALTH_REFRESH_BATCH_SIZE,
-          onBatch: onProgress,
-        });
+        refreshedSignalWindows = await this.repository.refreshSignalWindows(
+          appidsToRefresh,
+          {
+            batchSize: PRESET_HEALTH_REFRESH_BATCH_SIZE,
+            onBatch: onProgress,
+          },
+        );
         for (const appid of appidsToRefresh) {
           refreshedAppids.add(appid);
         }
       }
       const inputs =
-        appidsToRefresh.length > 0
+        refreshedSignalWindows > 0
           ? await this.repository.productRepository.getPresetHealthInputs(
               target.rules,
             )
@@ -578,9 +586,16 @@ export class OpportunityWorker {
           userId: item.userId,
         }),
       ]);
-      await this.repository.refreshSignalWindows(appids);
+      await this.repository.heartbeatWork(item.id, this.workerId);
+      const refreshedSignalWindows = await this.repository.refreshSignalWindows(
+        appids,
+        {
+          batchSize: EVALUATION_SIGNAL_REFRESH_BATCH_SIZE,
+          onBatch: () => this.repository.heartbeatWork(item.id, this.workerId),
+        },
+      );
       const refreshedInputs =
-        appids.length > 0
+        refreshedSignalWindows > 0
           ? await this.repository.productRepository.getRuleInputs(appids)
           : inputs;
       const inputByApp = new Map(
@@ -589,8 +604,12 @@ export class OpportunityWorker {
       const evaluations: OpportunityCandidateEvaluation[] = [];
       const pending: OpportunityCandidateEvaluation[] = [];
       const results: OpportunityEvaluatedResult[] = [];
+      const cohortCache = this.repository.createReleasedCohortCache();
 
-      for (const event of selectedEvents) {
+      for (const [index, event] of selectedEvents.entries()) {
+        if (index % EVALUATION_HEARTBEAT_GAME_INTERVAL === 0) {
+          await this.repository.heartbeatWork(item.id, this.workerId);
+        }
         const input = inputByApp.get(event.appid);
         if (!input) {
           continue;
@@ -605,6 +624,7 @@ export class OpportunityWorker {
         const outcome = await this.evaluateGame({
           appid: event.appid,
           candidateOutcomes,
+          cohortCache,
           event,
           input,
           priorState,
@@ -622,6 +642,7 @@ export class OpportunityWorker {
         }
       }
 
+      await this.repository.heartbeatWork(item.id, this.workerId);
       results.sort(
         (left, right) =>
           right.rank.finalScore - left.rank.finalScore ||
@@ -694,7 +715,10 @@ export class OpportunityWorker {
     const matches: OpportunityEvaluatedMatch[] = eligible.map(
       ({ evaluation, profile }) => ({ evaluation, profile }),
     );
-    const cohort = await this.repository.getReleasedCohort(context.input);
+    const cohort = await this.repository.getReleasedCohort(
+      context.input,
+      context.cohortCache,
+    );
     const market = calculateOpportunityMarketContext(cohort.members);
     const preference = Math.max(
       0,
