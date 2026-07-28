@@ -5,7 +5,10 @@ import {
   calculateOpportunityPresetHealth,
   calculateOpportunityRanking,
 } from "./intelligence.js";
-import { evaluateOpportunityProfile } from "./rules.js";
+import {
+  evaluateOpportunityProfile,
+  supportsReleasedMarketHealth,
+} from "./rules.js";
 import type {
   OpportunityEvaluationInput,
   OpportunityFieldValue,
@@ -25,6 +28,10 @@ import type {
   OpportunityWorkItem,
 } from "./worker-repository.js";
 import { OpportunityWorkerRepository } from "./worker-repository.js";
+
+const PRESET_HEALTH_MAX_EVALUATED_GAMES = 5_000;
+const PRESET_HEALTH_MAX_REFRESHED_GAMES = 20_000;
+const PRESET_HEALTH_REFRESH_BATCH_SIZE = 500;
 
 export interface OpportunityWorkerOptions {
   claimLimit?: number;
@@ -57,12 +64,23 @@ function valueOf(
   return value?.state === "known" ? value.value : null;
 }
 
-function numberOf(
+export function opportunityNumericFieldValue(
   input: OpportunityEvaluationInput,
   field: OpportunityRuleField,
 ): number | null {
-  const value = Number(valueOf(input, field));
-  return Number.isFinite(value) ? value : null;
+  const value = valueOf(input, field);
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim().length === 0)
+  ) {
+    return null;
+  }
+  if (typeof value !== "number" && typeof value !== "string") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function percentileRank(
@@ -345,7 +363,9 @@ export class OpportunityWorker {
           await this.repository.completeWork(item.id, this.workerId);
           return;
         case "refresh_preset_health":
-          await this.refreshPresetHealth();
+          await this.refreshPresetHealth(() =>
+            this.repository.heartbeatWork(item.id, this.workerId),
+          );
           await this.repository.completeWork(item.id, this.workerId);
           return;
       }
@@ -359,16 +379,52 @@ export class OpportunityWorker {
     }
   }
 
-  private async refreshPresetHealth(): Promise<void> {
+  private async refreshPresetHealth(
+    onProgress?: () => Promise<void>,
+  ): Promise<void> {
     const targets = await this.repository.getPresetHealthTargets();
+    const refreshedAppids = new Set<number>();
     for (const target of targets) {
-      const [inputs, prior] = await Promise.all([
+      if (!supportsReleasedMarketHealth(target.rules)) {
+        continue;
+      }
+      await onProgress?.();
+      const [initialInputs, prior] = await Promise.all([
         this.repository.productRepository.getPresetHealthInputs(target.rules),
         this.repository.getPriorPresetHealth(target.id),
       ]);
+      const remainingRefreshCapacity = Math.max(
+        0,
+        PRESET_HEALTH_MAX_REFRESHED_GAMES - refreshedAppids.size,
+      );
+      const appidsToRefresh = initialInputs
+        .map((input) => input.appid)
+        .filter((appid) => !refreshedAppids.has(appid))
+        .slice(0, remainingRefreshCapacity);
+      if (appidsToRefresh.length > 0) {
+        await this.repository.refreshSignalWindows(appidsToRefresh, {
+          batchSize: PRESET_HEALTH_REFRESH_BATCH_SIZE,
+          onBatch: onProgress,
+        });
+        for (const appid of appidsToRefresh) {
+          refreshedAppids.add(appid);
+        }
+      }
+      const inputs =
+        appidsToRefresh.length > 0
+          ? await this.repository.productRepository.getPresetHealthInputs(
+              target.rules,
+            )
+          : initialInputs;
       const measurements = inputs.map((input) => {
-        const reviews7d = numberOf(input, "reviews_added_7d");
-        const reviews30d = numberOf(input, "reviews_added_30d");
+        const reviews7d = opportunityNumericFieldValue(
+          input,
+          "reviews_added_7d",
+        );
+        const reviews30d = opportunityNumericFieldValue(
+          input,
+          "reviews_added_30d",
+        );
         const prior23d =
           reviews30d === null || reviews7d === null
             ? null
@@ -383,7 +439,7 @@ export class OpportunityWorker {
                 ? 1
                 : 0
               : (recentDaily - baselineDaily) / baselineDaily;
-        const ccuGrowth = numberOf(input, "ccu_change_30d");
+        const ccuGrowth = opportunityNumericFieldValue(input, "ccu_change_30d");
         return {
           ccuGrowth,
           reviewAcceleration,
@@ -424,6 +480,7 @@ export class OpportunityWorker {
         ),
         consecutiveCandidateDays,
         coreCoverage: inputs.length === 0 ? 0 : core.length / inputs.length,
+        evaluatedGames: inputs.length,
         measuredGames: core.length,
         positiveBreadth:
           core.length === 0 ? null : positive.length / core.length,
@@ -437,8 +494,18 @@ export class OpportunityWorker {
         cohortDefinition: {
           candidateCount: inputs.length,
           deterministicOrder: "appid",
-          maximumEvaluated: 5_000,
+          maximumEvaluated: PRESET_HEALTH_MAX_EVALUATED_GAMES,
           ruleSchemaVersion: target.rules.schemaVersion,
+          signalWindowRefresh: {
+            fullyRefreshed: inputs.every((input) =>
+              refreshedAppids.has(input.appid),
+            ),
+            maximumUniqueGamesPerRun: PRESET_HEALTH_MAX_REFRESHED_GAMES,
+            refreshedGames: inputs.filter((input) =>
+              refreshedAppids.has(input.appid),
+            ).length,
+            runUniqueGames: refreshedAppids.size,
+          },
           slug: target.slug,
         },
         indicators: {
@@ -633,8 +700,11 @@ export class OpportunityWorker {
       0,
       ...matches.map((match) => match.evaluation.preferenceContribution),
     );
-    const currentReviews = numberOf(context.input, "total_reviews");
-    const currentCcu = numberOf(context.input, "ccu_peak");
+    const currentReviews = opportunityNumericFieldValue(
+      context.input,
+      "total_reviews",
+    );
+    const currentCcu = opportunityNumericFieldValue(context.input, "ccu_peak");
     const peerPosition = Math.max(
       percentileRank(
         currentReviews,

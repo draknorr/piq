@@ -1362,15 +1362,30 @@ export class OpportunityWorkerRepository {
     };
   }
 
-  async refreshSignalWindows(appids: number[]): Promise<void> {
-    const bounded = Array.from(new Set(appids)).slice(0, 5_000);
+  async refreshSignalWindows(
+    appids: number[],
+    options: {
+      batchSize?: number;
+      onBatch?: () => Promise<void>;
+    } = {},
+  ): Promise<void> {
+    const bounded = Array.from(
+      new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
+    ).slice(0, 50_000);
     if (bounded.length === 0) {
       return;
     }
-    await this.pool.query(
-      `SELECT metrics.refresh_app_signal_windows_v1(CURRENT_DATE - 1, $1::integer[], 'signal-windows/v1')`,
-      [bounded],
+    const batchSize = Math.max(
+      1,
+      Math.min(5_000, Math.floor(options.batchSize ?? 5_000)),
     );
+    for (let offset = 0; offset < bounded.length; offset += batchSize) {
+      await this.pool.query(
+        `SELECT metrics.refresh_app_signal_windows_v1(CURRENT_DATE - 1, $1::integer[], 'signal-windows/v1')`,
+        [bounded.slice(offset, offset + batchSize)],
+      );
+      await options.onBatch?.();
+    }
   }
 
   async getPresetHealthTargets(): Promise<OpportunityPresetHealthTarget[]> {

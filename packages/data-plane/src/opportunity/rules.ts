@@ -74,6 +74,25 @@ const SUPPORTED_FIELDS = new Set<OpportunityRuleField>([
   "ccu_change_30d",
 ]);
 
+function clauseRequiresUnreleasedGame(clause: OpportunityRuleClause): boolean {
+  return (
+    clause.field === "is_released" &&
+    ((clause.operator === "equals" && clause.value === false) ||
+      (clause.operator === "not_equals" && clause.value === true))
+  );
+}
+
+export function supportsReleasedMarketHealth(
+  rules: OpportunityRuleSet,
+): boolean {
+  return !rules.required.some((group) =>
+    group.operator === "all"
+      ? group.clauses.some(clauseRequiresUnreleasedGame)
+      : group.clauses.length > 0 &&
+        group.clauses.every(clauseRequiresUnreleasedGame),
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -4,11 +4,157 @@ import { describe, it } from "node:test";
 import type { Pool } from "pg";
 
 import { OpportunityRepository } from "./repository.js";
+import {
+  OPPORTUNITY_RULE_SCHEMA_VERSION,
+  type OpportunityRuleSet,
+} from "./types.js";
 
 interface QueryCall {
   text: string;
   values: readonly unknown[];
 }
+
+function releaseRules(released: boolean): OpportunityRuleSet {
+  return {
+    excluded: [],
+    preferred: [],
+    required: [
+      {
+        clauses: [
+          {
+            field: "is_released",
+            id: released ? "released" : "unreleased",
+            operator: "equals",
+            value: released,
+          },
+        ],
+        id: "release",
+        label: released ? "Released" : "Upcoming",
+        operator: "all",
+      },
+    ],
+    schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+  };
+}
+
+describe("opportunity preset health presentation", () => {
+  it("marks unreleased presets unsupported in the released-market model", async () => {
+    const pool = {
+      query: async (): Promise<{ rows: unknown[] }> => ({
+        rows: [
+          {
+            description: "Released",
+            health_state: "quiet",
+            id: "released",
+            name: "Released preset",
+            rules: releaseRules(true),
+            slug: "released",
+            version: 1,
+          },
+          {
+            description: "Upcoming",
+            health_state: "insufficient_data",
+            id: "upcoming",
+            name: "Upcoming preset",
+            rules: releaseRules(false),
+            slug: "upcoming",
+            version: 1,
+          },
+        ],
+      }),
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    const presets = await repository.listPresets();
+
+    assert.deepEqual(
+      presets.map((preset) => ({
+        healthState: preset.healthState,
+        healthUnavailableReason: preset.healthUnavailableReason,
+        id: preset.id,
+      })),
+      [
+        {
+          healthState: "quiet",
+          healthUnavailableReason: null,
+          id: "released",
+        },
+        {
+          healthState: null,
+          healthUnavailableReason: "unreleased_only",
+          id: "upcoming",
+        },
+      ],
+    );
+  });
+
+  it("returns only latest non-initial supported transitions with cap metadata", async () => {
+    const calls: QueryCall[] = [];
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        calls.push({ text, values });
+        if (text.includes("WITH latest_changes AS")) {
+          return {
+            rows: [
+              {
+                as_of_date: new Date("2026-07-28T00:00:00.000Z"),
+                evaluated_games: 5_000,
+                explanation: ["coverage", "state reason"],
+                maximum_evaluated: 5_000,
+                name: "Released preset",
+                prior_state: "quiet",
+                rules: releaseRules(true),
+                state: "insufficient_data",
+              },
+              {
+                as_of_date: new Date("2026-07-28T00:00:00.000Z"),
+                evaluated_games: 0,
+                explanation: ["coverage", "state reason"],
+                maximum_evaluated: 5_000,
+                name: "Upcoming preset",
+                prior_state: "quiet",
+                rules: releaseRules(false),
+                state: "insufficient_data",
+              },
+            ],
+          };
+        }
+        if (text.includes("FROM opportunity.runs run")) {
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected query in health transition test: ${text}`);
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    const overview = await repository.getLatestDailyOverview(
+      "workspace",
+      "user",
+    );
+
+    assert.deepEqual(overview.presetHealthChanges, [
+      {
+        asOfDate: "2026-07-28T00:00:00.000Z",
+        evaluatedGames: 5_000,
+        explanation: ["coverage", "state reason"],
+        maximumEvaluated: 5_000,
+        name: "Released preset",
+        priorState: "quiet",
+        sampleCapped: true,
+        state: "insufficient_data",
+      },
+    ]);
+    assert.match(calls[0]?.text ?? "", /DISTINCT ON \(snapshot\.preset_id\)/);
+    assert.match(calls[0]?.text ?? "", /snapshot\.prior_state IS NOT NULL/);
+    assert.match(
+      calls[0]?.text ?? "",
+      /snapshot\.state IS DISTINCT FROM snapshot\.prior_state/,
+    );
+  });
+});
 
 describe("opportunity workspace provisioning", () => {
   it("binds the audit object id independently from the workspace UUID", async () => {

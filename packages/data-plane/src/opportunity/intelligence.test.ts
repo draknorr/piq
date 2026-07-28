@@ -93,6 +93,7 @@ describe("opportunity intelligence", () => {
       ccuGrowthMedian: 0.4,
       consecutiveCandidateDays: 1,
       coreCoverage: 0.8,
+      evaluatedGames: 25,
       measuredGames: 20,
       positiveBreadth: 0.6,
       priorState: "active",
@@ -104,6 +105,7 @@ describe("opportunity intelligence", () => {
       ccuGrowthMedian: 0.4,
       consecutiveCandidateDays: 2,
       coreCoverage: 0.8,
+      evaluatedGames: 25,
       measuredGames: 20,
       positiveBreadth: 0.6,
       priorState: "growing",
@@ -113,5 +115,42 @@ describe("opportunity intelligence", () => {
 
     assert.equal(first.state, "growing");
     assert.equal(second.state, "surging");
+  });
+
+  it("explains quiet as measured flat movement", () => {
+    const result = calculateOpportunityPresetHealth({
+      asOfDate: "2026-07-27",
+      ccuGrowthMedian: 0.01,
+      consecutiveCandidateDays: 1,
+      coreCoverage: 0.8,
+      evaluatedGames: 25,
+      measuredGames: 20,
+      positiveBreadth: 0.2,
+      priorState: "active",
+      reviewAccelerationMedian: -0.02,
+      topContributorShare: 0.4,
+    });
+
+    assert.equal(result.state, "quiet");
+    assert.match(result.explanation.at(-1) ?? "", /both within ±5%/);
+  });
+
+  it("requires both minimum count and minimum coverage", () => {
+    const result = calculateOpportunityPresetHealth({
+      asOfDate: "2026-07-27",
+      ccuGrowthMedian: 0,
+      consecutiveCandidateDays: 1,
+      coreCoverage: 0.1,
+      evaluatedGames: 20,
+      measuredGames: 2,
+      positiveBreadth: 0,
+      priorState: null,
+      reviewAccelerationMedian: 0,
+      topContributorShare: null,
+    });
+
+    assert.equal(result.state, "insufficient_data");
+    assert.match(result.explanation[0] ?? "", /2 of 20 evaluated released/);
+    assert.match(result.explanation[1] ?? "", /10 measured games and 60%/);
   });
 });

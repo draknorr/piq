@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import type { Pool } from "pg";
+
 import {
   type OpportunityEvaluationInput,
+  type OpportunityFieldValue,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityRuleSet,
 } from "./types.js";
 import {
+  opportunityNumericFieldValue,
   OpportunityWorker,
   resolveOpportunityResultLabel,
   shouldSurfaceOpportunityMatch,
@@ -52,6 +56,49 @@ const PROFILE: OpportunityWorkerProfile = {
   versionId: "version",
   versionNumber: 1,
 };
+
+function knownField(value: unknown): OpportunityFieldValue {
+  return {
+    confidence: "high",
+    evidenceClass: "observed_fact",
+    source: "test",
+    sourceAt: "2026-07-27T00:00:00.000Z",
+    state: "known",
+    value,
+  };
+}
+
+function unknownField(): OpportunityFieldValue {
+  return {
+    confidence: "directional",
+    evidenceClass: "derived_metric",
+    reason: "Metric is unavailable.",
+    source: "test",
+    sourceAt: null,
+    state: "unknown",
+    value: null,
+  };
+}
+
+describe("opportunity numeric evidence", () => {
+  it("preserves unknown and null values instead of coercing them to zero", () => {
+    const input: OpportunityEvaluationInput = {
+      appid: 10,
+      fields: {
+        ccu_peak: unknownField(),
+        reviews_added_7d: knownField(0),
+        reviews_added_30d: knownField("12"),
+        total_reviews: knownField(""),
+      },
+      name: "Numeric evidence",
+    };
+
+    assert.equal(opportunityNumericFieldValue(input, "ccu_peak"), null);
+    assert.equal(opportunityNumericFieldValue(input, "reviews_added_7d"), 0);
+    assert.equal(opportunityNumericFieldValue(input, "reviews_added_30d"), 12);
+    assert.equal(opportunityNumericFieldValue(input, "total_reviews"), null);
+  });
+});
 
 describe("opportunity worker materialization recovery", () => {
   it("renews the active queue claim when materialization reports progress", async () => {
@@ -101,6 +148,159 @@ describe("opportunity worker materialization recovery", () => {
       [495, "lease-test-worker"],
     ]);
     assert.deepEqual(completed, [[495, "lease-test-worker"]]);
+  });
+});
+
+describe("opportunity preset health refresh", () => {
+  it("hydrates a bounded released cohort and keeps missing core signals insufficient", async () => {
+    const supportedRules: OpportunityRuleSet = {
+      ...RULES,
+      required: [
+        {
+          clauses: [
+            {
+              field: "is_released",
+              id: "released",
+              operator: "equals",
+              value: true,
+            },
+          ],
+          id: "release",
+          label: "Released",
+          operator: "all",
+        },
+      ],
+    };
+    const inputs: OpportunityEvaluationInput[] = Array.from(
+      { length: 20 },
+      (_, index) => ({
+        appid: index + 1,
+        fields: {
+          ccu_change_30d: unknownField(),
+          reviews_added_7d: unknownField(),
+          reviews_added_30d: unknownField(),
+        },
+        name: `Game ${index + 1}`,
+      }),
+    );
+    const item: OpportunityWorkItem = {
+      appid: null,
+      attempts: 1,
+      id: 501,
+      kind: "refresh_preset_health",
+      lane: "market_cohort",
+      materialEventId: null,
+      payload: {},
+      profileId: null,
+      userId: null,
+      workspaceId: null,
+    };
+    type PersistParams = Parameters<
+      OpportunityWorkerRepository["persistPresetHealth"]
+    >[0];
+    const persisted: PersistParams[] = [];
+    const refreshCalls: number[][] = [];
+    let inputCalls = 0;
+    let heartbeatCount = 0;
+    const repository = {
+      async claimWork(): Promise<OpportunityWorkItem[]> {
+        return [item];
+      },
+      async completeWork(): Promise<void> {
+        return;
+      },
+      async failWork(params: { error: string }): Promise<void> {
+        throw new Error(params.error);
+      },
+      async getPresetHealthTargets() {
+        return [
+          { id: "supported", rules: supportedRules, slug: "supported" },
+          { id: "unreleased", rules: RULES, slug: "unreleased" },
+        ];
+      },
+      async getPriorPresetHealth() {
+        return { consecutiveDays: 0, state: null };
+      },
+      async heartbeatWork(): Promise<void> {
+        heartbeatCount += 1;
+      },
+      async persistPresetHealth(params: PersistParams): Promise<void> {
+        persisted.push(params);
+      },
+      productRepository: {
+        async getPresetHealthInputs(): Promise<OpportunityEvaluationInput[]> {
+          inputCalls += 1;
+          return inputs;
+        },
+      },
+      async refreshSignalWindows(
+        appids: number[],
+        options: { batchSize?: number; onBatch?: () => Promise<void> },
+      ): Promise<void> {
+        refreshCalls.push(appids);
+        assert.equal(options.batchSize, 500);
+        await options.onBatch?.();
+      },
+      async scheduleWork(): Promise<number> {
+        return 0;
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "health-test-worker",
+    });
+
+    assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
+    assert.equal(inputCalls, 2);
+    assert.deepEqual(refreshCalls, [inputs.map((input) => input.appid)]);
+    assert.ok(heartbeatCount >= 3);
+    const persistedHealth = persisted[0];
+    assert.ok(persistedHealth);
+    assert.equal(persistedHealth.snapshot.measuredGames, 0);
+    assert.equal(persistedHealth.snapshot.coverage, 0);
+    assert.equal(persistedHealth.snapshot.state, "insufficient_data");
+    assert.deepEqual(persistedHealth.cohortDefinition.signalWindowRefresh, {
+      fullyRefreshed: true,
+      maximumUniqueGamesPerRun: 20_000,
+      refreshedGames: 20,
+      runUniqueGames: 20,
+    });
+  });
+
+  it("deduplicates appids and refreshes them in bounded heartbeat batches", async () => {
+    const batches: number[][] = [];
+    let progressCalls = 0;
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        assert.match(text, /refresh_app_signal_windows_v1/);
+        batches.push(values[0] as number[]);
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityWorkerRepository(pool);
+    const appids = [
+      ...Array.from({ length: 1_200 }, (_, index) => index + 1),
+      1,
+      -1,
+      0,
+    ];
+
+    await repository.refreshSignalWindows(appids, {
+      batchSize: 500,
+      onBatch: async () => {
+        progressCalls += 1;
+      },
+    });
+
+    assert.deepEqual(
+      batches.map((batch) => batch.length),
+      [500, 500, 200],
+    );
+    assert.equal(new Set(batches.flat()).size, 1_200);
+    assert.equal(progressCalls, 3);
   });
 });
 
@@ -387,6 +587,109 @@ describe("opportunity worker result provenance", () => {
       outcome.result.sourceTimestamps.steam_pics,
       "2026-07-27T20:31:16.500Z",
     );
+  });
+
+  it("uses the neutral peer percentile when reviews and CCU are unknown", async () => {
+    const repository = {
+      async getReleasedCohort() {
+        return {
+          confidence: "high" as const,
+          coverage: 1,
+          fallbackTier: 1 as const,
+          members: [
+            {
+              appid: 101,
+              ccuPeak: 25,
+              inclusionReasons: ["shared genre"],
+              inclusionScore: 0.8,
+              name: "Peer one",
+              positivePercentage: 90,
+              priceCents: 1_000,
+              reviewsAdded30d: 10,
+              totalReviews: 100,
+            },
+            {
+              appid: 102,
+              ccuPeak: 50,
+              inclusionReasons: ["shared genre"],
+              inclusionScore: 0.7,
+              name: "Peer two",
+              positivePercentage: 85,
+              priceCents: 1_000,
+              reviewsAdded30d: 20,
+              totalReviews: 200,
+            },
+          ],
+          signature: {},
+          sourceAt: "2026-07-27T00:00:00.000Z",
+        };
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "ranking-test-worker",
+    });
+    const evaluateGame = (
+      worker as unknown as {
+        evaluateGame(context: {
+          appid: number;
+          candidateOutcomes: Map<
+            string,
+            "eligible" | "ineligible" | "pending" | "expired"
+          >;
+          event: OpportunityWorkerMaterialEvent;
+          input: OpportunityEvaluationInput;
+          priorState: {
+            dismissedEventFingerprint: null;
+            ignored: false;
+            priorEventFingerprints: Set<string>;
+            priorResultId: null;
+            tracked: false;
+          };
+          profiles: OpportunityWorkerProfile[];
+          run: {
+            id: string;
+            kind: "daily";
+            windowEnd: string;
+            windowStart: string;
+          };
+        }): Promise<{
+          result: OpportunityEvaluatedResult | null;
+        }>;
+      }
+    ).evaluateGame.bind(worker);
+
+    const outcome = await evaluateGame({
+      appid: 42,
+      candidateOutcomes: new Map(),
+      event: event({ appid: 42 }),
+      input: {
+        appid: 42,
+        fields: {
+          ccu_peak: unknownField(),
+          is_released: knownField(false),
+          total_reviews: unknownField(),
+        },
+        name: "Unknown market position",
+      },
+      priorState: {
+        dismissedEventFingerprint: null,
+        ignored: false,
+        priorEventFingerprints: new Set(),
+        priorResultId: null,
+        tracked: false,
+      },
+      profiles: [PROFILE],
+      run: {
+        id: "run",
+        kind: "daily",
+        windowEnd: "2026-07-27T01:00:00.000Z",
+        windowStart: "2026-07-27T00:00:00.000Z",
+      },
+    });
+
+    assert.ok(outcome.result);
+    assert.equal(outcome.result.rank.components.peerPosition, 0.5);
   });
 });
 

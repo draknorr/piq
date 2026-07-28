@@ -232,11 +232,31 @@ export interface OpportunityHealthInput {
   ccuGrowthMedian: number | null;
   consecutiveCandidateDays: number;
   coreCoverage: number;
+  evaluatedGames: number;
   measuredGames: number;
   positiveBreadth: number | null;
   priorState: OpportunityPresetHealthState | null;
   reviewAccelerationMedian: number | null;
   topContributorShare: number | null;
+}
+
+function explainOpportunityHealthState(
+  state: OpportunityPresetHealthState,
+): string {
+  switch (state) {
+    case "surging":
+      return "Review and CCU demand improved broadly for two consecutive daily snapshots without one title dominating.";
+    case "growing":
+      return "A broad share of measured games improved in reviews or concurrent players.";
+    case "cooling":
+      return "Median review and concurrent-player movement both declined, with improvement limited to a narrow share of games.";
+    case "quiet":
+      return "Median review acceleration and concurrent-player growth were both within ±5%.";
+    case "active":
+      return "Movement was measurable but did not meet the growing, cooling, or quiet thresholds.";
+    case "insufficient_data":
+      return "At least 10 measured games and 60% coverage are required for a market-health conclusion.";
+  }
 }
 
 export function calculateOpportunityPresetHealth(
@@ -275,15 +295,13 @@ export function calculateOpportunityPresetHealth(
 
   const explanation = enoughData
     ? [
-        `${input.measuredGames} released games provide ${(100 * input.coreCoverage).toFixed(0)}% core coverage.`,
+        `${input.measuredGames} of ${input.evaluatedGames} evaluated released games have complete review-and-CCU signals (${(100 * input.coreCoverage).toFixed(0)}% core coverage).`,
         `${(100 * (input.positiveBreadth ?? 0)).toFixed(0)}% of measured games are improving.`,
-        state === "surging"
-          ? "Review and CCU demand improved broadly for two consecutive daily snapshots without one title dominating."
-          : "The conservative Surging gate was not fully met.",
+        explainOpportunityHealthState(state),
       ]
     : [
-        `Only ${input.measuredGames} released games provide ${(100 * input.coreCoverage).toFixed(0)}% core coverage.`,
-        "At least 10 measured games and 60% coverage are required for a market-health conclusion.",
+        `Only ${input.measuredGames} of ${input.evaluatedGames} evaluated released games have complete review-and-CCU signals (${(100 * input.coreCoverage).toFixed(0)}% core coverage).`,
+        explainOpportunityHealthState(state),
       ];
 
   return {

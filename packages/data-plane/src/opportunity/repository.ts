@@ -29,7 +29,10 @@ import {
   OPPORTUNITY_PREVIEW_FROM_SQL,
   type OpportunityCompiledPreview,
 } from "./sql-compiler.js";
-import { describeOpportunityRuleSet } from "./rules.js";
+import {
+  describeOpportunityRuleSet,
+  supportsReleasedMarketHealth,
+} from "./rules.js";
 
 interface WorkspaceContext {
   id: string;
@@ -631,15 +634,19 @@ export class OpportunityRepository {
       LIMIT 100
     `);
 
-    return result.rows.map((row) => ({
-      description: row.description,
-      healthState: row.health_state,
-      id: row.id,
-      name: row.name,
-      ruleSummary: describeOpportunityRuleSet(row.rules),
-      slug: row.slug,
-      version: row.version,
-    }));
+    return result.rows.map((row) => {
+      const healthSupported = supportsReleasedMarketHealth(row.rules);
+      return {
+        description: row.description,
+        healthState: healthSupported ? row.health_state : null,
+        healthUnavailableReason: healthSupported ? null : "unreleased_only",
+        id: row.id,
+        name: row.name,
+        ruleSummary: describeOpportunityRuleSet(row.rules),
+        slug: row.slug,
+        version: row.version,
+      };
+    });
   }
 
   async listProfiles(
@@ -696,34 +703,74 @@ export class OpportunityRepository {
     const healthChanges = await this.pool.query<
       QueryResultRow & {
         as_of_date: Date | string;
+        evaluated_games: number | string;
         explanation: string[];
+        maximum_evaluated: number | string;
         name: string;
         prior_state: OpportunityPresetSummary["healthState"];
+        rules: OpportunityRuleSet;
         state: NonNullable<OpportunityPresetSummary["healthState"]>;
       }
     >(
       `
+        WITH latest_changes AS (
+          SELECT DISTINCT ON (snapshot.preset_id)
+            snapshot.preset_id,
+            preset.name,
+            version.rules,
+            snapshot.as_of_date,
+            snapshot.state,
+            snapshot.prior_state,
+            snapshot.explanation,
+            COALESCE(
+              (snapshot.cohort_definition->>'candidateCount')::integer,
+              0
+            ) AS evaluated_games,
+            COALESCE(
+              (snapshot.cohort_definition->>'maximumEvaluated')::integer,
+              5000
+            ) AS maximum_evaluated,
+            snapshot.calculated_at
+          FROM opportunity.preset_health_snapshots snapshot
+          JOIN opportunity.presets preset ON preset.id = snapshot.preset_id
+          JOIN opportunity.preset_versions version
+            ON version.id = preset.current_version_id
+          WHERE snapshot.calculated_at >= now() - interval '48 hours'
+            AND snapshot.prior_state IS NOT NULL
+            AND snapshot.state IS DISTINCT FROM snapshot.prior_state
+          ORDER BY snapshot.preset_id, snapshot.calculated_at DESC
+        )
         SELECT
-          preset.name,
-          snapshot.as_of_date,
-          snapshot.state,
-          snapshot.prior_state,
-          snapshot.explanation
-        FROM opportunity.preset_health_snapshots snapshot
-        JOIN opportunity.presets preset ON preset.id = snapshot.preset_id
-        WHERE snapshot.calculated_at >= now() - interval '48 hours'
-          AND snapshot.state IS DISTINCT FROM snapshot.prior_state
-        ORDER BY snapshot.calculated_at DESC, preset.name
+          name,
+          rules,
+          as_of_date,
+          state,
+          prior_state,
+          explanation,
+          evaluated_games,
+          maximum_evaluated
+        FROM latest_changes
+        ORDER BY calculated_at DESC, name
         LIMIT 50
       `,
     );
-    const presetHealthChanges = healthChanges.rows.map((row) => ({
-      asOfDate: iso(row.as_of_date)!,
-      explanation: row.explanation,
-      name: row.name,
-      priorState: row.prior_state,
-      state: row.state,
-    }));
+    const presetHealthChanges = healthChanges.rows
+      .filter((row) => supportsReleasedMarketHealth(row.rules))
+      .map((row) => {
+        const evaluatedGames = Number(row.evaluated_games);
+        const maximumEvaluated = Number(row.maximum_evaluated);
+        return {
+          asOfDate: iso(row.as_of_date)!,
+          evaluatedGames,
+          explanation: row.explanation,
+          maximumEvaluated,
+          name: row.name,
+          priorState: row.prior_state,
+          sampleCapped:
+            maximumEvaluated > 0 && evaluatedGames >= maximumEvaluated,
+          state: row.state,
+        };
+      });
     const runResult = await this.pool.query<LatestRunRow>(
       `
         SELECT
