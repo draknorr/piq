@@ -2310,6 +2310,15 @@ export class OpportunityRepository {
         track: `tracked_at = now()`,
         untrack: `tracked_at = NULL`,
       }[params.action];
+      const updateValues =
+        params.action === "dismiss"
+          ? [
+              workspace.id,
+              params.identity.userId,
+              params.appid,
+              params.eventFingerprint ?? null,
+            ]
+          : [workspace.id, params.identity.userId, params.appid];
       await client.query(
         `
           UPDATE opportunity.user_game_state
@@ -2319,12 +2328,7 @@ export class OpportunityRepository {
             AND user_id = $2
             AND appid = $3
         `,
-        [
-          workspace.id,
-          params.identity.userId,
-          params.appid,
-          params.eventFingerprint ?? null,
-        ],
+        updateValues,
       );
       await client.query(
         `

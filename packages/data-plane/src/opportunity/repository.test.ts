@@ -179,3 +179,117 @@ describe("opportunity rule-input provenance", () => {
     assert.match(calls[0]?.text ?? "", /readiness_catalog\.source = 'catalog'/);
   });
 });
+
+describe("opportunity personal game state", () => {
+  const cases = [
+    {
+      action: "dismiss",
+      expectedBindCount: 4,
+      expectedUpdate: /dismissed_event_fingerprint = \$4/,
+    },
+    {
+      action: "ignore",
+      expectedBindCount: 3,
+      expectedUpdate: /ignored_at = now\(\)/,
+    },
+    {
+      action: "restore",
+      expectedBindCount: 3,
+      expectedUpdate: /ignored_at = NULL/,
+    },
+    {
+      action: "track",
+      expectedBindCount: 3,
+      expectedUpdate: /tracked_at = now\(\)/,
+    },
+    {
+      action: "untrack",
+      expectedBindCount: 3,
+      expectedUpdate: /tracked_at = NULL/,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    it(`binds only referenced parameters for ${testCase.action}`, async () => {
+      const workspaceId = "32d4ce66-6344-4a7d-91b1-59d3a5bd405a";
+      const userId = "f71d6cd1-38ff-4f16-a3e7-b4c6de0c64ea";
+      const appid = 570;
+      const eventFingerprint = "event-fingerprint-123";
+      const calls: QueryCall[] = [];
+      const client = {
+        query: async (
+          text: string,
+          values: readonly unknown[] = [],
+        ): Promise<{ rows: unknown[] }> => {
+          calls.push({ text, values });
+
+          if (
+            text === "BEGIN" ||
+            text === "COMMIT" ||
+            text === "ROLLBACK" ||
+            text.includes("UPDATE opportunity.workspace_memberships") ||
+            text.includes("INSERT INTO opportunity.user_game_state") ||
+            text.includes("UPDATE opportunity.user_game_state") ||
+            text.includes("INSERT INTO opportunity.audit_log")
+          ) {
+            return { rows: [] };
+          }
+          if (
+            text.includes("FROM opportunity.workspace_memberships membership")
+          ) {
+            return {
+              rows: [
+                { id: workspaceId, name: "Test workspace", role: "owner" },
+              ],
+            };
+          }
+
+          throw new Error(
+            `Unexpected query in personal game state test: ${text}`,
+          );
+        },
+        release: (): void => undefined,
+      };
+      const pool = {
+        connect: async () => client,
+      } as unknown as Pool;
+      const repository = new OpportunityRepository(pool);
+
+      await repository.setUserGameState({
+        action: testCase.action,
+        appid,
+        eventFingerprint,
+        identity: {
+          accessToken: "test-access-token",
+          email: "owner@example.com",
+          userId,
+        },
+      });
+
+      const updateCall = calls.find((call) =>
+        call.text.includes("UPDATE opportunity.user_game_state"),
+      );
+      assert.ok(updateCall);
+      assert.match(updateCall.text, testCase.expectedUpdate);
+      assert.equal(updateCall.values.length, testCase.expectedBindCount);
+      assert.deepEqual(
+        updateCall.values,
+        testCase.action === "dismiss"
+          ? [workspaceId, userId, appid, eventFingerprint]
+          : [workspaceId, userId, appid],
+      );
+
+      const auditCall = calls.find((call) =>
+        call.text.includes("'game_state'"),
+      );
+      assert.ok(auditCall);
+      assert.deepEqual(auditCall.values, [
+        workspaceId,
+        userId,
+        `game_state.${testCase.action}`,
+        String(appid),
+        JSON.stringify({ eventFingerprint }),
+      ]);
+    });
+  }
+});
