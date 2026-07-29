@@ -191,6 +191,9 @@ stored provenance is the exact completed prefix of the same plan.
 | `PICS_CONSUMER_LIVE_BATCH_SIZE`          | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
 | `PICS_CONSUMER_CATCHUP_BATCH_SIZE`       | `10`                          | Separate per-pass historical catch-up quota                                                       |
 | `PICS_CONSUMER_LEASE_SECONDS`            | `300`                         | Claim lease and heartbeat extension                                                               |
+| `PICS_CONSUMER_CONCURRENCY`              | `4`                           | Bounded native threads for independent post-Steam R2/Tiger work; hard-capped at `8`               |
+| `PICS_CONSUMER_HEARTBEAT_INTERVAL_SECONDS` | `60`                        | Maximum interval between batched remaining-claim lease barriers                                   |
+| `PICS_PRODUCT_INFO_MIN_INTERVAL_SECONDS` | `215`                         | Minimum scheduled product-info pass spacing; values below `212` fail closed without a governor    |
 | `PICS_CONSUMER_RETRY_BASE_SECONDS`       | `30`                          | Initial retry delay                                                                               |
 | `PICS_CONSUMER_RETRY_MAX_SECONDS`        | `3600`                        | Maximum capped retry delay                                                                        |
 | `CHANGE_INTEL_ARCHIVE_TARGET`            | `disabled`                    | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger`                                  |
@@ -213,10 +216,13 @@ stored provenance is the exact completed prefix of the same plan.
 | `POLL_INTERVAL`                          | `30`                          | Seconds between PICS change polls                                                                 |
 | `PROCESS_BATCH_SIZE`                     | `100`                         | Apps per queue processing batch                                                                   |
 | `MAX_QUEUE_SIZE`                         | `10000`                       | Maximum queued apps                                                                               |
-| `STEAM_HEARTBEAT_INTERVAL`               | `300`                         | Heartbeat interval to keep the Steam connection alive                                             |
+| `STEAM_HEARTBEAT_INTERVAL`               | `300`                         | Existing heartbeat cadence; changes require a global Steam-session governor                       |
 | `STEAM_AUTO_RECONNECT`                   | `true`                        | Automatically reconnect after a disconnect                                                        |
 | `LOG_LEVEL`                              | `INFO`                        | Logging level                                                                                     |
 | `LOG_JSON`                               | `true`                        | JSON log formatting                                                                               |
+
+The live plus catch-up consumer quotas must not exceed the existing
+200-app product-info batch cap.
 
 ## PICS Change-History Backfill
 
@@ -260,6 +266,26 @@ Focused suites:
 
 ```bash
 pytest tests/test_change_intelligence.py tests/test_operations_change_history.py tests/test_operations_relationship_sync.py
+```
+
+No-network processor benchmark:
+
+```bash
+PYTHONPATH=. python scripts/benchmark_durable_processor.py \
+  --batch-sizes 50,75,100,150,200 \
+  --workers 1,4,8
+```
+
+The production-read benchmark is explicitly read-only: it opens Tiger
+transactions with `default_transaction_read_only=on` and performs only bounded
+`SELECT` queries plus verified R2 `GET` requests. Run it only with the genuine
+PICS service environment:
+
+```bash
+PYTHONPATH=. python scripts/benchmark_durable_reads.py \
+  --confirm-read-only-production \
+  --batch-sizes 50,75,100,150,200 \
+  --r2-workers 4
 ```
 
 ## Package Layout

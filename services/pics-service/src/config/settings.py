@@ -68,11 +68,16 @@ class Settings(BaseSettings):
     pics_consumer_live_batch_size: int = 40
     pics_consumer_catchup_batch_size: int = 10
     pics_consumer_lease_seconds: int = 300
+    pics_consumer_concurrency: int = 4
+    pics_consumer_heartbeat_interval_seconds: int = 60
+    # Keep scheduled product-info pass starts within the requested approximate
+    # 17/hour canary ceiling until a separately reviewed global Steam governor.
+    pics_product_info_min_interval_seconds: int = 215
     pics_consumer_retry_base_seconds: int = 30
     pics_consumer_retry_max_seconds: int = 3600
 
     # Steam connection settings
-    steam_heartbeat_interval: int = 300  # 5 minutes - heartbeat to prevent idle disconnect
+    steam_heartbeat_interval: int = 300  # Existing cadence; changes require a global governor
     steam_auto_reconnect: bool = True  # Auto-reconnect on disconnect
 
     # Logging

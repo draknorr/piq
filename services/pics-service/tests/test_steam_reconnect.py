@@ -1,3 +1,5 @@
+# ruff: noqa: E402, I001
+
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -144,7 +146,11 @@ def test_get_changes_since_retries_after_timeout_response(monkeypatch):
         responses=[None, build_response(700, [11, 22])],
     )
     fetcher = PICSFetcher(client, timeout=1, max_retries=2)
-    monkeypatch.setattr(pics_module.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pics_module,
+        "_cooperative_sleep",
+        lambda *_args, **_kwargs: None,
+    )
 
     result = fetcher.get_changes_since(650)
 
@@ -164,7 +170,11 @@ def test_get_changes_since_retries_after_hanging_poll_timeout(monkeypatch):
         responses=[slow_success, build_response(902, [42])],
     )
     fetcher = PICSFetcher(client, timeout=1, change_poll_timeout=0.01, max_retries=2)
-    monkeypatch.setattr(pics_module.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pics_module,
+        "_cooperative_sleep",
+        lambda *_args, **_kwargs: None,
+    )
 
     result = fetcher.get_changes_since(800)
 

@@ -149,18 +149,49 @@ For each pass:
 3. claim a separate, smaller `catchup` quota;
 4. increment attempts when the lease is acquired so a crash cannot retry
    forever without consuming its cap;
-5. heartbeat before and after the bounded Steam product-info request and renew
-   every still-unprocessed lease before each app promotion;
-6. retry transient payload or processing failures with capped exponential
+5. heartbeat before the bounded Steam product-info request, batch the latest
+   snapshot-pointer lookup, and heartbeat remaining claims at completed-wave
+   barriers rather than opening one heartbeat transaction per app;
+6. run independent post-Steam R2/validation/Tiger work on four bounded native
+   threads so blocking psycopg and boto3 calls do not halt the gevent Steam
+   heartbeat;
+7. retry transient payload or processing failures with capped exponential
    backoff;
-7. record inaccessible or token-blocked source payloads as `source_blocked`;
+8. record inaccessible or token-blocked source payloads as `source_blocked`;
    and
-8. acknowledge work only inside the shadow settlement or primary promotion
+9. acknowledge work only inside the shadow settlement or primary promotion
    transaction.
 
 If a newer PICS change arrives during processing, acknowledgement records the
 claimed cursor and returns the row to `pending` for the later cursor. It never
 marks unseen work complete.
+
+Product-info pass starts have an explicit 215-second minimum interval, keeping
+scheduled calls within the requested approximate 17/hour canary ceiling.
+Values below 212 seconds fail closed until one global Steam-session governor
+covers change polls, product-info calls, token work, reconnects, and backoff.
+Change polling continues on the normal poll loop between eligible processing
+passes.
+
+The Steam heartbeat remains at its existing 300-second cadence so this change
+does not add heartbeat traffic before a global Steam-session governor exists.
+All regular poll sleeps and retry delays yield through gevent, and blocking
+post-Steam I/O runs outside the hub thread. The post-Steam thread pool is
+hard-capped at eight and defaults to four.
+
+`/status` and the structured `Durable PICS processing metrics` log expose:
+
+- intake timing for Steam change polling, R2 response archival, and the Tiger
+  batch transaction;
+- processing timing for live/catch-up claims, Steam product-info retrieval,
+  batched heartbeat and pointer reads, prior R2 reads, validation/extraction,
+  R2 writes, Tiger promotion or settlement, and total pass latency;
+- per-app phase count, total, p50, p95, and max latency;
+- product-info attempts, heartbeat and estimated Tiger transactions, R2 reads
+  and writes, and Tiger transactions per settlement; and
+- live/catch-up open work, retry/claim/dead-letter counts,
+  `missing_access_token` rows, recent catch-up settlement rate, and projected
+  catch-up ETA.
 
 ## Payload Completeness and Promotion
 
