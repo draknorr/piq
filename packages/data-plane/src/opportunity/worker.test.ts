@@ -214,15 +214,30 @@ describe("opportunity evaluation recovery", () => {
       async getRunMaterialEvents() {
         return events;
       },
+      async getReleasedCohorts() {
+        return new Map();
+      },
       async heartbeatWork(): Promise<void> {
         heartbeatCount += 1;
       },
       async persistRunOutcome(params: {
         evaluations: unknown[];
+        phaseTimings: Record<string, number>;
         results: unknown[];
       }): Promise<void> {
         assert.equal(params.evaluations.length, 0);
         assert.equal(params.results.length, 0);
+        assert.deepEqual(Object.keys(params.phaseTimings).sort(), [
+          "cohortResolutionMs",
+          "inputPreparationMs",
+          "marketCalculationMs",
+          "profileEvaluationMs",
+        ]);
+        assert.ok(
+          Object.values(params.phaseTimings).every(
+            (duration) => Number.isFinite(duration) && duration >= 0,
+          ),
+        );
         persisted = true;
       },
       productRepository: {
@@ -252,7 +267,7 @@ describe("opportunity evaluation recovery", () => {
     });
 
     assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
-    assert.equal(heartbeatCount, 7);
+    assert.equal(heartbeatCount, 8);
     assert.equal(persisted, true);
   });
 });
@@ -457,6 +472,58 @@ describe("opportunity preset health refresh", () => {
 });
 
 describe("released opportunity cohort lookup", () => {
+  type MockQuery = (
+    sql: string,
+    values?: readonly unknown[],
+  ) => Promise<{ rows: unknown[] }>;
+
+  function poolWithSnapshotClients(
+    query: MockQuery,
+    options: {
+      onClientQuery?: (
+        sql: string,
+        values: readonly unknown[],
+      ) => Promise<{ rows: unknown[] } | null>;
+      onRelease?: () => void;
+    } = {},
+  ): Pool {
+    let snapshotSequence = 0;
+    return {
+      connect: async () => ({
+        query: async (
+          sql: string,
+          values: readonly unknown[] = [],
+        ): Promise<{ rows: unknown[] }> => {
+          const override = await options.onClientQuery?.(sql, values);
+          if (override) {
+            return override;
+          }
+          const normalized = sql.trim().replaceAll(/\s+/g, " ");
+          if (normalized.includes("SELECT pg_export_snapshot()")) {
+            snapshotSequence += 1;
+            return {
+              rows: [
+                {
+                  snapshot_id: `00000001-00000001-${snapshotSequence}`,
+                },
+              ],
+            };
+          }
+          if (
+            /^(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE SAVEPOINT|SET LOCAL|SET TRANSACTION|LOCK TABLE)/.test(
+              normalized,
+            )
+          ) {
+            return { rows: [] };
+          }
+          return query(sql, values);
+        },
+        release: () => options.onRelease?.(),
+      }),
+      query,
+    } as unknown as Pool;
+  }
+
   function cohortRow(appid: number) {
     return {
       appid,
@@ -470,6 +537,32 @@ describe("released opportunity cohort lookup", () => {
       tag_overlap: 2,
       total_reviews: appid * 100,
     };
+  }
+
+  function cohortTaxonomyRows() {
+    return [
+      { name: "action", taxonomy_id: 11, taxonomy_kind: "genre" },
+      { name: "indie", taxonomy_id: 10, taxonomy_kind: "genre" },
+      { name: "deckbuilder", taxonomy_id: 3, taxonomy_kind: "tag" },
+      { name: "deckbuilding", taxonomy_id: 2, taxonomy_kind: "tag" },
+      { name: "roguelike", taxonomy_id: 1, taxonomy_kind: "tag" },
+    ];
+  }
+
+  function cohortFeatureRows(rows: ReturnType<typeof cohortRow>[]) {
+    return rows.map((row) => ({
+      appid: row.appid,
+      ccu_peak: row.ccu_peak,
+      effective_price_cents: row.price_cents,
+      genre_ids: [10, 11],
+      is_free: false,
+      metric_date: row.metric_date,
+      name: row.name,
+      positive_percentage: row.positive_percentage,
+      review_change_30d: row.review_change_30d,
+      tag_ids: [1, 2, 3],
+      total_reviews: row.total_reviews,
+    }));
   }
 
   it("reuses an exact run-scoped cohort and excludes each subject game", async () => {
@@ -567,6 +660,500 @@ describe("released opportunity cohort lookup", () => {
       cohort.members.map((member) => member.appid),
       [2],
     );
+  });
+
+  it("keeps set-based cohort output byte-for-byte equal to the legacy resolver", async () => {
+    const input: OpportunityEvaluationInput = {
+      appid: 27,
+      fields: {
+        genres: knownField(["Indie", "Action"]),
+        is_free: knownField(false),
+        price_cents: knownField(1_999),
+        tags: knownField(["Roguelike", "Deckbuilding"]),
+      },
+      name: "Golden subject",
+    };
+    const candidates = Array.from({ length: 51 }, (_, index) => ({
+      ...cohortRow(index + 1),
+      inclusion_score: 0.85,
+    }));
+    const legacyRepository = new OpportunityWorkerRepository({
+      query: async (): Promise<{ rows: unknown[] }> => ({
+        rows: candidates,
+      }),
+    } as unknown as Pool);
+    const optimizedRepository = new OpportunityWorkerRepository(
+      poolWithSnapshotClients(
+        async (
+          sql: string,
+          _values: readonly unknown[] = [],
+        ): Promise<{ rows: unknown[] }> => {
+          if (sql.includes("cohort_feature_projection_state_v1")) {
+            return { rows: [{ ready: true }] };
+          }
+          if (sql.includes("CURRENT_DATE AS source_date")) {
+            return {
+              rows: [
+                {
+                  source_date: "2026-07-28",
+                  source_watermark: {
+                    sourceRevisions: {
+                      "legacy.apps": 1,
+                      "legacy.app_genres": 1,
+                      "legacy.app_steam_tags": 1,
+                      "legacy.latest_daily_metrics": 1,
+                      "legacy.steam_genres": 1,
+                      "legacy.steam_tags": 1,
+                      "metrics.app_signal_windows_v1": 1,
+                      "ops.app_data_readiness": 1,
+                    },
+                  },
+                },
+              ],
+            };
+          }
+          if (
+            sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+            sql.includes("SELECT cache_key, cohort")
+          ) {
+            return { rows: [] };
+          }
+          if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+            return { rows: cohortTaxonomyRows() };
+          }
+          if (
+            sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+          ) {
+            return { rows: cohortFeatureRows(candidates) };
+          }
+          if (
+            sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")
+          ) {
+            return { rows: [] };
+          }
+          throw new Error(`Unexpected golden cohort query: ${sql}`);
+        },
+      ),
+    );
+
+    const legacy = await legacyRepository.getReleasedCohort(input);
+    const optimized = (
+      await optimizedRepository.getReleasedCohorts([input])
+    ).get(input.appid);
+
+    assert.deepEqual(optimized, legacy);
+    assert.equal(JSON.stringify(optimized), JSON.stringify(legacy));
+  });
+
+  it("refreshes stale cohort features with a transaction-scoped five-minute timeout", async () => {
+    let refreshed = false;
+    let released = false;
+    const refreshQueries: string[] = [];
+    const sourceWatermark = {
+      sourceRevisions: {
+        "legacy.apps": 1,
+        "legacy.app_genres": 1,
+        "legacy.app_steam_tags": 1,
+        "legacy.latest_daily_metrics": 1,
+        "legacy.steam_genres": 1,
+        "legacy.steam_tags": 1,
+        "metrics.app_signal_windows_v1": 1,
+        "ops.app_data_readiness": 1,
+      },
+    };
+    const pool = poolWithSnapshotClients(
+      async (
+        sql: string,
+        _values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (sql.includes("cohort_feature_projection_state_v1")) {
+          return { rows: [{ ready: refreshed }] };
+        }
+        if (sql.includes("CURRENT_DATE AS source_date")) {
+          return {
+            rows: [
+              {
+                source_date: "2026-07-28",
+                source_watermark: sourceWatermark,
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes("CALL opportunity.refresh_released_cohort_features_v2()")
+        ) {
+          return { rows: [] };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+          sql.includes("SELECT cache_key, cohort")
+        ) {
+          return { rows: [] };
+        }
+        if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+          return { rows: cohortTaxonomyRows() };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+        ) {
+          return { rows: cohortFeatureRows([cohortRow(2)]) };
+        }
+        if (sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")) {
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected feature refresh query: ${sql}`);
+      },
+      {
+        onClientQuery: async (sql) => {
+          const normalized = sql.trim().replaceAll(/\s+/g, " ");
+          refreshQueries.push(normalized);
+          if (
+            normalized ===
+            "CALL opportunity.refresh_released_cohort_features_v2()"
+          ) {
+            refreshed = true;
+            return { rows: [] };
+          }
+          return null;
+        },
+        onRelease: () => {
+          released = true;
+        },
+      },
+    );
+    const repository = new OpportunityWorkerRepository(pool);
+
+    await repository.getReleasedCohorts([
+      {
+        appid: 1,
+        fields: {
+          genres: knownField(["Indie"]),
+          is_free: knownField(false),
+          price_cents: knownField(1_999),
+          tags: knownField(["Roguelike"]),
+        },
+        name: "Refresh subject",
+      },
+    ]);
+
+    assert.ok(
+      refreshQueries.some((query) =>
+        query.startsWith("LOCK TABLE legacy.apps"),
+      ),
+    );
+    assert.ok(
+      refreshQueries.includes(
+        "CALL opportunity.refresh_released_cohort_features_v2()",
+      ),
+    );
+    assert.ok(refreshQueries.includes("SET LOCAL statement_timeout = '5min'"));
+    assert.equal(refreshed, true);
+    assert.equal(released, true);
+  });
+
+  it("fails closed when the feature projection misses the fenced snapshot", async () => {
+    let readinessCalls = 0;
+    let watermarkCalls = 0;
+    let resolverCalls = 0;
+    let cacheWrites = 0;
+    const pool = poolWithSnapshotClients(
+      async (
+        sql: string,
+        _values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (sql.includes("cohort_feature_projection_state_v1")) {
+          readinessCalls += 1;
+          return { rows: [{ ready: false }] };
+        }
+        if (sql.includes("CURRENT_DATE AS source_date")) {
+          watermarkCalls += 1;
+          return {
+            rows: [
+              {
+                source_date: "2026-07-28",
+                source_watermark: {
+                  sourceRevisions: {
+                    "legacy.apps": 1,
+                    "legacy.app_genres": 1,
+                    "legacy.app_steam_tags": 1,
+                    "legacy.latest_daily_metrics": 1,
+                    "legacy.steam_genres": 1,
+                    "legacy.steam_tags": 1,
+                    "metrics.app_signal_windows_v1": 1,
+                    "ops.app_data_readiness": 1,
+                  },
+                },
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes("CALL opportunity.refresh_released_cohort_features_v2()")
+        ) {
+          return { rows: [] };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+          sql.includes("SELECT cache_key, cohort")
+        ) {
+          return { rows: [] };
+        }
+        if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+          return { rows: cohortTaxonomyRows() };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+        ) {
+          resolverCalls += 1;
+          return { rows: cohortFeatureRows([cohortRow(2)]) };
+        }
+        if (sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")) {
+          cacheWrites += 1;
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected unstable cohort query: ${sql}`);
+      },
+    );
+    const repository = new OpportunityWorkerRepository(pool);
+
+    await assert.rejects(
+      repository.getReleasedCohorts([
+        {
+          appid: 1,
+          fields: {
+            genres: knownField(["Indie"]),
+            is_free: knownField(false),
+            price_cents: knownField(1_999),
+            tags: knownField(["Roguelike"]),
+          },
+          name: "Unstable subject",
+        },
+      ]),
+      /did not match the fenced exported source snapshot/,
+    );
+    assert.equal(readinessCalls, 2);
+    assert.equal(watermarkCalls, 2);
+    assert.equal(resolverCalls, 0);
+    assert.equal(cacheWrites, 0);
+  });
+
+  it("treats malformed persistent cohort payloads as misses", async () => {
+    let resolverCalls = 0;
+    let cacheWrites = 0;
+    const sourceWatermark = {
+      sourceRevisions: {
+        "legacy.apps": 1,
+        "legacy.app_genres": 1,
+        "legacy.app_steam_tags": 1,
+        "legacy.latest_daily_metrics": 1,
+        "legacy.steam_genres": 1,
+        "legacy.steam_tags": 1,
+        "metrics.app_signal_windows_v1": 1,
+        "ops.app_data_readiness": 1,
+      },
+    };
+    const pool = poolWithSnapshotClients(
+      async (
+        sql: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (sql.includes("cohort_feature_projection_state_v1")) {
+          return { rows: [{ ready: true }] };
+        }
+        if (sql.includes("CURRENT_DATE AS source_date")) {
+          return {
+            rows: [
+              {
+                source_date: "2026-07-28",
+                source_watermark: sourceWatermark,
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+          sql.includes("SELECT cache_key, cohort")
+        ) {
+          return {
+            rows: [
+              {
+                cache_key: (values[0] as string[])[0]!,
+                cohort: JSON.stringify({
+                  confidence: "directional",
+                  coverage: 1,
+                  fallbackTier: 3,
+                  members: [
+                    {
+                      appid: 2,
+                      ccuPeak: 10,
+                      inclusionReasons: ["shared genre"],
+                      inclusionScore: 0.3,
+                      name: "Incomplete cached member",
+                      positivePercentage: 90,
+                      priceCents: 1_999,
+                      reviewsAdded30d: 5,
+                      // totalReviews is deliberately missing.
+                    },
+                  ],
+                  signature: {
+                    businessModel: "premium",
+                    genres: ["Indie"],
+                    priceBand: [999, 2_999],
+                    tags: ["Roguelike"],
+                  },
+                  sourceAt: "2026-07-28T00:00:00.000Z",
+                }),
+              },
+            ],
+          };
+        }
+        if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+          return { rows: cohortTaxonomyRows() };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+        ) {
+          resolverCalls += 1;
+          return { rows: cohortFeatureRows([cohortRow(2)]) };
+        }
+        if (sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")) {
+          cacheWrites += 1;
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected malformed cohort query: ${sql}`);
+      },
+    );
+    const repository = new OpportunityWorkerRepository(pool);
+
+    const cohorts = await repository.getReleasedCohorts([
+      {
+        appid: 1,
+        fields: {
+          genres: knownField(["Indie"]),
+          is_free: knownField(false),
+          price_cents: knownField(1_999),
+          tags: knownField(["Roguelike"]),
+        },
+        name: "Malformed cache subject",
+      },
+    ]);
+
+    assert.equal(cohorts.get(1)?.members[0]?.appid, 2);
+    assert.equal(resolverCalls, 1);
+    assert.equal(cacheWrites, 1);
+  });
+
+  it("resolves cohort signatures in one batch and reuses exact persistent entries", async () => {
+    const persistent = new Map<string, unknown>();
+    let resolverCalls = 0;
+    let cacheWrites = 0;
+    let readinessRevision = 7;
+    const watermark = () => ({
+      sourceRevisions: {
+        "legacy.apps": 11,
+        "legacy.app_genres": 3,
+        "legacy.app_steam_tags": 4,
+        "legacy.latest_daily_metrics": 12,
+        "legacy.steam_genres": 2,
+        "legacy.steam_tags": 5,
+        "metrics.app_signal_windows_v1": 9,
+        "ops.app_data_readiness": readinessRevision,
+      },
+    });
+    const pool = poolWithSnapshotClients(
+      async (
+        sql: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (sql.includes("cohort_feature_projection_state_v1")) {
+          return { rows: [{ ready: true }] };
+        }
+        if (sql.includes("CURRENT_DATE AS source_date")) {
+          return {
+            rows: [
+              {
+                source_date: "2026-07-28",
+                source_watermark: watermark(),
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+          sql.includes("SELECT cache_key, cohort")
+        ) {
+          return {
+            rows: (values[0] as string[]).flatMap((cacheKey) => {
+              const cohort = persistent.get(cacheKey);
+              return cohort ? [{ cache_key: cacheKey, cohort }] : [];
+            }),
+          };
+        }
+        if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+          return { rows: cohortTaxonomyRows() };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+        ) {
+          resolverCalls += 1;
+          return {
+            rows: cohortFeatureRows(
+              Array.from({ length: 51 }, (_, index) => cohortRow(index + 1)),
+            ),
+          };
+        }
+        if (sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")) {
+          cacheWrites += 1;
+          const rows = JSON.parse(String(values[0])) as Array<{
+            cache_key: string;
+            cohort: unknown;
+          }>;
+          for (const row of rows) {
+            persistent.set(row.cache_key, row.cohort);
+          }
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected persistent cohort query: ${sql}`);
+      },
+    );
+    const repository = new OpportunityWorkerRepository(pool);
+    const firstInput: OpportunityEvaluationInput = {
+      appid: 1,
+      fields: {
+        genres: knownField(["Indie", "Action"]),
+        is_free: knownField(false),
+        price_cents: knownField(1_999),
+        tags: knownField(["Roguelike", "Deckbuilder"]),
+      },
+      name: "First subject",
+    };
+    const secondInput: OpportunityEvaluationInput = {
+      ...firstInput,
+      appid: 2,
+      name: "Second subject",
+    };
+
+    const cold = await repository.getReleasedCohorts([firstInput, secondInput]);
+    const warm = await repository.getReleasedCohorts([firstInput, secondInput]);
+
+    assert.equal(resolverCalls, 1);
+    assert.equal(cacheWrites, 1);
+    assert.equal(persistent.size, 2);
+    assert.deepEqual(warm, cold);
+    assert.deepEqual(
+      cold.get(1)?.members.map((member) => member.appid),
+      Array.from({ length: 50 }, (_, index) => index + 2),
+    );
+    assert.deepEqual(
+      cold.get(2)?.members.map((member) => member.appid),
+      [1, ...Array.from({ length: 49 }, (_, index) => index + 3)],
+    );
+
+    readinessRevision += 1;
+    await repository.getReleasedCohorts([firstInput, secondInput]);
+    assert.equal(resolverCalls, 2);
+    assert.equal(cacheWrites, 2);
+    assert.equal(persistent.size, 4);
   });
 });
 

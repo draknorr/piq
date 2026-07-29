@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
+
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import {
@@ -16,9 +19,25 @@ import type {
   OpportunitySignalFamily,
   OpportunityPresetHealthSnapshot,
   OpportunityPresetHealthState,
+  OpportunityWorkerPhaseTimings,
 } from "./types.js";
-import { OPPORTUNITY_MATERIALITY_VERSION } from "./types.js";
+import {
+  OPPORTUNITY_BULK_PERSISTENCE_VERSION,
+  OPPORTUNITY_COHORT_CACHE_VERSION,
+  OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+  OPPORTUNITY_COHORT_RESOLVER_VERSION,
+  OPPORTUNITY_COHORT_VERSION,
+  OPPORTUNITY_MARKET_VERSION,
+  OPPORTUNITY_MATERIALITY_VERSION,
+  OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+} from "./types.js";
 import { OpportunityRepository } from "./repository.js";
+
+const COHORT_FEATURE_PAGE_SIZE = 25_000;
+const COHORT_FEATURE_MAX_ROWS = 250_000;
+const COHORT_CACHE_WRITE_BATCH_SIZE = 250;
+const RESULT_PERSISTENCE_BATCH_SIZE = 100;
+const CANDIDATE_PERSISTENCE_BATCH_SIZE = 500;
 
 export interface OpportunityWorkItem {
   appid: number | null;
@@ -84,16 +103,18 @@ export interface OpportunityEvaluatedMatch {
   profile: OpportunityWorkerProfile;
 }
 
+export interface OpportunityReleasedCohort {
+  confidence: "high" | "directional";
+  coverage: number;
+  fallbackTier: 1 | 2 | 3 | 4 | 5;
+  members: OpportunityCohortMember[];
+  signature: Record<string, unknown>;
+  sourceAt: string | null;
+}
+
 export interface OpportunityEvaluatedResult {
   appid: number;
-  cohort: {
-    confidence: "high" | "directional";
-    coverage: number;
-    fallbackTier: 1 | 2 | 3 | 4 | 5;
-    members: OpportunityCohortMember[];
-    signature: Record<string, unknown>;
-    sourceAt: string | null;
-  };
+  cohort: OpportunityReleasedCohort;
   confidence: "high" | "directional";
   event: OpportunityWorkerMaterialEvent;
   eventLabel: OpportunityResultLabel;
@@ -135,6 +156,7 @@ export interface OpportunityPriorPresetHealth {
 }
 
 interface OpportunityReleasedCohortRow extends QueryResultRow {
+  signature_key?: string;
   appid: number;
   ccu_peak: number | null;
   inclusion_score: string | number;
@@ -145,6 +167,48 @@ interface OpportunityReleasedCohortRow extends QueryResultRow {
   review_change_30d: string | number | null;
   tag_overlap: number;
   total_reviews: number | null;
+}
+
+interface OpportunityCohortFeatureRow extends QueryResultRow {
+  appid: number;
+  ccu_peak: number | null;
+  effective_price_cents: number | null;
+  genre_ids: number[];
+  is_free: boolean;
+  metric_date: Date | string | null;
+  name: string;
+  positive_percentage: string | number | null;
+  review_change_30d: string | number | null;
+  tag_ids: number[];
+  total_reviews: number | null;
+}
+
+interface OpportunityCohortTaxonomyRow extends QueryResultRow {
+  name: string;
+  taxonomy_id: number;
+  taxonomy_kind: "genre" | "tag";
+}
+
+interface OpportunityCohortSourceWatermarkRow extends QueryResultRow {
+  source_date: Date | string;
+  source_watermark: Record<string, unknown> | string;
+}
+
+interface OpportunityCohortSourceWatermark {
+  cacheable: boolean;
+  featureSourceRevisions: Record<string, number> | null;
+  hash: string;
+  sourceDate: string;
+  value: Record<string, unknown>;
+}
+
+interface OpportunityCohortCacheRow extends QueryResultRow {
+  cache_key: string;
+  cohort: OpportunityReleasedCohort | string;
+}
+
+interface OpportunityExportedSnapshotRow extends QueryResultRow {
+  snapshot_id: string;
 }
 
 export type OpportunityReleasedCohortCache = Map<
@@ -169,6 +233,270 @@ function iso(value: Date | string): string {
   return value instanceof Date
     ? value.toISOString()
     : new Date(value).toISOString();
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function stableHash(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return asRecord(JSON.parse(value) as unknown);
+    } catch {
+      return null;
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function isFiniteNumberOrNull(value: unknown): value is number | null {
+  return (
+    value === null || (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function isCanonicalIsoOrNull(value: unknown): value is string | null {
+  if (value === null) {
+    return true;
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+function isReleasedCohort(value: unknown): value is OpportunityReleasedCohort {
+  const cohort = asRecord(value);
+  if (!cohort) {
+    return false;
+  }
+  const signature = asRecord(cohort.signature);
+  const genres = signature?.genres;
+  const tags = signature?.tags;
+  const priceBand = signature?.priceBand;
+  if (
+    (cohort.confidence !== "high" && cohort.confidence !== "directional") ||
+    typeof cohort.coverage !== "number" ||
+    !Number.isFinite(cohort.coverage) ||
+    cohort.coverage < 0 ||
+    cohort.coverage > 1 ||
+    ![1, 2, 3, 4, 5].includes(Number(cohort.fallbackTier)) ||
+    !Array.isArray(cohort.members) ||
+    cohort.members.length > 50 ||
+    !signature ||
+    (signature.businessModel !== "free" &&
+      signature.businessModel !== "premium") ||
+    !Array.isArray(genres) ||
+    !genres.every((item) => typeof item === "string") ||
+    !Array.isArray(tags) ||
+    !tags.every((item) => typeof item === "string") ||
+    !(
+      priceBand === null ||
+      (Array.isArray(priceBand) &&
+        priceBand.length === 2 &&
+        priceBand.every(
+          (item) => typeof item === "number" && Number.isFinite(item),
+        ))
+    ) ||
+    !isCanonicalIsoOrNull(cohort.sourceAt)
+  ) {
+    return false;
+  }
+  const appids = new Set<number>();
+  const membersValid = cohort.members.every((member) => {
+    const row = asRecord(member);
+    if (
+      !row ||
+      !Number.isInteger(row.appid) ||
+      Number(row.appid) <= 0 ||
+      appids.has(Number(row.appid)) ||
+      typeof row.name !== "string" ||
+      typeof row.inclusionScore !== "number" ||
+      !Number.isFinite(row.inclusionScore) ||
+      !Array.isArray(row.inclusionReasons) ||
+      !row.inclusionReasons.every((reason) => typeof reason === "string") ||
+      !isFiniteNumberOrNull(row.ccuPeak) ||
+      !isFiniteNumberOrNull(row.positivePercentage) ||
+      !isFiniteNumberOrNull(row.priceCents) ||
+      !isFiniteNumberOrNull(row.reviewsAdded30d) ||
+      !isFiniteNumberOrNull(row.totalReviews)
+    ) {
+      return false;
+    }
+    appids.add(Number(row.appid));
+    return true;
+  });
+  if (!membersValid) {
+    return false;
+  }
+  const members = cohort.members as OpportunityCohortMember[];
+  const measured = members.filter(
+    (member) => member.totalReviews !== null || member.ccuPeak !== null,
+  ).length;
+  const expectedCoverage = members.length === 0 ? 0 : measured / members.length;
+  const expectedConfidence =
+    members.length >= 10 && expectedCoverage >= 0.6 ? "high" : "directional";
+  const expectedFallbackTier =
+    members.length >= 20 && tags.length >= 2
+      ? 1
+      : members.length >= 10
+        ? 2
+        : genres.length > 0
+          ? 3
+          : tags.length > 0
+            ? 4
+            : 5;
+  return (
+    cohort.coverage === expectedCoverage &&
+    cohort.confidence === expectedConfidence &&
+    cohort.fallbackTier === expectedFallbackTier
+  );
+}
+
+interface NormalizedCohortInput {
+  appid: number;
+  genres: string[];
+  input: OpportunityEvaluationInput;
+  inputFingerprint: string;
+  isFree: boolean;
+  normalizedGenres: string[];
+  normalizedTags: string[];
+  price: number;
+  priceValid: boolean;
+  signatureKey: string;
+  tags: string[];
+}
+
+function normalizeCohortInput(
+  input: OpportunityEvaluationInput,
+): NormalizedCohortInput {
+  const tagValue = input.fields.tags?.value;
+  const genreValue = input.fields.genres?.value;
+  const tags = (Array.isArray(tagValue) ? tagValue : [])
+    .filter((value): value is string => typeof value === "string")
+    .slice(0, 10);
+  const genres = (Array.isArray(genreValue) ? genreValue : [])
+    .filter((value): value is string => typeof value === "string")
+    .slice(0, 6);
+  const rawPrice = Number(input.fields.price_cents?.value ?? 0);
+  const priceValid = Number.isFinite(rawPrice);
+  const price = priceValid ? rawPrice : 0;
+  const isFree = input.fields.is_free?.value === true;
+  const normalizedTags = tags.map((tag) => tag.toLocaleLowerCase()).sort();
+  const normalizedGenres = genres
+    .map((genre) => genre.toLocaleLowerCase())
+    .sort();
+  const inputFingerprint = stableHash({
+    appid: input.appid,
+    genres: input.fields.genres ?? null,
+    isFree: input.fields.is_free ?? null,
+    price: input.fields.price_cents ?? null,
+    tags: input.fields.tags ?? null,
+  });
+  return {
+    appid: input.appid,
+    genres,
+    input,
+    inputFingerprint,
+    isFree,
+    normalizedGenres,
+    normalizedTags,
+    price,
+    priceValid,
+    signatureKey: stableHash({
+      genres: normalizedGenres,
+      isFree,
+      price,
+      tags: normalizedTags,
+    }),
+    tags,
+  };
+}
+
+function releasedCohortFromRows(
+  subject: NormalizedCohortInput,
+  candidateRows: OpportunityReleasedCohortRow[],
+): OpportunityReleasedCohort {
+  const rows = candidateRows
+    .filter((row) => row.appid !== subject.appid)
+    .slice(0, 50);
+  const members: OpportunityCohortMember[] = rows.map((row) => ({
+    appid: row.appid,
+    ccuPeak: row.ccu_peak,
+    inclusionReasons: [
+      row.tag_overlap > 0
+        ? `${row.tag_overlap} shared primary tags`
+        : "shared genre",
+      row.price_cents === null
+        ? "price unavailable"
+        : "compatible business model",
+    ],
+    inclusionScore: Number(row.inclusion_score),
+    name: row.name,
+    positivePercentage:
+      row.positive_percentage === null ? null : Number(row.positive_percentage),
+    priceCents: row.price_cents,
+    reviewsAdded30d:
+      row.review_change_30d === null ? null : Number(row.review_change_30d),
+    totalReviews: row.total_reviews,
+  }));
+  const measured = members.filter(
+    (member) => member.totalReviews !== null || member.ccuPeak !== null,
+  ).length;
+  const coverage = members.length === 0 ? 0 : measured / members.length;
+  const latestMetricDate =
+    rows
+      .map((row) => row.metric_date)
+      .filter((value): value is Date | string => value !== null)
+      .map(iso)
+      .sort()
+      .at(-1) ?? null;
+  const fallbackTier: 1 | 2 | 3 | 4 | 5 =
+    members.length >= 20 && subject.tags.length >= 2
+      ? 1
+      : members.length >= 10
+        ? 2
+        : subject.genres.length > 0
+          ? 3
+          : subject.tags.length > 0
+            ? 4
+            : 5;
+  return {
+    confidence:
+      members.length >= 10 && coverage >= 0.6 ? "high" : "directional",
+    coverage,
+    fallbackTier,
+    members,
+    signature: {
+      businessModel: subject.isFree ? "free" : "premium",
+      genres: subject.genres,
+      priceBand: subject.priceValid
+        ? [Math.max(0, subject.price - 1000), subject.price + 1000]
+        : null,
+      tags: subject.tags,
+    },
+    sourceAt: latestMetricDate,
+  };
 }
 
 function asSignalFamily(value: string): OpportunitySignalFamily {
@@ -955,11 +1283,17 @@ export class OpportunityWorkerRepository {
         }),
         versionIds,
         JSON.stringify({
-          cohort: "opportunity-cohort/v1",
+          bulkPersistence: OPPORTUNITY_BULK_PERSISTENCE_VERSION,
+          cohort: OPPORTUNITY_COHORT_VERSION,
+          cohortCache: OPPORTUNITY_COHORT_CACHE_VERSION,
+          cohortFeatureProjection:
+            OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+          cohortResolver: OPPORTUNITY_COHORT_RESOLVER_VERSION,
           health: "opportunity-health/v1",
-          market: "opportunity-market/v1",
+          market: OPPORTUNITY_MARKET_VERSION,
           materiality: "opportunity-materiality/v1",
           ranking: "opportunity-ranking/v1",
+          ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
           rules: "opportunity-rules/v1",
           signals: "signal-windows/v1",
         }),
@@ -1214,17 +1548,22 @@ export class OpportunityWorkerRepository {
     return new Map();
   }
 
-  private async loadReleasedCohortRows(params: {
-    genres: string[];
-    isFree: boolean;
-    price: number;
-    tags: string[];
-  }): Promise<OpportunityReleasedCohortRow[]> {
+  private async loadReleasedCohortRows(
+    params: {
+      genres: string[];
+      isFree: boolean;
+      price: number;
+      tags: string[];
+    },
+    client: PoolClient | null = null,
+  ): Promise<OpportunityReleasedCohortRow[]> {
     const values = [params.tags, params.genres, params.isFree, params.price];
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (client) {
+        await client.query("SAVEPOINT opportunity_legacy_cohort");
+      }
       try {
-        const result = await this.pool.query<OpportunityReleasedCohortRow>(
-          `
+        const sql = `
             WITH tag_matches AS MATERIALIZED (
               SELECT
                 app_tag.appid,
@@ -1309,11 +1648,20 @@ export class OpportunityWorkerRepository {
               AND app.is_free = $3
             ORDER BY inclusion_score DESC, app.appid
             LIMIT 51
-          `,
-          values,
-        );
+          `;
+        const result = client
+          ? await client.query<OpportunityReleasedCohortRow>(sql, values)
+          : await this.pool.query<OpportunityReleasedCohortRow>(sql, values);
+        if (client) {
+          await client.query("RELEASE SAVEPOINT opportunity_legacy_cohort");
+        }
         return result.rows;
       } catch (error) {
+        if (client) {
+          await client
+            .query("ROLLBACK TO SAVEPOINT opportunity_legacy_cohort")
+            .catch(() => undefined);
+        }
         if (attempt >= 2 || !isStatementTimeout(error)) {
           throw error;
         }
@@ -1325,107 +1673,831 @@ export class OpportunityWorkerRepository {
   async getReleasedCohort(
     input: OpportunityEvaluationInput,
     cache: OpportunityReleasedCohortCache = this.createReleasedCohortCache(),
-  ): Promise<{
-    confidence: "high" | "directional";
-    coverage: number;
-    fallbackTier: 1 | 2 | 3 | 4 | 5;
-    members: OpportunityCohortMember[];
-    signature: Record<string, unknown>;
-    sourceAt: string | null;
-  }> {
-    const tagValue = input.fields.tags?.value;
-    const genreValue = input.fields.genres?.value;
-    const tags = (Array.isArray(tagValue) ? tagValue : [])
-      .filter((value): value is string => typeof value === "string")
-      .slice(0, 10);
-    const genres = (Array.isArray(genreValue) ? genreValue : [])
-      .filter((value): value is string => typeof value === "string")
-      .slice(0, 6);
-    const price = Number(input.fields.price_cents?.value ?? 0);
-    const isFree = input.fields.is_free?.value === true;
-    const normalizedTags = tags.map((tag) => tag.toLocaleLowerCase()).sort();
-    const normalizedGenres = genres
-      .map((genre) => genre.toLocaleLowerCase())
-      .sort();
-    const queryPrice = Number.isFinite(price) ? price : 0;
+  ): Promise<OpportunityReleasedCohort> {
+    const subject = normalizeCohortInput(input);
     const cacheKey = JSON.stringify([
-      normalizedTags,
-      normalizedGenres,
-      isFree,
-      queryPrice,
+      subject.normalizedTags,
+      subject.normalizedGenres,
+      subject.isFree,
+      subject.price,
     ]);
     let rowsPromise = cache.get(cacheKey);
     if (!rowsPromise) {
       rowsPromise = this.loadReleasedCohortRows({
-        genres: normalizedGenres,
-        isFree,
-        price: queryPrice,
-        tags: normalizedTags,
+        genres: subject.normalizedGenres,
+        isFree: subject.isFree,
+        price: subject.price,
+        tags: subject.normalizedTags,
       });
       cache.set(cacheKey, rowsPromise);
     }
-    const rows = (await rowsPromise)
-      .filter((row) => row.appid !== input.appid)
-      .slice(0, 50);
-    const members: OpportunityCohortMember[] = rows.map((row) => ({
-      appid: row.appid,
-      ccuPeak: row.ccu_peak,
-      inclusionReasons: [
-        row.tag_overlap > 0
-          ? `${row.tag_overlap} shared primary tags`
-          : "shared genre",
-        row.price_cents === null
-          ? "price unavailable"
-          : "compatible business model",
-      ],
-      inclusionScore: Number(row.inclusion_score),
-      name: row.name,
-      positivePercentage:
-        row.positive_percentage === null
-          ? null
-          : Number(row.positive_percentage),
-      priceCents: row.price_cents,
-      reviewsAdded30d:
-        row.review_change_30d === null ? null : Number(row.review_change_30d),
-      totalReviews: row.total_reviews,
-    }));
-    const measured = members.filter(
-      (member) => member.totalReviews !== null || member.ccuPeak !== null,
-    ).length;
-    const coverage = members.length === 0 ? 0 : measured / members.length;
-    const latestMetricDate =
-      rows
-        .map((row) => row.metric_date)
-        .filter((value): value is Date | string => value !== null)
-        .map(iso)
-        .sort()
-        .at(-1) ?? null;
-    const fallbackTier: 1 | 2 | 3 | 4 | 5 =
-      members.length >= 20 && tags.length >= 2
-        ? 1
-        : members.length >= 10
-          ? 2
-          : genres.length > 0
-            ? 3
-            : tags.length > 0
-              ? 4
-              : 5;
+    return releasedCohortFromRows(subject, await rowsPromise);
+  }
+
+  async getReleasedCohortShadow(
+    input: OpportunityEvaluationInput,
+    snapshotId: string,
+  ): Promise<OpportunityReleasedCohort> {
+    if (!/^[0-9A-Fa-f-]+$/.test(snapshotId)) {
+      throw new Error(
+        "Tiger returned an invalid exported snapshot identifier.",
+      );
+    }
+    const subject = normalizeCohortInput(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      await client.query(`SET TRANSACTION SNAPSHOT '${snapshotId}'`);
+      const rows = await this.loadReleasedCohortRows(
+        {
+          genres: subject.normalizedGenres,
+          isFree: subject.isFree,
+          price: subject.price,
+          tags: subject.normalizedTags,
+        },
+        client,
+      );
+      await client.query("COMMIT");
+      return releasedCohortFromRows(subject, rows);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async cohortFeatureProjectionReady(
+    expectedSourceRevisions: Record<string, number> | null = null,
+    client: PoolClient | null = null,
+  ): Promise<boolean> {
+    const sql = `
+        WITH current_revisions AS (
+          SELECT jsonb_object_agg(
+            source_key,
+            revision
+            ORDER BY source_key
+          ) AS value
+          FROM opportunity.cohort_source_revisions_v1
+          WHERE source_key IN (
+            'legacy.apps',
+            'legacy.app_steam_tags',
+            'legacy.steam_tags',
+            'legacy.app_genres',
+            'legacy.steam_genres',
+            'legacy.latest_daily_metrics'
+          )
+        )
+        SELECT EXISTS (
+          SELECT 1
+          FROM opportunity.cohort_feature_projection_state_v1 state
+          CROSS JOIN current_revisions
+          JOIN pg_class relation
+            ON relation.oid =
+              'opportunity.released_cohort_features_v2'::regclass
+          WHERE state.singleton
+            AND relation.relispopulated
+            AND state.row_count > 0
+            AND state.feature_projection_version = $1
+            AND state.source_revisions = current_revisions.value
+            AND (
+              $2::jsonb IS NULL
+              OR state.source_revisions = $2::jsonb
+            )
+        ) AS ready
+      `;
+    const values = [
+      OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+      expectedSourceRevisions ? JSON.stringify(expectedSourceRevisions) : null,
+    ];
+    const result = client
+      ? await client.query<QueryResultRow & { ready: boolean }>(sql, values)
+      : await this.pool.query<QueryResultRow & { ready: boolean }>(sql, values);
+    return result.rows[0]?.ready === true;
+  }
+
+  private async refreshCohortFeatureProjection(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '5min'");
+      await client.query(
+        "CALL opportunity.refresh_released_cohort_features_v2()",
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async acquireCohortFeatureSourceFence(): Promise<PoolClient> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '5min'");
+      await client.query("SET LOCAL lock_timeout = '2min'");
+      await client.query(`
+        LOCK TABLE
+          legacy.apps,
+          legacy.steam_genres,
+          legacy.app_genres,
+          legacy.steam_tags,
+          legacy.app_steam_tags,
+          legacy.latest_daily_metrics
+        IN SHARE MODE
+      `);
+      return client;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+      throw error;
+    }
+  }
+
+  private async getCohortSourceWatermark(
+    client: PoolClient | null = null,
+  ): Promise<OpportunityCohortSourceWatermark> {
+    const sql = `
+        WITH expected(source_key) AS (
+          VALUES
+            ('legacy.apps'),
+            ('legacy.app_steam_tags'),
+            ('legacy.steam_tags'),
+            ('legacy.app_genres'),
+            ('legacy.steam_genres'),
+            ('legacy.latest_daily_metrics'),
+            ('metrics.app_signal_windows_v1'),
+            ('ops.app_data_readiness')
+        )
+        SELECT
+          CURRENT_DATE AS source_date,
+          jsonb_build_object(
+            'sourceRevisions',
+              (
+                SELECT jsonb_object_agg(
+                  expected.source_key,
+                  revisions.revision
+                  ORDER BY expected.source_key
+                )
+                FROM expected
+                LEFT JOIN opportunity.cohort_source_revisions_v1 revisions
+                  USING (source_key)
+              )
+          ) AS source_watermark
+      `;
+    const result = client
+      ? await client.query<OpportunityCohortSourceWatermarkRow>(sql)
+      : await this.pool.query<OpportunityCohortSourceWatermarkRow>(sql);
+    const row = result.rows[0];
+    const value = asRecord(row?.source_watermark) ?? {};
+    const sourceRevisions = asRecord(value.sourceRevisions) ?? {};
+    const sourceDate = row?.source_date
+      ? row.source_date instanceof Date
+        ? row.source_date.toISOString().slice(0, 10)
+        : String(row.source_date).slice(0, 10)
+      : "";
+    const required = [
+      "legacy.apps",
+      "legacy.app_steam_tags",
+      "legacy.steam_tags",
+      "legacy.app_genres",
+      "legacy.steam_genres",
+      "legacy.latest_daily_metrics",
+      "metrics.app_signal_windows_v1",
+      "ops.app_data_readiness",
+    ];
+    const cacheable =
+      /^\d{4}-\d{2}-\d{2}$/.test(sourceDate) &&
+      required.every(
+        (key) =>
+          typeof sourceRevisions[key] === "number" &&
+          Number.isSafeInteger(sourceRevisions[key]) &&
+          Number(sourceRevisions[key]) >= 0,
+      );
+    const featureSourceRevisions = cacheable
+      ? Object.fromEntries(
+          [
+            "legacy.apps",
+            "legacy.app_steam_tags",
+            "legacy.steam_tags",
+            "legacy.app_genres",
+            "legacy.steam_genres",
+            "legacy.latest_daily_metrics",
+          ].map((key) => [key, Number(sourceRevisions[key])]),
+        )
+      : null;
     return {
-      confidence:
-        members.length >= 10 && coverage >= 0.6 ? "high" : "directional",
-      coverage,
-      fallbackTier,
-      members,
-      signature: {
-        businessModel: isFree ? "free" : "premium",
-        genres,
-        priceBand: Number.isFinite(price)
-          ? [Math.max(0, price - 1000), price + 1000]
-          : null,
-        tags,
-      },
-      sourceAt: latestMetricDate,
+      cacheable,
+      featureSourceRevisions,
+      hash: stableHash({ sourceDate, value }),
+      sourceDate,
+      value,
     };
+  }
+
+  private async openCurrentCohortSnapshot(): Promise<{
+    client: PoolClient;
+    snapshotId: string;
+    watermark: OpportunityCohortSourceWatermark;
+  } | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const watermark = await this.getCohortSourceWatermark(client);
+      if (
+        !watermark.featureSourceRevisions ||
+        !(await this.cohortFeatureProjectionReady(
+          watermark.featureSourceRevisions,
+          client,
+        ))
+      ) {
+        await client.query("ROLLBACK");
+        client.release();
+        return null;
+      }
+      const snapshot = await client.query<OpportunityExportedSnapshotRow>(
+        "SELECT pg_export_snapshot() AS snapshot_id",
+      );
+      const snapshotId = snapshot.rows[0]?.snapshot_id;
+      if (!snapshotId) {
+        throw new Error(
+          "Tiger did not return an exported snapshot for Opportunity cohort resolution.",
+        );
+      }
+      return { client, snapshotId, watermark };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+      throw error;
+    }
+  }
+
+  private cohortCacheKey(
+    subject: NormalizedCohortInput,
+    watermark: { hash: string; sourceDate: string },
+  ): string {
+    return stableHash({
+      appid: subject.appid,
+      cacheVersion: OPPORTUNITY_COHORT_CACHE_VERSION,
+      cohortVersion: OPPORTUNITY_COHORT_VERSION,
+      featureProjectionVersion: OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+      inputFingerprint: subject.inputFingerprint,
+      marketVersion: OPPORTUNITY_MARKET_VERSION,
+      projectionVersion: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+      resolverVersion: OPPORTUNITY_COHORT_RESOLVER_VERSION,
+      sourceDate: watermark.sourceDate,
+      sourceWatermarkHash: watermark.hash,
+    });
+  }
+
+  private async loadCachedReleasedCohorts(
+    cacheKeys: string[],
+    client: PoolClient | null = null,
+  ): Promise<Map<string, OpportunityReleasedCohort>> {
+    if (cacheKeys.length === 0) {
+      return new Map();
+    }
+    const sql = `
+        SELECT cache_key, cohort
+        FROM opportunity.released_cohort_cache_v1
+        WHERE cache_key = ANY($1::text[])
+          AND projection_version = $2
+          AND feature_projection_version = $3
+          AND cohort_version = $4
+          AND market_version = $5
+          AND resolver_version = $6
+          AND expires_at > now()
+        ORDER BY cache_key
+      `;
+    const values = [
+      cacheKeys,
+      OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+      OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+      OPPORTUNITY_COHORT_VERSION,
+      OPPORTUNITY_MARKET_VERSION,
+      OPPORTUNITY_COHORT_RESOLVER_VERSION,
+    ];
+    const result = client
+      ? await client.query<OpportunityCohortCacheRow>(sql, values)
+      : await this.pool.query<OpportunityCohortCacheRow>(sql, values);
+    const cohorts = new Map<string, OpportunityReleasedCohort>();
+    const expectedCacheKeys = new Set(cacheKeys);
+    for (const row of result.rows) {
+      const cohort =
+        typeof row.cohort === "string" ? asRecord(row.cohort) : row.cohort;
+      if (
+        !expectedCacheKeys.has(row.cache_key) ||
+        cohorts.has(row.cache_key) ||
+        !isReleasedCohort(cohort)
+      ) {
+        continue;
+      }
+      cohorts.set(row.cache_key, cohort);
+    }
+    return cohorts;
+  }
+
+  private async loadReleasedCohortRowsBatch(
+    signatures: NormalizedCohortInput[],
+    snapshotId: string | null = null,
+  ): Promise<Map<string, OpportunityReleasedCohortRow[]>> {
+    const unique = Array.from(
+      new Map(
+        signatures.map((subject) => [subject.signatureKey, subject]),
+      ).values(),
+    );
+    const rowsBySignature = new Map<string, OpportunityReleasedCohortRow[]>();
+    if (unique.length === 0) {
+      return rowsBySignature;
+    }
+
+    const client = await this.pool.connect();
+    let transactionOpen = false;
+    const features: OpportunityCohortFeatureRow[] = [];
+    let taxonomyRows: OpportunityCohortTaxonomyRow[] = [];
+    try {
+      await client.query(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      transactionOpen = true;
+      await client.query("SET LOCAL statement_timeout = '120s'");
+      if (snapshotId) {
+        if (!/^[0-9A-Fa-f-]+$/.test(snapshotId)) {
+          throw new Error(
+            "Tiger returned an invalid exported snapshot identifier.",
+          );
+        }
+        await client.query(`SET TRANSACTION SNAPSHOT '${snapshotId}'`);
+      }
+      const taxonomy = await client.query<OpportunityCohortTaxonomyRow>(`
+        SELECT
+          position.taxonomy_kind,
+          position.taxonomy_id,
+          lower(CASE
+            WHEN position.taxonomy_kind = 'tag' THEN tag.name
+            ELSE genre.name
+          END) AS name
+        FROM opportunity.cohort_taxonomy_positions_v1 position
+        LEFT JOIN legacy.steam_tags tag
+          ON position.taxonomy_kind = 'tag'
+         AND tag.tag_id = position.taxonomy_id
+        LEFT JOIN legacy.steam_genres genre
+          ON position.taxonomy_kind = 'genre'
+         AND genre.genre_id = position.taxonomy_id
+        WHERE CASE
+          WHEN position.taxonomy_kind = 'tag' THEN tag.name
+          ELSE genre.name
+        END IS NOT NULL
+        ORDER BY position.taxonomy_kind, position.taxonomy_id
+      `);
+      taxonomyRows = taxonomy.rows;
+
+      let cursor = 0;
+      while (features.length <= COHORT_FEATURE_MAX_ROWS) {
+        const page = await client.query<OpportunityCohortFeatureRow>(
+          `
+            SELECT
+              feature.appid,
+              feature.is_free,
+              feature.effective_price_cents,
+              feature.tag_ids,
+              feature.genre_ids,
+              app.name,
+              metric.total_reviews,
+              metric.positive_percentage,
+              metric.ccu_peak,
+              metric.metric_date,
+              signal.review_change_30d
+            FROM opportunity.released_cohort_features_v2 feature
+            JOIN legacy.apps app ON app.appid = feature.appid
+            LEFT JOIN legacy.latest_daily_metrics metric
+              ON metric.appid = feature.appid
+            LEFT JOIN metrics.app_signal_windows_v1 signal
+              ON signal.appid = feature.appid
+            WHERE feature.appid > $1
+            ORDER BY feature.appid
+            LIMIT $2
+          `,
+          [cursor, COHORT_FEATURE_PAGE_SIZE],
+        );
+        features.push(...page.rows);
+        if (features.length > COHORT_FEATURE_MAX_ROWS) {
+          throw new Error(
+            `Opportunity cohort feature row cap exceeded (${COHORT_FEATURE_MAX_ROWS}).`,
+          );
+        }
+        if (page.rows.length < COHORT_FEATURE_PAGE_SIZE) {
+          break;
+        }
+        cursor = page.rows.at(-1)?.appid ?? cursor;
+      }
+      await client.query("COMMIT");
+      transactionOpen = false;
+    } catch (error) {
+      if (transactionOpen) {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const taxonomyIds = {
+      genre: new Map<string, number[]>(),
+      tag: new Map<string, number[]>(),
+    };
+    for (const row of taxonomyRows) {
+      const ids = taxonomyIds[row.taxonomy_kind].get(row.name) ?? [];
+      ids.push(row.taxonomy_id);
+      taxonomyIds[row.taxonomy_kind].set(row.name, ids);
+    }
+
+    const genrePostings = new Map<number, OpportunityCohortFeatureRow[]>();
+    const tagPostings = new Map<number, OpportunityCohortFeatureRow[]>();
+    const businessFeatures = new Map<boolean, OpportunityCohortFeatureRow[]>([
+      [false, []],
+      [true, []],
+    ]);
+    for (const feature of features) {
+      businessFeatures.get(feature.is_free)?.push(feature);
+      for (const taxonomyId of feature.tag_ids) {
+        const posting = tagPostings.get(taxonomyId) ?? [];
+        posting.push(feature);
+        tagPostings.set(taxonomyId, posting);
+      }
+      for (const taxonomyId of feature.genre_ids) {
+        const posting = genrePostings.get(taxonomyId) ?? [];
+        posting.push(feature);
+        genrePostings.set(taxonomyId, posting);
+      }
+    }
+
+    for (const subject of unique) {
+      const candidates = new Map<
+        number,
+        {
+          feature: OpportunityCohortFeatureRow;
+          genreOverlap: number;
+          tagOverlap: number;
+        }
+      >();
+      const addPosting = (
+        posting: OpportunityCohortFeatureRow[],
+        kind: "genreOverlap" | "tagOverlap",
+      ): void => {
+        for (const feature of posting) {
+          if (feature.is_free !== subject.isFree) {
+            continue;
+          }
+          const candidate = candidates.get(feature.appid) ?? {
+            feature,
+            genreOverlap: 0,
+            tagOverlap: 0,
+          };
+          candidate[kind] += 1;
+          candidates.set(feature.appid, candidate);
+        }
+      };
+      const subjectTagIds = new Set(
+        subject.normalizedTags.flatMap(
+          (name) => taxonomyIds.tag.get(name) ?? [],
+        ),
+      );
+      const subjectGenreIds = new Set(
+        subject.normalizedGenres.flatMap(
+          (name) => taxonomyIds.genre.get(name) ?? [],
+        ),
+      );
+      for (const taxonomyId of subjectTagIds) {
+        addPosting(tagPostings.get(taxonomyId) ?? [], "tagOverlap");
+      }
+      for (const taxonomyId of subjectGenreIds) {
+        addPosting(genrePostings.get(taxonomyId) ?? [], "genreOverlap");
+      }
+      if (
+        subject.normalizedTags.length === 0 &&
+        subject.normalizedGenres.length === 0
+      ) {
+        for (const feature of businessFeatures.get(subject.isFree) ?? []) {
+          candidates.set(feature.appid, {
+            feature,
+            genreOverlap: 0,
+            tagOverlap: 0,
+          });
+        }
+      }
+
+      const tagDenominator = Math.max(1, subject.normalizedTags.length);
+      const genreDenominator = Math.max(1, subject.normalizedGenres.length);
+      const rows = Array.from(candidates.values(), (candidate) => {
+        const priceCompatible =
+          Math.abs(
+            (candidate.feature.effective_price_cents ?? 0) - subject.price,
+          ) <= 1_000;
+        const numerator =
+          45 *
+            Math.min(candidate.tagOverlap, tagDenominator) *
+            genreDenominator +
+          20 *
+            Math.min(candidate.genreOverlap, genreDenominator) *
+            tagDenominator +
+          (priceCompatible ? 20 : 10) * tagDenominator * genreDenominator;
+        return {
+          appid: candidate.feature.appid,
+          ccu_peak: candidate.feature.ccu_peak,
+          inclusion_score:
+            numerator / (100 * tagDenominator * genreDenominator),
+          metric_date: candidate.feature.metric_date,
+          name: candidate.feature.name,
+          positive_percentage: candidate.feature.positive_percentage,
+          price_cents: candidate.feature.effective_price_cents,
+          review_change_30d: candidate.feature.review_change_30d,
+          signature_key: subject.signatureKey,
+          tag_overlap: candidate.tagOverlap,
+          total_reviews: candidate.feature.total_reviews,
+        } satisfies OpportunityReleasedCohortRow;
+      });
+      rows.sort(
+        (left, right) =>
+          Number(right.inclusion_score) - Number(left.inclusion_score) ||
+          left.appid - right.appid,
+      );
+      rowsBySignature.set(subject.signatureKey, rows.slice(0, 51));
+    }
+    return rowsBySignature;
+  }
+
+  private async persistReleasedCohortCache(
+    rows: Array<{
+      cacheKey: string;
+      cohort: OpportunityReleasedCohort;
+      subject: NormalizedCohortInput;
+    }>,
+    watermark: {
+      hash: string;
+      sourceDate: string;
+      value: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    for (
+      let offset = 0;
+      offset < rows.length;
+      offset += COHORT_CACHE_WRITE_BATCH_SIZE
+    ) {
+      const batch = rows
+        .slice(offset, offset + COHORT_CACHE_WRITE_BATCH_SIZE)
+        .map((row) => ({
+          appid: row.subject.appid,
+          cache_key: row.cacheKey,
+          cohort: row.cohort,
+          input_fingerprint: row.subject.inputFingerprint,
+          source_date: watermark.sourceDate,
+          source_watermark: watermark.value,
+          source_watermark_hash: watermark.hash,
+        }));
+      await this.pool.query(
+        `
+          INSERT INTO opportunity.released_cohort_cache_v1 (
+            cache_key,
+            appid,
+            source_date,
+            source_watermark_hash,
+            source_watermark,
+            input_fingerprint,
+            projection_version,
+            feature_projection_version,
+            cohort_version,
+            market_version,
+            resolver_version,
+            cohort,
+            created_at,
+            expires_at
+          )
+          SELECT
+            cached.cache_key,
+            cached.appid,
+            cached.source_date,
+            cached.source_watermark_hash,
+            cached.source_watermark,
+            cached.input_fingerprint,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            cached.cohort,
+            clock_timestamp(),
+            clock_timestamp() + interval '3 days'
+          FROM jsonb_to_recordset($1::jsonb) AS cached(
+            cache_key text,
+            appid integer,
+            source_date date,
+            source_watermark_hash text,
+            source_watermark jsonb,
+            input_fingerprint text,
+            cohort jsonb
+          )
+          ON CONFLICT (cache_key)
+          DO UPDATE SET
+            cohort = EXCLUDED.cohort,
+            created_at = EXCLUDED.created_at,
+            expires_at = EXCLUDED.expires_at
+          WHERE opportunity.released_cohort_cache_v1.cohort
+              IS DISTINCT FROM EXCLUDED.cohort
+             OR opportunity.released_cohort_cache_v1.expires_at <= now()
+        `,
+        [
+          JSON.stringify(batch),
+          OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+          OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+          OPPORTUNITY_COHORT_VERSION,
+          OPPORTUNITY_MARKET_VERSION,
+          OPPORTUNITY_COHORT_RESOLVER_VERSION,
+        ],
+      );
+    }
+  }
+
+  async roundTripReleasedCohortCacheShadow(
+    inputs: OpportunityEvaluationInput[],
+    expected: Map<number, OpportunityReleasedCohort>,
+    sourceClient: PoolClient,
+  ): Promise<{
+    exactMatches: number;
+    persisted: number;
+    persistenceMs: number;
+    readMs: number;
+  }> {
+    const subjects = Array.from(
+      new Map(
+        inputs.map((input) => [input.appid, normalizeCohortInput(input)]),
+      ).values(),
+    );
+    const watermark = await this.getCohortSourceWatermark(sourceClient);
+    if (!watermark.cacheable || !watermark.featureSourceRevisions) {
+      throw new Error(
+        "Opportunity cache shadow requires a complete exported source watermark.",
+      );
+    }
+    const keyed = subjects.map((subject) => ({
+      cacheKey: this.cohortCacheKey(subject, watermark),
+      cohort: expected.get(subject.appid),
+      subject,
+    }));
+    if (keyed.some((item) => !item.cohort)) {
+      throw new Error(
+        "Opportunity cache shadow is missing an expected cohort payload.",
+      );
+    }
+    const persistenceStartedAt = performance.now();
+    await this.persistReleasedCohortCache(
+      keyed.map((item) => ({
+        cacheKey: item.cacheKey,
+        cohort: item.cohort!,
+        subject: item.subject,
+      })),
+      watermark,
+    );
+    const persistenceMs = performance.now() - persistenceStartedAt;
+    const readStartedAt = performance.now();
+    const loaded = await this.loadCachedReleasedCohorts(
+      keyed.map((item) => item.cacheKey),
+    );
+    const readMs = performance.now() - readStartedAt;
+    const exactMatches = keyed.filter(
+      (item) =>
+        stableHash(loaded.get(item.cacheKey)) === stableHash(item.cohort),
+    ).length;
+    return {
+      exactMatches,
+      persisted: keyed.length,
+      persistenceMs,
+      readMs,
+    };
+  }
+
+  async getReleasedCohorts(
+    inputs: OpportunityEvaluationInput[],
+  ): Promise<Map<number, OpportunityReleasedCohort>> {
+    const subjects = Array.from(
+      new Map(
+        inputs.map((input) => [input.appid, normalizeCohortInput(input)]),
+      ).values(),
+    );
+    if (subjects.length === 0) {
+      return new Map();
+    }
+
+    let snapshot = await this.openCurrentCohortSnapshot();
+    if (!snapshot) {
+      const fenceClient = await this.acquireCohortFeatureSourceFence();
+      try {
+        await this.refreshCohortFeatureProjection();
+        snapshot = await this.openCurrentCohortSnapshot();
+        if (!snapshot) {
+          throw new Error(
+            "Opportunity cohort feature projection did not match the fenced exported source snapshot.",
+          );
+        }
+        await fenceClient.query("COMMIT");
+      } catch (error) {
+        await fenceClient.query("ROLLBACK").catch(() => undefined);
+        if (snapshot) {
+          await snapshot.client.query("ROLLBACK").catch(() => undefined);
+          snapshot.client.release();
+        }
+        throw error;
+      } finally {
+        fenceClient.release();
+      }
+    }
+
+    const snapshotClient = snapshot.client;
+    const before = snapshot.watermark;
+    let snapshotOpen = true;
+    try {
+      const keyed = subjects.map((subject) => ({
+        cacheKey: this.cohortCacheKey(subject, before),
+        subject,
+      }));
+      const cached = before.cacheable
+        ? await this.loadCachedReleasedCohorts(
+            keyed.map((item) => item.cacheKey),
+            snapshotClient,
+          )
+        : new Map<string, OpportunityReleasedCohort>();
+      const misses = keyed.filter((item) => !cached.has(item.cacheKey));
+      const rowsBySignature = await this.loadReleasedCohortRowsBatch(
+        misses.map((item) => item.subject),
+        snapshot.snapshotId,
+      );
+      const resolved = new Map<number, OpportunityReleasedCohort>();
+      for (const item of keyed) {
+        const cohort =
+          cached.get(item.cacheKey) ??
+          releasedCohortFromRows(
+            item.subject,
+            rowsBySignature.get(item.subject.signatureKey) ?? [],
+          );
+        resolved.set(item.subject.appid, cohort);
+      }
+      await snapshotClient.query("COMMIT");
+      snapshotOpen = false;
+      if (before.cacheable) {
+        await this.persistReleasedCohortCache(
+          misses.map((item) => ({
+            cacheKey: item.cacheKey,
+            cohort: resolved.get(item.subject.appid)!,
+            subject: item.subject,
+          })),
+          before,
+        );
+      }
+      return resolved;
+    } catch (error) {
+      if (snapshotOpen) {
+        await snapshotClient.query("ROLLBACK").catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      snapshotClient.release();
+    }
+  }
+
+  /**
+   * Runs the set-based cohort resolver without reading or writing cache state.
+   * Live callers must wrap this in a read-only transaction for a stable,
+   * non-mutating shadow comparison.
+   */
+  async getReleasedCohortsShadow(
+    inputs: OpportunityEvaluationInput[],
+    snapshotId: string | null = null,
+  ): Promise<Map<number, OpportunityReleasedCohort>> {
+    const subjects = Array.from(
+      new Map(
+        inputs.map((input) => [input.appid, normalizeCohortInput(input)]),
+      ).values(),
+    );
+    const rowsBySignature = await this.loadReleasedCohortRowsBatch(
+      subjects,
+      snapshotId,
+    );
+    return new Map(
+      subjects.map((subject) => [
+        subject.appid,
+        releasedCohortFromRows(
+          subject,
+          rowsBySignature.get(subject.signatureKey) ?? [],
+        ),
+      ]),
+    );
   }
 
   async refreshSignalWindows(
@@ -1604,7 +2676,417 @@ export class OpportunityWorkerRepository {
     );
   }
 
-  async persistRunOutcome(params: {
+  private async persistResultBatch(
+    client: PoolClient,
+    params: {
+      results: OpportunityEvaluatedResult[];
+      runId: string;
+      userId: string;
+      workspaceId: string;
+    },
+  ): Promise<number> {
+    if (params.results.length === 0) {
+      return 0;
+    }
+    const payload = params.results.map((result) => ({
+      appid: result.appid,
+      calculation_versions: {
+        bulkPersistence: OPPORTUNITY_BULK_PERSISTENCE_VERSION,
+        cohort: OPPORTUNITY_COHORT_VERSION,
+        cohortCache: OPPORTUNITY_COHORT_CACHE_VERSION,
+        cohortFeatureProjection: OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+        cohortResolver: OPPORTUNITY_COHORT_RESOLVER_VERSION,
+        market: OPPORTUNITY_MARKET_VERSION,
+        materiality: "opportunity-materiality/v1",
+        ranking: "opportunity-ranking/v1",
+        ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+        rules: "opportunity-rules/v1",
+        signals: "signal-windows/v1",
+      },
+      cohort: {
+        ...result.cohort,
+        measuredCount: result.cohort.members.filter(
+          (member) => member.totalReviews !== null || member.ccuPeak !== null,
+        ).length,
+      },
+      confidence: result.confidence,
+      event_fingerprint: result.event.eventFingerprint,
+      event_label: result.eventLabel,
+      evidence_summary: {
+        currentMetrics: Object.fromEntries(
+          result.evidenceItems.map((item) => [
+            String(item.label ?? "evidence"),
+            item.value ?? null,
+          ]),
+        ),
+        items: result.evidenceItems,
+        strongest: result.strongestEvidence,
+      },
+      market: result.market,
+      matches: result.matches.map((match) => ({
+        delivery_urgency: match.profile.immediateFullMatchEnabled
+          ? "immediate"
+          : "daily",
+        preference_score: match.evaluation.preferenceContribution,
+        profile_id: match.profile.id,
+        profile_version_id: match.profile.versionId,
+        rule_outcomes: match.evaluation,
+      })),
+      material_event_id: result.event.id,
+      missing_evidence: result.missingEvidence,
+      profile_version_set_fingerprint: result.profileVersionSetFingerprint,
+      rank_components: {
+        ...result.rank.components,
+        reasons: result.rank.reasons,
+        weights: result.rank.weights,
+      },
+      reappeared_after_result_id: result.reappearedAfterResultId,
+      rule_evidence: Object.fromEntries(
+        result.matches.map((match) => [
+          match.profile.versionId,
+          match.evaluation,
+        ]),
+      ),
+      score: result.rank.finalScore,
+      source_timestamps: result.sourceTimestamps,
+      why_now: { summary: result.whyNow },
+    }));
+    const inserted = await client.query<
+      QueryResultRow & { created_count: string | number }
+    >(
+      `
+        WITH payload AS MATERIALIZED (
+          SELECT *
+          FROM jsonb_to_recordset($4::jsonb) AS result(
+            appid integer,
+            calculation_versions jsonb,
+            cohort jsonb,
+            confidence text,
+            event_fingerprint text,
+            event_label text,
+            evidence_summary jsonb,
+            market jsonb,
+            matches jsonb,
+            material_event_id uuid,
+            missing_evidence jsonb,
+            profile_version_set_fingerprint text,
+            rank_components jsonb,
+            reappeared_after_result_id uuid,
+            rule_evidence jsonb,
+            score numeric,
+            source_timestamps jsonb,
+            why_now jsonb
+          )
+        ),
+        cohort_rows AS (
+          INSERT INTO opportunity.cohort_snapshots (
+            run_id,
+            appid,
+            cohort_kind,
+            cohort_version,
+            signature,
+            fallback_tier,
+            member_count,
+            measured_count,
+            coverage,
+            members,
+            source_at
+          )
+          SELECT
+            $1,
+            payload.appid,
+            'released_market',
+            $5,
+            payload.cohort->'signature',
+            (payload.cohort->>'fallbackTier')::smallint,
+            jsonb_array_length(payload.cohort->'members'),
+            (payload.cohort->>'measuredCount')::integer,
+            (payload.cohort->>'coverage')::numeric,
+            payload.cohort->'members',
+            NULLIF(payload.cohort->>'sourceAt', '')::timestamptz
+          FROM payload
+          ON CONFLICT (run_id, appid, cohort_kind)
+          DO UPDATE SET
+            signature = EXCLUDED.signature,
+            fallback_tier = EXCLUDED.fallback_tier,
+            member_count = EXCLUDED.member_count,
+            measured_count = EXCLUDED.measured_count,
+            coverage = EXCLUDED.coverage,
+            members = EXCLUDED.members,
+            source_at = EXCLUDED.source_at
+          RETURNING id, appid
+        ),
+        market_rows AS (
+          INSERT INTO opportunity.market_context_snapshots (
+            run_id,
+            appid,
+            cohort_snapshot_id,
+            calculation_version,
+            distributions,
+            demand_direction,
+            supply,
+            concentration,
+            potential_band,
+            confidence,
+            explanation,
+            source_at
+          )
+          SELECT
+            $1,
+            payload.appid,
+            cohort_rows.id,
+            $6,
+            payload.market->'distributions',
+            jsonb_build_object(
+              'state',
+              payload.market->>'demandDirection'
+            ),
+            payload.market->'supply',
+            payload.market->'concentration',
+            payload.market->>'potentialBand',
+            payload.market->>'confidence',
+            payload.market->'explanation',
+            NULLIF(payload.cohort->>'sourceAt', '')::timestamptz
+          FROM payload
+          JOIN cohort_rows USING (appid)
+          ON CONFLICT (run_id, appid)
+          DO UPDATE SET
+            distributions = EXCLUDED.distributions,
+            demand_direction = EXCLUDED.demand_direction,
+            supply = EXCLUDED.supply,
+            concentration = EXCLUDED.concentration,
+            potential_band = EXCLUDED.potential_band,
+            confidence = EXCLUDED.confidence,
+            explanation = EXCLUDED.explanation,
+            source_at = EXCLUDED.source_at
+          RETURNING id, appid
+        ),
+        inserted_results AS (
+          INSERT INTO opportunity.results (
+            run_id,
+            workspace_id,
+            user_id,
+            appid,
+            material_event_id,
+            event_label,
+            event_fingerprint,
+            profile_version_set_fingerprint,
+            score,
+            rank_components,
+            rule_evidence,
+            why_now,
+            evidence_summary,
+            source_timestamps,
+            calculation_versions,
+            missing_evidence,
+            confidence,
+            cohort_snapshot_id,
+            market_context_snapshot_id,
+            reappeared_after_result_id
+          )
+          SELECT
+            $1,
+            $2,
+            $3,
+            payload.appid,
+            payload.material_event_id,
+            payload.event_label,
+            payload.event_fingerprint,
+            payload.profile_version_set_fingerprint,
+            payload.score,
+            payload.rank_components,
+            payload.rule_evidence,
+            payload.why_now,
+            payload.evidence_summary,
+            payload.source_timestamps,
+            payload.calculation_versions,
+            payload.missing_evidence,
+            payload.confidence,
+            cohort_rows.id,
+            market_rows.id,
+            payload.reappeared_after_result_id
+          FROM payload
+          JOIN cohort_rows USING (appid)
+          JOIN market_rows USING (appid)
+          ON CONFLICT (
+            user_id,
+            appid,
+            event_fingerprint,
+            profile_version_set_fingerprint
+          )
+          DO NOTHING
+          RETURNING id, appid, event_fingerprint
+        ),
+        dismissal_resets AS (
+          UPDATE opportunity.user_game_state state
+          SET dismissed_at = NULL,
+              dismissed_event_fingerprint = NULL,
+              updated_at = now()
+          FROM inserted_results inserted
+          WHERE state.workspace_id = $2
+            AND state.user_id = $3
+            AND state.appid = inserted.appid
+            AND state.dismissed_event_fingerprint IS NOT NULL
+            AND state.dismissed_event_fingerprint
+              <> inserted.event_fingerprint
+          RETURNING state.appid
+        ),
+        inserted_matches AS (
+          INSERT INTO opportunity.result_profile_matches (
+            result_id,
+            profile_id,
+            profile_version_id,
+            eligibility_outcome,
+            rule_outcomes,
+            preference_score,
+            delivery_urgency
+          )
+          SELECT
+            inserted.id,
+            match.profile_id,
+            match.profile_version_id,
+            'eligible',
+            match.rule_outcomes,
+            match.preference_score,
+            match.delivery_urgency
+          FROM inserted_results inserted
+          JOIN payload USING (appid)
+          CROSS JOIN LATERAL jsonb_to_recordset(payload.matches) AS match(
+            delivery_urgency text,
+            preference_score numeric,
+            profile_id uuid,
+            profile_version_id uuid,
+            rule_outcomes jsonb
+          )
+          ON CONFLICT (result_id, profile_version_id) DO NOTHING
+          RETURNING result_id
+        )
+        SELECT count(*) AS created_count
+        FROM inserted_results
+      `,
+      [
+        params.runId,
+        params.workspaceId,
+        params.userId,
+        JSON.stringify(payload),
+        OPPORTUNITY_COHORT_VERSION,
+        OPPORTUNITY_MARKET_VERSION,
+      ],
+    );
+    return Number(inserted.rows[0]?.created_count ?? 0);
+  }
+
+  private async persistCandidateBatch(
+    client: PoolClient,
+    params: {
+      candidates: OpportunityCandidateEvaluation[];
+      userId: string;
+      workspaceId: string;
+    },
+  ): Promise<void> {
+    if (params.candidates.length === 0) {
+      return;
+    }
+    const payload = params.candidates.map((candidate) => ({
+      appid: candidate.appid,
+      last_outcome: candidate.evaluation,
+      material_event_id: candidate.eventId,
+      missing_fields: candidate.evaluation.missingRequiredFields,
+      profile_version_id: candidate.profile.versionId,
+      state:
+        candidate.evaluation.outcome === "pending"
+          ? "pending_readiness"
+          : candidate.evaluation.outcome,
+    }));
+    await client.query(
+      `
+        INSERT INTO opportunity.candidate_state (
+          workspace_id,
+          user_id,
+          appid,
+          profile_version_id,
+          material_event_id,
+          state,
+          missing_fields,
+          first_pending_at,
+          readiness_deadline,
+          next_evaluation_at,
+          last_evaluated_at,
+          last_outcome
+        )
+        SELECT
+          $1,
+          $2,
+          candidate.appid,
+          candidate.profile_version_id,
+          candidate.material_event_id,
+          candidate.state,
+          candidate.missing_fields,
+          CASE
+            WHEN candidate.state = 'pending_readiness' THEN now()
+            ELSE NULL
+          END,
+          CASE
+            WHEN candidate.state = 'pending_readiness'
+              THEN now() + interval '72 hours'
+            ELSE NULL
+          END,
+          CASE
+            WHEN candidate.state = 'pending_readiness'
+              THEN now() + interval '30 minutes'
+            ELSE NULL
+          END,
+          now(),
+          candidate.last_outcome
+        FROM jsonb_to_recordset($3::jsonb) AS candidate(
+          appid integer,
+          last_outcome jsonb,
+          material_event_id uuid,
+          missing_fields text[],
+          profile_version_id uuid,
+          state text
+        )
+        ON CONFLICT (user_id, appid, profile_version_id)
+        DO UPDATE SET
+          material_event_id = EXCLUDED.material_event_id,
+          state = CASE
+            WHEN EXCLUDED.state = 'pending_readiness'
+              AND opportunity.candidate_state.readiness_deadline <= now()
+              THEN 'readiness_expired'
+            ELSE EXCLUDED.state
+          END,
+          missing_fields = EXCLUDED.missing_fields,
+          first_pending_at = CASE
+            WHEN EXCLUDED.state = 'pending_readiness'
+              THEN COALESCE(
+                opportunity.candidate_state.first_pending_at,
+                EXCLUDED.first_pending_at
+              )
+            ELSE NULL
+          END,
+          readiness_deadline = CASE
+            WHEN EXCLUDED.state = 'pending_readiness'
+              THEN COALESCE(
+                opportunity.candidate_state.readiness_deadline,
+                EXCLUDED.readiness_deadline
+              )
+            ELSE NULL
+          END,
+          next_evaluation_at = CASE
+            WHEN EXCLUDED.state <> 'pending_readiness' THEN NULL
+            WHEN opportunity.candidate_state.readiness_deadline <= now()
+              THEN NULL
+            ELSE now() + interval '30 minutes'
+          END,
+          last_evaluated_at = now(),
+          last_outcome = EXCLUDED.last_outcome,
+          updated_at = now()
+      `,
+      [params.workspaceId, params.userId, JSON.stringify(payload)],
+    );
+  }
+
+  async persistRunOutcomeLegacy(params: {
     evaluations: OpportunityCandidateEvaluation[];
     pending: OpportunityPendingEvaluation[];
     results: OpportunityEvaluatedResult[];
@@ -2220,5 +3702,337 @@ export class OpportunityWorkerRepository {
         [params.workId, params.workerId],
       );
     });
+  }
+
+  async persistRunOutcome(params: {
+    evaluations: OpportunityCandidateEvaluation[];
+    pending: OpportunityPendingEvaluation[];
+    phaseTimings: Omit<
+      OpportunityWorkerPhaseTimings,
+      "persistenceMs" | "totalMs"
+    >;
+    results: OpportunityEvaluatedResult[];
+    run: OpportunityRunContext;
+    userId: string;
+    workId: number;
+    workerId: string;
+    workspaceId: string;
+    websiteBaseUrl: string;
+  }): Promise<OpportunityWorkerPhaseTimings> {
+    const persistenceStartedAt = performance.now();
+    let completedTimings: OpportunityWorkerPhaseTimings | null = null;
+    await this.transaction(async (client) => {
+      let createdResults = 0;
+      for (
+        let offset = 0;
+        offset < params.results.length;
+        offset += RESULT_PERSISTENCE_BATCH_SIZE
+      ) {
+        createdResults += await this.persistResultBatch(client, {
+          results: params.results.slice(
+            offset,
+            offset + RESULT_PERSISTENCE_BATCH_SIZE,
+          ),
+          runId: params.run.id,
+          userId: params.userId,
+          workspaceId: params.workspaceId,
+        });
+      }
+      for (
+        let offset = 0;
+        offset < params.evaluations.length;
+        offset += CANDIDATE_PERSISTENCE_BATCH_SIZE
+      ) {
+        await this.persistCandidateBatch(client, {
+          candidates: params.evaluations.slice(
+            offset,
+            offset + CANDIDATE_PERSISTENCE_BATCH_SIZE,
+          ),
+          userId: params.userId,
+          workspaceId: params.workspaceId,
+        });
+      }
+
+      await client.query(
+        `
+          WITH ranked AS (
+            SELECT
+              id,
+              row_number() OVER (
+                ORDER BY score DESC NULLS LAST, appid, id
+              ) AS rank
+            FROM opportunity.results
+            WHERE run_id = $1
+              AND user_id = $2
+          )
+          UPDATE opportunity.results result
+          SET rank = ranked.rank
+          FROM ranked
+          WHERE result.id = ranked.id
+        `,
+        [params.run.id, params.userId],
+      );
+
+      const resultIds = await client.query<
+        QueryResultRow & { id: string; profile_ids: string[] }
+      >(
+        `
+          SELECT
+            result.id,
+            COALESCE(
+              array_agg(DISTINCT match.profile_id)
+                FILTER (WHERE match.profile_id IS NOT NULL),
+              '{}'::uuid[]
+            ) AS profile_ids
+          FROM opportunity.results result
+          LEFT JOIN opportunity.result_profile_matches match
+            ON match.result_id = result.id
+          WHERE result.user_id = $2
+            AND (
+              result.run_id = $1
+              OR (
+                $3::text = 'daily'
+                AND result.created_at >= $4
+                AND result.created_at < $5
+              )
+            )
+          GROUP BY result.id
+          ORDER BY
+            result.score DESC NULLS LAST,
+            result.appid,
+            result.id
+          LIMIT 500
+        `,
+        [
+          params.run.id,
+          params.userId,
+          params.run.kind,
+          params.run.windowStart,
+          params.run.windowEnd,
+        ],
+      );
+      const preferences = await client.query<
+        QueryResultRow & {
+          channel: "email" | "slack";
+          id: string;
+          max_results: number;
+          profile_id: string | null;
+          quiet_day_behavior: "skip" | "send_empty";
+        }
+      >(
+        `
+          SELECT
+            id,
+            profile_id,
+            channel,
+            max_results,
+            quiet_day_behavior
+          FROM opportunity.channel_preferences
+          WHERE workspace_id = $1
+            AND user_id = $2
+            AND channel IN ('email', 'slack')
+            AND enabled
+            AND ($3::boolean = false OR immediate_full_match_enabled)
+            AND $4::boolean
+          ORDER BY channel, profile_id NULLS LAST, id
+          LIMIT 100
+        `,
+        [
+          params.workspaceId,
+          params.userId,
+          params.run.kind === "immediate",
+          params.run.kind !== "readiness",
+        ],
+      );
+      const assignments = assignOpportunityDeliveryResults(
+        resultIds.rows.map((row) => ({
+          id: row.id,
+          profileIds: row.profile_ids,
+        })),
+        preferences.rows.map((preference) => ({
+          channel: preference.channel,
+          id: preference.id,
+          maxResults: preference.max_results,
+          profileId: preference.profile_id,
+        })),
+      );
+      const deliveryPayload = preferences.rows.map((preference) => {
+        const assignment = assignments.get(preference.id) ?? {
+          availableResultCount: 0,
+          resultIds: [],
+        };
+        const shouldSkip =
+          assignment.resultIds.length === 0 &&
+          preference.quiet_day_behavior === "skip";
+        return {
+          channel: preference.channel,
+          delivery_kind:
+            params.run.kind === "immediate"
+              ? "immediate_full_match"
+              : "daily_digest",
+          idempotency_key:
+            params.run.kind === "immediate"
+              ? `immediate:${resultIds.rows[0]?.id ?? params.run.id}:${preference.id}`
+              : `daily:${params.run.id}:${preference.id}`,
+          preference_id: preference.id,
+          rendered_payload: {
+            availableResultCount: assignment.availableResultCount,
+            canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?run=${params.run.id}`,
+            resultCount: assignment.resultIds.length,
+            truncated:
+              assignment.availableResultCount > assignment.resultIds.length,
+            windowEnd: params.run.windowEnd,
+            windowStart: params.run.windowStart,
+          },
+          result_ids: assignment.resultIds,
+          status: shouldSkip ? "skipped" : "pending",
+        };
+      });
+      if (deliveryPayload.length > 0) {
+        await client.query(
+          `
+            INSERT INTO opportunity.deliveries (
+              run_id,
+              workspace_id,
+              user_id,
+              channel,
+              delivery_kind,
+              status,
+              result_ids,
+              preference_id,
+              rendered_content_version,
+              rendered_payload,
+              idempotency_key
+            )
+            SELECT
+              $1,
+              $2,
+              $3,
+              delivery.channel,
+              delivery.delivery_kind,
+              delivery.status,
+              delivery.result_ids,
+              delivery.preference_id,
+              'opportunity-digest/v1',
+              delivery.rendered_payload,
+              delivery.idempotency_key
+            FROM jsonb_to_recordset($4::jsonb) AS delivery(
+              channel text,
+              delivery_kind text,
+              status text,
+              result_ids uuid[],
+              preference_id uuid,
+              rendered_payload jsonb,
+              idempotency_key text
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+          `,
+          [
+            params.run.id,
+            params.workspaceId,
+            params.userId,
+            JSON.stringify(deliveryPayload),
+          ],
+        );
+      }
+
+      await client.query(
+        `
+          WITH personal_schedule AS (
+            SELECT timezone, local_delivery_time
+            FROM opportunity.profiles
+            WHERE workspace_id = $1
+              AND owner_user_id = $2
+              AND status = 'enabled'
+            ORDER BY next_evaluation_at NULLS LAST, id
+            LIMIT 1
+          )
+          UPDATE opportunity.profiles profile
+          SET timezone = personal_schedule.timezone,
+              local_delivery_time = personal_schedule.local_delivery_time,
+              next_evaluation_at = opportunity.next_profile_evaluation_v1(
+                personal_schedule.timezone,
+                personal_schedule.local_delivery_time,
+                now()
+              ),
+              updated_at = now()
+          FROM personal_schedule
+          WHERE profile.workspace_id = $1
+            AND profile.owner_user_id = $2
+            AND profile.status = 'enabled'
+            AND $3::boolean
+        `,
+        [
+          params.workspaceId,
+          params.userId,
+          ["daily", "manual", "replay"].includes(params.run.kind),
+        ],
+      );
+      await client.query(
+        `
+          UPDATE opportunity.work_queue
+          SET state = 'completed',
+              completed_at = now(),
+              claim_expires_at = NULL,
+              heartbeat_at = now(),
+              updated_at = now()
+          WHERE id = $1
+            AND worker_id = $2
+            AND state = 'claimed'
+        `,
+        [params.workId, params.workerId],
+      );
+
+      const persistenceMs = performance.now() - persistenceStartedAt;
+      completedTimings = {
+        ...params.phaseTimings,
+        persistenceMs,
+        totalMs:
+          params.phaseTimings.inputPreparationMs +
+          params.phaseTimings.profileEvaluationMs +
+          params.phaseTimings.cohortResolutionMs +
+          params.phaseTimings.marketCalculationMs +
+          persistenceMs,
+      };
+      await client.query(
+        `
+          UPDATE opportunity.runs
+          SET status = 'completed',
+              candidate_count = $2,
+              evaluated_count = $3,
+              result_count = $4,
+              pending_count = $5,
+              coverage_warnings = $6::jsonb,
+              phase_timings = $7::jsonb,
+              completed_at = now()
+          WHERE id = $1
+            AND status = 'running'
+        `,
+        [
+          params.run.id,
+          new Set([
+            ...params.results.map((result) => result.appid),
+            ...params.pending.map((pending) => pending.appid),
+          ]).size,
+          params.results.length + params.pending.length,
+          createdResults,
+          params.pending.length,
+          JSON.stringify(
+            params.pending.length > 0
+              ? [
+                  `${params.pending.length} profile evaluations are waiting for required source data.`,
+                ]
+              : [],
+          ),
+          JSON.stringify(completedTimings),
+        ],
+      );
+    });
+    if (!completedTimings) {
+      throw new Error(
+        "Opportunity bulk persistence completed without phase timings.",
+      );
+    }
+    return completedTimings;
   }
 }

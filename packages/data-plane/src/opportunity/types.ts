@@ -3,6 +3,16 @@ export const OPPORTUNITY_RANKING_VERSION = "opportunity-ranking/v1" as const;
 export const OPPORTUNITY_COHORT_VERSION = "opportunity-cohort/v1" as const;
 export const OPPORTUNITY_MARKET_VERSION = "opportunity-market/v1" as const;
 export const OPPORTUNITY_HEALTH_VERSION = "opportunity-health/v1" as const;
+export const OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION =
+  "opportunity-rule-input-projection/v1" as const;
+export const OPPORTUNITY_COHORT_CACHE_VERSION =
+  "opportunity-cohort-cache/v1" as const;
+export const OPPORTUNITY_COHORT_RESOLVER_VERSION =
+  "opportunity-cohort-resolver/v2" as const;
+export const OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION =
+  "opportunity-cohort-feature-projection/v2" as const;
+export const OPPORTUNITY_BULK_PERSISTENCE_VERSION =
+  "opportunity-bulk-persistence/v1" as const;
 export const OPPORTUNITY_MATERIALITY_VERSION =
   "opportunity-materiality/v1" as const;
 
@@ -15,40 +25,52 @@ export type OpportunityEvidenceClass =
   | "derived_metric"
   | "publisheriq_interpretation";
 
-export type OpportunityRuleField =
-  | "appid"
-  | "name"
-  | "app_type"
-  | "developer"
-  | "publisher"
-  | "release_state"
-  | "is_released"
-  | "release_date"
-  | "days_until_release"
-  | "tags"
-  | "genres"
-  | "categories"
-  | "is_free"
-  | "price_cents"
-  | "discount_percent"
-  | "has_purchase_packages"
-  | "platforms"
-  | "controller_support"
-  | "steam_deck"
-  | "languages"
-  | "has_demo"
-  | "no_publisher_listed"
-  | "self_published"
-  | "publisher_game_count"
-  | "developer_game_count"
-  | "content_descriptors"
-  | "total_reviews"
-  | "positive_percentage"
-  | "reviews_added_7d"
-  | "reviews_added_30d"
-  | "ccu_peak"
-  | "ccu_change_7d"
-  | "ccu_change_30d";
+export const OPPORTUNITY_RULE_FIELDS = [
+  "appid",
+  "name",
+  "app_type",
+  "developer",
+  "publisher",
+  "release_state",
+  "is_released",
+  "release_date",
+  "days_until_release",
+  "tags",
+  "genres",
+  "categories",
+  "is_free",
+  "price_cents",
+  "discount_percent",
+  "has_purchase_packages",
+  "platforms",
+  "controller_support",
+  "steam_deck",
+  "languages",
+  "has_demo",
+  "no_publisher_listed",
+  "self_published",
+  "publisher_game_count",
+  "developer_game_count",
+  "content_descriptors",
+  "total_reviews",
+  "positive_percentage",
+  "reviews_added_7d",
+  "reviews_added_30d",
+  "ccu_peak",
+  "ccu_change_7d",
+  "ccu_change_30d",
+] as const;
+
+export type OpportunityRuleField = (typeof OPPORTUNITY_RULE_FIELDS)[number];
+
+export interface OpportunityWorkerPhaseTimings {
+  cohortResolutionMs: number;
+  inputPreparationMs: number;
+  marketCalculationMs: number;
+  persistenceMs: number;
+  profileEvaluationMs: number;
+  totalMs: number;
+}
 
 export type OpportunityRuleOperator =
   | "equals"

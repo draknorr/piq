@@ -21,6 +21,19 @@ const presets = readFileSync(
   ),
   "utf8",
 );
+const performanceMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../sql/tiger-bootstrap/0099_opportunity_evaluation_performance_v1.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const workerRepository = readFileSync(
+  fileURLToPath(new URL("./worker-repository.ts", import.meta.url)),
+  "utf8",
+);
 
 describe("opportunity Tiger migration", () => {
   it("is additive and contains no destructive data operation", () => {
@@ -77,5 +90,137 @@ describe("opportunity Tiger migration", () => {
     );
     assert.match(migration, /p_after AT TIME ZONE p_timezone/);
     assert.match(migration, /p_local_delivery_time/);
+  });
+});
+
+describe("opportunity evaluation performance migration", () => {
+  it("adds only versioned Opportunity state and bounded cleanup", () => {
+    assert.doesNotMatch(
+      performanceMigration,
+      /\bDROP\s+(?:TABLE|SCHEMA|COLUMN|CONSTRAINT)\b/i,
+    );
+    assert.doesNotMatch(performanceMigration, /\bTRUNCATE\b/i);
+    assert.doesNotMatch(
+      performanceMigration,
+      /\b(?:UPDATE|DELETE\s+FROM)\s+(?:legacy|metrics|ops)\./i,
+    );
+    for (const table of [
+      "opportunity.rule_input_projection_v1",
+      "opportunity.released_cohort_cache_v1",
+      "opportunity.cohort_source_revisions_v1",
+      "opportunity.cohort_taxonomy_positions_v1",
+      "opportunity.cohort_feature_projection_state_v1",
+    ]) {
+      assert.match(
+        performanceMigration,
+        new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`),
+      );
+    }
+    assert.match(
+      performanceMigration,
+      /ADD COLUMN IF NOT EXISTS phase_timings jsonb/,
+    );
+    assert.match(
+      performanceMigration,
+      /CREATE MATERIALIZED VIEW IF NOT EXISTS\s+opportunity\.released_cohort_features_v1/s,
+    );
+    assert.match(
+      performanceMigration,
+      /CREATE MATERIALIZED VIEW IF NOT EXISTS\s+opportunity\.released_cohort_features_v2/s,
+    );
+    assert.match(
+      performanceMigration,
+      /released_cohort_features_tags_v2[\s\S]*USING gin \(tag_ids\)/,
+    );
+    assert.match(
+      performanceMigration,
+      /released_cohort_features_genres_v2[\s\S]*USING gin \(genre_ids\)/,
+    );
+    assert.doesNotMatch(performanceMigration, /CREATE EXTENSION/i);
+    assert.doesNotMatch(performanceMigration, /jsonb_object_length/i);
+    assert.match(
+      performanceMigration,
+      /LOCK TABLE[\s\S]*legacy\.apps[\s\S]*legacy\.latest_daily_metrics[\s\S]*IN SHARE MODE/,
+    );
+    assert.match(
+      performanceMigration,
+      /LIMIT v_cache_limit[\s\S]*LIMIT v_projection_limit/,
+    );
+  });
+
+  it("invalidates exact cohort cache entries transactionally for every source", () => {
+    for (const source of [
+      "legacy', 'apps",
+      "legacy', 'app_steam_tags",
+      "legacy', 'steam_tags",
+      "legacy', 'app_genres",
+      "legacy', 'steam_genres",
+      "legacy', 'latest_daily_metrics",
+      "metrics', 'app_signal_windows_v1",
+      "ops', 'app_data_readiness",
+    ]) {
+      assert.match(performanceMigration, new RegExp(`\\('${source}'\\)`));
+    }
+    assert.match(
+      performanceMigration,
+      /AFTER INSERT OR UPDATE OR DELETE[\s\S]*FOR EACH STATEMENT/,
+    );
+    assert.match(
+      performanceMigration,
+      /ON CONFLICT \(source_key\)[\s\S]*revision \+ 1/,
+    );
+    assert.match(performanceMigration, /B'0'::bit\(1024\)/);
+    assert.match(performanceMigration, /B'0'::bit\(128\)/);
+    assert.match(
+      performanceMigration,
+      /REFRESH MATERIALIZED VIEW CONCURRENTLY\s+opportunity\.released_cohort_features_v2/s,
+    );
+    assert.match(
+      performanceMigration,
+      /v_before_revisions IS DISTINCT FROM v_after_revisions/,
+    );
+    const featureWatermark = performanceMigration.match(
+      /SELECT jsonb_object_agg\(source_key, revision ORDER BY source_key\)[\s\S]*?WITH missing AS \([\s\S]*?SELECT tag\.tag_id/,
+    )?.[0];
+    assert.ok(featureWatermark);
+    for (const source of [
+      "legacy.apps",
+      "legacy.app_steam_tags",
+      "legacy.steam_tags",
+      "legacy.app_genres",
+      "legacy.steam_genres",
+      "legacy.latest_daily_metrics",
+    ]) {
+      assert.match(featureWatermark, new RegExp(`'${source}'`));
+    }
+    assert.match(
+      workerRepository,
+      /cohort_feature_projection_state_v1[\s\S]*'legacy\.steam_tags'[\s\S]*'legacy\.steam_genres'/,
+    );
+    assert.match(workerRepository, /sourceRevisions/);
+    assert.match(
+      workerRepository,
+      /SELECT pg_export_snapshot\(\) AS snapshot_id/,
+    );
+    assert.match(workerRepository, /SET TRANSACTION SNAPSHOT/);
+    assert.match(
+      workerRepository,
+      /did not match the fenced exported source snapshot/,
+    );
+  });
+
+  it("uses bounded set-based resolution and persistence contracts", () => {
+    assert.match(workerRepository, /COHORT_FEATURE_PAGE_SIZE = 25_000/);
+    assert.match(workerRepository, /COHORT_FEATURE_MAX_ROWS = 250_000/);
+    assert.match(workerRepository, /RESULT_PERSISTENCE_BATCH_SIZE = 100/);
+    assert.match(workerRepository, /CANDIDATE_PERSISTENCE_BATCH_SIZE = 500/);
+    assert.match(
+      workerRepository,
+      /FROM opportunity\.released_cohort_features_v2 feature[\s\S]*WHERE feature\.appid > \$1[\s\S]*LIMIT \$2/,
+    );
+    assert.match(
+      workerRepository,
+      /INSERT INTO opportunity\.released_cohort_cache_v1/,
+    );
   });
 });

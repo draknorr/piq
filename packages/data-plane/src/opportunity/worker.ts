@@ -16,13 +16,14 @@ import type {
   OpportunityRankComponents,
   OpportunityResultLabel,
   OpportunityRuleField,
+  OpportunityWorkerPhaseTimings,
 } from "./types.js";
 import type {
   OpportunityCandidateEvaluation,
   OpportunityEvaluatedMatch,
   OpportunityEvaluatedResult,
   OpportunityPriorUserState,
-  OpportunityReleasedCohortCache,
+  OpportunityReleasedCohort,
   OpportunityRunContext,
   OpportunityWorkerMaterialEvent,
   OpportunityWorkerProfile,
@@ -42,18 +43,28 @@ export interface OpportunityWorkerOptions {
   workerId?: string;
 }
 
-interface EvaluationContext {
+export interface EvaluationContext {
   appid: number;
   candidateOutcomes: Map<
     string,
     "eligible" | "ineligible" | "pending" | "expired"
   >;
-  cohortCache?: OpportunityReleasedCohortCache;
   event: OpportunityWorkerMaterialEvent;
   input: OpportunityEvaluationInput;
   priorState: OpportunityPriorUserState;
   profiles: OpportunityWorkerProfile[];
   run: OpportunityRunContext;
+}
+
+interface PreparedEvaluation {
+  context: EvaluationContext;
+  eligible: Array<{
+    evaluation: OpportunityProfileEvaluation;
+    priorOutcome: "eligible" | "ineligible" | "pending" | "expired" | undefined;
+    profile: OpportunityWorkerProfile;
+  }>;
+  evaluations: OpportunityCandidateEvaluation[];
+  shouldEnrich: boolean;
 }
 
 function clamp(value: number): number {
@@ -543,6 +554,7 @@ export class OpportunityWorker {
         `${item.kind} work is missing workspace or user identity.`,
       );
     }
+    const inputPreparationStartedAt = performance.now();
     const run = await this.repository.createRunContext({
       kind:
         item.kind === "immediate_evaluation"
@@ -604,7 +616,9 @@ export class OpportunityWorker {
       const evaluations: OpportunityCandidateEvaluation[] = [];
       const pending: OpportunityCandidateEvaluation[] = [];
       const results: OpportunityEvaluatedResult[] = [];
-      const cohortCache = this.repository.createReleasedCohortCache();
+      const preparedForEnrichment: PreparedEvaluation[] = [];
+      const inputPreparationMs = performance.now() - inputPreparationStartedAt;
+      const profileEvaluationStartedAt = performance.now();
 
       for (const [index, event] of selectedEvents.entries()) {
         if (index % EVALUATION_HEARTBEAT_GAME_INTERVAL === 0) {
@@ -621,28 +635,47 @@ export class OpportunityWorker {
           priorResultId: null,
           tracked: false,
         };
-        const outcome = await this.evaluateGame({
+        const prepared = this.prepareGame({
           appid: event.appid,
           candidateOutcomes,
-          cohortCache,
           event,
           input,
           priorState,
           profiles,
           run,
         });
-        evaluations.push(...outcome.evaluations);
+        evaluations.push(...prepared.evaluations);
         pending.push(
-          ...outcome.evaluations.filter(
+          ...prepared.evaluations.filter(
             (candidate) => candidate.evaluation.outcome === "pending",
           ),
         );
-        if (outcome.result) {
-          results.push(outcome.result);
+        if (prepared.shouldEnrich) {
+          preparedForEnrichment.push(prepared);
         }
       }
 
+      const profileEvaluationMs =
+        performance.now() - profileEvaluationStartedAt;
       await this.repository.heartbeatWork(item.id, this.workerId);
+      const cohortResolutionStartedAt = performance.now();
+      const cohorts = await this.repository.getReleasedCohorts(
+        preparedForEnrichment.map((prepared) => prepared.context.input),
+      );
+      const cohortResolutionMs = performance.now() - cohortResolutionStartedAt;
+      await this.repository.heartbeatWork(item.id, this.workerId);
+      const marketCalculationStartedAt = performance.now();
+      for (const prepared of preparedForEnrichment) {
+        const cohort = cohorts.get(prepared.context.appid);
+        if (!cohort) {
+          throw new Error(
+            `Opportunity cohort resolution omitted app ${prepared.context.appid}.`,
+          );
+        }
+        results.push(this.finalizeGame(prepared, cohort));
+      }
+      const marketCalculationMs =
+        performance.now() - marketCalculationStartedAt;
       results.sort(
         (left, right) =>
           right.rank.finalScore - left.rank.finalScore ||
@@ -651,6 +684,15 @@ export class OpportunityWorker {
       await this.repository.persistRunOutcome({
         evaluations,
         pending,
+        phaseTimings: {
+          cohortResolutionMs,
+          inputPreparationMs,
+          marketCalculationMs,
+          profileEvaluationMs,
+        } satisfies Omit<
+          OpportunityWorkerPhaseTimings,
+          "persistenceMs" | "totalMs"
+        >,
         results,
         run,
         userId: item.userId,
@@ -665,10 +707,22 @@ export class OpportunityWorker {
     }
   }
 
-  private async evaluateGame(context: EvaluationContext): Promise<{
+  async evaluateGame(context: EvaluationContext): Promise<{
     evaluations: OpportunityCandidateEvaluation[];
     result: OpportunityEvaluatedResult | null;
   }> {
+    const prepared = this.prepareGame(context);
+    if (!prepared.shouldEnrich) {
+      return { evaluations: prepared.evaluations, result: null };
+    }
+    const cohort = await this.repository.getReleasedCohort(context.input);
+    return {
+      evaluations: prepared.evaluations,
+      result: this.finalizeGame(prepared, cohort),
+    };
+  }
+
+  private prepareGame(context: EvaluationContext): PreparedEvaluation {
     const evaluated = context.profiles.map((profile) => {
       const evaluation = evaluateOpportunityProfile(
         profile.rules,
@@ -709,15 +763,29 @@ export class OpportunityWorker {
         context.event.eventFingerprint,
       )
     ) {
-      return { evaluations, result: null };
+      return {
+        context,
+        eligible,
+        evaluations,
+        shouldEnrich: false,
+      };
     }
 
+    return {
+      context,
+      eligible,
+      evaluations,
+      shouldEnrich: true,
+    };
+  }
+
+  private finalizeGame(
+    prepared: PreparedEvaluation,
+    cohort: OpportunityReleasedCohort,
+  ): OpportunityEvaluatedResult {
+    const { context, eligible } = prepared;
     const matches: OpportunityEvaluatedMatch[] = eligible.map(
       ({ evaluation, profile }) => ({ evaluation, profile }),
-    );
-    const cohort = await this.repository.getReleasedCohort(
-      context.input,
-      context.cohortCache,
     );
     const market = calculateOpportunityMarketContext(cohort.members);
     const preference = Math.max(
@@ -788,35 +856,32 @@ export class OpportunityWorker {
         context.event.eventFingerprint;
 
     return {
-      evaluations,
-      result: {
-        appid: context.appid,
-        cohort,
-        confidence:
-          market.confidence === "high" && components.evidenceQuality >= 0.8
-            ? "high"
-            : "directional",
-        event: context.event,
-        eventLabel: label,
-        evidenceItems,
-        market,
-        matches,
-        missingEvidence,
-        profileVersionSetFingerprint: stableFingerprint(
-          matches.map((match) => match.profile.versionId),
-        ),
-        rank,
-        reappearedAfterResultId: reappeared
-          ? context.priorState.priorResultId
-          : null,
-        sourceTimestamps: buildSourceTimestamps(
-          context.input,
-          context.event,
-          new Date().toISOString(),
-        ),
-        strongestEvidence,
-        whyNow: `${eventDescription(context.event)} It now qualifies for ${matches.map((match) => match.profile.name).join(", ")}.`,
-      },
+      appid: context.appid,
+      cohort,
+      confidence:
+        market.confidence === "high" && components.evidenceQuality >= 0.8
+          ? "high"
+          : "directional",
+      event: context.event,
+      eventLabel: label,
+      evidenceItems,
+      market,
+      matches,
+      missingEvidence,
+      profileVersionSetFingerprint: stableFingerprint(
+        matches.map((match) => match.profile.versionId),
+      ),
+      rank,
+      reappearedAfterResultId: reappeared
+        ? context.priorState.priorResultId
+        : null,
+      sourceTimestamps: buildSourceTimestamps(
+        context.input,
+        context.event,
+        new Date().toISOString(),
+      ),
+      strongestEvidence,
+      whyNow: `${eventDescription(context.event)} It now qualifies for ${matches.map((match) => match.profile.name).join(", ")}.`,
     };
   }
 }
