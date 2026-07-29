@@ -204,6 +204,10 @@ def test_poll_once_returns_later_cursor_only_after_store_commit():
         "package_changes": [],
     }
     assert worker._last_committed_batch.to_change_number == 20
+    assert worker._last_intake_phase_seconds["steam_change_poll_requests"] == 1
+    assert "steam_change_poll" in worker._last_intake_phase_seconds
+    assert "r2_change_archive" in worker._last_intake_phase_seconds
+    assert "tiger_batch_persist" in worker._last_intake_phase_seconds
 
 
 def test_poll_once_does_not_return_a_later_cursor_when_persistence_fails():
@@ -256,3 +260,11 @@ def test_poll_once_retains_force_full_response_without_advancing_cursor():
     assert len(store.calls) == 1
     assert worker._last_committed_batch.source_complete is False
     assert worker._last_committed_batch.primary_cursor_advanced is False
+
+
+def test_processing_cadence_guard_uses_monotonic_deadline():
+    worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
+    worker._next_processing_at_monotonic = 215.0
+
+    assert worker._processing_due(214.999) is False
+    assert worker._processing_due(215.0) is True

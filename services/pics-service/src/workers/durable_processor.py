@@ -5,11 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import socket
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+import gevent
 
 from ..config.settings import settings
 from ..database.durable_payload import (
@@ -41,10 +45,40 @@ class PICSProcessingStats:
     source_blocked: int
     snapshots_changed: int
     events_created: int
+    live_claimed: int = 0
+    catchup_claimed: int = 0
+    duration_seconds: float = 0.0
+    product_info_requests: int = 0
+    heartbeat_transactions: int = 0
+    tiger_transactions: int = 0
+    tiger_transactions_per_settlement: Optional[float] = None
+    r2_reads: int = 0
+    r2_writes: int = 0
+    phase_seconds: Dict[str, float] = field(default_factory=dict)
+    phase_latency_seconds: Dict[str, Dict[str, float | int]] = field(default_factory=dict)
+    queue_metrics: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class PICSClaimOutcome:
+    """Settlement and phase evidence for one claimed app."""
+
+    completed: int = 0
+    retried: int = 0
+    dead_lettered: int = 0
+    source_blocked: int = 0
+    snapshot_changed: int = 0
+    event_count: int = 0
+    tiger_transactions: int = 0
+    r2_reads: int = 0
+    r2_writes: int = 0
+    phase_seconds: Dict[str, float] = field(default_factory=dict)
 
 
 class DurablePICSProcessor:
     """Claim, validate, archive, promote, and acknowledge PICS app work."""
+
+    MAX_PRODUCT_INFO_BATCH_SIZE = 200
 
     def __init__(
         self,
@@ -66,6 +100,19 @@ class DurablePICSProcessor:
             raise ValueError("Durable PICS processing requires PICS_CHANGE_HISTORY_TARGET=tiger")
         if settings.pics_latest_state_target.strip().lower() != "tiger":
             raise ValueError("Durable PICS processing requires PICS_LATEST_STATE_TARGET=tiger")
+        live_batch_size = int(settings.pics_consumer_live_batch_size)
+        catchup_batch_size = int(settings.pics_consumer_catchup_batch_size)
+        if live_batch_size < 0 or catchup_batch_size < 0:
+            raise ValueError("PICS consumer batch sizes cannot be negative")
+        if live_batch_size + catchup_batch_size > self.MAX_PRODUCT_INFO_BATCH_SIZE:
+            raise ValueError(
+                "Combined PICS consumer batch size cannot exceed "
+                f"{self.MAX_PRODUCT_INFO_BATCH_SIZE}"
+            )
+        if not 1 <= int(settings.pics_consumer_concurrency) <= 8:
+            raise ValueError("PICS_CONSUMER_CONCURRENCY must be between 1 and 8")
+        if int(settings.pics_consumer_heartbeat_interval_seconds) < 10:
+            raise ValueError("PICS_CONSUMER_HEARTBEAT_INTERVAL_SECONDS must be at least 10")
 
         self._work_mode = work_mode
         self._stream_key = stream_key
@@ -87,44 +134,92 @@ class DurablePICSProcessor:
     def process_once(self, fetcher: PICSFetcher) -> PICSProcessingStats:
         """Process protected live/new capacity plus a separate catch-up quota."""
 
-        claims = [
-            *self._work_store.claim_work(
-                work_mode=self._work_mode,
-                stream_key=self._stream_key,
-                worker_id=self._worker_id,
-                lane_group="live",
-                limit=settings.pics_consumer_live_batch_size,
-                lease_seconds=settings.pics_consumer_lease_seconds,
-            ),
-            *self._work_store.claim_work(
-                work_mode=self._work_mode,
-                stream_key=self._stream_key,
-                worker_id=self._worker_id,
-                lane_group="catchup",
-                limit=settings.pics_consumer_catchup_batch_size,
-                lease_seconds=settings.pics_consumer_lease_seconds,
-            ),
-        ]
-        if not claims:
-            return PICSProcessingStats(0, 0, 0, 0, 0, 0, 0)
+        pass_started = time.perf_counter()
+        phase_seconds: Dict[str, float] = {}
+        phase_samples: Dict[str, List[float]] = {}
+        heartbeat_transactions = 0
+        tiger_transactions = 0
 
+        phase_started = time.perf_counter()
+        live_claims = self._work_store.claim_work(
+            work_mode=self._work_mode,
+            stream_key=self._stream_key,
+            worker_id=self._worker_id,
+            lane_group="live",
+            limit=settings.pics_consumer_live_batch_size,
+            lease_seconds=settings.pics_consumer_lease_seconds,
+        )
+        phase_seconds["claim_live"] = time.perf_counter() - phase_started
+        tiger_transactions += int(settings.pics_consumer_live_batch_size > 0)
+
+        phase_started = time.perf_counter()
+        catchup_claims = self._work_store.claim_work(
+            work_mode=self._work_mode,
+            stream_key=self._stream_key,
+            worker_id=self._worker_id,
+            lane_group="catchup",
+            limit=settings.pics_consumer_catchup_batch_size,
+            lease_seconds=settings.pics_consumer_lease_seconds,
+        )
+        phase_seconds["claim_catchup"] = time.perf_counter() - phase_started
+        tiger_transactions += int(settings.pics_consumer_catchup_batch_size > 0)
+
+        claims = [*live_claims, *catchup_claims]
+        if not claims:
+            queue_metrics, queue_duration, queue_transactions = self._queue_metrics()
+            phase_seconds["queue_metrics"] = queue_duration
+            phase_seconds["total"] = time.perf_counter() - pass_started
+            stats = PICSProcessingStats(
+                claimed=0,
+                completed=0,
+                retried=0,
+                dead_lettered=0,
+                source_blocked=0,
+                snapshots_changed=0,
+                events_created=0,
+                live_claimed=0,
+                catchup_claimed=0,
+                duration_seconds=phase_seconds["total"],
+                tiger_transactions=tiger_transactions + queue_transactions,
+                phase_seconds=self._rounded_phases(phase_seconds),
+                queue_metrics=queue_metrics,
+            )
+            self._log_processing_metrics(stats)
+            return stats
+
+        phase_started = time.perf_counter()
         self._heartbeat_all(claims)
+        phase_seconds["lease_heartbeat"] = time.perf_counter() - phase_started
+        heartbeat_transactions += 1
+        tiger_transactions += 1
         try:
+            phase_started = time.perf_counter()
             raw_by_appid = fetcher.fetch_apps_batch([claim.appid for claim in claims])
+            phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
         except Exception as error:
+            phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
             logger.exception("Durable PICS batch fetch failed for %s claims", len(claims))
             retried = 0
             dead_lettered = 0
             for claim in claims:
+                settlement_started = time.perf_counter()
                 state = self._fail_claim(
                     claim,
                     "product_fetch_failed",
                     str(error),
                     True,
                 )
+                phase_samples.setdefault("tiger_failure_settlement", []).append(
+                    time.perf_counter() - settlement_started
+                )
+                tiger_transactions += 1
                 retried += int(state == "retrying")
                 dead_lettered += int(state == "dead_letter")
-            return PICSProcessingStats(
+            queue_metrics, queue_duration, queue_transactions = self._queue_metrics()
+            phase_seconds["queue_metrics"] = queue_duration
+            tiger_transactions += queue_transactions
+            phase_seconds["total"] = time.perf_counter() - pass_started
+            stats = PICSProcessingStats(
                 claimed=len(claims),
                 completed=0,
                 retried=retried,
@@ -132,82 +227,223 @@ class DurablePICSProcessor:
                 source_blocked=0,
                 snapshots_changed=0,
                 events_created=0,
+                live_claimed=len(live_claims),
+                catchup_claimed=len(catchup_claims),
+                duration_seconds=phase_seconds["total"],
+                product_info_requests=int(getattr(fetcher, "last_product_info_attempts", 1)),
+                heartbeat_transactions=heartbeat_transactions,
+                tiger_transactions=tiger_transactions,
+                tiger_transactions_per_settlement=self._transactions_per_settlement(
+                    tiger_transactions,
+                    retried + dead_lettered,
+                ),
+                phase_seconds=self._rounded_phases(phase_seconds),
+                phase_latency_seconds=self._summarize_phase_samples(phase_samples),
+                queue_metrics=queue_metrics,
             )
+            self._log_processing_metrics(stats)
+            return stats
+
+        phase_started = time.perf_counter()
+        latest_by_appid = self._work_store.get_latest_snapshots([claim.appid for claim in claims])
+        phase_seconds["latest_snapshot_lookup"] = time.perf_counter() - phase_started
+        tiger_transactions += 1
+
+        phase_started = time.perf_counter()
         self._heartbeat_all(claims)
+        phase_seconds["lease_heartbeat"] += time.perf_counter() - phase_started
+        heartbeat_transactions += 1
+        tiger_transactions += 1
+        last_heartbeat_at = time.monotonic()
 
-        completed = 0
-        retried = 0
-        dead_lettered = 0
-        source_blocked = 0
-        snapshots_changed = 0
-        events_created = 0
+        outcomes: List[PICSClaimOutcome] = []
+        concurrency = max(1, min(int(settings.pics_consumer_concurrency), 8))
+        heartbeat_interval = max(
+            10,
+            min(
+                int(settings.pics_consumer_heartbeat_interval_seconds),
+                max(10, int(settings.pics_consumer_lease_seconds) // 3),
+            ),
+        )
+        downstream_started = time.perf_counter()
+        thread_pool = gevent.get_hub().threadpool
+        for wave_start in range(0, len(claims), concurrency):
+            remaining_claims = claims[wave_start:]
+            if time.monotonic() - last_heartbeat_at >= heartbeat_interval:
+                phase_started = time.perf_counter()
+                self._heartbeat_all(remaining_claims)
+                phase_seconds["lease_heartbeat"] += time.perf_counter() - phase_started
+                heartbeat_transactions += 1
+                tiger_transactions += 1
+                last_heartbeat_at = time.monotonic()
 
-        for claim_index, claim in enumerate(claims):
-            # Refresh every unprocessed lease before each potentially variable
-            # R2/Tiger promotion. Completed claims are intentionally excluded.
-            self._heartbeat_all(claims[claim_index:])
-            raw_payload = self._lookup_payload(raw_by_appid, claim.appid)
-            try:
-                result = self._process_claim(claim=claim, raw_payload=raw_payload)
-                completed += 1
-                snapshots_changed += int(result["snapshot_changed"])
-                events_created += int(result["event_count"])
-            except PICSPayloadValidationError as error:
-                final_source_omission = (
-                    error.error_code == "payload_missing"
-                    and claim.attempts >= claim.max_attempts
+            wave = claims[wave_start : wave_start + concurrency]
+            jobs = [
+                thread_pool.spawn(
+                    self._process_and_settle_claim,
+                    claim=claim,
+                    raw_payload=self._lookup_payload(raw_by_appid, claim.appid),
+                    previous_pointer=latest_by_appid.get(claim.appid),
                 )
-                if error.retryable and not final_source_omission:
-                    state = self._fail_claim(claim, error.error_code, str(error), True)
-                    retried += int(state == "retrying")
-                    dead_lettered += int(state == "dead_letter")
-                else:
-                    provenance = self._archive_blocked_payload(
-                        claim=claim,
-                        raw_payload=raw_payload,
-                        error=error,
-                    )
-                    self._work_store.block_claim(
-                        claim=claim,
-                        worker_id=self._worker_id,
-                        blocking_reason=error.error_code,
-                        detail=str(error),
-                        provenance=provenance,
-                    )
-                    source_blocked += 1
-            except Exception as error:
-                logger.exception(
-                    "Durable PICS processing failed for work %s app %s",
-                    claim.id,
-                    claim.appid,
-                )
-                state = self._fail_claim(
-                    claim,
-                    "processing_error",
-                    str(error),
-                    True,
-                )
-                retried += int(state == "retrying")
-                dead_lettered += int(state == "dead_letter")
+                for claim in wave
+            ]
+            first_error: Optional[Exception] = None
+            for job in jobs:
+                try:
+                    outcomes.append(job.get())
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
+        phase_seconds["downstream"] = time.perf_counter() - downstream_started
 
-        return PICSProcessingStats(
+        for outcome in outcomes:
+            tiger_transactions += outcome.tiger_transactions
+            for phase, duration in outcome.phase_seconds.items():
+                phase_samples.setdefault(phase, []).append(duration)
+        queue_metrics, queue_duration, queue_transactions = self._queue_metrics()
+        phase_seconds["queue_metrics"] = queue_duration
+        tiger_transactions += queue_transactions
+        for phase, samples in phase_samples.items():
+            phase_seconds[phase] = sum(samples)
+        phase_seconds["total"] = time.perf_counter() - pass_started
+
+        completed = sum(outcome.completed for outcome in outcomes)
+        retried = sum(outcome.retried for outcome in outcomes)
+        dead_lettered = sum(outcome.dead_lettered for outcome in outcomes)
+        source_blocked = sum(outcome.source_blocked for outcome in outcomes)
+        settlements = completed + retried + dead_lettered + source_blocked
+        stats = PICSProcessingStats(
             claimed=len(claims),
             completed=completed,
             retried=retried,
             dead_lettered=dead_lettered,
             source_blocked=source_blocked,
-            snapshots_changed=snapshots_changed,
-            events_created=events_created,
+            snapshots_changed=sum(outcome.snapshot_changed for outcome in outcomes),
+            events_created=sum(outcome.event_count for outcome in outcomes),
+            live_claimed=len(live_claims),
+            catchup_claimed=len(catchup_claims),
+            duration_seconds=phase_seconds["total"],
+            product_info_requests=int(getattr(fetcher, "last_product_info_attempts", 1)),
+            heartbeat_transactions=heartbeat_transactions,
+            tiger_transactions=tiger_transactions,
+            tiger_transactions_per_settlement=self._transactions_per_settlement(
+                tiger_transactions,
+                settlements,
+            ),
+            r2_reads=sum(outcome.r2_reads for outcome in outcomes),
+            r2_writes=sum(outcome.r2_writes for outcome in outcomes),
+            phase_seconds=self._rounded_phases(phase_seconds),
+            phase_latency_seconds=self._summarize_phase_samples(phase_samples),
+            queue_metrics=queue_metrics,
         )
+        self._log_processing_metrics(stats)
+        return stats
+
+    def _process_and_settle_claim(
+        self,
+        *,
+        claim: PICSWorkClaim,
+        raw_payload: Any,
+        previous_pointer: Optional[PICSLatestSnapshot],
+    ) -> PICSClaimOutcome:
+        phase_seconds: Dict[str, float] = {}
+        try:
+            result = self._process_claim(
+                claim=claim,
+                raw_payload=raw_payload,
+                previous_pointer=previous_pointer,
+                phase_seconds=phase_seconds,
+            )
+            return PICSClaimOutcome(
+                completed=1,
+                snapshot_changed=int(result["snapshot_changed"]),
+                event_count=int(result["event_count"]),
+                tiger_transactions=1,
+                r2_reads=int(previous_pointer is not None),
+                r2_writes=int(result["archive_written"]),
+                phase_seconds=phase_seconds,
+            )
+        except PICSPayloadValidationError as error:
+            final_source_omission = (
+                error.error_code == "payload_missing" and claim.attempts >= claim.max_attempts
+            )
+            if error.retryable and not final_source_omission:
+                phase_started = time.perf_counter()
+                state = self._fail_claim(claim, error.error_code, str(error), True)
+                phase_seconds["tiger_failure_settlement"] = time.perf_counter() - phase_started
+                return PICSClaimOutcome(
+                    retried=int(state == "retrying"),
+                    dead_lettered=int(state == "dead_letter"),
+                    tiger_transactions=1,
+                    r2_reads=int(previous_pointer is not None),
+                    phase_seconds=phase_seconds,
+                )
+
+            phase_started = time.perf_counter()
+            provenance = self._archive_blocked_payload(
+                claim=claim,
+                raw_payload=raw_payload,
+                error=error,
+            )
+            phase_seconds["r2_write"] = time.perf_counter() - phase_started
+            phase_started = time.perf_counter()
+            self._work_store.block_claim(
+                claim=claim,
+                worker_id=self._worker_id,
+                blocking_reason=error.error_code,
+                detail=str(error),
+                provenance=provenance,
+            )
+            phase_seconds["tiger_source_block"] = time.perf_counter() - phase_started
+            return PICSClaimOutcome(
+                source_blocked=1,
+                tiger_transactions=1,
+                r2_reads=int(previous_pointer is not None),
+                r2_writes=1,
+                phase_seconds=phase_seconds,
+            )
+        except Exception as error:
+            logger.exception(
+                "Durable PICS processing failed for work %s app %s",
+                claim.id,
+                claim.appid,
+            )
+            phase_started = time.perf_counter()
+            state = self._fail_claim(
+                claim,
+                "processing_error",
+                str(error),
+                True,
+            )
+            phase_seconds["tiger_failure_settlement"] = time.perf_counter() - phase_started
+            prior_tiger_attempts = int(
+                "tiger_promotion" in phase_seconds or "tiger_shadow_settlement" in phase_seconds
+            )
+            return PICSClaimOutcome(
+                retried=int(state == "retrying"),
+                dead_lettered=int(state == "dead_letter"),
+                tiger_transactions=1 + prior_tiger_attempts,
+                r2_reads=int(previous_pointer is not None),
+                r2_writes=int("r2_write" in phase_seconds),
+                phase_seconds=phase_seconds,
+            )
 
     def _process_claim(
         self,
         *,
         claim: PICSWorkClaim,
         raw_payload: Any,
+        previous_pointer: Optional[PICSLatestSnapshot],
+        phase_seconds: Dict[str, float],
     ) -> Dict[str, int | bool]:
-        previous_pointer = self._work_store.get_latest_snapshot(claim.appid)
-        previous_snapshot = self._read_previous_snapshot(previous_pointer)
+        phase_started = time.perf_counter()
+        try:
+            previous_snapshot = self._read_previous_snapshot(previous_pointer)
+        finally:
+            phase_seconds["prior_r2_read"] = time.perf_counter() - phase_started
+        phase_started = time.perf_counter()
         payload = validate_pics_product_payload(
             appid=claim.appid,
             claimed_through_change_number=claim.claimed_through_change_number,
@@ -215,21 +451,28 @@ class DurablePICSProcessor:
             previous_snapshot=previous_snapshot,
             extractor=self._extractor,
         )
+        phase_seconds["validation_extraction"] = time.perf_counter() - phase_started
         snapshot_changed = (
             previous_pointer is None
             or previous_pointer.content_hash != payload.normalized_snapshot_sha256
         )
-        archive = (
-            self._archive_validated_payload(claim=claim, payload=payload)
-            if snapshot_changed
-            else None
-        )
+        archive = None
+        if snapshot_changed:
+            phase_started = time.perf_counter()
+            try:
+                archive = self._archive_validated_payload(claim=claim, payload=payload)
+            finally:
+                phase_seconds["r2_write"] = time.perf_counter() - phase_started
 
         if claim.work_mode == "shadow":
-            next_state = self._work_store.complete_shadow_claim(
-                claim=claim,
-                worker_id=self._worker_id,
-            )
+            phase_started = time.perf_counter()
+            try:
+                next_state = self._work_store.complete_shadow_claim(
+                    claim=claim,
+                    worker_id=self._worker_id,
+                )
+            finally:
+                phase_seconds["tiger_shadow_settlement"] = time.perf_counter() - phase_started
             logger.info(
                 "Validated shadow PICS work %s for app %s (changed=%s, archive=%s, next_state=%s)",
                 claim.id,
@@ -241,18 +484,23 @@ class DurablePICSProcessor:
             return {
                 "snapshot_changed": snapshot_changed,
                 "event_count": 0,
+                "archive_written": archive is not None,
             }
 
         if self._promoter is None:
             raise RuntimeError("Durable PICS promoter is not configured")
-        result = self._promoter.promote(
-            claim=claim,
-            worker_id=self._worker_id,
-            payload=payload,
-            previous_pointer=previous_pointer,
-            previous_snapshot=previous_snapshot,
-            archive=archive,
-        )
+        phase_started = time.perf_counter()
+        try:
+            result = self._promoter.promote(
+                claim=claim,
+                worker_id=self._worker_id,
+                payload=payload,
+                previous_pointer=previous_pointer,
+                previous_snapshot=previous_snapshot,
+                archive=archive,
+            )
+        finally:
+            phase_seconds["tiger_promotion"] = time.perf_counter() - phase_started
         logger.info(
             "Promoted durable PICS work %s for app %s through %s "
             "(snapshot=%s, changed=%s, events=%s, next_state=%s)",
@@ -267,6 +515,7 @@ class DurablePICSProcessor:
         return {
             "snapshot_changed": result.snapshot_changed,
             "event_count": result.event_count,
+            "archive_written": archive is not None,
         }
 
     def _read_previous_snapshot(
@@ -344,6 +593,72 @@ class DurablePICSProcessor:
                 "contentType": pointer.content_type,
             }
         }
+
+    def _queue_metrics(self) -> tuple[Optional[Dict[str, Any]], float, int]:
+        """Read operational queue metrics without making settlement depend on them."""
+
+        get_metrics = getattr(self._work_store, "get_queue_metrics", None)
+        if get_metrics is None:
+            return None, 0.0, 0
+        started = time.perf_counter()
+        try:
+            metrics = asdict(
+                get_metrics(
+                    work_mode=self._work_mode,
+                    stream_key=self._stream_key,
+                )
+            )
+            observed_at = metrics.get("observed_at")
+            isoformat = getattr(observed_at, "isoformat", None)
+            if callable(isoformat):
+                metrics["observed_at"] = isoformat()
+            for key, value in tuple(metrics.items()):
+                if isinstance(value, float):
+                    metrics[key] = round(value, 3)
+            return metrics, time.perf_counter() - started, 1
+        except Exception as error:
+            logger.warning("Unable to read durable PICS queue metrics: %s", error)
+            return None, time.perf_counter() - started, 1
+
+    @staticmethod
+    def _summarize_phase_samples(
+        samples_by_phase: Dict[str, List[float]],
+    ) -> Dict[str, Dict[str, float | int]]:
+        summaries: Dict[str, Dict[str, float | int]] = {}
+        for phase, samples in sorted(samples_by_phase.items()):
+            if not samples:
+                continue
+            ordered = sorted(samples)
+            p50_index = max(0, math.ceil(len(ordered) * 0.50) - 1)
+            p95_index = max(0, math.ceil(len(ordered) * 0.95) - 1)
+            summaries[phase] = {
+                "count": len(ordered),
+                "total": round(sum(ordered), 3),
+                "p50": round(ordered[p50_index], 3),
+                "p95": round(ordered[p95_index], 3),
+                "max": round(ordered[-1], 3),
+            }
+        return summaries
+
+    @staticmethod
+    def _rounded_phases(phases: Dict[str, float]) -> Dict[str, float]:
+        return {key: round(value, 3) for key, value in sorted(phases.items())}
+
+    @staticmethod
+    def _transactions_per_settlement(
+        tiger_transactions: int,
+        settlements: int,
+    ) -> Optional[float]:
+        if settlements <= 0:
+            return None
+        return round(tiger_transactions / settlements, 3)
+
+    @staticmethod
+    def _log_processing_metrics(stats: PICSProcessingStats) -> None:
+        logger.info(
+            "Durable PICS processing metrics %s",
+            json.dumps(asdict(stats), sort_keys=True, separators=(",", ":")),
+        )
 
     def _heartbeat_all(self, claims: List[PICSWorkClaim]) -> None:
         heartbeat_count = self._work_store.heartbeat_claims(
