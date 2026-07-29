@@ -1,6 +1,9 @@
+import threading
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import gevent
 import pytest
 
 from src.database.durable_work import PICSWorkClaim
@@ -92,6 +95,7 @@ class FakeWorkStore:
         self.completed = []
         self.blocked = []
         self.failed = []
+        self.latest_snapshot_calls = []
 
     def claim_work(self, **kwargs):
         self.claim_calls.append(kwargs)
@@ -101,8 +105,9 @@ class FakeWorkStore:
         self.heartbeats.append(kwargs)
         return len(kwargs["claims"])
 
-    def get_latest_snapshot(self, _appid):
-        return None
+    def get_latest_snapshots(self, appids):
+        self.latest_snapshot_calls.append(list(appids))
+        return {}
 
     def complete_shadow_claim(self, **kwargs):
         self.completed.append(kwargs)
@@ -115,6 +120,32 @@ class FakeWorkStore:
         self.failed.append(kwargs)
         claim = kwargs["claim"]
         return "retrying" if claim.attempts < claim.max_attempts else "dead_letter"
+
+
+class FailingSettlementWorkStore(FakeWorkStore):
+    def complete_shadow_claim(self, **kwargs):
+        self.completed.append(kwargs)
+        raise RuntimeError("Tiger settlement unavailable")
+
+
+def test_processor_rejects_product_batches_above_existing_cap(monkeypatch):
+    monkeypatch.setattr(
+        "src.workers.durable_processor.settings.pics_consumer_live_batch_size",
+        40,
+    )
+    monkeypatch.setattr(
+        "src.workers.durable_processor.settings.pics_consumer_catchup_batch_size",
+        161,
+    )
+
+    with pytest.raises(ValueError, match="cannot exceed 200"):
+        DurablePICSProcessor(
+            work_mode="shadow",
+            stream_key="shadow-test",
+            work_store=FakeWorkStore(make_claim()),
+            archive_store=FakeArchiveStore(),
+            worker_id="test-worker",
+        )
 
 
 def test_shadow_processor_validates_archives_and_acknowledges_without_promoting():
@@ -137,7 +168,8 @@ def test_shadow_processor_validates_archives_and_acknowledges_without_promoting(
     assert stats.snapshots_changed == 1
     assert stats.events_created == 0
     assert fetcher.requested == [[7]]
-    assert len(work_store.heartbeats) == 3
+    assert len(work_store.heartbeats) == 2
+    assert work_store.latest_snapshot_calls == [[7]]
     assert len(work_store.completed) == 1
     assert len(work_store.blocked) == 0
     assert len(work_store.failed) == 0
@@ -264,6 +296,51 @@ def test_final_missing_product_response_requires_durable_archive_evidence():
     assert len(work_store.failed) == 0
 
 
+def test_valid_payload_r2_failure_releases_claim_without_acknowledgement():
+    claim = make_claim()
+    work_store = FakeWorkStore(claim)
+    archive_store = FailingArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FakeFetcher(make_payload()))
+
+    assert stats.retried == 1
+    assert stats.completed == 0
+    assert len(work_store.completed) == 0
+    assert len(work_store.failed) == 1
+    assert work_store.failed[0]["error_code"] == "processing_error"
+    assert stats.phase_latency_seconds["r2_write"]["count"] == 1
+
+
+def test_tiger_settlement_failure_releases_claim_and_retains_archive():
+    claim = make_claim()
+    work_store = FailingSettlementWorkStore(claim)
+    archive_store = FakeArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FakeFetcher(make_payload()))
+
+    assert stats.retried == 1
+    assert stats.completed == 0
+    assert len(archive_store.writes) == 1
+    assert len(work_store.completed) == 1
+    assert len(work_store.failed) == 1
+    assert stats.r2_writes == 1
+    assert stats.phase_latency_seconds["tiger_shadow_settlement"]["count"] == 1
+
+
 def test_batch_fetch_failure_releases_claim_for_bounded_retry():
     claim = make_claim()
     work_store = FakeWorkStore(claim)
@@ -284,7 +361,7 @@ def test_batch_fetch_failure_releases_claim_for_bounded_retry():
     assert work_store.failed[0]["error_code"] == "product_fetch_failed"
 
 
-def test_unprocessed_leases_are_refreshed_before_each_claim():
+def test_unprocessed_leases_use_batched_barrier_heartbeats():
     first = make_claim(appid=7)
     second = replace(first, id=42, appid=8)
     work_store = FakeWorkStore(first)
@@ -304,4 +381,58 @@ def test_unprocessed_leases_are_refreshed_before_each_claim():
     stats = processor.process_once(fetcher)
 
     assert stats.completed == 2
-    assert [len(call["claims"]) for call in work_store.heartbeats] == [2, 2, 2, 1]
+    assert [len(call["claims"]) for call in work_store.heartbeats] == [2, 2]
+    assert work_store.latest_snapshot_calls == [[7, 8]]
+
+
+def test_blocking_downstream_work_is_bounded_and_does_not_starve_gevent(
+    monkeypatch,
+):
+    claims = [replace(make_claim(), id=100 + index, appid=1000 + index) for index in range(8)]
+    work_store = FakeWorkStore(claims[0])
+    work_store.claim_work = lambda **kwargs: (claims if kwargs["lane_group"] == "live" else [])
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class SlowArchiveStore(FakeArchiveStore):
+        def write_json(self, **kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.03)
+                return super().write_json(**kwargs)
+            finally:
+                with lock:
+                    active -= 1
+
+    fetcher = FakeFetcher(None)
+    fetcher.fetch_apps_batch = lambda appids: {appid: make_payload(appid=appid) for appid in appids}
+    monkeypatch.setattr(
+        "src.workers.durable_processor.settings.pics_consumer_concurrency",
+        4,
+    )
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=SlowArchiveStore(),
+        worker_id="test-worker",
+    )
+    gevent_ticks = []
+    ticker = gevent.spawn_later(
+        0.01,
+        lambda: gevent_ticks.append(time.monotonic()),
+    )
+
+    stats = processor.process_once(fetcher)
+    ticker.join(timeout=1)
+
+    assert stats.completed == 8
+    assert 1 < max_active <= 4
+    assert gevent_ticks
+    assert stats.heartbeat_transactions == 2
+    assert stats.tiger_transactions_per_settlement is not None
+    assert stats.phase_latency_seconds["r2_write"]["count"] == 8

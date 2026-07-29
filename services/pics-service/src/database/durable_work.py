@@ -42,6 +42,22 @@ class PICSLatestSnapshot:
     archive_content_hash: str
 
 
+@dataclass(frozen=True)
+class PICSQueueMetrics:
+    """Bounded queue and recent-settlement snapshot for one stream."""
+
+    observed_at: datetime
+    live_open: int
+    catchup_open: int
+    retrying: int
+    claimed: int
+    dead_letter: int
+    missing_access_token: int
+    catchup_settled_last_hour: int
+    catchup_settlements_per_minute: float
+    catchup_eta_hours: Optional[float]
+
+
 class TigerPICSDurableWorkStore:
     """Claim and settle PICS app work using bounded PostgreSQL leases."""
 
@@ -419,13 +435,28 @@ class TigerPICSDurableWorkStore:
     def get_latest_snapshot(self, appid: int) -> Optional[PICSLatestSnapshot]:
         """Return the latest PICS snapshot pointer for one bounded app."""
 
+        return self.get_latest_snapshots([appid]).get(int(appid))
+
+    def get_latest_snapshots(
+        self,
+        appids: Sequence[int],
+    ) -> Dict[int, PICSLatestSnapshot]:
+        """Return latest PICS snapshot pointers in one bounded transaction."""
+
+        normalized_appids = sorted({int(appid) for appid in appids if int(appid) > 0})
+        if not normalized_appids:
+            return {}
+        if len(normalized_appids) > 500:
+            raise ValueError("At most 500 latest PICS snapshot pointers may be read")
+
         with self._connect() as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
                     self._configure_transaction(cursor)
                     cursor.execute(
                         """
-                        SELECT
+                        SELECT DISTINCT ON (appid)
+                          appid,
                           id,
                           content_hash,
                           archive_bucket,
@@ -433,24 +464,102 @@ class TigerPICSDurableWorkStore:
                           archive_content_hash
                         FROM docs.app_source_snapshots
                         WHERE source = 'pics'
-                          AND appid = %s
+                          AND appid = ANY(%s::integer[])
                           AND archive_bucket IS NOT NULL
                           AND archive_key IS NOT NULL
                           AND archive_content_hash IS NOT NULL
-                        ORDER BY first_seen_at DESC, id DESC
+                        ORDER BY appid, first_seen_at DESC, id DESC
+                        LIMIT 500
+                        """,
+                        (normalized_appids,),
+                    )
+                    rows = cursor.fetchall()
+        return {
+            int(row[0]): PICSLatestSnapshot(
+                id=int(row[1]),
+                content_hash=str(row[2]),
+                archive_bucket=str(row[3]),
+                archive_key=str(row[4]),
+                archive_content_hash=str(row[5]),
+            )
+            for row in rows
+        }
+
+    def get_queue_metrics(
+        self,
+        *,
+        work_mode: str,
+        stream_key: str,
+    ) -> PICSQueueMetrics:
+        """Return one bounded operational snapshot without changing work."""
+
+        normalized_mode, normalized_stream, _worker = self._validate_identity(
+            work_mode=work_mode,
+            stream_key=stream_key,
+            worker_id="queue-metrics",
+        )
+        with self._connect() as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    self._configure_transaction(cursor)
+                    cursor.execute(
+                        """
+                        SELECT
+                          clock_timestamp(),
+                          count(*) FILTER (
+                            WHERE lane IN ('new', 'live')
+                              AND state IN ('pending', 'retrying', 'claimed')
+                          ),
+                          count(*) FILTER (
+                            WHERE lane = 'catchup'
+                              AND state IN ('pending', 'retrying', 'claimed')
+                          ),
+                          count(*) FILTER (WHERE state = 'retrying'),
+                          count(*) FILTER (WHERE state = 'claimed'),
+                          count(*) FILTER (WHERE state = 'dead_letter'),
+                          count(*) FILTER (
+                            WHERE state = 'source_blocked'
+                              AND last_error_code = 'missing_access_token'
+                          ),
+                          count(*) FILTER (
+                            WHERE lane = 'catchup'
+                              AND (
+                                last_completed_at >= clock_timestamp() - interval '1 hour'
+                                OR (
+                                  state = 'source_blocked'
+                                  AND updated_at >= clock_timestamp() - interval '1 hour'
+                                )
+                                OR dead_lettered_at
+                                  >= clock_timestamp() - interval '1 hour'
+                              )
+                          )
+                        FROM ops.pics_work_state
+                        WHERE work_mode = %s
+                          AND stream_key = %s
                         LIMIT 1
                         """,
-                        (int(appid),),
+                        (normalized_mode, normalized_stream),
                     )
                     row = cursor.fetchone()
         if row is None:
-            return None
-        return PICSLatestSnapshot(
-            id=int(row[0]),
-            content_hash=str(row[1]),
-            archive_bucket=str(row[2]),
-            archive_key=str(row[3]),
-            archive_content_hash=str(row[4]),
+            raise RuntimeError("PICS queue metrics query returned no row")
+        catchup_open = int(row[2])
+        catchup_settled_last_hour = int(row[7])
+        settlements_per_minute = catchup_settled_last_hour / 60.0
+        eta_hours = (
+            catchup_open / catchup_settled_last_hour if catchup_settled_last_hour > 0 else None
+        )
+        return PICSQueueMetrics(
+            observed_at=row[0],
+            live_open=int(row[1]),
+            catchup_open=catchup_open,
+            retrying=int(row[3]),
+            claimed=int(row[4]),
+            dead_letter=int(row[5]),
+            missing_access_token=int(row[6]),
+            catchup_settled_last_hour=catchup_settled_last_hour,
+            catchup_settlements_per_minute=settlements_per_minute,
+            catchup_eta_hours=eta_hours,
         )
 
     @classmethod

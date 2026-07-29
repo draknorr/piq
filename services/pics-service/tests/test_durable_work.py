@@ -57,8 +57,24 @@ class FakeCursor(AbstractContextManager):
             self.rowcount = len(params[1])
         elif normalized.startswith("SELECT attempts, max_attempts"):
             self._row = (2, 8)
+        elif normalized.startswith("SELECT DISTINCT ON (appid)"):
+            self._rows = [
+                (7, 100, "a" * 64, "test-bucket", "test/key.json", "b" * 64),
+                (8, 101, "c" * 64, "test-bucket", "test/key-2.json", "d" * 64),
+            ]
         elif normalized.startswith("SELECT id, content_hash"):
             self._row = (100, "a" * 64, "test-bucket", "test/key.json", "b" * 64)
+        elif normalized.startswith("SELECT clock_timestamp()"):
+            self._row = (
+                datetime.now(timezone.utc),
+                12,
+                120,
+                3,
+                4,
+                2,
+                10,
+                60,
+            )
         elif "RETURNING state" in normalized:
             self._row = ("completed",)
             self.rowcount = 1
@@ -149,6 +165,9 @@ def make_reconciliation_claim():
 
 def test_processing_defaults_fail_closed():
     assert Settings.model_fields["pics_processing_enabled"].default is False
+    assert Settings.model_fields["pics_consumer_concurrency"].default == 4
+    assert Settings.model_fields["pics_product_info_min_interval_seconds"].default == 215
+    assert Settings.model_fields["steam_heartbeat_interval"].default == 300
 
 
 def test_claim_recovers_expired_leases_before_skip_locked_claim():
@@ -454,7 +473,41 @@ def test_latest_snapshot_read_uses_transaction_local_timeouts():
     statements = [statement for statement, _ in cursor.events]
     assert statements[0].startswith("SELECT set_config('statement_timeout'")
     assert statements[1].startswith("SELECT set_config('lock_timeout'")
-    assert statements[2].startswith("SELECT id, content_hash")
+    assert statements[2].startswith("SELECT DISTINCT ON (appid)")
     assert snapshot is not None
     assert snapshot.id == 100
+    assert connection.committed is True
+
+
+def test_latest_snapshot_batch_uses_one_bounded_query():
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+
+    snapshots = store.get_latest_snapshots([8, 7, 8])
+
+    query = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("SELECT DISTINCT ON (appid)")
+    )
+    assert query[1] == ([7, 8],)
+    assert set(snapshots) == {7, 8}
+    assert snapshots[8].id == 101
+    assert connection.committed is True
+
+
+def test_queue_metrics_reports_catchup_rate_and_eta():
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+
+    metrics = store.get_queue_metrics(
+        work_mode="shadow",
+        stream_key="shadow-test",
+    )
+
+    assert metrics.live_open == 12
+    assert metrics.catchup_open == 120
+    assert metrics.catchup_settlements_per_minute == 1.0
+    assert metrics.catchup_eta_hours == 2.0
+    assert metrics.missing_access_token == 10
     assert connection.committed is True
