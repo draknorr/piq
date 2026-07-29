@@ -156,6 +156,7 @@ interface PresetRow extends QueryResultRow {
 
 interface ResultRow extends QueryResultRow {
   appid: number;
+  change: OpportunityResultSummary["change"];
   confidence: OpportunityResultSummary["confidence"];
   created_at: Date | string;
   event_fingerprint: string;
@@ -1052,6 +1053,21 @@ export class OpportunityRepository {
           result.id,
           result.appid,
           app.name,
+          (
+            SELECT jsonb_build_object(
+              'eventType', material.event_type,
+              'signalFamily', material.signal_family,
+              'effectiveAt', material.effective_at,
+              'observedAt', material.observed_at,
+              'confidence', material.confidence,
+              'affectedRuleFields', material.affected_rule_fields,
+              'before', material.before_summary,
+              'after', material.after_summary
+            )
+            FROM opportunity.material_events material
+            WHERE material.id = result.material_event_id
+            LIMIT 1
+          ) AS change,
           result.event_label,
           result.event_fingerprint,
           row_number() OVER (
@@ -2377,6 +2393,19 @@ export class OpportunityRepository {
             'id', canonical.id,
             'appid', canonical.appid,
             'name', app.name,
+            'change', CASE
+              WHEN triggering_event.id IS NULL THEN NULL
+              ELSE jsonb_build_object(
+                'eventType', triggering_event.event_type,
+                'signalFamily', triggering_event.signal_family,
+                'effectiveAt', triggering_event.effective_at,
+                'observedAt', triggering_event.observed_at,
+                'confidence', triggering_event.confidence,
+                'affectedRuleFields', triggering_event.affected_rule_fields,
+                'before', triggering_event.before_summary,
+                'after', triggering_event.after_summary
+              )
+            END,
             'eventLabel', canonical.event_label,
             'eventFingerprint', canonical.event_fingerprint,
             'rank', canonical.rank,
@@ -2523,6 +2552,7 @@ export class OpportunityRepository {
               'eventFingerprint', recent.event_fingerprint,
               'materiality', recent.materiality,
               'confidence', recent.confidence,
+              'affectedRuleFields', recent.affected_rule_fields,
               'before', recent.before_summary,
               'after', recent.after_summary,
               'rawEventRefs', recent.raw_event_refs
@@ -2658,6 +2688,10 @@ export class OpportunityRepository {
         trackedAt: null,
       },
       youtubeEvidence: row.youtube_evidence,
+      workspace: {
+        name: workspace.name,
+        role: workspace.role,
+      },
     };
   }
 
@@ -2825,6 +2859,7 @@ export class OpportunityRepository {
   private mapResult(row: ResultRow): OpportunityResultSummary {
     return {
       appid: row.appid,
+      change: row.change ?? null,
       confidence: row.confidence,
       createdAt: iso(row.created_at)!,
       eventLabel: row.event_label,

@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { OpportunityRepository } from "./repository.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
+  type OpportunityObservedChange,
   type OpportunityRuleSet,
 } from "./types.js";
 
@@ -154,6 +155,183 @@ describe("opportunity preset health presentation", () => {
       /snapshot\.state IS DISTINCT FROM snapshot\.prior_state/,
     );
   });
+});
+
+describe("opportunity customer response contracts", () => {
+  const observedChange: OpportunityObservedChange = {
+    affectedRuleFields: ["price_cents"],
+    after: [{ price_cents: 1499 }],
+    before: [{ price_cents: 1999 }],
+    confidence: "high",
+    effectiveAt: "2026-07-27T07:30:00.000Z",
+    eventType: "business_model_changed",
+    observedAt: "2026-07-27T07:31:00.000Z",
+    signalFamily: "pricing",
+  };
+
+  it("returns exact stored change evidence and preserves a nullable change", async () => {
+    let resultQuery = "";
+    const pool = {
+      query: async (text: string): Promise<{ rows: unknown[] }> => {
+        if (text.includes("WITH latest_changes AS")) {
+          return { rows: [] };
+        }
+        if (text.includes("FROM opportunity.runs run")) {
+          return {
+            rows: [
+              {
+                completed_at: "2026-07-27T08:01:00.000Z",
+                coverage_warnings: [],
+                id: "run-1",
+                profiles_evaluated: 1,
+                result_count: 2,
+                run_kind: "daily",
+                started_at: "2026-07-27T08:00:00.000Z",
+                status: "completed",
+                window_end: "2026-07-27T08:00:00.000Z",
+                window_start: "2026-07-26T08:00:00.000Z",
+              },
+            ],
+          };
+        }
+        if (text.includes("FROM opportunity.results result")) {
+          resultQuery = text;
+          const base = {
+            confidence: "high",
+            created_at: "2026-07-27T08:00:00.000Z",
+            event_label: "materially_changed",
+            market_potential: "meaningful",
+            matched_profiles: [{ id: "profile-1", name: "Cozy scouting" }],
+            name: "Lanterns at Low Tide",
+            rank_components: { userFit: 1 },
+            score: "82.5",
+            strongest_evidence: ["Price changed."],
+            why_now: "The price changed.",
+          };
+          return {
+            rows: [
+              {
+                ...base,
+                appid: 424242,
+                change: observedChange,
+                event_fingerprint: "event-1",
+                id: "result-1",
+                rank: 1,
+              },
+              {
+                ...base,
+                appid: 424243,
+                change: null,
+                event_fingerprint: "event-2",
+                id: "result-2",
+                rank: 2,
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected query in result contract test: ${text}`);
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    const overview = await repository.getLatestDailyOverview(
+      "workspace-1",
+      "user-1",
+    );
+
+    assert.deepEqual(
+      overview.groups.materiallyChanged.map((result) => result.change),
+      [observedChange, null],
+    );
+    assert.match(resultQuery, /'affectedRuleFields'/);
+    assert.match(resultQuery, /material\.before_summary/);
+    assert.match(resultQuery, /material\.after_summary/);
+  });
+
+  for (const role of ["owner", "admin", "member"] as const) {
+    it(`returns workspace role ${role} and reuses the observed-change contract`, async () => {
+      let gameRecordQuery = "";
+      const recentChange = {
+        ...observedChange,
+        eventFingerprint: "event-1",
+        materiality: 0.9,
+        rawEventRefs: [{ source: "storefront" }],
+      };
+      const pool = {
+        query: async (text: string): Promise<{ rows: unknown[] }> => {
+          gameRecordQuery = text;
+          return {
+            rows: [
+              {
+                app: { appid: 424242, name: "Lanterns at Low Tide" },
+                cohort: null,
+                current_metrics: {},
+                evidence: [],
+                market_context: null,
+                matched_profiles: [],
+                missing_evidence: [],
+                official_news: [],
+                previous_appearances: [],
+                provenance: {},
+                rank: {},
+                recent_changes: [recentChange],
+                result_summary: {
+                  appid: 424242,
+                  change: observedChange,
+                  confidence: "high",
+                  createdAt: "2026-07-27T08:00:00.000Z",
+                  eventFingerprint: "event-1",
+                  eventLabel: "materially_changed",
+                  id: "result-1",
+                  marketPotential: "meaningful",
+                  matchedProfiles: [],
+                  name: "Lanterns at Low Tide",
+                  rank: 1,
+                  rankComponents: {},
+                  score: 82.5,
+                  strongestEvidence: [],
+                  whyNow: "The price changed.",
+                },
+                team_activity: [],
+                user_state: null,
+                youtube_evidence: {
+                  coverage: "partial",
+                  latestSnapshotAt: null,
+                  videos: [],
+                },
+              },
+            ],
+          };
+        },
+      } as unknown as Pool;
+      const repository = new OpportunityRepository(pool);
+      repository.ensureWorkspace = async () => ({
+        id: "workspace-1",
+        name: "PublisherIQ research",
+        role,
+      });
+      repository.recordTeamActivity = async () => undefined;
+
+      const record = await repository.getGameRecord({
+        appid: 424242,
+        identity: {
+          accessToken: "test-token",
+          email: "user@example.com",
+          userId: "user-1",
+        },
+        resultId: "result-1",
+      });
+
+      assert.deepEqual(record.workspace, {
+        name: "PublisherIQ research",
+        role,
+      });
+      assert.deepEqual(record.result.change, observedChange);
+      assert.deepEqual(record.recentChanges, [recentChange]);
+      assert.match(gameRecordQuery, /'change', CASE/);
+      assert.match(gameRecordQuery, /'affectedRuleFields'/);
+    });
+  }
 });
 
 describe("opportunity workspace provisioning", () => {

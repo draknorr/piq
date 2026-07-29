@@ -403,8 +403,20 @@ export type OpportunityResultLabel =
   | "materially_changed"
   | "tracked_update";
 
+export interface OpportunityObservedChange {
+  affectedRuleFields: OpportunityRuleField[];
+  after: unknown;
+  before: unknown;
+  confidence: OpportunityConfidence;
+  effectiveAt: string;
+  eventType: OpportunityMaterialEventType;
+  observedAt: string;
+  signalFamily: OpportunitySignalFamily;
+}
+
 export interface OpportunityResultSummary {
   appid: number;
+  change: OpportunityObservedChange | null;
   confidence: OpportunityConfidence;
   createdAt: string;
   eventLabel: OpportunityResultLabel;
@@ -553,18 +565,13 @@ export interface OpportunityGameRecord {
       signalFamily: OpportunitySignalFamily;
     };
   };
-  recentChanges: Array<{
-    after: unknown;
-    before: unknown;
-    confidence: OpportunityConfidence;
-    effectiveAt: string;
-    eventFingerprint: string;
-    eventType: string;
-    materiality: number;
-    observedAt: string;
-    rawEventRefs: unknown[];
-    signalFamily: OpportunitySignalFamily;
-  }>;
+  recentChanges: Array<
+    {
+      eventFingerprint: string;
+      materiality: number;
+      rawEventRefs: unknown[];
+    } & OpportunityObservedChange
+  >;
   rank: OpportunityRankingEvidence;
   result: OpportunityResultSummary;
   teamActivity: Array<{
@@ -591,6 +598,10 @@ export interface OpportunityGameRecord {
       videoId: string;
       viewCount: number | null;
     }>;
+  };
+  workspace: {
+    name: string;
+    role: "owner" | "admin" | "member";
   };
 }
 
