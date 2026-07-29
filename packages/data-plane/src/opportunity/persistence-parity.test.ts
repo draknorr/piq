@@ -804,6 +804,7 @@ describe("opportunity bulk persistence golden parity", () => {
       assert.equal(timings.marketCalculationMs, 14);
       assert.ok(timings.persistenceMs >= 0);
       assert.equal(timings.totalMs, 50 + timings.persistenceMs);
+      assert.deepEqual(bulkDatabase.state.runSummary?.phase_timings, timings);
 
       const legacyWriteCount = legacyDatabase.state.queries.filter((query) =>
         /^(INSERT|UPDATE|WITH ranked|WITH personal_schedule)/.test(query),

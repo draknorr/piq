@@ -222,10 +222,22 @@ describe("opportunity evaluation recovery", () => {
       },
       async persistRunOutcome(params: {
         evaluations: unknown[];
+        phaseTimings: Record<string, number>;
         results: unknown[];
       }): Promise<void> {
         assert.equal(params.evaluations.length, 0);
         assert.equal(params.results.length, 0);
+        assert.deepEqual(Object.keys(params.phaseTimings).sort(), [
+          "cohortResolutionMs",
+          "inputPreparationMs",
+          "marketCalculationMs",
+          "profileEvaluationMs",
+        ]);
+        assert.ok(
+          Object.values(params.phaseTimings).every(
+            (duration) => Number.isFinite(duration) && duration >= 0,
+          ),
+        );
         persisted = true;
       },
       productRepository: {
