@@ -13,7 +13,9 @@ const RESULT = {
     eventType: "business_model_changed",
     observedAt: "2026-07-27T07:31:00.000Z",
     signalFamily: "pricing",
+    summary: "Price lowered from $19.99 to $14.99.",
   },
+  changeSummary: "Price lowered from $19.99 to $14.99.",
   confidence: "high",
   createdAt: "2026-07-27T08:00:00.000Z",
   eventFingerprint: "event-fingerprint-1",
@@ -42,7 +44,9 @@ const CHANGE_RESULTS = [
       before: [{ developers: ["Old Harbor Studio"] }],
       eventType: "developer_changed",
       signalFamily: "store-page",
+      summary: "Developer changed from Old Harbor Studio to Harborlight.",
     },
+    changeSummary: "Developer changed from Old Harbor Studio to Harborlight.",
     eventFingerprint: "event-fingerprint-2",
     id: "11111111-1111-4111-8111-111111111112",
     name: "Developer Change Game",
@@ -58,7 +62,9 @@ const CHANGE_RESULTS = [
       before: [{ platforms: { mac: false, windows: true } }],
       eventType: "platform_expanded",
       signalFamily: "platform",
+      summary: "macOS support was added.",
     },
+    changeSummary: "macOS support was added.",
     eventFingerprint: "event-fingerprint-3",
     id: "11111111-1111-4111-8111-111111111113",
     name: "Platform Change Game",
@@ -74,7 +80,9 @@ const CHANGE_RESULTS = [
       before: [{ release_date: "2026-10-20" }],
       eventType: "release_timing_changed",
       signalFamily: "release",
+      summary: "Release date moved from Oct 20, 2026 to Nov 12, 2026.",
     },
+    changeSummary: "Release date moved from Oct 20, 2026 to Nov 12, 2026.",
     eventFingerprint: "event-fingerprint-4",
     id: "11111111-1111-4111-8111-111111111114",
     name: "Release Date Game",
@@ -90,7 +98,9 @@ const CHANGE_RESULTS = [
       before: [{ has_demo: false }],
       eventType: "demo_added",
       signalFamily: "release",
+      summary: "A playable demo was added.",
     },
+    changeSummary: "A playable demo was added.",
     eventFingerprint: "event-fingerprint-5",
     id: "11111111-1111-4111-8111-111111111115",
     name: "Demo Added Game",
@@ -106,7 +116,9 @@ const CHANGE_RESULTS = [
       before: [{ tags: ["Cozy", "Puzzle"] }],
       eventType: "taxonomy_repositioned",
       signalFamily: "taxonomy",
+      summary: "Tags added: Deckbuilder. Tags removed: Puzzle.",
     },
+    changeSummary: "Tags added: Deckbuilder. Tags removed: Puzzle.",
     eventFingerprint: "event-fingerprint-6",
     id: "11111111-1111-4111-8111-111111111116",
     name: "Tag Change Game",
@@ -122,7 +134,11 @@ const CHANGE_RESULTS = [
       before: null,
       eventType: "publisher_changed",
       signalFamily: "store-page",
+      summary:
+        "The listed publisher changed, but the before-and-after names are unavailable.",
     },
+    changeSummary:
+      "The listed publisher changed, but the before-and-after names are unavailable.",
     eventFingerprint: "event-fingerprint-7",
     id: "11111111-1111-4111-8111-111111111117",
     name: "Unknown Publisher Game",
@@ -180,7 +196,7 @@ const BOOTSTRAP = {
   ],
   presets: [
     {
-      description: "Cozy games with visible product readiness.",
+      description: "Cozy games with a playable demo and a clear store page.",
       healthState: "growing",
       healthUnavailableReason: null,
       id: "preset-1",
@@ -208,7 +224,7 @@ const BOOTSTRAP = {
       updatedAt: "2026-07-27T07:59:00.000Z",
     },
     {
-      label: "PICS taxonomy",
+      label: "Steam features and positioning",
       source: "pics",
       state: "healthy",
       updatedAt: "2026-07-27T07:58:00.000Z",
@@ -433,6 +449,7 @@ const GAME_RECORD = {
       observedAt: "2026-07-27T07:31:00.000Z",
       rawEventRefs: [{ source: "storefront" }],
       signalFamily: "pricing",
+      summary: "Price lowered from $19.99 to $14.99.",
     },
   ],
   result: RESULT,
@@ -499,7 +516,9 @@ const PREVIEW = {
     },
   ],
   totalMatches: 12,
-  warnings: ["Daily volume needs completed run history."],
+  warnings: [
+    "Daily volume estimates will appear after this profile has run a few times.",
+  ],
 };
 
 async function installOpportunityMocks(
@@ -585,19 +604,24 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await page.goto("/opportunities");
 
   await expect(
-    page.getByRole("heading", { name: /daily opportunity/i }),
+    page.getByRole("heading", { name: "Daily Intelligence Desk" }),
   ).toBeVisible();
+  await expect(
+    page.getByText(/See the Steam games that newly match/i),
+  ).toHaveCount(0);
   await expect(page.getByText(RESULT.name)).toBeVisible();
-  await expect(page.getByText("1 signals worth opening")).toBeVisible();
-  await expect(page.getByText("Data status", { exact: true })).toBeVisible();
-  await page.getByText("Data status", { exact: true }).click();
+  await expect(page.getByText("1 game worth reviewing")).toBeVisible();
+  await expect(
+    page.getByText("Coverage status", { exact: true }),
+  ).toBeVisible();
+  await page.getByText("Coverage status", { exact: true }).click();
   await expect(page.getByText("Recent market health changes")).toBeVisible();
-  await expect(page.getByText("Quiet → Insufficient Data")).toBeVisible();
+  await expect(page.getByText("Quiet → Still developing")).toBeVisible();
   await expect(
     page.getByText(/5,000-game evaluation cap reached/i),
   ).toBeVisible();
   await expect(
-    page.getByText("Price changed from $19.99 to $14.99."),
+    page.getByText("Price lowered from $19.99 to $14.99."),
   ).toBeVisible();
   await expect(page.getByText("Opportunity fit: 83/100")).toBeVisible();
   await expect(page.getByText("Matches your sourcing profile:")).toBeVisible();
@@ -610,7 +634,7 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   );
   await expect(page.getByRole("heading", { name: RESULT.name })).toBeVisible();
   await expect(
-    page.getByText("Price changed from $19.99 to $14.99.").first(),
+    page.getByText("Price lowered from $19.99 to $14.99.").first(),
   ).toBeVisible();
   await expect(
     page.getByText("What drives this opportunity score"),
@@ -626,9 +650,7 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   ).toBeVisible();
   await expect(page.getByText("Demo now available")).toBeVisible();
   await expect(page.getByText("Five demos worth playing")).toBeVisible();
-  await expect(
-    page.getByText("Data status and technical details"),
-  ).toBeVisible();
+  await expect(page.getByText("Source coverage")).toBeVisible();
   await expect(page.getByText("opportunity-ranking/v1")).not.toBeVisible();
   await expect(page.getByText("Reproduction contract")).toHaveCount(0);
 });
@@ -660,17 +682,19 @@ test("opportunity list translates stored changes without inventing values", asyn
   ).toBeVisible();
   await expect(page.getByText("A playable demo was added.")).toBeVisible();
   await expect(
-    page.getByText("Steam tags changed: added Deckbuilder; removed Puzzle."),
+    page.getByText("Tags added: Deckbuilder. Tags removed: Puzzle."),
   ).toBeVisible();
   await expect(
     page.getByText(
-      "The listed publisher changed, but the stored evidence does not contain both names.",
+      "The listed publisher changed, but the before-and-after names are unavailable.",
     ),
   ).toBeVisible();
 });
 
 for (const role of ["owner", "admin", "member"] as const) {
-  test(`data status follows the ${role} workspace role`, async ({ page }) => {
+  test(`coverage status follows the ${role} workspace role`, async ({
+    page,
+  }) => {
     await installOpportunityMocks(page, {
       bootstrap: {
         ...BOOTSTRAP,
@@ -680,12 +704,12 @@ for (const role of ["owner", "admin", "member"] as const) {
     await page.goto("/opportunities");
 
     if (role === "member") {
-      await expect(page.getByText("Data status", { exact: true })).toHaveCount(
-        0,
-      );
+      await expect(
+        page.getByText("Coverage status", { exact: true }),
+      ).toHaveCount(0);
     } else {
       await expect(
-        page.getByText("Data status", { exact: true }),
+        page.getByText("Coverage status", { exact: true }),
       ).toBeVisible();
     }
   });
@@ -702,7 +726,12 @@ test("opportunity records render truthful null and sparse change evidence", asyn
         groups: {
           ...BOOTSTRAP.dailyOverview.groups,
           materiallyChanged: [
-            { ...RESULT, change: null },
+            {
+              ...RESULT,
+              change: null,
+              changeSummary:
+                "Steam activity made this game relevant, but the affected field is unavailable.",
+            },
             {
               ...RESULT,
               appid: 424249,
@@ -713,7 +742,11 @@ test("opportunity records render truthful null and sparse change evidence", asyn
                 before: null,
                 eventType: "publisher_changed",
                 signalFamily: "store-page",
+                summary:
+                  "The listed publisher changed, but the before-and-after names are unavailable.",
               },
+              changeSummary:
+                "The listed publisher changed, but the before-and-after names are unavailable.",
               eventFingerprint: "event-fingerprint-8",
               id: "11111111-1111-4111-8111-111111111118",
               name: "Sparse Evidence Game",
@@ -734,33 +767,40 @@ test("opportunity records render truthful null and sparse change evidence", asyn
           before: null,
           eventType: "publisher_changed",
           signalFamily: "store-page",
+          summary:
+            "The listed publisher changed, but the before-and-after names are unavailable.",
         },
       ],
-      result: { ...RESULT, change: null },
+      result: {
+        ...RESULT,
+        change: null,
+        changeSummary:
+          "Steam activity made this game relevant, but the affected field is unavailable.",
+      },
     },
   });
   await page.goto("/opportunities");
 
   await expect(
     page.getByText(
-      "PublisherIQ identified a new sourcing signal, but no before-and-after snapshot is linked.",
+      "Steam activity made this game relevant, but the affected field is unavailable.",
     ),
   ).toBeVisible();
   await expect(
     page.getByText(
-      "The listed publisher changed, but the stored evidence does not contain both names.",
+      "The listed publisher changed, but the before-and-after names are unavailable.",
     ),
   ).toBeVisible();
 
   await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
   await expect(
     page.getByText(
-      "PublisherIQ identified a new sourcing signal, but no before-and-after snapshot is linked.",
+      "Steam activity made this game relevant, but the affected field is unavailable.",
     ),
   ).toBeVisible();
   await expect(
     page.getByText(
-      "The listed publisher changed, but the stored evidence does not contain both names.",
+      "The listed publisher changed, but the before-and-after names are unavailable.",
     ),
   ).toBeVisible();
 });
@@ -775,6 +815,56 @@ test("labels presets that do not support released-market health", async ({
   await expect(page.getByText("Unreleased health model pending")).toBeVisible();
 });
 
+test("Vampire Crawlers explains its Steam build update consistently", async ({
+  page,
+}) => {
+  const buildChange = {
+    affectedRuleFields: [],
+    after: ["23803422", "2026-06-23T13:00:28+00:00"],
+    before: ["23012943", "2026-04-30T10:01:00"],
+    confidence: "directional",
+    effectiveAt: "2026-06-23T13:00:28.000Z",
+    eventFingerprint: "vampire-build-change",
+    eventType: "material_change",
+    materiality: 0.35,
+    observedAt: "2026-07-28T03:32:58.360Z",
+    rawEventRefs: ["raw:1000001050331", "raw:1000001050332"],
+    signalFamily: "build",
+    summary: "A new Steam build was published on Jun 23, 2026.",
+  };
+  const vampireResult = {
+    ...RESULT,
+    appid: 3265700,
+    change: buildChange,
+    changeSummary: buildChange.summary,
+    id: "8b69e3a9-e28f-4f9a-93cb-2ce1e6c59b7c",
+    name: "Vampire Crawlers",
+  };
+  await installOpportunityMocks(page, {
+    gameRecord: {
+      ...GAME_RECORD,
+      app: {
+        ...GAME_RECORD.app,
+        appid: vampireResult.appid,
+        name: vampireResult.name,
+      },
+      recentChanges: [buildChange],
+      result: vampireResult,
+    },
+  });
+
+  await page.goto(
+    `/opportunities/games/${vampireResult.appid}?result=${vampireResult.id}`,
+  );
+
+  await expect(
+    page.getByText(buildChange.summary, { exact: true }),
+  ).toHaveCount(2);
+  await expect(
+    page.getByText("An important Steam detail changed", { exact: false }),
+  ).toHaveCount(0);
+});
+
 test("profile workshop previews with the same visible rule contract", async ({
   page,
 }) => {
@@ -786,7 +876,7 @@ test("profile workshop previews with the same visible rule contract", async ({
 
   await expect(page.getByText("Profile workshop")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Remove rule" }),
+    page.getByRole("button", { name: "Remove criterion" }),
   ).toBeDisabled();
 
   await page.getByRole("button", { name: "Preview profile" }).click();

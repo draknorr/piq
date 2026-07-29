@@ -87,6 +87,7 @@ export interface OpportunityRuleSet {
 export interface OpportunityResultSummary {
   appid: number;
   change: OpportunityObservedChange | null;
+  changeSummary: string;
   confidence: "high" | "directional";
   createdAt: string;
   eventFingerprint: string;
@@ -135,6 +136,7 @@ export interface OpportunityObservedChange {
     | "material_change";
   observedAt: string;
   signalFamily: OpportunitySignalFamily;
+  summary: string;
 }
 
 export interface OpportunityBootstrap {

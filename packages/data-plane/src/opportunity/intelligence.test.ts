@@ -7,8 +7,14 @@ import {
   calculateOpportunityMarketContext,
   calculateOpportunityPresetHealth,
   calculateOpportunityRanking,
+  cleanOpportunityProfileName,
+  decodeOpportunityText,
+  describeOpportunityChange,
 } from "./intelligence.js";
-import type { OpportunityCohortMember } from "./types.js";
+import type {
+  OpportunityCohortMember,
+  OpportunityObservedChange,
+} from "./types.js";
 
 function member(
   appid: number,
@@ -24,6 +30,23 @@ function member(
     priceCents: 1_999,
     reviewsAdded30d: 10 + appid,
     totalReviews: 1_000 + appid,
+    ...overrides,
+  };
+}
+
+function change(
+  overrides: Partial<OpportunityObservedChange> = {},
+): OpportunityObservedChange {
+  return {
+    affectedRuleFields: ["price_cents"],
+    after: [{ price_cents: 500 }],
+    before: [{ price_cents: 999 }],
+    confidence: "high",
+    effectiveAt: "2026-07-27T00:00:00.000Z",
+    eventType: "business_model_changed",
+    observedAt: "2026-07-27T00:00:00.000Z",
+    signalFamily: "pricing",
+    summary: "",
     ...overrides,
   };
 }
@@ -152,5 +175,150 @@ describe("opportunity intelligence", () => {
     assert.equal(result.state, "insufficient_data");
     assert.match(result.explanation[0] ?? "", /2 of 20 evaluated released/);
     assert.match(result.explanation[1] ?? "", /10 measured games and 60%/);
+  });
+});
+
+describe("opportunity presentation", () => {
+  it("uses directional price language", () => {
+    assert.equal(
+      describeOpportunityChange(change()),
+      "Price lowered from $9.99 to $5.00.",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          after: [{ price_cents: 699 }],
+          before: [{ price_cents: 499 }],
+        }),
+      ),
+      "Price raised from $4.99 to $6.99.",
+    );
+  });
+
+  it("describes free-to-play and paid transitions", () => {
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["is_free", "price_cents"],
+          after: [{ is_free: true, price_cents: 0 }],
+          before: [{ is_free: false, price_cents: 999 }],
+        }),
+      ),
+      "The game became free to play.",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["is_free", "price_cents"],
+          after: [{ is_free: false, price_cents: 999 }],
+          before: [{ is_free: true, price_cents: 0 }],
+        }),
+      ),
+      "The game changed from free to play to a paid release.",
+    );
+  });
+
+  it("resolves Steam tag and category IDs without exposing numbers", () => {
+    const taxonomy = {
+      categories: new Map([
+        ["18", "Partial Controller Support"],
+        ["55", "Steam Achievements"],
+      ]),
+      genres: new Map<string, string>(),
+      tags: new Map([
+        ["4195", "Roguelike"],
+        ["4305", "Deckbuilding"],
+      ]),
+    };
+    const tagSummary = describeOpportunityChange(
+      change({
+        affectedRuleFields: ["tags"],
+        after: [[4195, 4305]],
+        before: [[]],
+        eventType: "taxonomy_repositioned",
+        signalFamily: "taxonomy",
+      }),
+      "materially_changed",
+      taxonomy,
+    );
+    const categorySummary = describeOpportunityChange(
+      change({
+        affectedRuleFields: ["categories"],
+        after: [[18, 55]],
+        before: [[]],
+        eventType: "taxonomy_repositioned",
+        signalFamily: "taxonomy",
+      }),
+      "materially_changed",
+      taxonomy,
+    );
+
+    assert.equal(tagSummary, "Tags added: Roguelike and Deckbuilding.");
+    assert.equal(
+      categorySummary,
+      "Steam features added: Partial Controller Support and Steam Achievements.",
+    );
+    assert.doesNotMatch(
+      `${tagSummary} ${categorySummary}`,
+      /\b(?:18|55|4195|4305)\b/,
+    );
+  });
+
+  it("describes developer and publisher changes by name", () => {
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["developer"],
+          after: [{ developers: ["CREEK &amp; RIVER"] }],
+          before: [{ developers: ["Old Studio"] }],
+          eventType: "developer_changed",
+          signalFamily: "store-page",
+        }),
+      ),
+      "Developer changed from Old Studio to CREEK & RIVER.",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["publisher"],
+          after: [{ publishers: ["New Publisher"] }],
+          before: [{ publishers: ["Old Publisher"] }],
+          eventType: "publisher_changed",
+          signalFamily: "store-page",
+        }),
+      ),
+      "Publisher changed from Old Publisher to New Publisher.",
+    );
+  });
+
+  it("decodes named and numeric HTML entities as text", () => {
+    assert.equal(
+      decodeOpportunityText("CREEK &amp; RIVER &#38; FRIENDS &#x26; CO."),
+      "CREEK & RIVER & FRIENDS & CO.",
+    );
+  });
+
+  it("cleans internal smoke-test profile names", () => {
+    assert.equal(
+      cleanOpportunityProfileName(
+        "Production smoke — Roguelike Deckbuilder — 2026-07-27",
+      ),
+      "Roguelike Deckbuilder",
+    );
+  });
+
+  it("explains the Vampire Crawlers build change specifically", () => {
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: [],
+          after: ["23803422", "2026-06-23T13:00:28+00:00"],
+          before: ["23012943", "2026-04-30T10:01:00"],
+          eventType: "material_change",
+          signalFamily: "build",
+        }),
+      ),
+      "A new Steam build was published on Jun 23, 2026.",
+    );
   });
 });

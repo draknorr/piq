@@ -140,7 +140,9 @@ describe("opportunity preset health presentation", () => {
       {
         asOfDate: "2026-07-28T00:00:00.000Z",
         evaluatedGames: 5_000,
-        explanation: ["coverage", "state reason"],
+        explanation: [
+          "More released games are needed for a reliable market comparison.",
+        ],
         maximumEvaluated: 5_000,
         name: "Released preset",
         priorState: "quiet",
@@ -167,6 +169,7 @@ describe("opportunity customer response contracts", () => {
     eventType: "business_model_changed",
     observedAt: "2026-07-27T07:31:00.000Z",
     signalFamily: "pricing",
+    summary: "Price lowered from $19.99 to $14.99.",
   };
 
   it("returns exact stored change evidence and preserves a nullable change", async () => {

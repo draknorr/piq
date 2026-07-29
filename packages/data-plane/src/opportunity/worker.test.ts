@@ -1161,7 +1161,11 @@ function event(
   values: Partial<OpportunityWorkerMaterialEvent> = {},
 ): OpportunityWorkerMaterialEvent {
   return {
+    affectedRuleFields: ["tags"],
+    after: [["Roguelike"]],
     appid: 10,
+    before: [["Action"]],
+    confidence: "high",
     createsDailyResult: true,
     effectiveAt: "2026-07-27T00:00:00.000Z",
     eligibleForImmediate: false,
@@ -1172,6 +1176,7 @@ function event(
     observedAt: "2026-07-27T00:00:00.000Z",
     reevaluateEligibility: true,
     signalFamily: "taxonomy",
+    summary: "Tags added: Roguelike. Tags removed: Action.",
     ...values,
   };
 }

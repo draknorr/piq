@@ -404,10 +404,8 @@ export function ProfileBuilder({
           rules,
         }),
       );
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Preview failed.",
-      );
+    } catch {
+      setError("PublisherIQ could not preview this profile. Please try again.");
     } finally {
       setPreviewing(false);
     }
@@ -442,8 +440,8 @@ export function ProfileBuilder({
         });
       }
       await onSaved(version.profileId);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Save failed.");
+    } catch {
+      setError("PublisherIQ could not save this profile. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -469,12 +467,8 @@ export function ProfileBuilder({
         status,
       });
       await onStatusChanged(initialProfile.id, status);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : "Profile status update failed.",
-      );
+    } catch {
+      setError("PublisherIQ could not update this profile. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -648,7 +642,7 @@ export function ProfileBuilder({
               className="inline-flex items-center gap-2 rounded-lg border border-border-muted bg-surface px-4 py-2.5 text-sm font-semibold text-text-primary transition hover:border-border-prominent disabled:opacity-50"
             >
               <Eye className="h-4 w-4" />
-              {previewing ? "Evaluating catalog…" : "Preview profile"}
+              {previewing ? "Finding matching games…" : "Preview profile"}
             </button>
             <button
               type="button"
@@ -754,7 +748,7 @@ export function ProfileBuilder({
               ))}
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
-                  Representative matches
+                  Example matches
                 </h4>
                 <div className="mt-3 divide-y divide-border-subtle">
                   {preview.representativeMatches.slice(0, 6).map((match) => (
@@ -892,7 +886,7 @@ function RuleSection({
                   ))}
                 </div>
                 <span className="text-[10px] text-text-muted">
-                  of these rules
+                  of these criteria
                 </span>
               </div>
               <div className="space-y-2">
@@ -939,7 +933,7 @@ function RuleSection({
                 className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-text-tertiary transition hover:text-accent-primary"
               >
                 <Plus className="h-3 w-3" />
-                Add rule
+                Add criterion
               </button>
             </div>
           ))}
@@ -1068,8 +1062,12 @@ function ClauseEditor({
         onClick={onRemove}
         disabled={!canRemove}
         className="flex h-9 w-8 items-center justify-center rounded-md text-text-muted transition hover:bg-semantic-error-muted hover:text-semantic-error disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-muted"
-        aria-label="Remove rule"
-        title={canRemove ? "Remove rule" : "A group needs at least one rule"}
+        aria-label="Remove criterion"
+        title={
+          canRemove
+            ? "Remove criterion"
+            : "A group needs at least one criterion"
+        }
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>

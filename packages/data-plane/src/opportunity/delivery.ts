@@ -4,10 +4,18 @@ import { OpportunityDestinationCipher } from "./delivery-secrets.js";
 import type {
   OpportunityPotentialBand,
   OpportunityResultLabel,
+  OpportunityResultSummary,
 } from "./types.js";
+import {
+  cleanOpportunityEvidence,
+  decodeOpportunityText,
+  opportunityChangeSummary,
+} from "./intelligence.js";
+import { presentOpportunityChanges } from "./repository.js";
 
 export interface OpportunityDeliveryResult {
   appid: number;
+  changeSummary: string;
   eventLabel: OpportunityResultLabel;
   id: string;
   marketPotential: OpportunityPotentialBand;
@@ -153,6 +161,7 @@ export class OpportunityDeliveryRepository {
         const results = await client.query<
           QueryResultRow & {
             appid: number;
+            change: OpportunityResultSummary["change"];
             event_label: OpportunityResultLabel;
             id: string;
             market_potential: OpportunityPotentialBand;
@@ -167,6 +176,21 @@ export class OpportunityDeliveryRepository {
               result.id,
               result.appid,
               app.name,
+              (
+                SELECT jsonb_build_object(
+                  'eventType', material.event_type,
+                  'signalFamily', material.signal_family,
+                  'effectiveAt', material.effective_at,
+                  'observedAt', material.observed_at,
+                  'confidence', material.confidence,
+                  'affectedRuleFields', material.affected_rule_fields,
+                  'before', material.before_summary,
+                  'after', material.after_summary
+                )
+                FROM opportunity.material_events material
+                WHERE material.id = result.material_event_id
+                LIMIT 1
+              ) AS change,
               result.event_label,
               result.score,
               COALESCE(
@@ -198,6 +222,11 @@ export class OpportunityDeliveryRepository {
           `,
           [row.id],
         );
+        const presentedChanges = await presentOpportunityChanges(
+          client,
+          results.rows.map((result) => result.change),
+          results.rows.map((result) => result.event_label),
+        );
         deliveries.push({
           availableResultCount:
             row.rendered_payload.availableResultCount ?? results.rowCount ?? 0,
@@ -207,16 +236,26 @@ export class OpportunityDeliveryRepository {
           id: row.id,
           idempotencyKey: row.idempotency_key,
           overviewUrl: row.rendered_payload.canonicalOverviewUrl ?? "",
-          results: results.rows.map((result) => ({
-            appid: result.appid,
-            eventLabel: result.event_label,
-            id: result.id,
-            marketPotential: result.market_potential,
-            name: result.name,
-            score: numberValue(result.score),
-            strongestEvidence: result.strongest_evidence,
-            whyNow: result.why_now,
-          })),
+          results: results.rows.map((result, index) => {
+            const changeSummary = opportunityChangeSummary(
+              presentedChanges[index] ?? null,
+              result.event_label,
+            );
+            return {
+              appid: result.appid,
+              changeSummary,
+              eventLabel: result.event_label,
+              id: result.id,
+              marketPotential: result.market_potential,
+              name: decodeOpportunityText(result.name),
+              score: numberValue(result.score),
+              strongestEvidence: cleanOpportunityEvidence(
+                result.strongest_evidence,
+                changeSummary,
+              ),
+              whyNow: `${changeSummary} The game matches your sourcing criteria.`,
+            };
+          }),
         });
       }
       return deliveries;
@@ -297,8 +336,24 @@ function escapeSlackMrkdwn(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function humanize(value: string): string {
-  return value.replaceAll("_", " ");
+function resultLabel(value: OpportunityResultLabel): string {
+  return {
+    materially_changed: "Commercial change",
+    newly_discovered: "New discovery",
+    newly_qualified: "New match",
+    newly_released: "Newly released",
+    tracked_update: "Tracked update",
+  }[value];
+}
+
+function potentialLabel(value: OpportunityPotentialBand): string {
+  return {
+    developing: "Developing",
+    insufficient_data: "Too early to size",
+    large_but_competitive: "Large, competitive market",
+    limited: "Selective",
+    meaningful: "Meaningful",
+  }[value];
 }
 
 export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
@@ -309,24 +364,27 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
 } {
   const immediate = work.deliveryKind === "immediate_full_match";
   const subject = immediate
-    ? `New full-match Steam opportunity${work.results[0] ? `: ${work.results[0].name}` : ""}`
+    ? `New Steam match${work.results[0] ? `: ${decodeOpportunityText(work.results[0].name)}` : ""}`
     : work.results.length > 0
-      ? `${work.results.length} Steam ${work.results.length === 1 ? "opportunity" : "opportunities"} in your daily brief`
-      : "Your Steam opportunity brief is quiet today";
+      ? `${work.results.length} ${work.results.length === 1 ? "game" : "games"} to review in Daily Intelligence Desk`
+      : "No new games in Daily Intelligence Desk today";
   const header = immediate
-    ? "PublisherIQ found a new full match."
-    : `${work.results.length} new ${work.results.length === 1 ? "result" : "results"} in your daily Steam opportunity brief.`;
+    ? "A new game matches your sourcing criteria."
+    : work.results.length > 0
+      ? `${work.results.length} ${work.results.length === 1 ? "game is" : "games are"} worth reviewing today.`
+      : "No new games matched your criteria today.";
   const truncationNotice =
     work.availableResultCount > work.results.length
       ? `Showing the top ${work.results.length} of ${work.availableResultCount} results. Open PublisherIQ for the complete brief.`
       : null;
   const resultText = work.results.map((result, index) => {
     const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
+    const name = decodeOpportunityText(result.name);
+    const summary = decodeOpportunityText(result.changeSummary);
     return [
-      `${index + 1}. ${result.name} — ${humanize(result.eventLabel)}`,
-      result.whyNow,
-      `Market potential: ${humanize(result.marketPotential)}`,
-      result.strongestEvidence[0] ?? "Open the canonical record for evidence.",
+      `${index + 1}. ${name} — ${resultLabel(result.eventLabel)}`,
+      summary,
+      `Market potential: ${potentialLabel(result.marketPotential)}`,
       link,
     ].join("\n");
   });
@@ -340,19 +398,20 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
   const cards = work.results
     .map((result) => {
       const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
+      const name = decodeOpportunityText(result.name);
+      const summary = decodeOpportunityText(result.changeSummary);
       return `
         <article style="border:1px solid #dbe4ea;border-radius:12px;padding:16px;margin:12px 0">
-          <h2 style="font-size:18px;margin:0 0 8px">${escapeHtml(result.name)}</h2>
-          <p style="margin:0 0 8px;color:#475569">${escapeHtml(humanize(result.eventLabel))} · ${escapeHtml(humanize(result.marketPotential))} market potential</p>
-          <p style="margin:0 0 8px">${escapeHtml(result.whyNow)}</p>
-          <p style="margin:0 0 12px;color:#334155">${escapeHtml(result.strongestEvidence[0] ?? "Open the canonical record for complete evidence.")}</p>
-          <a href="${escapeHtml(link)}" style="color:#0f766e;font-weight:600">Open canonical record</a>
+          <h2 style="font-size:18px;margin:0 0 8px">${escapeHtml(name)}</h2>
+          <p style="margin:0 0 8px;color:#475569">${escapeHtml(resultLabel(result.eventLabel))} · ${escapeHtml(potentialLabel(result.marketPotential))} market potential</p>
+          <p style="margin:0 0 12px">${escapeHtml(summary)}</p>
+          <a href="${escapeHtml(link)}" style="color:#0f766e;font-weight:600">View full analysis</a>
         </article>`;
     })
     .join("");
   const html = `
     <main style="font-family:Inter,Arial,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#0f172a">
-      <p style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#0f766e">PublisherIQ Opportunity Brief</p>
+      <p style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#0f766e">PublisherIQ · Daily Intelligence Desk</p>
       <h1 style="font-size:26px;line-height:1.2">${escapeHtml(header)}</h1>
       ${cards}
       ${
@@ -360,12 +419,12 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
           ? `<p style="margin-top:20px;color:#475569">${escapeHtml(truncationNotice)}</p>`
           : ""
       }
-      <p style="margin-top:24px"><a href="${escapeHtml(work.overviewUrl)}" style="color:#0f766e;font-weight:600">Open the complete daily overview</a></p>
+      <p style="margin-top:24px"><a href="${escapeHtml(work.overviewUrl)}" style="color:#0f766e;font-weight:600">Open Daily Intelligence Desk</a></p>
     </main>`;
   const slackBlocks: Array<Record<string, unknown>> = [
     {
       text: {
-        text: `*${header}*\n<${work.overviewUrl}|Open the complete daily overview>`,
+        text: `*${header}*\n<${work.overviewUrl}|Open Daily Intelligence Desk>`,
         type: "mrkdwn",
       },
       type: "section",
@@ -380,11 +439,13 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
       : []),
     ...work.results.flatMap((result) => {
       const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
+      const name = decodeOpportunityText(result.name);
+      const summary = decodeOpportunityText(result.changeSummary);
       return [
         { type: "divider" },
         {
           text: {
-            text: `*<${link}|${escapeSlackMrkdwn(result.name)}>* · ${humanize(result.eventLabel)}\n${escapeSlackMrkdwn(result.whyNow)}\n_${humanize(result.marketPotential)} market potential_`,
+            text: `*<${link}|${escapeSlackMrkdwn(name)}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(summary)}\n_${potentialLabel(result.marketPotential)} market potential_`,
             type: "mrkdwn",
           },
           type: "section",

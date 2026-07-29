@@ -4,6 +4,7 @@ import {
   calculateOpportunityMarketContext,
   calculateOpportunityPresetHealth,
   calculateOpportunityRanking,
+  describeOpportunityChange,
 } from "./intelligence.js";
 import {
   evaluateOpportunityProfile,
@@ -12,6 +13,7 @@ import {
 import type {
   OpportunityEvaluationInput,
   OpportunityFieldValue,
+  OpportunityMaterialEventType,
   OpportunityProfileEvaluation,
   OpportunityRankComponents,
   OpportunityResultLabel,
@@ -137,26 +139,20 @@ function stableFingerprint(values: string[]): string {
 
 function eventDescription(event: OpportunityWorkerMaterialEvent): string {
   return (
-    {
-      announcement: "A new official Steam announcement was published.",
-      business_model_changed: "The game's price or business model changed.",
-      ccu_breakthrough:
-        "The game crossed an important concurrent-player milestone.",
-      demo_added: "A playable demo became available.",
-      developer_changed: "The listed developer changed.",
-      first_observed: "PublisherIQ identified this game on Steam.",
-      material_change: "An important Steam detail changed.",
-      platform_expanded:
-        "The game expanded its platform or controller support.",
-      publisher_changed: "The listed publisher changed.",
-      release_timing_changed: "The announced release date changed.",
-      released: "The game was released on Steam.",
-      review_breakthrough: "Steam reviews crossed an important milestone.",
-      store_readiness_improved:
-        "The Steam store page added an important sales asset.",
-      taxonomy_repositioned: "The game's Steam positioning changed.",
-      tracked_update: "A tracked title received a subscribed update.",
-    }[event.eventType] ?? "An important Steam detail changed."
+    event.summary ??
+    describeOpportunityChange(
+      {
+        affectedRuleFields: event.affectedRuleFields ?? [],
+        after: event.after ?? null,
+        before: event.before ?? null,
+        confidence: event.confidence ?? "directional",
+        effectiveAt: event.effectiveAt,
+        eventType: event.eventType as OpportunityMaterialEventType,
+        observedAt: event.observedAt,
+        signalFamily: event.signalFamily,
+      },
+      "materially_changed",
+    )
   );
 }
 

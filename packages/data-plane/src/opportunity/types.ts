@@ -412,11 +412,13 @@ export interface OpportunityObservedChange {
   eventType: OpportunityMaterialEventType;
   observedAt: string;
   signalFamily: OpportunitySignalFamily;
+  summary?: string;
 }
 
 export interface OpportunityResultSummary {
   appid: number;
   change: OpportunityObservedChange | null;
+  changeSummary: string;
   confidence: OpportunityConfidence;
   createdAt: string;
   eventLabel: OpportunityResultLabel;

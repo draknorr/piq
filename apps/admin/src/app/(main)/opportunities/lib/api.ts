@@ -1,5 +1,4 @@
 import type {
-  OpportunityObservedChange,
   OpportunityResultSummary,
   OpportunityRuleField,
   OpportunityRuleOperator,
@@ -23,12 +22,6 @@ export async function opportunityPost<T>(
     );
   }
   return payload as T;
-}
-
-export function humanizeOpportunity(value: string): string {
-  return value
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function formatOpportunityDate(value: string | null): string {
@@ -92,9 +85,7 @@ const FIELD_LABELS: Record<OpportunityRuleField, string> = {
 };
 
 export function opportunityFieldLabel(field: string): string {
-  return (
-    FIELD_LABELS[field as OpportunityRuleField] ?? humanizeOpportunity(field)
-  );
+  return FIELD_LABELS[field as OpportunityRuleField] ?? "Game information";
 }
 
 const METRIC_LABELS: Record<string, string> = {
@@ -124,67 +115,19 @@ function parseMaybeJson(value: unknown): unknown {
     return value;
   }
   const trimmed = value.trim();
-  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+  if (
+    !(
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    )
+  ) {
     return value;
   }
   try {
     return JSON.parse(trimmed) as unknown;
   } catch {
-    return undefined;
+    return value;
   }
-}
-
-function findNestedValue(
-  input: unknown,
-  aliases: string[],
-  depth = 0,
-): unknown {
-  if (depth > 5) {
-    return undefined;
-  }
-  const value = parseMaybeJson(input);
-  const aliasTokens = new Set(aliases.map(keyToken));
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (item && typeof item === "object") {
-        const match = findNestedValue(item, aliases, depth + 1);
-        if (match !== undefined) {
-          return match;
-        }
-      }
-    }
-    if (value.length === 1) {
-      return parseMaybeJson(value[0]);
-    }
-    if (
-      value.length > 0 &&
-      value.every(
-        (item) =>
-          item === null ||
-          ["boolean", "number", "string"].includes(typeof item),
-      )
-    ) {
-      return value;
-    }
-    return undefined;
-  }
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>);
-    const direct = entries.find(([key]) => aliasTokens.has(keyToken(key)));
-    if (direct) {
-      return parseMaybeJson(direct[1]);
-    }
-    for (const [, nested] of entries) {
-      if (nested && typeof nested === "object") {
-        const match = findNestedValue(nested, aliases, depth + 1);
-        if (match !== undefined) {
-          return match;
-        }
-      }
-    }
-    return undefined;
-  }
-  return value;
 }
 
 function asStringList(value: unknown): string[] | null {
@@ -215,24 +158,11 @@ function asStringList(value: unknown): string[] | null {
   return [String(parsed)];
 }
 
-function listDifference(left: string[], right: string[]): string[] {
-  const rightValues = new Set(right.map((item) => item.toLocaleLowerCase()));
-  return left.filter((item) => !rightValues.has(item.toLocaleLowerCase()));
-}
-
 function joinNatural(items: string[]): string {
   if (items.length === 0) return "";
   if (items.length === 1) return items[0]!;
   if (items.length === 2) return `${items[0]} and ${items[1]}`;
   return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
-}
-
-function readablePlatform(value: string): string {
-  const token = keyToken(value);
-  if (["mac", "macos", "osx"].includes(token)) return "macOS";
-  if (["win", "windows"].includes(token)) return "Windows";
-  if (token === "linux") return "Linux";
-  return humanizeOpportunity(value);
 }
 
 function formatCurrency(value: unknown): string | null {
@@ -277,247 +207,6 @@ function formatCompactValue(value: unknown): string | null {
   return String(parsed);
 }
 
-function fieldValue(
-  change: OpportunityObservedChange,
-  side: "after" | "before",
-  field: OpportunityRuleField,
-  aliases: string[] = [],
-): unknown {
-  const source = change[side];
-  const found = findNestedValue(source, [field, ...aliases]);
-  if (found !== undefined) {
-    if (
-      Array.isArray(found) &&
-      ![
-        "categories",
-        "content_descriptors",
-        "developer",
-        "genres",
-        "languages",
-        "platforms",
-        "publisher",
-        "tags",
-      ].includes(field)
-    ) {
-      return side === "before" ? found[0] : found.at(-1);
-    }
-    return found;
-  }
-  if (change.affectedRuleFields.length === 1) {
-    return findNestedValue(source, ["value"]);
-  }
-  return undefined;
-}
-
-function describePartyChange(
-  change: OpportunityObservedChange,
-  kind: "developer" | "publisher",
-): string {
-  const label = kind === "developer" ? "Developer" : "Publisher";
-  const aliases =
-    kind === "developer"
-      ? ["developers", "developer_names", "developerName"]
-      : ["publishers", "publisher_names", "publisherName"];
-  const before =
-    asStringList(fieldValue(change, "before", kind, aliases)) ?? [];
-  const after = asStringList(fieldValue(change, "after", kind, aliases)) ?? [];
-  const added = listDifference(after, before);
-  const removed = listDifference(before, after);
-
-  if (
-    before.length > 0 &&
-    after.length > 0 &&
-    (added.length || removed.length)
-  ) {
-    return `${label} changed from ${joinNatural(before)} to ${joinNatural(after)}.`;
-  }
-  if (added.length > 0) {
-    return `${label} ${joinNatural(added)} ${added.length === 1 ? "was" : "were"} added.`;
-  }
-  if (removed.length > 0) {
-    return `${label} ${joinNatural(removed)} ${removed.length === 1 ? "was" : "were"} removed.`;
-  }
-  if (after.length > 0) {
-    return `${label} changed to ${joinNatural(after)}; the prior ${kind} is not available in the stored evidence.`;
-  }
-  return `The listed ${kind} changed, but the stored evidence does not contain both names.`;
-}
-
-function describeTaxonomyChange(change: OpportunityObservedChange): string {
-  const field =
-    change.affectedRuleFields.find((candidate) =>
-      ["tags", "genres", "categories"].includes(candidate),
-    ) ?? "tags";
-  const before = asStringList(fieldValue(change, "before", field)) ?? [];
-  const after = asStringList(fieldValue(change, "after", field)) ?? [];
-  const added = listDifference(after, before);
-  const removed = listDifference(before, after);
-  const label = opportunityFieldLabel(field);
-  if (added.length > 0 && removed.length > 0) {
-    return `${label} changed: added ${joinNatural(added)}; removed ${joinNatural(removed)}.`;
-  }
-  if (added.length > 0) {
-    return `${label} added: ${joinNatural(added)}.`;
-  }
-  if (removed.length > 0) {
-    return `${label} removed: ${joinNatural(removed)}.`;
-  }
-  return `The game's ${label.toLocaleLowerCase()} changed, but exact additions and removals are not available in the stored evidence.`;
-}
-
-function describePlatformChange(change: OpportunityObservedChange): string {
-  const before =
-    asStringList(
-      fieldValue(change, "before", "platforms", [
-        "supported_platforms",
-        "platform",
-      ]),
-    ) ?? [];
-  const after =
-    asStringList(
-      fieldValue(change, "after", "platforms", [
-        "supported_platforms",
-        "platform",
-      ]),
-    ) ?? [];
-  const added = listDifference(after, before).map(readablePlatform);
-  const removed = listDifference(before, after).map(readablePlatform);
-  if (added.length > 0 && removed.length === 0) {
-    return `${joinNatural(added)} support was added.`;
-  }
-  if (removed.length > 0 && added.length === 0) {
-    return `${joinNatural(removed)} support was removed.`;
-  }
-  if (added.length > 0 || removed.length > 0) {
-    return `Platform support changed: added ${joinNatural(added)}; removed ${joinNatural(removed)}.`;
-  }
-  const controllerBefore = fieldValue(change, "before", "controller_support");
-  const controllerAfter = fieldValue(change, "after", "controller_support");
-  if (controllerAfter !== undefined && controllerBefore !== controllerAfter) {
-    return `Controller support changed from ${formatCompactValue(controllerBefore) ?? "an unknown setting"} to ${formatCompactValue(controllerAfter) ?? "an unknown setting"}.`;
-  }
-  return "Platform or controller support changed; the exact setting is not available in the stored evidence.";
-}
-
-function describeMetricChange(
-  change: OpportunityObservedChange,
-  field: "ccu_peak" | "total_reviews",
-): string {
-  const before = Number(fieldValue(change, "before", field));
-  const after = Number(fieldValue(change, "after", field));
-  const label = opportunityFieldLabel(field);
-  if (Number.isFinite(before) && Number.isFinite(after)) {
-    const direction = after >= before ? "increased" : "decreased";
-    return `${label} ${direction} from ${before.toLocaleString()} to ${after.toLocaleString()}.`;
-  }
-  if (Number.isFinite(after)) {
-    return `${label} reached ${after.toLocaleString()}.`;
-  }
-  return `${label} crossed an important milestone.`;
-}
-
-export function describeOpportunityChange(
-  change: OpportunityObservedChange | null,
-): string {
-  if (!change) {
-    return "PublisherIQ identified a new sourcing signal, but no before-and-after snapshot is linked.";
-  }
-  switch (change.eventType) {
-    case "developer_changed":
-      return describePartyChange(change, "developer");
-    case "publisher_changed":
-      return describePartyChange(change, "publisher");
-    case "demo_added":
-      return "A playable demo was added.";
-    case "release_timing_changed": {
-      const before = fieldValue(change, "before", "release_date", [
-        "release_date_raw",
-        "releaseDate",
-      ]);
-      const after = fieldValue(change, "after", "release_date", [
-        "release_date_raw",
-        "releaseDate",
-      ]);
-      if (before !== undefined && after !== undefined) {
-        return `Release date moved from ${formatOpportunityDay(String(before))} to ${formatOpportunityDay(String(after))}.`;
-      }
-      if (after !== undefined) {
-        return `Release date moved to ${formatOpportunityDay(String(after))}; the prior date is not available in the stored evidence.`;
-      }
-      return "The announced release date changed, but both dates are not available in the stored evidence.";
-    }
-    case "business_model_changed": {
-      const beforePrice = fieldValue(change, "before", "price_cents", [
-        "current_price_cents",
-        "price",
-      ]);
-      const afterPrice = fieldValue(change, "after", "price_cents", [
-        "current_price_cents",
-        "price",
-      ]);
-      const previous = formatCurrency(beforePrice);
-      const next = formatCurrency(afterPrice);
-      if (previous && next && previous !== next) {
-        return `Price changed from ${previous} to ${next}.`;
-      }
-      const wasFree = fieldValue(change, "before", "is_free");
-      const isFree = fieldValue(change, "after", "is_free");
-      if (wasFree === false && isFree === true) {
-        return "The game became free to play.";
-      }
-      if (wasFree === true && isFree === false) {
-        return "The game moved from free to play to a paid model.";
-      }
-      const hadPackage = fieldValue(change, "before", "has_purchase_packages");
-      const hasPackage = fieldValue(change, "after", "has_purchase_packages");
-      if (hadPackage === false && hasPackage === true) {
-        return "A Steam purchase option was added.";
-      }
-      return "The game's price or business model changed, but the stored evidence does not support a more exact comparison.";
-    }
-    case "platform_expanded":
-      return describePlatformChange(change);
-    case "taxonomy_repositioned":
-      return describeTaxonomyChange(change);
-    case "released":
-      return "The game was released on Steam.";
-    case "first_observed":
-      return "PublisherIQ first identified this game on Steam.";
-    case "announcement": {
-      const title = findNestedValue(change.after, [
-        "title",
-        "headline",
-        "announcement_title",
-      ]);
-      return typeof title === "string" && title.trim()
-        ? `“${title.trim()}” was announced on Steam.`
-        : "A new official Steam announcement was published.";
-    }
-    case "review_breakthrough":
-      return describeMetricChange(change, "total_reviews");
-    case "ccu_breakthrough":
-      return describeMetricChange(change, "ccu_peak");
-    case "store_readiness_improved":
-      return "The Steam store page added an important sales asset.";
-    case "material_change": {
-      const field = change.affectedRuleFields[0];
-      if (field) {
-        const before = fieldValue(change, "before", field);
-        const after = fieldValue(change, "after", field);
-        if (
-          before !== undefined &&
-          after !== undefined &&
-          formatCompactValue(before) !== formatCompactValue(after)
-        ) {
-          return `${opportunityFieldLabel(field)} changed from ${formatCompactValue(before) ?? "an unknown value"} to ${formatCompactValue(after) ?? "an unknown value"}.`;
-        }
-        return `${opportunityFieldLabel(field)} changed; the stored evidence does not contain both values.`;
-      }
-      return "An important Steam detail changed.";
-    }
-  }
-}
-
 export function opportunityWhyItMatters(
   result: OpportunityResultSummary,
 ): string {
@@ -544,7 +233,7 @@ export function opportunityPotentialLabel(
       large_but_competitive: "Large, competitive market",
       limited: "Selective",
       meaningful: "Meaningful",
-    }[value] ?? humanizeOpportunity(value)
+    }[value] ?? "Developing"
   );
 }
 

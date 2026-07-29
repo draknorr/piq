@@ -21,9 +21,7 @@ import {
 
 import { ProfileBuilder } from "./ProfileBuilder";
 import {
-  describeOpportunityChange,
   formatOpportunityDate,
-  humanizeOpportunity,
   opportunityConfidenceExplanation,
   opportunityConfidenceLabel,
   opportunityPost,
@@ -79,6 +77,52 @@ function presetMarketLabel(state: string | null): string {
   return labels[state ?? ""] ?? "Market history is developing";
 }
 
+function briefStatusLabel(
+  status: OpportunityBootstrap["dailyOverview"]["status"],
+): string {
+  return {
+    empty: "Complete",
+    failed: "Needs attention",
+    not_run: "Waiting for first brief",
+    ready: "Ready",
+    running: "Updating",
+  }[status];
+}
+
+function profileStatusLabel(status: string): string {
+  return (
+    {
+      archived: "Archived",
+      draft: "Draft",
+      enabled: "Active",
+      paused: "Paused",
+    }[status] ?? "Saved"
+  );
+}
+
+function sourceStatusLabel(status: string): string {
+  return (
+    {
+      blocked: "Unavailable",
+      delayed: "Delayed",
+      healthy: "Current",
+    }[status] ?? "Checking"
+  );
+}
+
+function marketHealthLabel(status: string): string {
+  return (
+    {
+      active: "Steady",
+      cooling: "Cooling",
+      growing: "Growing",
+      insufficient_data: "Still developing",
+      quiet: "Quiet",
+      surging: "Surging",
+    }[status] ?? "Updated"
+  );
+}
+
 export function OpportunityWorkspace() {
   const [data, setData] = useState<OpportunityBootstrap | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>("brief");
@@ -94,11 +138,9 @@ export function OpportunityWorkspace() {
     setError(null);
     try {
       setData(await opportunityPost<OpportunityBootstrap>("bootstrap"));
-    } catch (nextError) {
+    } catch {
       setError(
-        nextError instanceof Error
-          ? nextError.message
-          : "The opportunity service is unavailable.",
+        "PublisherIQ could not load your sourcing brief. Please try again.",
       );
     } finally {
       setLoading(false);
@@ -119,10 +161,8 @@ export function OpportunityWorkspace() {
         }),
       );
       setBuilderOpen(true);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Profile unavailable.",
-      );
+    } catch {
+      setError("PublisherIQ could not open this profile. Please try again.");
     } finally {
       setLoadingProfile(false);
     }
@@ -151,10 +191,8 @@ export function OpportunityWorkspace() {
       );
       await load();
       await openProfile(version.profileId);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Preset clone failed.",
-      );
+    } catch {
+      setError("PublisherIQ could not copy this preset. Please try again.");
     } finally {
       setLoadingProfile(false);
     }
@@ -201,7 +239,7 @@ export function OpportunityWorkspace() {
             Opportunity Brief
           </p>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-text-primary">
-            The intelligence desk is not connected yet.
+            Daily Intelligence Desk
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">
             {error ??
@@ -231,16 +269,8 @@ export function OpportunityWorkspace() {
                 Custom Steam sourcing
               </div>
               <h1 className="mt-3 max-w-4xl text-[clamp(2rem,5vw,4.4rem)] font-medium leading-[0.94] tracking-[-0.045em] text-text-primary">
-                Daily opportunity
-                <span className="block text-text-tertiary">
-                  intelligence desk.
-                </span>
+                Daily Intelligence Desk
               </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-text-secondary">
-                See the Steam games that newly match your strategy, the changes
-                that made them relevant, and the market evidence behind each
-                opportunity.
-              </p>
             </div>
             <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted">
               <DispatchMetric label="Today" value={String(resultCount)} />
@@ -384,7 +414,7 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
               {hasResults
-                ? `${overview.matchedCount} signals worth opening`
+                ? `${overview.matchedCount} ${overview.matchedCount === 1 ? "game" : "games"} worth reviewing`
                 : overview.status === "not_run"
                   ? "Your first brief is waiting"
                   : "A quiet coverage window"}
@@ -405,7 +435,7 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
                     : "text-semantic-success"
               }`}
             />
-            {humanizeOpportunity(overview.status)}
+            {briefStatusLabel(overview.status)}
           </div>
         </div>
 
@@ -416,7 +446,7 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
               <h3 className="mt-5 text-xl font-semibold text-text-primary">
                 {overview.status === "not_run"
                   ? "Start with a maintained preset"
-                  : "No games crossed your event and rule gates"}
+                  : "No new games matched your criteria"}
               </h3>
               <p className="mt-2 text-sm leading-6 text-text-tertiary">
                 No new game crossed your sourcing criteria in this brief. Your
@@ -486,7 +516,7 @@ function ResultSection({
                 {result.name}
               </h4>
               <p className="mt-2 max-w-3xl text-base font-medium leading-6 text-text-primary">
-                {describeOpportunityChange(result.change)}
+                {result.changeSummary}
               </p>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">
                 {opportunityWhyItMatters(result)}
@@ -539,7 +569,7 @@ function ResultSection({
 }
 
 function BriefRail({ data }: { data: OpportunityBootstrap }) {
-  const canSeeDiagnostics =
+  const canSeeCoverage =
     data.workspace.role === "owner" || data.workspace.role === "admin";
   return (
     <aside className="border-t border-border-subtle bg-surface-sunken px-5 py-7 lg:border-l lg:border-t-0 lg:px-6 lg:py-10">
@@ -565,10 +595,10 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
           Profiles, tracking, dismissals, and delivery settings remain personal.
         </p>
       </section>
-      {canSeeDiagnostics && (
+      {canSeeCoverage && (
         <details className="mt-8 border-t border-border-muted pt-7">
           <summary className="cursor-pointer text-xs font-semibold text-text-tertiary transition hover:text-text-primary">
-            Data status
+            Coverage status
           </summary>
           <div className="mt-4 space-y-3">
             {data.sourceHealth.map((source) => (
@@ -577,10 +607,10 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
                 className="flex items-center justify-between gap-3"
               >
                 <span className="truncate text-xs text-text-secondary">
-                  {humanizeOpportunity(source.label)}
+                  {source.label}
                 </span>
                 <span className="text-[10px] uppercase text-text-muted">
-                  {source.state}
+                  {sourceStatusLabel(source.state)}
                 </span>
               </div>
             ))}
@@ -611,8 +641,8 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
                       </p>
                       <span className="text-[10px] uppercase text-accent-primary">
                         {change.priorState
-                          ? `${humanizeOpportunity(change.priorState)} → ${humanizeOpportunity(change.state)}`
-                          : humanizeOpportunity(change.state)}
+                          ? `${marketHealthLabel(change.priorState)} → ${marketHealthLabel(change.state)}`
+                          : marketHealthLabel(change.state)}
                       </span>
                     </div>
                     <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-muted">
@@ -705,7 +735,7 @@ function ProfilesDesk({
                             : "bg-surface-sunken text-text-tertiary"
                         }`}
                       >
-                        {profile.status}
+                        {profileStatusLabel(profile.status)}
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-text-tertiary">
@@ -850,10 +880,8 @@ function DeliveryDesk({
         `${channel === "email" ? "Email" : "Slack"} delivery updated.`,
       );
       await onChanged();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Delivery update failed.",
-      );
+    } catch {
+      setMessage("PublisherIQ could not update delivery. Please try again.");
     } finally {
       setSaving(null);
     }
@@ -998,7 +1026,7 @@ function DeliveryDesk({
                 Immediate full matches
               </span>
               <span className="mt-1 block text-xs text-text-tertiary">
-                First-observed games only.
+                Only games newly identified on Steam.
               </span>
             </span>
           </label>

@@ -11,11 +11,14 @@ import {
 import type {
   OpportunityCohortMember,
   OpportunityEvaluationInput,
+  OpportunityConfidence,
   OpportunityMarketContext,
+  OpportunityMaterialEventType,
   OpportunityProfileEvaluation,
   OpportunityRankingEvidence,
   OpportunityResultLabel,
   OpportunityRuleSet,
+  OpportunityRuleField,
   OpportunitySignalFamily,
   OpportunityPresetHealthSnapshot,
   OpportunityPresetHealthState,
@@ -31,7 +34,10 @@ import {
   OPPORTUNITY_MATERIALITY_VERSION,
   OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
 } from "./types.js";
-import { OpportunityRepository } from "./repository.js";
+import {
+  OpportunityRepository,
+  presentOpportunityChanges,
+} from "./repository.js";
 
 const COHORT_FEATURE_PAGE_SIZE = 25_000;
 const COHORT_FEATURE_MAX_ROWS = 250_000;
@@ -70,17 +76,22 @@ export interface OpportunityWorkerProfile {
 }
 
 export interface OpportunityWorkerMaterialEvent {
+  affectedRuleFields?: OpportunityRuleField[];
+  after?: unknown;
   appid: number;
+  before?: unknown;
+  confidence?: OpportunityConfidence;
   createsDailyResult: boolean;
   effectiveAt: string;
   eligibleForImmediate: boolean;
   eventFingerprint: string;
-  eventType: string;
+  eventType: OpportunityMaterialEventType;
   id: string;
   materiality: number;
   observedAt: string;
   reevaluateEligibility: boolean;
   signalFamily: OpportunitySignalFamily;
+  summary?: string;
 }
 
 export interface OpportunityPriorUserState {
@@ -1383,11 +1394,15 @@ export class OpportunityWorkerRepository {
     const result = await this.pool.query<
       QueryResultRow & {
         appid: number;
+        affected_rule_fields: OpportunityRuleField[];
+        after_summary: unknown;
+        before_summary: unknown;
+        confidence: OpportunityConfidence;
         creates_daily_result: boolean;
         effective_at: Date | string;
         eligible_for_immediate: boolean;
         event_fingerprint: string;
-        event_type: string;
+        event_type: OpportunityMaterialEventType;
         id: string;
         materiality: string | number;
         observed_at: Date | string;
@@ -1401,6 +1416,10 @@ export class OpportunityWorkerRepository {
           appid,
           event_type,
           signal_family,
+          affected_rule_fields,
+          before_summary,
+          after_summary,
+          confidence,
           effective_at,
           observed_at,
           event_fingerprint,
@@ -1423,8 +1442,27 @@ export class OpportunityWorkerRepository {
       `,
       [run.windowStart, run.windowEnd, appid ?? null, materialEventId ?? null],
     );
-    return result.rows.map((row) => ({
+    const changes = await presentOpportunityChanges(
+      this.pool,
+      result.rows.map((row) => ({
+        affectedRuleFields: row.affected_rule_fields,
+        after: row.after_summary,
+        before: row.before_summary,
+        confidence: row.confidence,
+        effectiveAt: iso(row.effective_at),
+        eventType: row.event_type,
+        observedAt: iso(row.observed_at),
+        signalFamily: row.signal_family,
+        summary: "",
+      })),
+      result.rows.map(() => "materially_changed" as const),
+    );
+    return result.rows.map((row, index) => ({
+      affectedRuleFields: row.affected_rule_fields,
+      after: row.after_summary,
       appid: row.appid,
+      before: row.before_summary,
+      confidence: row.confidence,
       createsDailyResult: row.creates_daily_result,
       effectiveAt: iso(row.effective_at),
       eligibleForImmediate: row.eligible_for_immediate,
@@ -1435,6 +1473,9 @@ export class OpportunityWorkerRepository {
       observedAt: iso(row.observed_at),
       reevaluateEligibility: row.reevaluate_eligibility,
       signalFamily: row.signal_family,
+      summary:
+        changes[index]?.summary ??
+        "Steam recorded a change, but the affected field is unavailable.",
     }));
   }
 
