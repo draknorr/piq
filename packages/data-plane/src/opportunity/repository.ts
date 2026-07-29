@@ -2208,6 +2208,7 @@ export class OpportunityRepository {
 
   async getRuleInputsLegacy(
     appids: number[],
+    client: PoolClient | null = null,
   ): Promise<OpportunityEvaluationInput[]> {
     const bounded = Array.from(
       new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
@@ -2215,14 +2216,14 @@ export class OpportunityRepository {
     if (bounded.length === 0) {
       return [];
     }
-    const result = await this.pool.query<RuleInputRow>(
-      `
+    const sql = `
         ${RULE_INPUT_SELECT}
         WHERE a.appid = ANY($1::integer[])
         ORDER BY a.appid
-      `,
-      [bounded],
-    );
+      `;
+    const result = client
+      ? await client.query<RuleInputRow>(sql, [bounded])
+      : await this.pool.query<RuleInputRow>(sql, [bounded]);
     return result.rows.map(buildOpportunityRuleInput);
   }
 

@@ -47,6 +47,9 @@ interface StoredCohortRow extends QueryResultRow {
   source_at: Date | string | null;
 }
 
+const COLD_TARGET_MS = 3 * 60 * 1000;
+const WARM_TARGET_MS = 60 * 1000;
+
 function requiredEnvironment(name: "TIGER_PRIMARY_URL"): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -292,6 +295,27 @@ async function runShadow(
   const inputs = await productRepository.getRuleInputsShadow(appids, client);
   const inputPreparationMs = performance.now() - inputStartedAt;
 
+  const inputParityStartedAt = performance.now();
+  const legacyInputs = await productRepository.getRuleInputsLegacy(
+    appids,
+    client,
+  );
+  const legacyInputByAppid = new Map(
+    legacyInputs.map((input) => [input.appid, input]),
+  );
+  const exactInputMatches = inputs.filter(
+    (input) => digest(input) === digest(legacyInputByAppid.get(input.appid)),
+  ).length;
+  if (
+    legacyInputs.length !== inputs.length ||
+    exactInputMatches !== inputs.length
+  ) {
+    throw new Error(
+      `Opportunity rule-input parity failed: ${exactInputMatches}/${inputs.length} exact matches against ${legacyInputs.length} legacy inputs.`,
+    );
+  }
+  const inputParityMs = performance.now() - inputParityStartedAt;
+
   const profileStartedAt = performance.now();
   const candidateEvaluations = inputs.flatMap((input) =>
     profileRows.rows.map((profile) => ({
@@ -311,6 +335,40 @@ async function runShadow(
     { eligible: 0, ineligible: 0, pending: 0 },
   );
   const profileEvaluationMs = performance.now() - profileStartedAt;
+
+  const profileParityStartedAt = performance.now();
+  const legacyEvaluations = legacyInputs.flatMap((input) =>
+    profileRows.rows.map((profile) => ({
+      appid: input.appid,
+      evaluation: evaluateOpportunityProfile(profile.rules, input),
+      profileId: profile.id,
+      profileVersionId: profile.version_id,
+    })),
+  );
+  const legacyEvaluationByKey = new Map(
+    legacyEvaluations.map((candidate) => [
+      `${candidate.appid}:${candidate.profileVersionId}`,
+      candidate,
+    ]),
+  );
+  const exactProfileEvaluationMatches = candidateEvaluations.filter(
+    (candidate) =>
+      digest(candidate) ===
+      digest(
+        legacyEvaluationByKey.get(
+          `${candidate.appid}:${candidate.profileVersionId}`,
+        ),
+      ),
+  ).length;
+  if (
+    legacyEvaluations.length !== candidateEvaluations.length ||
+    exactProfileEvaluationMatches !== candidateEvaluations.length
+  ) {
+    throw new Error(
+      `Opportunity profile-evaluation parity failed: ${exactProfileEvaluationMatches}/${candidateEvaluations.length} exact matches against ${legacyEvaluations.length} legacy evaluations.`,
+    );
+  }
+  const profileParityMs = performance.now() - profileParityStartedAt;
 
   const inputByAppid = new Map(inputs.map((input) => [input.appid, input]));
   const resultInputs = resultAppids.flatMap((appid) => {
@@ -430,6 +488,37 @@ async function runShadow(
       marketCalculationMs +
       persistenceMs,
   };
+  const coldCacheFillTimings = cacheValidation
+    ? {
+        ...timings,
+        cohortResolutionMs:
+          cohortResolutionMs + cacheValidation.persistenceMs,
+        totalMs: timings.totalMs + cacheValidation.persistenceMs,
+      }
+    : null;
+  const warmCacheTimings = cacheValidation
+    ? {
+        ...timings,
+        cohortResolutionMs: cacheValidation.readMs,
+        totalMs:
+          inputPreparationMs +
+          profileEvaluationMs +
+          cacheValidation.readMs +
+          marketCalculationMs +
+          persistenceMs,
+      }
+    : null;
+  const measuredColdMs = coldCacheFillTimings?.totalMs ?? timings.totalMs;
+  if (measuredColdMs > COLD_TARGET_MS) {
+    throw new Error(
+      `Opportunity cold shadow exceeded ${COLD_TARGET_MS}ms: ${measuredColdMs}ms.`,
+    );
+  }
+  if (warmCacheTimings && warmCacheTimings.totalMs > WARM_TARGET_MS) {
+    throw new Error(
+      `Opportunity warm shadow exceeded ${WARM_TARGET_MS}ms: ${warmCacheTimings.totalMs}ms.`,
+    );
+  }
 
   return {
     candidateEvaluations: candidateEvaluations.length,
@@ -441,6 +530,34 @@ async function runShadow(
     },
     outcomeCounts,
     profileCount: profileRows.rowCount,
+    parity: {
+      profileEvaluations: {
+        compared: candidateEvaluations.length,
+        exactMatches: exactProfileEvaluationMatches,
+      },
+      ruleInputs: {
+        compared: inputs.length,
+        exactMatches: exactInputMatches,
+      },
+      validationOverheadMs: {
+        profileEvaluation: profileParityMs,
+        ruleInput: inputParityMs,
+      },
+    },
+    performanceTargets: {
+      cold: {
+        measuredMs: measuredColdMs,
+        passed: true,
+        targetMs: COLD_TARGET_MS,
+      },
+      warm: warmCacheTimings
+        ? {
+            measuredMs: warmCacheTimings.totalMs,
+            passed: true,
+            targetMs: WARM_TARGET_MS,
+          }
+        : null,
+    },
     readOnly: cachePool === null,
     resultLimit: limit,
     run: {
@@ -462,7 +579,9 @@ async function runShadow(
       exactMatches: storedSnapshotMatches,
       note: "Historical snapshots can differ when cohort sources changed after the run.",
     },
+    ...(coldCacheFillTimings ? { coldCacheFillTimings } : {}),
     timings,
+    ...(warmCacheTimings ? { warmCacheTimings } : {}),
   };
 }
 
