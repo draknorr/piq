@@ -4,7 +4,8 @@ import { OpportunityGameRecordClient } from "./OpportunityGameRecordClient";
 
 export const metadata: Metadata = {
   title: "Opportunity Record | PublisherIQ",
-  description: "A canonical, replayable Steam opportunity research record.",
+  description:
+    "A decision-ready Steam sourcing opportunity with change, fit, market, and evidence context.",
 };
 
 interface PageProps {

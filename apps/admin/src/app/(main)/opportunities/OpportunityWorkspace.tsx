@@ -21,9 +21,15 @@ import {
 
 import { ProfileBuilder } from "./ProfileBuilder";
 import {
+  describeOpportunityChange,
   formatOpportunityDate,
   humanizeOpportunity,
+  opportunityConfidenceExplanation,
+  opportunityConfidenceLabel,
   opportunityPost,
+  opportunityPotentialLabel,
+  opportunityStrengthLabel,
+  opportunityWhyItMatters,
 } from "./lib/api";
 import type {
   OpportunityBootstrap,
@@ -40,26 +46,38 @@ const RESULT_SECTIONS: Array<{
 }> = [
   {
     key: "newlyDiscovered",
-    kicker: "First observed",
+    kicker: "New to your search",
     title: "New discoveries",
   },
   {
     key: "newlyReleased",
-    kicker: "Release transition",
+    kicker: "Just launched",
     title: "Newly released",
   },
   {
     key: "newlyQualified",
-    kicker: "Criteria crossed",
+    kicker: "New match",
     title: "Newly qualified",
   },
   {
     key: "materiallyChanged",
-    kicker: "Subscribed signal",
+    kicker: "Commercial change",
     title: "Material changes",
   },
-  { key: "trackedUpdates", kicker: "Personal watch", title: "Tracked updates" },
+  { key: "trackedUpdates", kicker: "You follow", title: "Tracked updates" },
 ];
+
+function presetMarketLabel(state: string | null): string {
+  const labels: Record<string, string> = {
+    active: "Steady opportunity flow",
+    cooling: "Fewer new matches",
+    growing: "More matching games emerging",
+    insufficient_data: "Still gathering market history",
+    quiet: "Few recent matches",
+    surging: "Opportunity pool expanding quickly",
+  };
+  return labels[state ?? ""] ?? "Market history is developing";
+}
 
 export function OpportunityWorkspace() {
   const [data, setData] = useState<OpportunityBootstrap | null>(null);
@@ -164,6 +182,12 @@ export function OpportunityWorkspace() {
   const activeProfiles =
     data?.profiles.filter((profile) => profile.status === "enabled").length ??
     0;
+  const highConfidenceResults =
+    data === null
+      ? 0
+      : Object.values(data.dailyOverview.groups)
+          .flat()
+          .filter((result) => result.confidence === "high").length;
 
   if (loading && !data) {
     return <OpportunityLoading />;
@@ -181,7 +205,7 @@ export function OpportunityWorkspace() {
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">
             {error ??
-              "The query API or additive Tiger opportunity schema is unavailable in this environment."}
+              "PublisherIQ could not load your sourcing brief. Please try again."}
           </p>
           <button
             type="button"
@@ -213,8 +237,9 @@ export function OpportunityWorkspace() {
                 </span>
               </h1>
               <p className="mt-4 max-w-2xl text-sm leading-6 text-text-secondary">
-                Personal rules, durable Steam events, and released-market
-                context—assembled into one replayable research brief.
+                See the Steam games that newly match your strategy, the changes
+                that made them relevant, and the market evidence behind each
+                opportunity.
               </p>
             </div>
             <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted">
@@ -224,8 +249,8 @@ export function OpportunityWorkspace() {
                 value={String(activeProfiles)}
               />
               <DispatchMetric
-                label="Sources"
-                value={`${data.sourceHealth.filter((source) => source.state === "healthy").length}/${data.sourceHealth.length}`}
+                label="High confidence"
+                value={String(highConfidenceResults)}
               />
             </div>
           </div>
@@ -298,14 +323,14 @@ export function OpportunityWorkspace() {
         <div className="border-t border-border-muted bg-surface-raised lg:grid lg:grid-cols-[minmax(260px,0.33fr)_minmax(0,1fr)]">
           <div className="hidden px-8 py-12 lg:block">
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-muted">
-              Evaluation contract
+              How matching works
             </p>
             <ol className="mt-6 space-y-6">
               {[
-                ["01", "Wait for every required source field."],
-                ["02", "Apply required, preferred, and excluded logic."],
-                ["03", "Rank only eligible games against released peers."],
-                ["04", "Persist the event, evidence, versions, and result."],
+                ["01", "Check every must-have criterion you choose."],
+                ["02", "Reward strengths and screen for dealbreakers."],
+                ["03", "Compare qualified games with similar releases."],
+                ["04", "Show the evidence behind every recommendation."],
               ].map(([number, label]) => (
                 <li key={number} className="flex gap-4">
                   <span className="font-mono text-xs text-accent-primary">
@@ -336,7 +361,9 @@ export function OpportunityWorkspace() {
 function DispatchMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-[90px] bg-surface-elevated px-4 py-3">
-      <p className="font-mono text-xl text-text-primary">{value}</p>
+      <p className="text-xl font-semibold tabular-nums text-text-primary">
+        {value}
+      </p>
       <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">
         {label}
       </p>
@@ -353,8 +380,7 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-muted pb-6">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              Dispatch{" "}
-              {overview.runId ? overview.runId.slice(0, 8) : "not yet run"}
+              Your latest sourcing brief
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
               {hasResults
@@ -365,8 +391,8 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
             </h2>
             <p className="mt-2 text-sm text-text-tertiary">
               {overview.windowStart && overview.windowEnd
-                ? `${formatOpportunityDate(overview.windowStart)} — ${formatOpportunityDate(overview.windowEnd)}`
-                : "Enable a profile to schedule the first replayable evaluation."}
+                ? `Changes observed from ${formatOpportunityDate(overview.windowStart)} through ${formatOpportunityDate(overview.windowEnd)}`
+                : "Enable a sourcing profile to receive your first brief."}
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border-muted px-3 py-1.5 text-xs text-text-secondary">
@@ -393,9 +419,9 @@ function DailyBrief({ data }: { data: OpportunityBootstrap }) {
                   : "No games crossed your event and rule gates"}
               </h3>
               <p className="mt-2 text-sm leading-6 text-text-tertiary">
-                Quiet is useful evidence. PublisherIQ preserves the coverage
-                window and will catch up after failures instead of advancing the
-                cursor.
+                No new game crossed your sourcing criteria in this brief. Your
+                enabled profiles will keep watching Steam for meaningful
+                changes.
               </p>
             </div>
           </div>
@@ -440,7 +466,7 @@ function ResultSection({
             {title}
           </h3>
         </div>
-        <span className="font-mono text-xs text-text-muted">
+        <span className="text-xs tabular-nums text-text-muted">
           {results.length}
         </span>
       </div>
@@ -450,47 +476,61 @@ function ResultSection({
             key={result.id}
             href={`/opportunities/games/${result.appid}?result=${result.id}`}
             prefetch={false}
-            className="group grid gap-4 py-5 transition hover:bg-surface-elevated/45 md:grid-cols-[48px_minmax(0,1fr)_170px_24px] md:px-2"
+            className="group grid gap-5 py-6 transition hover:bg-surface-elevated/45 md:grid-cols-[36px_minmax(0,1fr)_210px_24px] md:px-2"
           >
-            <span className="font-mono text-sm text-text-muted">
+            <span className="text-sm tabular-nums text-text-muted">
               {result.rank ? String(result.rank).padStart(2, "0") : "—"}
             </span>
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h4 className="truncate text-base font-semibold text-text-primary">
-                  {result.name}
-                </h4>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                    result.confidence === "high"
-                      ? "bg-semantic-success-muted text-semantic-success-text"
-                      : "bg-semantic-warning-muted text-semantic-warning"
-                  }`}
+              <h4 className="truncate text-base font-semibold text-text-primary">
+                {result.name}
+              </h4>
+              <p className="mt-2 max-w-3xl text-base font-medium leading-6 text-text-primary">
+                {describeOpportunityChange(result.change)}
+              </p>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">
+                {opportunityWhyItMatters(result)}
+              </p>
+              {result.matchedProfiles.length > 0 && (
+                <p className="mt-3 text-xs text-text-tertiary">
+                  <span className="font-semibold text-text-secondary">
+                    Matches your sourcing profile:
+                  </span>{" "}
+                  {result.matchedProfiles
+                    .map((profile) => profile.name)
+                    .join(", ")}
+                </p>
+              )}
+            </div>
+            <div className="space-y-3 md:text-right">
+              <div>
+                <p className="text-sm font-semibold text-text-primary">
+                  {opportunityStrengthLabel(result.score)}
+                </p>
+                <p className="mt-0.5 text-xs tabular-nums text-text-tertiary">
+                  Opportunity fit:{" "}
+                  {result.score === null
+                    ? "Not available"
+                    : `${Math.round(result.score)}/100`}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-text-secondary">
+                  Market potential:{" "}
+                  {opportunityPotentialLabel(result.marketPotential)}
+                </p>
+                <p
+                  className="mt-0.5 text-xs text-text-tertiary"
+                  title={opportunityConfidenceExplanation(result.confidence)}
                 >
-                  {result.confidence}
-                </span>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
-                {result.whyNow}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-tertiary">
-                {result.matchedProfiles.map((profile) => (
-                  <span key={profile.id}>{profile.name}</span>
-                ))}
-                {result.strongestEvidence.slice(0, 1).map((evidence) => (
-                  <span key={evidence}>• {evidence}</span>
-                ))}
+                  {opportunityConfidenceLabel(result.confidence)}
+                </p>
               </div>
             </div>
-            <div className="md:text-right">
-              <p className="font-mono text-lg text-text-primary">
-                {result.score?.toFixed(1) ?? "—"}
-              </p>
-              <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">
-                {humanizeOpportunity(result.marketPotential)}
-              </p>
-            </div>
-            <ArrowRight className="mt-1 h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary" />
+            <ArrowRight
+              aria-hidden="true"
+              className="mt-1 h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary"
+            />
           </Link>
         ))}
       </div>
@@ -499,38 +539,21 @@ function ResultSection({
 }
 
 function BriefRail({ data }: { data: OpportunityBootstrap }) {
+  const canSeeDiagnostics =
+    data.workspace.role === "owner" || data.workspace.role === "admin";
   return (
     <aside className="border-t border-border-subtle bg-surface-sunken px-5 py-7 lg:border-l lg:border-t-0 lg:px-6 lg:py-10">
       <section>
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-          Evaluation coverage
+          Your sourcing strategy
         </p>
-        <div className="mt-4 space-y-3">
-          {data.sourceHealth.map((source) => (
-            <div
-              key={source.source}
-              className="flex items-center justify-between gap-3"
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    source.state === "healthy"
-                      ? "bg-semantic-success"
-                      : source.state === "delayed"
-                        ? "bg-semantic-warning"
-                        : "bg-semantic-error"
-                  }`}
-                />
-                <span className="truncate text-xs text-text-secondary">
-                  {humanizeOpportunity(source.label)}
-                </span>
-              </div>
-              <span className="text-[10px] uppercase text-text-muted">
-                {source.state}
-              </span>
-            </div>
-          ))}
-        </div>
+        <p className="mt-3 text-sm leading-6 text-text-secondary">
+          {data.profiles.filter((profile) => profile.status === "enabled")
+            .length === 1
+            ? "1 active profile is"
+            : `${data.profiles.filter((profile) => profile.status === "enabled").length} active profiles are`}{" "}
+          watching for games that match your commercial priorities.
+        </p>
       </section>
       <section className="mt-8 border-t border-border-muted pt-7">
         <div className="flex items-center gap-2 text-text-primary">
@@ -538,61 +561,78 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
           <h3 className="text-sm font-semibold">{data.workspace.name}</h3>
         </div>
         <p className="mt-2 text-xs leading-5 text-text-tertiary">
-          Game records share viewed and researching activity. Profiles,
-          dismissals, ignores, tracking, and delivery remain personal.
+          Your team can see who has opened or started researching a game.
+          Profiles, tracking, dismissals, and delivery settings remain personal.
         </p>
       </section>
-      {data.dailyOverview.presetHealthChanges.length > 0 && (
-        <section className="mt-8 border-t border-border-muted pt-7">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-            Recent market health changes
-          </p>
-          <div className="mt-4 space-y-4">
-            {data.dailyOverview.presetHealthChanges.map((change) => (
-              <div key={`${change.name}:${change.asOfDate}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-semibold text-text-primary">
-                    {change.name}
-                  </p>
-                  <span className="text-[10px] uppercase text-accent-primary">
-                    {change.priorState
-                      ? `${humanizeOpportunity(change.priorState)} → ${humanizeOpportunity(change.state)}`
-                      : humanizeOpportunity(change.state)}
-                  </span>
-                </div>
-                <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-muted">
-                  {formatOpportunityDate(change.asOfDate)}
-                </p>
-                <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
-                  {change.explanation.at(-1) ?? change.explanation[0]}
-                </p>
-                <p className="mt-1 text-[10px] leading-4 text-text-muted">
-                  {change.explanation[0]}
-                  {change.sampleCapped
-                    ? ` ${change.maximumEvaluated.toLocaleString()}-game evaluation cap reached.`
-                    : ""}
-                </p>
+      {canSeeDiagnostics && (
+        <details className="mt-8 border-t border-border-muted pt-7">
+          <summary className="cursor-pointer text-xs font-semibold text-text-tertiary transition hover:text-text-primary">
+            Data status
+          </summary>
+          <div className="mt-4 space-y-3">
+            {data.sourceHealth.map((source) => (
+              <div
+                key={source.source}
+                className="flex items-center justify-between gap-3"
+              >
+                <span className="truncate text-xs text-text-secondary">
+                  {humanizeOpportunity(source.label)}
+                </span>
+                <span className="text-[10px] uppercase text-text-muted">
+                  {source.state}
+                </span>
               </div>
             ))}
           </div>
-        </section>
-      )}
-      {data.dailyOverview.coverageWarnings.length > 0 && (
-        <section className="mt-8 border-t border-border-muted pt-7">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-semantic-warning">
-            Coverage notes
-          </p>
-          <ul className="mt-3 space-y-3">
-            {data.dailyOverview.coverageWarnings.map((warning) => (
-              <li
-                key={warning}
-                className="text-xs leading-5 text-text-secondary"
-              >
-                {warning}
-              </li>
-            ))}
-          </ul>
-        </section>
+          {data.dailyOverview.coverageWarnings.length > 0 && (
+            <ul className="mt-4 space-y-2 border-t border-border-muted pt-4">
+              {data.dailyOverview.coverageWarnings.map((warning) => (
+                <li
+                  key={warning}
+                  className="text-xs leading-5 text-text-tertiary"
+                >
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.dailyOverview.presetHealthChanges.length > 0 && (
+            <div className="mt-4 border-t border-border-muted pt-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Recent market health changes
+              </p>
+              <div className="mt-3 space-y-4">
+                {data.dailyOverview.presetHealthChanges.map((change) => (
+                  <div key={`${change.name}:${change.asOfDate}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold text-text-primary">
+                        {change.name}
+                      </p>
+                      <span className="text-[10px] uppercase text-accent-primary">
+                        {change.priorState
+                          ? `${humanizeOpportunity(change.priorState)} → ${humanizeOpportunity(change.state)}`
+                          : humanizeOpportunity(change.state)}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                      {formatOpportunityDate(change.asOfDate)}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                      {change.explanation.at(-1) ?? change.explanation[0]}
+                    </p>
+                    <p className="mt-1 text-[10px] leading-4 text-text-muted">
+                      {change.explanation[0]}
+                      {change.sampleCapped
+                        ? ` ${change.maximumEvaluated.toLocaleString()}-game evaluation cap reached.`
+                        : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </details>
       )}
     </aside>
   );
@@ -674,8 +714,7 @@ function ProfilesDesk({
                     <p className="mt-2 text-xs text-text-muted">
                       {profile.sourcePresetName
                         ? `Based on ${profile.sourcePresetName}`
-                        : "Custom profile"}{" "}
-                      · version {profile.currentVersion ?? 1}
+                        : "Custom profile"}
                     </p>
                     <p className="mt-1 text-xs text-text-muted">
                       Daily at {profile.localDeliveryTime} {profile.timezone}
@@ -702,8 +741,8 @@ function ProfilesDesk({
               Preset field notes
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-text-tertiary">
-              Versioned editorial starting points. Cloning never subscribes you
-              automatically.
+              PublisherIQ-maintained starting points you can clone and tailor to
+              your strategy. Cloning does not turn on alerts automatically.
             </p>
           </div>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -714,9 +753,6 @@ function ProfilesDesk({
                   index === 0 ? "sm:col-span-2" : ""
                 }`}
               >
-                <div className="absolute right-4 top-4 font-mono text-[10px] text-text-muted">
-                  V{preset.version}
-                </div>
                 <div className="flex items-center gap-2">
                   <span
                     className={`h-2 w-2 rounded-full ${
@@ -730,9 +766,7 @@ function ProfilesDesk({
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
                     {preset.healthUnavailableReason === "unreleased_only"
                       ? "Unreleased health model pending"
-                      : preset.healthState
-                        ? humanizeOpportunity(preset.healthState)
-                        : "Awaiting health run"}
+                      : presetMarketLabel(preset.healthState)}
                   </span>
                 </div>
                 <h3 className="mt-4 pr-10 text-lg font-semibold text-text-primary">
@@ -829,14 +863,14 @@ function DeliveryDesk({
     <div className="px-5 py-8 md:px-8 md:py-10">
       <div className="max-w-5xl">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
-          Projection, not a second truth
+          Stay in the loop
         </p>
         <h2 className="mt-2 text-3xl font-semibold tracking-tight text-text-primary">
           Deliver the brief where work starts.
         </h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-text-tertiary">
           Email and Slack carry a compact, personal selection. Every item links
-          back to the complete canonical record on PublisherIQ.
+          back to the complete research record on PublisherIQ.
         </p>
 
         <label className="mt-8 block max-w-md">

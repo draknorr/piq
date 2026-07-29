@@ -86,6 +86,7 @@ export interface OpportunityRuleSet {
 
 export interface OpportunityResultSummary {
   appid: number;
+  change: OpportunityObservedChange | null;
   confidence: "high" | "directional";
   createdAt: string;
   eventFingerprint: string;
@@ -109,6 +110,31 @@ export interface OpportunityResultSummary {
   score: number | null;
   strongestEvidence: string[];
   whyNow: string;
+}
+
+export interface OpportunityObservedChange {
+  affectedRuleFields: OpportunityRuleField[];
+  after: unknown;
+  before: unknown;
+  confidence: "high" | "directional";
+  effectiveAt: string;
+  eventType:
+    | "first_observed"
+    | "released"
+    | "demo_added"
+    | "release_timing_changed"
+    | "publisher_changed"
+    | "developer_changed"
+    | "taxonomy_repositioned"
+    | "business_model_changed"
+    | "store_readiness_improved"
+    | "platform_expanded"
+    | "announcement"
+    | "review_breakthrough"
+    | "ccu_breakthrough"
+    | "material_change";
+  observedAt: string;
+  signalFamily: OpportunitySignalFamily;
 }
 
 export interface OpportunityBootstrap {
@@ -356,18 +382,13 @@ export interface OpportunityGameRecord {
       signalFamily: string;
     };
   };
-  recentChanges: Array<{
-    after: unknown;
-    before: unknown;
-    confidence: "high" | "directional";
-    effectiveAt: string;
-    eventFingerprint: string;
-    eventType: string;
-    materiality: number;
-    observedAt: string;
-    rawEventRefs: unknown[];
-    signalFamily: string;
-  }>;
+  recentChanges: Array<
+    {
+      eventFingerprint: string;
+      materiality: number;
+      rawEventRefs: unknown[];
+    } & OpportunityObservedChange
+  >;
   rank: {
     components: Record<string, number>;
     finalScore: number;
@@ -401,12 +422,28 @@ export interface OpportunityGameRecord {
       viewCount: number | null;
     }>;
   };
+  workspace: {
+    name: string;
+    role: "owner" | "admin" | "member";
+  };
 }
 
 interface RuleOutcomeGroup {
   clauseOutcomes: Array<{
+    actualValue: unknown;
+    comparisonValue?:
+      | boolean
+      | number
+      | string
+      | null
+      | Array<boolean | number | string>;
+    confidence: "high" | "directional";
+    evidenceClass: string;
     explanation: string;
-    field: string;
+    field: OpportunityRuleField;
+    operator: OpportunityRuleOperator;
+    source: string | null;
+    sourceAt: string | null;
     state: "true" | "false" | "unknown";
   }>;
   groupId: string;

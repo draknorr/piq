@@ -17,30 +17,98 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
-  Tag,
   Users,
   X,
   Youtube,
 } from "lucide-react";
 
 import {
+  describeOpportunityChange,
+  describeOpportunityRuleClause,
   formatOpportunityDate,
+  formatOpportunityMetricValue,
   humanizeOpportunity,
+  OPPORTUNITY_COMPONENTS,
+  opportunityComponentStrength,
+  opportunityConfidenceExplanation,
+  opportunityConfidenceLabel,
+  opportunityFieldLabel,
+  opportunityMetricLabel,
   opportunityPost,
+  opportunityPotentialLabel,
+  opportunityStrengthLabel,
+  opportunityWhyItMatters,
 } from "../../lib/api";
-import type { OpportunityGameRecord } from "../../lib/types";
+import type {
+  OpportunityGameRecord,
+  OpportunityRuleField,
+  OpportunityRuleOperator,
+} from "../../lib/types";
 
-function display(value: unknown): string {
+function displayDiagnostic(value: unknown): string {
   if (value === null || value === undefined) {
     return "Not available";
   }
-  if (Array.isArray(value)) {
-    return value.join(", ");
-  }
   if (typeof value === "object") {
-    return JSON.stringify(value);
+    return JSON.stringify(value, null, 2);
   }
   return String(value);
+}
+
+function metricToken(value: string): string {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function metricKind(value: string): string | null {
+  const token = metricToken(value);
+  if (token === "ccupeak" || token.includes("peakconcurrentplayers")) {
+    return "ccupeak";
+  }
+  if (
+    token === "reviewsadded30d" ||
+    (token.includes("reviewsadded") && token.includes("30"))
+  ) {
+    return "reviewsadded30d";
+  }
+  if (token === "totalreviews" || token.includes("totalsteamreviews")) {
+    return "totalreviews";
+  }
+  if (
+    token === "positivepercentage" ||
+    token.includes("positivesteamreviewrate")
+  ) {
+    return "positivepercentage";
+  }
+  return null;
+}
+
+function findCurrentMetric(
+  metrics: OpportunityGameRecord["currentMetrics"],
+  metric: string,
+): number | string | null {
+  const target = metricKind(metric);
+  if (target === null) {
+    return null;
+  }
+  const match = Object.entries(metrics).find(
+    ([name]) => metricKind(name) === target,
+  );
+  return match?.[1] ?? null;
+}
+
+function demandSummary(
+  direction: "declining" | "improving" | "stable" | "unknown" | undefined,
+): string {
+  return {
+    declining:
+      "Recent player and review activity across comparable games is softening.",
+    improving:
+      "Recent player and review activity across comparable games is strengthening.",
+    stable:
+      "Recent player and review activity across comparable games is broadly stable.",
+    unknown:
+      "We do not yet have enough recent player and review data to determine whether demand is rising or falling.",
+  }[direction ?? "unknown"];
 }
 
 export function OpportunityGameRecordClient({
@@ -57,7 +125,7 @@ export function OpportunityGameRecordClient({
 
   const load = async () => {
     if (!appid || !resultId) {
-      setError("This canonical record link is missing its result identity.");
+      setError("This opportunity link is incomplete.");
       setLoading(false);
       return;
     }
@@ -146,7 +214,7 @@ export function OpportunityGameRecordClient({
         </Link>
         <div className="mt-10 border-l-2 border-semantic-error pl-6">
           <h1 className="text-2xl font-semibold text-text-primary">
-            Record unavailable
+            Opportunity unavailable
           </h1>
           <p className="mt-3 text-sm text-text-secondary">{error}</p>
         </div>
@@ -157,6 +225,13 @@ export function OpportunityGameRecordClient({
   const market = record.marketContext;
   const tracked = Boolean(record.userState.trackedAt);
   const researching = record.userState.researching;
+  const primaryChange =
+    record.result.change ?? record.recentChanges.at(0) ?? null;
+  const canSeeDiagnostics =
+    record.workspace.role === "owner" || record.workspace.role === "admin";
+  const currentMetrics = Object.entries(record.currentMetrics).filter(
+    ([name, value]) => metricKind(name) !== null && value !== null,
+  );
 
   return (
     <div className="-m-4 min-h-screen bg-surface md:-m-6 lg:-m-8">
@@ -172,11 +247,10 @@ export function OpportunityGameRecordClient({
           </Link>
           <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
             <div>
-              <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
-                {humanizeOpportunity(record.result.eventLabel)}
-                <span className="text-text-muted">•</span>
-                observed {formatOpportunityDate(record.result.createdAt)}
-              </div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+                Opportunity record · observed{" "}
+                {formatOpportunityDate(record.result.createdAt)}
+              </p>
               <h1 className="mt-3 max-w-4xl text-[clamp(2rem,5vw,4.2rem)] font-medium leading-[0.95] tracking-[-0.045em] text-text-primary">
                 {record.app.name}
               </h1>
@@ -184,7 +258,7 @@ export function OpportunityGameRecordClient({
                 <span>
                   {record.app.developers.join(", ") || "Developer not listed"}
                 </span>
-                <span>→</span>
+                <span aria-hidden="true">→</span>
                 <span>
                   {record.app.publishers.join(", ") || "Publisher not listed"}
                 </span>
@@ -194,7 +268,7 @@ export function OpportunityGameRecordClient({
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 font-medium text-accent-primary"
                 >
-                  Steam <ExternalLink className="h-3 w-3" />
+                  View on Steam <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
             </div>
@@ -210,7 +284,7 @@ export function OpportunityGameRecordClient({
                 active={researching}
                 disabled={acting !== null}
                 icon={Search}
-                label={researching ? "Researching" : "Research"}
+                label={researching ? "Researching" : "Start research"}
                 onClick={() => setResearching(!researching)}
               />
               {record.userState.dismissedAt || record.userState.ignoredAt ? (
@@ -248,109 +322,79 @@ export function OpportunityGameRecordClient({
 
       <main className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_350px]">
         <div className="min-w-0 px-5 py-8 md:px-8 md:py-10">
-          <section className="grid gap-8 border-b border-border-muted pb-10 md:grid-cols-[minmax(0,1fr)_220px]">
+          <section className="grid gap-8 border-b border-border-muted pb-10 md:grid-cols-[minmax(0,1fr)_280px]">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-                Why now
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+                What changed
               </p>
-              <p className="mt-3 text-xl leading-8 text-text-primary">
-                {record.result.whyNow}
+              <p className="mt-3 text-[clamp(1.25rem,2.5vw,1.8rem)] font-medium leading-tight text-text-primary">
+                {describeOpportunityChange(primaryChange)}
               </p>
-              <div className="mt-5 flex flex-wrap gap-2">
-                {record.result.strongestEvidence.map((evidence) => (
-                  <span
-                    key={evidence}
-                    className="rounded-full bg-accent-primary-muted px-3 py-1.5 text-xs font-medium text-accent-primary"
-                  >
-                    {evidence}
-                  </span>
-                ))}
-              </div>
+              <p className="mt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+                Why it matters
+              </p>
+              <p className="mt-2 max-w-3xl text-base leading-7 text-text-secondary">
+                {opportunityWhyItMatters(record.result)}
+              </p>
+              {record.result.matchedProfiles.length > 0 && (
+                <p className="mt-5 text-sm text-text-tertiary">
+                  <span className="font-semibold text-text-primary">
+                    Matches your sourcing profile:
+                  </span>{" "}
+                  {record.result.matchedProfiles
+                    .map((profile) => profile.name)
+                    .join(", ")}
+                </p>
+              )}
             </div>
             <div className="border-l border-border-muted pl-6">
-              <p className="font-mono text-5xl tracking-tight text-text-primary">
-                {record.rank.finalScore?.toFixed(1) ?? "—"}
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                Opportunity fit
               </p>
-              <p className="mt-2 text-xs uppercase tracking-wide text-text-muted">
-                explainable rank score
+              <p className="mt-2 text-4xl font-semibold tabular-nums text-text-primary">
+                {record.rank.finalScore === null
+                  ? "—"
+                  : `${Math.round(record.rank.finalScore)}/100`}
               </p>
-              <p className="mt-5 text-xs leading-5 text-text-tertiary">
-                {record.rank.rankingVersion}
+              <p className="mt-2 text-sm font-semibold text-accent-primary">
+                {opportunityStrengthLabel(record.rank.finalScore)}
+              </p>
+              <p className="mt-4 text-xs leading-5 text-text-tertiary">
+                A higher score means stronger alignment with your sourcing
+                criteria, comparable-game position, market momentum, and
+                evidence quality.
               </p>
             </div>
           </section>
 
           <SectionHeader
-            icon={BarChart3}
-            kicker="Decomposed ranking"
-            title="Every point has a named input"
-          />
-          <div className="grid gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted sm:grid-cols-5">
-            {Object.entries(record.rank.components).map(([component, value]) =>
-              typeof value === "number" ? (
-                <div key={component} className="bg-surface-raised px-4 py-5">
-                  <p className="font-mono text-2xl text-text-primary">
-                    {(value * 100).toFixed(0)}
-                  </p>
-                  <p className="mt-2 text-[10px] uppercase leading-4 tracking-wide text-text-muted">
-                    {humanizeOpportunity(component)}
-                  </p>
-                  <p className="mt-1 text-[10px] text-text-tertiary">
-                    {Math.round((record.rank.weights[component] ?? 0) * 100)}%
-                    weight
-                  </p>
-                </div>
-              ) : null,
-            )}
-          </div>
-          <ul className="mt-4 space-y-2">
-            {record.rank.reasons.map((reason) => (
-              <li
-                key={reason}
-                className="flex gap-2 text-sm leading-6 text-text-secondary"
-              >
-                <Check className="mt-1 h-3.5 w-3.5 shrink-0 text-semantic-success" />
-                {reason}
-              </li>
-            ))}
-          </ul>
-
-          <SectionHeader
             icon={ShieldCheck}
-            kicker="Rule evidence"
-            title="Why this game qualified"
+            kicker="Your sourcing strategy"
+            title="Why this game matches"
           />
-          <div className="space-y-5">
+          <div className="space-y-8">
             {record.matchedProfiles.map((profile) => (
               <article
                 key={profile.id}
-                className="border-y border-border-subtle py-5"
+                className="border-y border-border-subtle py-6"
               >
-                <div className="flex items-center justify-between gap-4">
-                  <h3 className="text-base font-semibold text-text-primary">
-                    {profile.name}
-                  </h3>
-                  <div className="text-right">
-                    <span className="rounded-full bg-semantic-success-muted px-2.5 py-1 text-[10px] font-semibold uppercase text-semantic-success-text">
-                      eligible
-                    </span>
-                    <p className="mt-2 font-mono text-[10px] text-text-muted">
-                      v{profile.profileVersion} ·{" "}
-                      {profile.profileVersionId.slice(0, 8)}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4 grid gap-5 md:grid-cols-3">
+                <h3 className="text-base font-semibold text-text-primary">
+                  {profile.name}
+                </h3>
+                <div className="mt-5 grid gap-7 md:grid-cols-3">
                   <RuleOutcomeColumn
-                    label="Required"
+                    context="matched"
+                    label="What matched"
                     outcomes={profile.ruleOutcomes.requiredOutcomes}
                   />
                   <RuleOutcomeColumn
-                    label="Preferred"
+                    context="strength"
+                    label="Additional strengths"
                     outcomes={profile.ruleOutcomes.preferredOutcomes}
                   />
                   <RuleOutcomeColumn
-                    label="Excluded"
+                    context="dealbreaker"
+                    label="Dealbreakers checked"
                     outcomes={profile.ruleOutcomes.excludedOutcomes}
                   />
                 </div>
@@ -359,39 +403,106 @@ export function OpportunityGameRecordClient({
           </div>
 
           <SectionHeader
-            icon={Radar}
-            kicker="Released-market comparables"
-            title="The peer set behind market context"
+            icon={BarChart3}
+            kicker="Opportunity strength"
+            title="What drives this opportunity score"
           />
-          {record.cohort ? (
+          <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-5">
+            {Object.entries(record.rank.components).map(
+              ([component, value]) => {
+                const presentation = OPPORTUNITY_COMPONENTS[component];
+                if (typeof value !== "number" || !presentation) return null;
+                return (
+                  <div key={component} className="bg-surface-raised px-4 py-5">
+                    <p className="text-sm font-semibold text-text-primary">
+                      {presentation.label}
+                    </p>
+                    <p className="mt-3 text-lg font-semibold text-accent-primary">
+                      {opportunityComponentStrength(value)}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                      {presentation.description}
+                    </p>
+                  </div>
+                );
+              },
+            )}
+          </div>
+
+          <SectionHeader
+            icon={Radar}
+            kicker="Commercial context"
+            title="Current traction and comparable-game benchmarks"
+          />
+          <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
+            {currentMetrics.length === 0 ? (
+              <p className="col-span-full bg-surface-raised px-4 py-5 text-sm text-text-tertiary">
+                Current player and review metrics are not yet available.
+              </p>
+            ) : (
+              currentMetrics.slice(0, 4).map(([name, value]) => (
+                <div key={name} className="bg-surface-raised px-4 py-5">
+                  <p className="text-xs leading-5 text-text-tertiary">
+                    {opportunityMetricLabel(name)}
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">
+                    {formatOpportunityMetricValue(name, value)}
+                  </p>
+                  <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">
+                    Selected game
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+          <p className="mt-5 max-w-3xl text-sm leading-6 text-text-secondary">
+            {demandSummary(market?.demandDirection)}
+          </p>
+
+          {market && Object.keys(market.distributions).length > 0 && (
+            <div className="mt-7 divide-y divide-border-subtle border-y border-border-muted">
+              {Object.entries(market.distributions).map(
+                ([name, distribution]) => (
+                  <MarketMetricRow
+                    key={name}
+                    current={findCurrentMetric(record.currentMetrics, name)}
+                    distribution={distribution}
+                    name={name}
+                  />
+                ),
+              )}
+            </div>
+          )}
+
+          <h3 className="mt-10 text-lg font-semibold text-text-primary">
+            Comparable games behind the benchmarks
+          </h3>
+          {record.cohort && record.cohort.members.length > 0 ? (
             <>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
-                <span>{record.cohort.members.length} released peers</span>
-                <span>•</span>
-                <span>
-                  {Math.round(record.cohort.coverage * 100)}% measured coverage
-                </span>
-                <span>•</span>
-                <span>Fallback tier {record.cohort.fallbackTier}</span>
-                <span>•</span>
-                <span>{record.cohort.confidence} confidence</span>
-              </div>
+              <p className="mt-2 text-sm leading-6 text-text-tertiary">
+                {record.cohort.members.length} similar released{" "}
+                {record.cohort.members.length === 1 ? "game was" : "games were"}{" "}
+                selected using shared positioning and business-model traits.
+                Metric availability varies by game.
+              </p>
               <div className="mt-5 overflow-x-auto border-y border-border-muted">
-                <table className="w-full min-w-[680px] text-left text-xs">
+                <table className="w-full min-w-[760px] text-left text-xs">
                   <thead className="bg-surface-elevated text-[10px] uppercase tracking-wide text-text-muted">
                     <tr>
-                      <th className="px-3 py-2.5 font-semibold">Comparable</th>
                       <th className="px-3 py-2.5 font-semibold">
-                        Why included
+                        Comparable game
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        Why it is comparable
                       </th>
                       <th className="px-3 py-2.5 text-right font-semibold">
-                        Reviews
+                        Total Steam reviews
                       </th>
                       <th className="px-3 py-2.5 text-right font-semibold">
-                        30d added
+                        Reviews added in 30 days
                       </th>
                       <th className="px-3 py-2.5 text-right font-semibold">
-                        CCU peak
+                        Peak concurrent players
                       </th>
                     </tr>
                   </thead>
@@ -404,14 +515,16 @@ export function OpportunityGameRecordClient({
                         <td className="max-w-xs px-3 py-3 text-text-tertiary">
                           {member.inclusionReasons.join(" · ")}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-text-secondary">
-                          {member.totalReviews?.toLocaleString() ?? "—"}
+                        <td className="px-3 py-3 text-right tabular-nums text-text-secondary">
+                          {member.totalReviews?.toLocaleString() ??
+                            "Not available"}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-text-secondary">
-                          {member.reviewsAdded30d?.toLocaleString() ?? "—"}
+                        <td className="px-3 py-3 text-right tabular-nums text-text-secondary">
+                          {member.reviewsAdded30d?.toLocaleString() ??
+                            "Not available"}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-text-secondary">
-                          {member.ccuPeak?.toLocaleString() ?? "—"}
+                        <td className="px-3 py-3 text-right tabular-nums text-text-secondary">
+                          {member.ccuPeak?.toLocaleString() ?? "Not available"}
                         </td>
                       </tr>
                     ))}
@@ -420,73 +533,55 @@ export function OpportunityGameRecordClient({
               </div>
             </>
           ) : (
-            <p className="text-sm text-text-tertiary">
-              No responsible released-peer cohort was available.
+            <p className="mt-2 text-sm leading-6 text-text-tertiary">
+              We do not yet have enough similar released games to build a
+              responsible benchmark.
             </p>
           )}
 
           <SectionHeader
             icon={History}
-            kicker="Material change ledger"
-            title="What PublisherIQ observed"
+            kicker="Relevant Steam activity"
+            title="Changes that inform this opportunity"
           />
           {record.recentChanges.length === 0 ? (
             <p className="text-sm text-text-tertiary">
-              No material change record was available before this result.
+              No additional Steam change history is available for this game.
             </p>
           ) : (
             <div className="divide-y divide-border-subtle border-y border-border-muted">
               {record.recentChanges.map((change) => (
                 <article
                   key={change.eventFingerprint}
-                  className="grid gap-3 py-4 md:grid-cols-[180px_minmax(0,1fr)]"
+                  className="grid gap-2 py-5 md:grid-cols-[180px_minmax(0,1fr)]"
                 >
                   <div>
                     <p className="text-xs font-semibold text-text-primary">
                       {humanizeOpportunity(change.eventType)}
                     </p>
-                    <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">
-                      {humanizeOpportunity(change.signalFamily)} ·{" "}
-                      {Math.round(change.materiality * 100)}% materiality
-                    </p>
-                    <p className="mt-2 text-[10px] text-text-muted">
+                    <p className="mt-1 text-[10px] text-text-muted">
                       Observed {formatOpportunityDate(change.observedAt)}
                     </p>
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <div className="rounded-lg bg-surface-elevated px-3 py-2.5">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                        Before
-                      </p>
-                      <p className="mt-1 break-words text-xs leading-5 text-text-secondary">
-                        {display(change.before)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg bg-accent-primary-muted px-3 py-2.5">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
-                        After
-                      </p>
-                      <p className="mt-1 break-words text-xs leading-5 text-text-secondary">
-                        {display(change.after)}
-                      </p>
-                    </div>
-                  </div>
+                  <p className="text-sm font-medium leading-6 text-text-secondary">
+                    {describeOpportunityChange(change)}
+                  </p>
                 </article>
               ))}
             </div>
           )}
 
-          <div className="grid gap-8 lg:grid-cols-2">
+          <div className="grid gap-10 lg:grid-cols-2">
             <section>
               <SectionHeader
                 icon={Newspaper}
-                kicker="Official source material"
-                title="Recent Steam news"
+                kicker="Official updates"
+                title="Recent Steam announcements"
               />
               {record.officialNews.length === 0 ? (
                 <p className="text-sm leading-6 text-text-tertiary">
-                  No official Steam news was linked to this title before the
-                  result cutoff.
+                  No recent official Steam announcement is linked to this
+                  opportunity.
                 </p>
               ) : (
                 <div className="divide-y divide-border-subtle border-y border-border-muted">
@@ -514,16 +609,16 @@ export function OpportunityGameRecordClient({
             <section>
               <SectionHeader
                 icon={Youtube}
-                kicker="Additive creator evidence"
-                title="Recent matched videos"
+                kicker="Creator signals"
+                title="Recent videos about this game"
               />
-              <p className="mb-3 text-[10px] uppercase tracking-wide text-semantic-warning">
-                Partial coverage · never treated as universal absence
+              <p className="mb-3 text-xs leading-5 text-text-tertiary">
+                Creator coverage is still growing, so no matched video does not
+                mean no creator interest exists.
               </p>
               {record.youtubeEvidence.videos.length === 0 ? (
                 <p className="text-sm leading-6 text-text-tertiary">
-                  No primary video match was available in the covered dataset.
-                  This is not evidence that creator coverage is absent.
+                  No clearly matched creator video is available yet.
                 </p>
               ) : (
                 <div className="divide-y divide-border-subtle border-y border-border-muted">
@@ -550,220 +645,29 @@ export function OpportunityGameRecordClient({
             </section>
           </div>
 
-          <SectionHeader
-            icon={Tag}
-            kicker="Provenance ledger"
-            title="Observed and derived evidence"
-          />
-          <div className="divide-y divide-border-subtle border-y border-border-muted">
-            {record.evidence.map((evidence) => (
-              <div
-                key={`${evidence.label}:${evidence.source}`}
-                className="grid gap-2 py-4 md:grid-cols-[170px_minmax(0,1fr)_170px]"
-              >
-                <div>
-                  <p className="text-xs font-semibold text-text-primary">
-                    {evidence.label}
-                  </p>
-                  <p className="mt-1 text-[10px] uppercase text-text-muted">
-                    {humanizeOpportunity(evidence.evidenceClass)}
-                  </p>
-                </div>
-                <p className="text-sm text-text-secondary">
-                  {display(evidence.value)}
-                </p>
-                <div className="text-xs text-text-tertiary md:text-right">
-                  <p>{evidence.source}</p>
-                  <p className="mt-1">
-                    {formatOpportunityDate(evidence.sourceAt)}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <SectionHeader
-            icon={Database}
-            kicker="Reproduction contract"
-            title="Versions, windows, and delivery history"
-          />
-          <div className="grid gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted md:grid-cols-3">
-            <div className="bg-surface-raised p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Evaluation run
-              </p>
-              <p className="mt-3 text-sm font-medium text-text-primary">
-                {humanizeOpportunity(record.provenance.run.kind)}
-              </p>
-              <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                {formatOpportunityDate(record.provenance.run.windowStart)}
-                <br />
-                through {formatOpportunityDate(record.provenance.run.windowEnd)}
-              </p>
-              <p className="mt-3 break-all font-mono text-[10px] text-text-muted">
-                {record.provenance.run.id}
-              </p>
-            </div>
-            <div className="bg-surface-raised p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Triggering event
-              </p>
-              {record.provenance.triggeringEvent ? (
-                <>
-                  <p className="mt-3 text-sm font-medium text-text-primary">
-                    {humanizeOpportunity(
-                      record.provenance.triggeringEvent.eventType,
-                    )}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                    Observed{" "}
-                    {formatOpportunityDate(
-                      record.provenance.triggeringEvent.observedAt,
-                    )}
-                    <br />
-                    Effective{" "}
-                    {formatOpportunityDate(
-                      record.provenance.triggeringEvent.effectiveAt,
-                    )}
-                  </p>
-                  <p className="mt-3 font-mono text-[10px] text-text-muted">
-                    {record.provenance.triggeringEvent.registryVersion} ·{" "}
-                    {record.provenance.triggeringEvent.classifierVersion}
-                  </p>
-                </>
-              ) : (
-                <p className="mt-3 text-xs text-text-tertiary">
-                  No triggering event snapshot was linked.
-                </p>
-              )}
-            </div>
-            <div className="bg-surface-raised p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Calculation versions
-              </p>
-              <dl className="mt-3 space-y-2">
-                {Object.entries(record.provenance.calculationVersions).map(
-                  ([name, version]) => (
-                    <div
-                      key={name}
-                      className="flex items-start justify-between gap-3 text-xs"
-                    >
-                      <dt className="text-text-tertiary">
-                        {humanizeOpportunity(name)}
-                      </dt>
-                      <dd className="text-right font-mono text-text-secondary">
-                        {version}
-                      </dd>
-                    </div>
-                  ),
-                )}
-              </dl>
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-6 md:grid-cols-2">
-            <section className="border-y border-border-subtle py-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Source timestamps
-              </p>
-              <dl className="mt-3 space-y-2">
-                {Object.entries(record.provenance.sourceTimestamps).map(
-                  ([source, timestamp]) => (
-                    <div
-                      key={source}
-                      className="flex items-start justify-between gap-3 text-xs"
-                    >
-                      <dt className="text-text-tertiary">
-                        {humanizeOpportunity(source)}
-                      </dt>
-                      <dd className="text-right text-text-secondary">
-                        {formatOpportunityDate(timestamp)}
-                      </dd>
-                    </div>
-                  ),
-                )}
-              </dl>
-            </section>
-            <section className="border-y border-border-subtle py-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Delivery projections
-              </p>
-              {record.provenance.deliveries.length === 0 ? (
-                <p className="mt-3 text-xs leading-5 text-text-tertiary">
-                  Website record only; no channel projection is linked yet.
-                </p>
-              ) : (
-                <div className="mt-3 space-y-3">
-                  {record.provenance.deliveries.map((delivery, index) => (
-                    <div
-                      key={`${delivery.channel}:${delivery.createdAt}:${index}`}
-                      className="flex items-start justify-between gap-3 text-xs"
-                    >
-                      <span className="text-text-secondary">
-                        {humanizeOpportunity(delivery.channel)} ·{" "}
-                        {humanizeOpportunity(delivery.deliveryKind)}
-                      </span>
-                      <span className="text-right text-text-tertiary">
-                        {humanizeOpportunity(delivery.status)}
-                        <br />
-                        {formatOpportunityDate(
-                          delivery.sentAt ?? delivery.createdAt,
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
+          {canSeeDiagnostics && <DataStatus record={record} />}
         </div>
 
         <aside className="border-t border-border-subtle bg-surface-sunken px-5 py-8 lg:border-l lg:border-t-0 lg:px-6 lg:py-10">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-            Market reading
+            Opportunity reading
           </p>
           <p className="mt-3 text-2xl font-semibold text-text-primary">
-            {humanizeOpportunity(market?.potentialBand ?? "insufficient_data")}
+            Market potential:{" "}
+            {opportunityPotentialLabel(
+              market?.potentialBand ?? "insufficient_data",
+            )}
           </p>
-          <p className="mt-1 text-xs uppercase tracking-wide text-text-muted">
-            directional potential · {market?.confidence ?? "directional"}{" "}
-            confidence
+          <p className="mt-3 text-sm font-semibold text-text-secondary">
+            {opportunityConfidenceLabel(
+              market?.confidence ?? record.result.confidence,
+            )}
           </p>
-          {market && (
-            <>
-              <div className="mt-7 space-y-5">
-                {Object.entries(market.distributions).map(
-                  ([name, distribution]) => (
-                    <div key={name}>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-text-secondary">
-                          {humanizeOpportunity(name)}
-                        </span>
-                        <span className="font-mono text-text-primary">
-                          P75 {distribution.p75?.toLocaleString() ?? "—"}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[10px] text-text-muted">
-                        {distribution.measured} measured · median{" "}
-                        {distribution.p50?.toLocaleString() ?? "—"} · P90{" "}
-                        {distribution.p90?.toLocaleString() ?? "—"}
-                      </p>
-                    </div>
-                  ),
-                )}
-              </div>
-              <ul className="mt-7 space-y-3 border-t border-border-muted pt-6">
-                {market.explanation.map((explanation) => (
-                  <li
-                    key={explanation}
-                    className="text-xs leading-5 text-text-secondary"
-                  >
-                    {explanation}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          <p className="mt-1 text-xs leading-5 text-text-tertiary">
+            {opportunityConfidenceExplanation(
+              market?.confidence ?? record.result.confidence,
+            )}
+          </p>
 
           <section className="mt-9 border-t border-border-muted pt-7">
             <div className="flex items-center gap-2">
@@ -775,7 +679,7 @@ export function OpportunityGameRecordClient({
             <div className="mt-4 space-y-4">
               {record.teamActivity.length === 0 ? (
                 <p className="text-xs leading-5 text-text-tertiary">
-                  Opening this record has placed your first viewed marker.
+                  No teammate has started research yet.
                 </p>
               ) : (
                 record.teamActivity.slice(0, 12).map((activity, index) => (
@@ -809,7 +713,7 @@ export function OpportunityGameRecordClient({
             <div className="mt-4 space-y-5">
               {record.previousAppearances.length === 0 ? (
                 <p className="text-xs text-text-tertiary">
-                  This is the first canonical appearance.
+                  This is the first time this game has appeared in your brief.
                 </p>
               ) : (
                 record.previousAppearances.map((appearance) => (
@@ -820,9 +724,6 @@ export function OpportunityGameRecordClient({
                   >
                     <p className="text-xs font-medium text-text-primary">
                       {humanizeOpportunity(appearance.eventLabel)}
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
-                      {appearance.whyNow}
                     </p>
                     <p className="mt-1 text-[10px] text-text-muted">
                       {formatOpportunityDate(appearance.createdAt)}
@@ -835,17 +736,170 @@ export function OpportunityGameRecordClient({
 
           {record.missingEvidence.length > 0 && (
             <section className="mt-9 border-t border-border-muted pt-7">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-semantic-warning">
-                Missing evidence
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                What we are still learning
               </p>
               <p className="mt-2 text-xs leading-5 text-text-secondary">
-                {record.missingEvidence.map(humanizeOpportunity).join(", ")}
+                More data is needed for{" "}
+                {record.missingEvidence
+                  .map(opportunityFieldLabel)
+                  .join(", ")
+                  .toLocaleLowerCase()}
+                .
               </p>
             </section>
           )}
         </aside>
       </main>
     </div>
+  );
+}
+
+function MarketMetricRow({
+  current,
+  distribution,
+  name,
+}: {
+  current: number | string | null;
+  distribution: {
+    measured: number;
+    p25: number | null;
+    p50: number | null;
+    p75: number | null;
+    p90: number | null;
+  };
+  name: string;
+}) {
+  return (
+    <div className="grid gap-4 py-5 md:grid-cols-[minmax(180px,1fr)_repeat(3,minmax(120px,0.7fr))]">
+      <div>
+        <p className="text-sm font-semibold text-text-primary">
+          {opportunityMetricLabel(name)}
+        </p>
+        <p className="mt-1 text-xs leading-5 text-text-tertiary">
+          {distribution.measured} comparable{" "}
+          {distribution.measured === 1 ? "game has" : "games have"} enough data
+          for this measure.
+        </p>
+      </div>
+      <MetricBenchmark label="Selected game" metric={name} value={current} />
+      <MetricBenchmark
+        label={`Median among ${distribution.measured} comparable games`}
+        metric={name}
+        value={distribution.p50}
+      />
+      <MetricBenchmark
+        label="Top-quarter benchmark"
+        metric={name}
+        value={distribution.p75}
+      />
+    </div>
+  );
+}
+
+function MetricBenchmark({
+  label,
+  metric,
+  value,
+}: {
+  label: string;
+  metric: string;
+  value: number | string | null;
+}) {
+  return (
+    <div>
+      <p className="text-lg font-semibold tabular-nums text-text-primary">
+        {formatOpportunityMetricValue(metric, value)}
+      </p>
+      <p className="mt-1 text-[10px] leading-4 text-text-muted">{label}</p>
+    </div>
+  );
+}
+
+function DataStatus({ record }: { record: OpportunityGameRecord }) {
+  return (
+    <details className="mt-12 border-y border-border-muted py-5">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-text-tertiary transition hover:text-text-primary">
+        <Database className="h-4 w-4" />
+        Data status and technical details
+      </summary>
+      <div className="mt-6 space-y-8">
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+            Evidence sources
+          </h3>
+          <div className="mt-3 divide-y divide-border-subtle">
+            {record.evidence.map((evidence) => (
+              <div
+                key={`${evidence.label}:${evidence.source}`}
+                className="grid gap-2 py-4 text-xs md:grid-cols-[160px_minmax(0,1fr)_180px]"
+              >
+                <span className="font-semibold text-text-primary">
+                  {evidence.label}
+                </span>
+                <pre className="whitespace-pre-wrap break-words font-sans text-text-secondary">
+                  {displayDiagnostic(evidence.value)}
+                </pre>
+                <span className="text-text-tertiary md:text-right">
+                  {evidence.source}
+                  <br />
+                  {formatOpportunityDate(evidence.sourceAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid gap-5 md:grid-cols-2">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              Evaluation run
+            </h3>
+            <p className="mt-2 break-all font-mono text-[11px] text-text-secondary">
+              {record.provenance.run.id}
+            </p>
+            <p className="mt-2 text-xs leading-5 text-text-tertiary">
+              {humanizeOpportunity(record.provenance.run.kind)} ·{" "}
+              {formatOpportunityDate(record.provenance.run.windowStart)} through{" "}
+              {formatOpportunityDate(record.provenance.run.windowEnd)}
+            </p>
+          </div>
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              Calculation versions
+            </h3>
+            <dl className="mt-2 space-y-1.5">
+              {Object.entries(record.provenance.calculationVersions).map(
+                ([name, version]) => (
+                  <div
+                    key={name}
+                    className="flex justify-between gap-4 text-xs"
+                  >
+                    <dt className="text-text-tertiary">
+                      {humanizeOpportunity(name)}
+                    </dt>
+                    <dd className="font-mono text-text-secondary">{version}</dd>
+                  </div>
+                ),
+              )}
+            </dl>
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+            Score inputs and weights
+          </h3>
+          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-lg bg-surface-elevated p-4 font-mono text-[11px] leading-5 text-text-secondary">
+            {displayDiagnostic({
+              components: record.rank.components,
+              reasons: record.rank.reasons,
+              weights: record.rank.weights,
+            })}
+          </pre>
+        </section>
+      </div>
+    </details>
   );
 }
 
@@ -903,55 +957,73 @@ function SectionHeader({
   );
 }
 
+type RuleOutcome = {
+  clauseOutcomes: Array<{
+    actualValue?: unknown;
+    comparisonValue?: unknown;
+    field: OpportunityRuleField;
+    operator?: OpportunityRuleOperator;
+    state: "true" | "false" | "unknown";
+  }>;
+  groupId: string;
+  label: string;
+  state: "true" | "false" | "unknown";
+};
+
 function RuleOutcomeColumn({
+  context,
   label,
   outcomes,
 }: {
+  context: "dealbreaker" | "matched" | "strength";
   label: string;
-  outcomes: Array<{
-    clauseOutcomes: Array<{
-      explanation: string;
-      field: string;
-      state: "true" | "false" | "unknown";
-    }>;
-    groupId: string;
-    label: string;
-    state: "true" | "false" | "unknown";
-  }>;
+  outcomes: RuleOutcome[];
 }) {
   return (
     <div>
       <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
         {label}
       </p>
-      <div className="mt-3 space-y-3">
+      <div className="mt-3 space-y-4">
         {outcomes.length === 0 ? (
-          <p className="text-xs italic text-text-muted">No rules</p>
+          <p className="text-xs leading-5 text-text-muted">
+            {context === "dealbreaker"
+              ? "No dealbreakers were configured."
+              : context === "strength"
+                ? "No additional strengths were configured."
+                : "No must-have criteria were configured."}
+          </p>
         ) : (
           outcomes.map((outcome) => (
             <div key={outcome.groupId}>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    outcome.state === "true"
-                      ? "bg-semantic-success"
-                      : outcome.state === "unknown"
-                        ? "bg-semantic-warning"
-                        : "bg-semantic-error"
-                  }`}
-                />
-                <p className="text-xs font-medium text-text-primary">
-                  {outcome.label}
-                </p>
+              <p className="text-xs font-semibold text-text-primary">
+                {outcome.label}
+              </p>
+              <div className="mt-2 space-y-2">
+                {outcome.clauseOutcomes.map((clause, index) => {
+                  const positive =
+                    context === "dealbreaker"
+                      ? clause.state === "false"
+                      : clause.state === "true";
+                  return (
+                    <div
+                      key={`${clause.field}:${index}`}
+                      className="flex items-start gap-2"
+                    >
+                      {clause.state === "unknown" ? (
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-semantic-warning" />
+                      ) : positive ? (
+                        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-semantic-success" />
+                      ) : (
+                        <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-muted" />
+                      )}
+                      <p className="text-xs leading-5 text-text-secondary">
+                        {describeOpportunityRuleClause(clause, context)}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
-              {outcome.clauseOutcomes.map((clause) => (
-                <p
-                  key={`${clause.field}:${clause.explanation}`}
-                  className="mt-1 pl-3.5 text-[11px] leading-4 text-text-tertiary"
-                >
-                  {clause.explanation}
-                </p>
-              ))}
             </div>
           ))
         )}

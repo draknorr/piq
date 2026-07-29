@@ -93,6 +93,20 @@ function evenlySample<T>(items: T[], limit: number): T[] {
   return sampled;
 }
 
+const PREVIEW_FIELD_LABELS: Partial<Record<OpportunityRuleField, string>> = {
+  ccu_change_30d: "30-day concurrent-player change",
+  ccu_change_7d: "7-day concurrent-player change",
+  ccu_peak: "peak concurrent players",
+  positive_percentage: "positive Steam review rate",
+  reviews_added_30d: "Steam reviews added in the last 30 days",
+  reviews_added_7d: "Steam reviews added in the last 7 days",
+  total_reviews: "total Steam reviews",
+};
+
+function previewFieldLabel(field: OpportunityRuleField): string {
+  return PREVIEW_FIELD_LABELS[field] ?? field.replaceAll("_", " ");
+}
+
 export class OpportunityService {
   constructor(
     private readonly repository: OpportunityRepository,
@@ -163,7 +177,7 @@ export class OpportunityService {
       .filter((item) => requiredFields.has(item.field) && item.percentage < 0.6)
       .map(
         (item) =>
-          `${item.field.replaceAll("_", " ")} is currently available for ${(100 * item.percentage).toFixed(0)}% of the catalog; unknown required values wait for readiness and may later appear as newly qualified.`,
+          `${previewFieldLabel(item.field)} is currently available for ${(100 * item.percentage).toFixed(0)}% of Steam games. Games without this information will wait until it can be confirmed.`,
       );
     if (
       request.rules.required.some((group) =>
@@ -173,7 +187,7 @@ export class OpportunityService {
       )
     ) {
       warnings.push(
-        "Taxonomy-dependent profiles wait for durable PICS readiness; source-blocked games remain visibly unresolved.",
+        "Some games do not yet have complete Steam positioning details. They will be checked again when that information becomes available.",
       );
     }
     let previousCount = aggregate.totalCatalog;

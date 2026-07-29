@@ -138,26 +138,25 @@ function stableFingerprint(values: string[]): string {
 function eventDescription(event: OpportunityWorkerMaterialEvent): string {
   return (
     {
-      announcement: "PublisherIQ observed a new official announcement.",
-      business_model_changed: "The game changed its price or business model.",
+      announcement: "A new official Steam announcement was published.",
+      business_model_changed: "The game's price or business model changed.",
       ccu_breakthrough:
-        "The game crossed a material concurrent-player threshold.",
+        "The game crossed an important concurrent-player milestone.",
       demo_added: "A playable demo became available.",
-      developer_changed: "The listed developer relationship changed.",
-      first_observed: "PublisherIQ observed this Steam app for the first time.",
-      material_change: "A subscribed material Steam signal changed.",
+      developer_changed: "The listed developer changed.",
+      first_observed: "PublisherIQ identified this game on Steam.",
+      material_change: "An important Steam detail changed.",
       platform_expanded:
-        "The game expanded its platform or accessibility support.",
-      publisher_changed: "The listed publisher relationship changed.",
-      release_timing_changed: "The announced release timing changed.",
-      released: "The game transitioned to released.",
-      review_breakthrough: "Review activity crossed a material threshold.",
+        "The game expanded its platform or controller support.",
+      publisher_changed: "The listed publisher changed.",
+      release_timing_changed: "The announced release date changed.",
+      released: "The game was released on Steam.",
+      review_breakthrough: "Steam reviews crossed an important milestone.",
       store_readiness_improved:
-        "The Steam store presentation became more complete.",
-      taxonomy_repositioned:
-        "The game changed its tags, genres, or categories.",
+        "The Steam store page added an important sales asset.",
+      taxonomy_repositioned: "The game's Steam positioning changed.",
       tracked_update: "A tracked title received a subscribed update.",
-    }[event.eventType] ?? "A material Steam signal changed."
+    }[event.eventType] ?? "An important Steam detail changed."
   );
 }
 
@@ -257,9 +256,9 @@ function buildEvidenceItems(
     ["release_state", "Release state"],
     ["tags", "Steam tags"],
     ["has_demo", "Playable demo"],
-    ["total_reviews", "Total reviews"],
-    ["reviews_added_30d", "Reviews added (30d)"],
-    ["ccu_peak", "CCU peak"],
+    ["total_reviews", "Total Steam reviews"],
+    ["reviews_added_30d", "Steam reviews added in the last 30 days"],
+    ["ccu_peak", "Peak concurrent players"],
   ];
   return labels.flatMap(([field, label]) => {
     const evidence = input.fields[field];
@@ -881,7 +880,7 @@ export class OpportunityWorker {
         new Date().toISOString(),
       ),
       strongestEvidence,
-      whyNow: `${eventDescription(context.event)} It now qualifies for ${matches.map((match) => match.profile.name).join(", ")}.`,
+      whyNow: `${eventDescription(context.event)} The game now matches the sourcing criteria you selected.`,
     };
   }
 }

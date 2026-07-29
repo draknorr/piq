@@ -4,10 +4,20 @@ import { installChatFetchMocks } from "./chat-mocks";
 
 const RESULT = {
   appid: 424242,
+  change: {
+    affectedRuleFields: ["price_cents"],
+    after: [{ price_cents: 1499 }],
+    before: [{ price_cents: 1999 }],
+    confidence: "high",
+    effectiveAt: "2026-07-27T07:30:00.000Z",
+    eventType: "business_model_changed",
+    observedAt: "2026-07-27T07:31:00.000Z",
+    signalFamily: "pricing",
+  },
   confidence: "high",
   createdAt: "2026-07-27T08:00:00.000Z",
   eventFingerprint: "event-fingerprint-1",
-  eventLabel: "newly_discovered",
+  eventLabel: "materially_changed",
   id: "11111111-1111-4111-8111-111111111111",
   marketPotential: "meaningful",
   matchedProfiles: [{ id: "profile-1", name: "Cozy scouting" }],
@@ -15,17 +25,118 @@ const RESULT = {
   rank: 1,
   rankComponents: { userFit: 1 },
   score: 82.5,
-  strongestEvidence: ["A playable demo became available."],
-  whyNow: "PublisherIQ observed this Steam game for the first time.",
+  strongestEvidence: ["Price changed from $19.99 to $14.99."],
+  whyNow:
+    "The game changed its price or business model. It now qualifies for Production smoke.",
 };
+
+const CHANGE_RESULTS = [
+  RESULT,
+  {
+    ...RESULT,
+    appid: 424243,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["developer"],
+      after: [{ developers: ["Harborlight"] }],
+      before: [{ developers: ["Old Harbor Studio"] }],
+      eventType: "developer_changed",
+      signalFamily: "store-page",
+    },
+    eventFingerprint: "event-fingerprint-2",
+    id: "11111111-1111-4111-8111-111111111112",
+    name: "Developer Change Game",
+    rank: 2,
+  },
+  {
+    ...RESULT,
+    appid: 424244,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["platforms"],
+      after: [{ platforms: { mac: true, windows: true } }],
+      before: [{ platforms: { mac: false, windows: true } }],
+      eventType: "platform_expanded",
+      signalFamily: "platform",
+    },
+    eventFingerprint: "event-fingerprint-3",
+    id: "11111111-1111-4111-8111-111111111113",
+    name: "Platform Change Game",
+    rank: 3,
+  },
+  {
+    ...RESULT,
+    appid: 424245,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["release_date"],
+      after: [{ release_date: "2026-11-12" }],
+      before: [{ release_date: "2026-10-20" }],
+      eventType: "release_timing_changed",
+      signalFamily: "release",
+    },
+    eventFingerprint: "event-fingerprint-4",
+    id: "11111111-1111-4111-8111-111111111114",
+    name: "Release Date Game",
+    rank: 4,
+  },
+  {
+    ...RESULT,
+    appid: 424246,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["has_demo"],
+      after: [{ has_demo: true }],
+      before: [{ has_demo: false }],
+      eventType: "demo_added",
+      signalFamily: "release",
+    },
+    eventFingerprint: "event-fingerprint-5",
+    id: "11111111-1111-4111-8111-111111111115",
+    name: "Demo Added Game",
+    rank: 5,
+  },
+  {
+    ...RESULT,
+    appid: 424247,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["tags"],
+      after: [{ tags: ["Cozy", "Deckbuilder"] }],
+      before: [{ tags: ["Cozy", "Puzzle"] }],
+      eventType: "taxonomy_repositioned",
+      signalFamily: "taxonomy",
+    },
+    eventFingerprint: "event-fingerprint-6",
+    id: "11111111-1111-4111-8111-111111111116",
+    name: "Tag Change Game",
+    rank: 6,
+  },
+  {
+    ...RESULT,
+    appid: 424248,
+    change: {
+      ...RESULT.change,
+      affectedRuleFields: ["publisher"],
+      after: null,
+      before: null,
+      eventType: "publisher_changed",
+      signalFamily: "store-page",
+    },
+    eventFingerprint: "event-fingerprint-7",
+    id: "11111111-1111-4111-8111-111111111117",
+    name: "Unknown Publisher Game",
+    rank: 7,
+  },
+];
 
 const BOOTSTRAP = {
   channelPreferences: [],
   dailyOverview: {
     coverageWarnings: ["YouTube evidence is partial."],
     groups: {
-      materiallyChanged: [],
-      newlyDiscovered: [RESULT],
+      materiallyChanged: [RESULT],
+      newlyDiscovered: [],
       newlyQualified: [],
       newlyReleased: [],
       trackedUpdates: [],
@@ -58,10 +169,12 @@ const BOOTSTRAP = {
       description: "Small cozy games with a demo",
       id: "profile-1",
       immediateFullMatchEnabled: false,
+      localDeliveryTime: "09:00",
       name: "Cozy scouting",
       nextEvaluationAt: "2026-07-28T08:00:00.000Z",
       sourcePresetName: "Cozy Sim",
       status: "enabled",
+      timezone: "America/Los_Angeles",
       updatedAt: "2026-07-27T07:00:00.000Z",
     },
   ],
@@ -141,7 +254,12 @@ const GAME_RECORD = {
     signature: { businessModel: "premium", tags: ["Cozy", "Exploration"] },
     sourceAt: "2026-07-26T00:00:00.000Z",
   },
-  currentMetrics: { "Total reviews": 42 },
+  currentMetrics: {
+    CcuPeak: 64,
+    positive_percentage: 92,
+    ReviewsAdded30d: 12,
+    TotalReviews: 42,
+  },
   evidence: [
     {
       confidence: "high",
@@ -157,6 +275,8 @@ const GAME_RECORD = {
     confidence: "high",
     demandDirection: "improving",
     distributions: {
+      ccuPeak: { measured: 20, p25: 18, p50: 40, p75: 75, p90: 180 },
+      reviewsAdded30d: { measured: 20, p25: 8, p50: 20, p75: 45, p90: 90 },
       totalReviews: { measured: 20, p25: 120, p50: 330, p75: 720, p90: 1800 },
     },
     explanation: ["20 of 24 released peers have current core measurements."],
@@ -171,17 +291,52 @@ const GAME_RECORD = {
       profileVersionId: "22222222-2222-4222-8222-222222222222",
       ruleOutcomes: {
         excluded: false,
-        excludedOutcomes: [],
+        excludedOutcomes: [
+          {
+            clauseOutcomes: [
+              {
+                actualValue: [],
+                comparisonValue: "Adult",
+                explanation: "content_descriptors contains adult did not pass",
+                field: "content_descriptors",
+                operator: "contains",
+                state: "false",
+              },
+            ],
+            groupId: "group-content",
+            label: "Content fit",
+            state: "false",
+          },
+        ],
         missingRequiredFields: [],
         outcome: "eligible",
         preferenceContribution: 0.5,
-        preferredOutcomes: [],
+        preferredOutcomes: [
+          {
+            clauseOutcomes: [
+              {
+                actualValue: true,
+                comparisonValue: true,
+                explanation: "has_demo was true; equals true passed",
+                field: "has_demo",
+                operator: "equals",
+                state: "true",
+              },
+            ],
+            groupId: "group-demo",
+            label: "Playable build",
+            state: "true",
+          },
+        ],
         requiredOutcomes: [
           {
             clauseOutcomes: [
               {
+                actualValue: ["Cozy", "Exploration"],
+                comparisonValue: "Cozy",
                 explanation: "Steam tags contain Cozy.",
                 field: "tags",
+                operator: "contains",
                 state: "true",
               },
             ],
@@ -240,10 +395,10 @@ const GAME_RECORD = {
     triggeringEvent: {
       classifierVersion: "opportunity-materiality/v1",
       effectiveAt: "2026-07-27T07:30:00.000Z",
-      eventType: "demo_added",
+      eventType: "business_model_changed",
       observedAt: "2026-07-27T07:31:00.000Z",
       registryVersion: "steam-change-event-registry/v1",
-      signalFamily: "release",
+      signalFamily: "pricing",
     },
   },
   rank: {
@@ -267,16 +422,17 @@ const GAME_RECORD = {
   },
   recentChanges: [
     {
-      after: { hasDemo: true },
-      before: { hasDemo: false },
+      affectedRuleFields: ["price_cents"],
+      after: [{ price_cents: 1499 }],
+      before: [{ price_cents: 1999 }],
       confidence: "high",
       effectiveAt: "2026-07-27T07:30:00.000Z",
       eventFingerprint: "event-fingerprint-1",
-      eventType: "demo_added",
+      eventType: "business_model_changed",
       materiality: 0.9,
       observedAt: "2026-07-27T07:31:00.000Z",
       rawEventRefs: [{ source: "storefront" }],
-      signalFamily: "release",
+      signalFamily: "pricing",
     },
   ],
   result: RESULT,
@@ -302,6 +458,10 @@ const GAME_RECORD = {
         viewCount: 12000,
       },
     ],
+  },
+  workspace: {
+    name: "PublisherIQ research",
+    role: "owner",
   },
 };
 
@@ -344,13 +504,19 @@ const PREVIEW = {
 
 async function installOpportunityMocks(
   page: Page,
-  options: { statefulActions?: boolean } = {},
+  options: {
+    bootstrap?: unknown;
+    gameRecord?: unknown;
+    statefulActions?: boolean;
+  } = {},
 ): Promise<Array<{ body: Record<string, unknown>; operation: string }>> {
   const actionRequests: Array<{
     body: Record<string, unknown>;
     operation: string;
   }> = [];
-  const gameRecord = structuredClone(GAME_RECORD);
+  const gameRecord = structuredClone(
+    (options.gameRecord ?? GAME_RECORD) as typeof GAME_RECORD,
+  );
   await installChatFetchMocks(page, { chatResponses: [] });
   await page.route("**/api/opportunities/**", async (route: Route) => {
     const operation = new URL(route.request().url()).pathname.split("/").at(-1);
@@ -396,7 +562,7 @@ async function installOpportunityMocks(
     }
     const payload =
       operation === "bootstrap"
-        ? BOOTSTRAP
+        ? (options.bootstrap ?? BOOTSTRAP)
         : operation === "game-record"
           ? gameRecord
           : operation === "preview-profile"
@@ -423,11 +589,19 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   ).toBeVisible();
   await expect(page.getByText(RESULT.name)).toBeVisible();
   await expect(page.getByText("1 signals worth opening")).toBeVisible();
+  await expect(page.getByText("Data status", { exact: true })).toBeVisible();
+  await page.getByText("Data status", { exact: true }).click();
   await expect(page.getByText("Recent market health changes")).toBeVisible();
   await expect(page.getByText("Quiet → Insufficient Data")).toBeVisible();
   await expect(
     page.getByText(/5,000-game evaluation cap reached/i),
   ).toBeVisible();
+  await expect(
+    page.getByText("Price changed from $19.99 to $14.99."),
+  ).toBeVisible();
+  await expect(page.getByText("Opportunity fit: 83/100")).toBeVisible();
+  await expect(page.getByText("Matches your sourcing profile:")).toBeVisible();
+  await expect(page.getByText(/Production smoke/i)).toHaveCount(0);
 
   await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
   await expect(page).toHaveURL(
@@ -435,11 +609,160 @@ test("daily opportunity brief opens a replayable evidence record", async ({
     { timeout: 20_000 },
   );
   await expect(page.getByRole("heading", { name: RESULT.name })).toBeVisible();
-  await expect(page.getByText("What PublisherIQ observed")).toBeVisible();
+  await expect(
+    page.getByText("Price changed from $19.99 to $14.99.").first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("What drives this opportunity score"),
+  ).toBeVisible();
+  await expect(page.getByText("Dealbreakers checked")).toBeVisible();
+  await expect(page.getByText("Playable demo available")).toBeVisible();
+  await expect(
+    page.getByText("No adult-only content identified"),
+  ).toBeVisible();
+  await expect(page.getByText("Peak concurrent players").first()).toBeVisible();
+  await expect(
+    page.getByText("Median among 20 comparable games").first(),
+  ).toBeVisible();
   await expect(page.getByText("Demo now available")).toBeVisible();
   await expect(page.getByText("Five demos worth playing")).toBeVisible();
-  await expect(page.getByText(/partial coverage/i)).toBeVisible();
-  await expect(page.getByText("Reproduction contract")).toBeVisible();
+  await expect(
+    page.getByText("Data status and technical details"),
+  ).toBeVisible();
+  await expect(page.getByText("opportunity-ranking/v1")).not.toBeVisible();
+  await expect(page.getByText("Reproduction contract")).toHaveCount(0);
+});
+
+test("opportunity list translates stored changes without inventing values", async ({
+  page,
+}) => {
+  await installOpportunityMocks(page, {
+    bootstrap: {
+      ...BOOTSTRAP,
+      dailyOverview: {
+        ...BOOTSTRAP.dailyOverview,
+        groups: {
+          ...BOOTSTRAP.dailyOverview.groups,
+          materiallyChanged: CHANGE_RESULTS,
+        },
+        matchedCount: CHANGE_RESULTS.length,
+      },
+    },
+  });
+  await page.goto("/opportunities");
+
+  await expect(
+    page.getByText("Developer changed from Old Harbor Studio to Harborlight."),
+  ).toBeVisible();
+  await expect(page.getByText("macOS support was added.")).toBeVisible();
+  await expect(
+    page.getByText("Release date moved from Oct 20, 2026 to Nov 12, 2026."),
+  ).toBeVisible();
+  await expect(page.getByText("A playable demo was added.")).toBeVisible();
+  await expect(
+    page.getByText("Steam tags changed: added Deckbuilder; removed Puzzle."),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "The listed publisher changed, but the stored evidence does not contain both names.",
+    ),
+  ).toBeVisible();
+});
+
+for (const role of ["owner", "admin", "member"] as const) {
+  test(`data status follows the ${role} workspace role`, async ({ page }) => {
+    await installOpportunityMocks(page, {
+      bootstrap: {
+        ...BOOTSTRAP,
+        workspace: { ...BOOTSTRAP.workspace, role },
+      },
+    });
+    await page.goto("/opportunities");
+
+    if (role === "member") {
+      await expect(page.getByText("Data status", { exact: true })).toHaveCount(
+        0,
+      );
+    } else {
+      await expect(
+        page.getByText("Data status", { exact: true }),
+      ).toBeVisible();
+    }
+  });
+}
+
+test("opportunity records render truthful null and sparse change evidence", async ({
+  page,
+}) => {
+  await installOpportunityMocks(page, {
+    bootstrap: {
+      ...BOOTSTRAP,
+      dailyOverview: {
+        ...BOOTSTRAP.dailyOverview,
+        groups: {
+          ...BOOTSTRAP.dailyOverview.groups,
+          materiallyChanged: [
+            { ...RESULT, change: null },
+            {
+              ...RESULT,
+              appid: 424249,
+              change: {
+                ...RESULT.change,
+                affectedRuleFields: ["publisher"],
+                after: "{malformed",
+                before: null,
+                eventType: "publisher_changed",
+                signalFamily: "store-page",
+              },
+              eventFingerprint: "event-fingerprint-8",
+              id: "11111111-1111-4111-8111-111111111118",
+              name: "Sparse Evidence Game",
+              rank: 2,
+            },
+          ],
+        },
+        matchedCount: 2,
+      },
+    },
+    gameRecord: {
+      ...GAME_RECORD,
+      recentChanges: [
+        {
+          ...GAME_RECORD.recentChanges[0],
+          affectedRuleFields: ["publisher"],
+          after: "{malformed",
+          before: null,
+          eventType: "publisher_changed",
+          signalFamily: "store-page",
+        },
+      ],
+      result: { ...RESULT, change: null },
+    },
+  });
+  await page.goto("/opportunities");
+
+  await expect(
+    page.getByText(
+      "PublisherIQ identified a new sourcing signal, but no before-and-after snapshot is linked.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "The listed publisher changed, but the stored evidence does not contain both names.",
+    ),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
+  await expect(
+    page.getByText(
+      "PublisherIQ identified a new sourcing signal, but no before-and-after snapshot is linked.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "The listed publisher changed, but the stored evidence does not contain both names.",
+    ),
+  ).toBeVisible();
 });
 
 test("labels presets that do not support released-market health", async ({
@@ -469,7 +792,9 @@ test("profile workshop previews with the same visible rule contract", async ({
   await page.getByRole("button", { name: "Preview profile" }).click();
   await expect(page.getByText("12", { exact: true }).first()).toBeVisible();
   await expect(
-    page.getByText(/current full matches across 200,000 games/i),
+    page.getByText(
+      /games currently match every must-have criterion across 200,000 Steam games/i,
+    ),
   ).toBeVisible();
   await expect(page.getByText(RESULT.name)).toBeVisible();
 });
@@ -492,13 +817,15 @@ test("personal and team controls survive canonical-record reloads", async ({
     page.getByRole("button", { name: "Track", exact: true }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Start research", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "Researching", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Researching", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Research", exact: true }),
+    page.getByRole("button", { name: "Start research", exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Dismiss", exact: true }).click();

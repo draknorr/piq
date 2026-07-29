@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 
-import { humanizeOpportunity, opportunityPost } from "./lib/api";
+import { opportunityPost } from "./lib/api";
 import type {
   OpportunityPreview,
   OpportunityProfileDetail,
@@ -99,13 +99,13 @@ const FIELD_OPTIONS: Array<{
   {
     field: "price_cents",
     group: "Commercial",
-    label: "Price (cents)",
+    label: "Steam price (US dollars)",
     valueType: "number",
   },
   {
     field: "discount_percent",
     group: "Commercial",
-    label: "Discount percent",
+    label: "Current discount (%)",
     valueType: "number",
   },
   {
@@ -117,7 +117,7 @@ const FIELD_OPTIONS: Array<{
   {
     field: "self_published",
     group: "Company",
-    label: "Self-published signal",
+    label: "Appears to be self-published",
     valueType: "boolean",
   },
   {
@@ -129,49 +129,49 @@ const FIELD_OPTIONS: Array<{
   {
     field: "publisher_game_count",
     group: "Company",
-    label: "Publisher game count",
+    label: "Publisher's Steam releases",
     valueType: "number",
   },
   {
     field: "developer_game_count",
     group: "Company",
-    label: "Developer game count",
+    label: "Developer's Steam releases",
     valueType: "number",
   },
   {
     field: "total_reviews",
     group: "Traction",
-    label: "Total reviews",
+    label: "Total Steam reviews",
     valueType: "number",
   },
   {
     field: "positive_percentage",
     group: "Traction",
-    label: "Positive reviews (%)",
+    label: "Positive Steam review rate (%)",
     valueType: "number",
   },
   {
     field: "reviews_added_7d",
     group: "Traction",
-    label: "Reviews added (7d)",
+    label: "Steam reviews added in the last 7 days",
     valueType: "number",
   },
   {
     field: "reviews_added_30d",
     group: "Traction",
-    label: "Reviews added (30d)",
+    label: "Steam reviews added in the last 30 days",
     valueType: "number",
   },
   {
     field: "ccu_peak",
     group: "Traction",
-    label: "CCU peak",
+    label: "Peak concurrent players",
     valueType: "number",
   },
   {
     field: "ccu_change_7d",
     group: "Traction",
-    label: "CCU change (7d)",
+    label: "Concurrent-player change in the last 7 days",
     valueType: "number",
   },
   {
@@ -197,6 +197,22 @@ const OPERATORS: OpportunityRuleOperator[] = [
   "exists",
   "not_exists",
 ];
+
+const OPERATOR_LABELS: Record<OpportunityRuleOperator, string> = {
+  between: "Is between",
+  contains: "Includes",
+  equals: "Is",
+  exists: "Is available",
+  greater_than: "Is more than",
+  greater_than_or_equal: "Is at least",
+  in: "Is one of",
+  less_than: "Is fewer than",
+  less_than_or_equal: "Is no more than",
+  not_contains: "Does not include",
+  not_equals: "Is not",
+  not_exists: "Is not available",
+  not_in: "Is not one of",
+};
 
 const SIGNALS: Array<{ label: string; value: OpportunitySignalFamily }> = [
   { label: "Release", value: "release" },
@@ -257,7 +273,10 @@ function parseValue(
   if (operator === "between") {
     return raw
       .split(",")
-      .map((value) => Number(value.trim()))
+      .map((value) => {
+        const number = Number(value.trim());
+        return field === "price_cents" ? Math.round(number * 100) : number;
+      })
       .filter(Number.isFinite)
       .slice(0, 2);
   }
@@ -269,13 +288,26 @@ function parseValue(
   }
   if (valueType === "number") {
     const number = Number(raw);
-    return Number.isFinite(number) ? number : 0;
+    if (!Number.isFinite(number)) {
+      return 0;
+    }
+    return field === "price_cents" ? Math.round(number * 100) : number;
   }
   return raw;
 }
 
-function displayValue(value: OpportunityRuleClause["value"]): string {
-  return Array.isArray(value) ? value.join(", ") : String(value ?? "");
+function displayValue(
+  value: OpportunityRuleClause["value"],
+  field: OpportunityRuleField,
+): string {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .map((item) =>
+      field === "price_cents" && typeof item === "number"
+        ? (item / 100).toFixed(2)
+        : String(item ?? ""),
+    )
+    .join(", ");
 }
 
 interface ProfileBuilderProps {
@@ -424,7 +456,7 @@ export function ProfileBuilder({
     if (
       status === "archived" &&
       !window.confirm(
-        "Archive this profile? Its versions and historical results will be preserved.",
+        "Archive this profile? Its past opportunity results will remain available.",
       )
     ) {
       return;
@@ -501,18 +533,18 @@ export function ProfileBuilder({
             [
               [
                 "required",
-                "Required",
-                "Every group must pass. Unknown source values wait for readiness.",
+                "Must have",
+                "Every group must match. Games stay out of your brief until the required information is available.",
               ],
               [
                 "preferred",
-                "Preferred",
-                "These rank a match higher but never make it eligible alone.",
+                "Nice to have",
+                "These strengths improve opportunity fit but cannot qualify a game on their own.",
               ],
               [
                 "excluded",
-                "Excluded",
-                "A positive match suppresses the game; unknown never excludes.",
+                "Dealbreakers",
+                "A confirmed dealbreaker keeps the game out. Missing information never counts against a game.",
               ],
             ] as const
           ).map(([section, title, detail]) => (
@@ -531,12 +563,11 @@ export function ProfileBuilder({
             <div className="flex items-end justify-between gap-4">
               <div>
                 <h3 className="text-sm font-semibold text-text-primary">
-                  Reappearance signals
+                  Changes worth resurfacing
                 </h3>
                 <p className="mt-1 max-w-xl text-xs leading-5 text-text-tertiary">
-                  Existing matches return only after a selected material event.
-                  Rule-input changes still re-evaluate eligibility in the
-                  background.
+                  Choose the Steam changes that should bring an existing match
+                  back into your daily brief.
                 </p>
               </div>
             </div>
@@ -575,11 +606,11 @@ export function ProfileBuilder({
               />
               <span>
                 <span className="block text-sm font-medium text-text-primary">
-                  Immediate new full-match alerts
+                  Alert me immediately about brand-new matches
                 </span>
                 <span className="mt-0.5 block text-xs leading-5 text-text-tertiary">
-                  Rare by design: first observation only, after every required
-                  rule is known and passes.
+                  Sent only when PublisherIQ first identifies a game and every
+                  must-have criterion is confirmed.
                 </span>
               </span>
             </label>
@@ -670,9 +701,8 @@ export function ProfileBuilder({
                 Test before enabling
               </p>
               <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                Preview uses the same tri-state rule engine as the daily worker
-                and reports source coverage instead of treating missing evidence
-                as false.
+                See which games match today and where missing information may
+                narrow the result.
               </p>
             </div>
           ) : (
@@ -682,8 +712,8 @@ export function ProfileBuilder({
                   {preview.totalMatches.toLocaleString()}
                 </p>
                 <p className="mt-1 text-xs text-text-tertiary">
-                  current full matches across{" "}
-                  {preview.evaluatedCatalogSize.toLocaleString()} games
+                  games currently match every must-have criterion across{" "}
+                  {preview.evaluatedCatalogSize.toLocaleString()} Steam games
                 </p>
               </div>
               {preview.eliminationFunnel.length > 0 && (
@@ -735,7 +765,7 @@ export function ProfileBuilder({
                       <p className="mt-1 line-clamp-2 text-xs text-text-tertiary">
                         {match.tags.slice(0, 4).join(" · ") ||
                           match.releaseState ||
-                          "Steam app"}
+                          "Game details are still developing"}
                       </p>
                     </div>
                   ))}
@@ -980,7 +1010,7 @@ function ClauseEditor({
       >
         {OPERATORS.map((operator) => (
           <option key={operator} value={operator}>
-            {humanizeOpportunity(operator)}
+            {OPERATOR_LABELS[operator]}
           </option>
         ))}
       </select>
@@ -1004,7 +1034,7 @@ function ClauseEditor({
                 ? "number"
                 : "text"
             }
-            value={displayValue(clause.value)}
+            value={displayValue(clause.value, clause.field)}
             onChange={(event) =>
               onChange({
                 ...clause,
@@ -1015,7 +1045,15 @@ function ClauseEditor({
                 ),
               })
             }
-            placeholder={clause.operator === "between" ? "min, max" : "Value"}
+            placeholder={
+              clause.operator === "between"
+                ? clause.field === "price_cents"
+                  ? "minimum, maximum in US dollars"
+                  : "minimum, maximum"
+                : clause.field === "price_cents"
+                  ? "US dollars"
+                  : "Value"
+            }
             className="h-9 min-w-0 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent-primary"
             aria-label="Value"
           />

@@ -33,18 +33,41 @@ Steam catalog/lifecycle/change events
 The implementation does not reuse legacy pin/alert storage or infer newness from
 mutable projection timestamps.
 
+## Browser response contract
+
+The browser contract is additive and customer-facing:
+
+- each daily result includes `change`, either the stored observed change or
+  `null` when no material-event snapshot is linked;
+- the observed-change shape includes event and signal type, effective and
+  observed timestamps, confidence, affected rule fields, and the stored
+  before/after evidence;
+- the canonical game record exposes `workspace.name` and a role limited to
+  `owner`, `admin`, or `member`;
+- recent changes reuse the same observed-change shape; and
+- owner/admin users can open operational data status, while member users see
+  customer intelligence without source-pipeline or calculation diagnostics.
+
+Presentation code must format only what the stored evidence supports. Null,
+sparse, or malformed before/after payloads receive a truthful fallback and must
+never produce an invented comparison. Historical `why_now` rows are not
+backfilled; future natural evaluations use the current customer-facing copy.
+
 ## Schema and seed files
 
 Apply in this order only after a separately approved production-write window:
 
 1. `packages/data-plane/sql/tiger-bootstrap/0097_opportunity_mvp.sql`
 2. `packages/data-plane/sql/tiger-bootstrap/0098_opportunity_preset_seed.sql`
+3. `packages/data-plane/sql/tiger-bootstrap/0099_opportunity_evaluation_performance_v1.sql`
 
 `0097` creates the additive `opportunity` schema and its versioned control,
 event, run, result, state, queue, outbox, audit, cohort, market, and health
 tables plus the timezone-aware `next_profile_evaluation_v1` scheduler.
 `0098` inserts immutable v1 versions for the eight launch presets and can be
-rerun safely.
+rerun safely. `0099` adds the versioned evaluation-input and cohort projections,
+exact persistent cohort cache, source-revision fences, bounded bulk persistence,
+and per-run phase timings.
 
 No checked-in command applies these files automatically. Before a production
 write, record:
@@ -189,6 +212,35 @@ GROUP BY status, run_kind
 ORDER BY run_kind, status
 LIMIT 30;
 
+SELECT
+  id,
+  status,
+  candidate_count,
+  evaluated_count,
+  result_count,
+  pending_count,
+  duplicate_count,
+  phase_timings,
+  started_at,
+  completed_at
+FROM opportunity.runs
+WHERE run_kind = 'daily'
+ORDER BY started_at DESC
+LIMIT 10;
+
+SELECT
+  id,
+  state,
+  attempts,
+  last_error_code,
+  last_error_message,
+  worker_id,
+  completed_at
+FROM opportunity.work_queue
+WHERE kind = 'daily_evaluation'
+ORDER BY created_at DESC
+LIMIT 20;
+
 SELECT cursor_key, cursor_value, updated_at
 FROM opportunity.worker_cursors
 ORDER BY cursor_key
@@ -205,7 +257,11 @@ Investigate:
 - growing retry/dead-letter counts by lane;
 - source-blocked work;
 - delivery rows exhausting retry attempts;
-- daily runs without a successful completion; and
+- daily runs without a successful completion;
+- completed optimized daily runs with an empty `phase_timings` object;
+- daily queue items with attempts above one or an unsettled current state;
+- duplicate counts or repeated refresh work growing without new source
+  revisions; and
 - stale materialization cursors.
 
 Queue failures use exponential backoff and dead-letter after the configured
@@ -234,12 +290,16 @@ evidence, not a new failure.
 ## Rollout
 
 1. Confirm change-intelligence and PICS source readiness with read-only checks.
-2. Record backup/PITR proof and explicit database-write approval.
-3. Apply `0097`, then `0098`.
-4. Run the post-apply read-only verification.
-5. Deploy query-api with auth verification and the shared encryption key.
-6. Deploy the admin app.
-7. Deploy one Railway opportunity worker.
+2. Record backup/PITR proof and explicit database-write approval only when a
+   migration is actually required.
+3. Apply `0097`, `0098`, and `0099` only in an approved new environment where
+   they are absent. Never reapply them as part of an application rollout.
+4. Run the post-apply read-only verification when schema work was authorized.
+5. Deploy query API and verify health, readiness, contracts, and authenticated
+   Opportunity responses.
+6. Deploy one Railway Opportunity worker from the same exact source revision.
+7. After worker startup and lease gates pass, deploy the admin app from that
+   same revision.
 8. Create a test profile, preview it, enable it, and verify one canonical
    website result before enabling delivery.
 9. Enable email, then Slack, for a test identity and confirm only one outbox
@@ -247,10 +307,12 @@ evidence, not a new failure.
 10. Review queue, run, source-health, cohort, and preset-health evidence before a
     broader rollout.
 
-The July 27 rollout completed steps 1–7 and the profile
-create/clone/preview/enable/pause/resume portion of step 8. A non-empty result,
-real-result state actions, and external provider sends remain open; see the
-[production rollout closeout](../../reference/opportunity-production-rollout-closeout-2026-07-27.md).
+For the July 29 controlled release, migrations `0097`, `0098`, and `0099`
+already exist and are out of scope. Do not force a daily run or configure an
+external destination. Completion requires observing the next natural daily
+cycle with one attempt, settled queue work, no current error, non-empty phase
+timings, no duplicate refresh amplification, and runtime within the tested
+performance envelope.
 
 ## Rollback
 
