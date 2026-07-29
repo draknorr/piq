@@ -7,6 +7,8 @@ import {
   OPPORTUNITY_HEALTH_VERSION,
   OPPORTUNITY_MARKET_VERSION,
   OPPORTUNITY_RANKING_VERSION,
+  OPPORTUNITY_RULE_FIELDS,
+  OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
   type OpportunityBootstrapResponse,
   type OpportunityChannelPreferenceSummary,
   type OpportunityDailyOverview,
@@ -86,6 +88,47 @@ interface RuleInputRow extends QueryResultRow {
   tags: string[] | null;
   total_reviews: number | null;
 }
+
+export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
+  OpportunityRuleField,
+  "catalog" | "market_metrics" | "pics" | "storefront"
+> = {
+  app_type: "catalog",
+  appid: "catalog",
+  categories: "pics",
+  ccu_change_30d: "market_metrics",
+  ccu_change_7d: "market_metrics",
+  ccu_peak: "market_metrics",
+  content_descriptors: "pics",
+  controller_support: "pics",
+  days_until_release: "storefront",
+  developer: "storefront",
+  developer_game_count: "storefront",
+  discount_percent: "storefront",
+  genres: "pics",
+  has_demo: "pics",
+  has_purchase_packages: "storefront",
+  is_free: "storefront",
+  is_released: "storefront",
+  languages: "pics",
+  name: "catalog",
+  no_publisher_listed: "storefront",
+  platforms: "pics",
+  positive_percentage: "market_metrics",
+  price_cents: "storefront",
+  publisher: "storefront",
+  publisher_game_count: "storefront",
+  release_date: "storefront",
+  release_state: "storefront",
+  reviews_added_30d: "market_metrics",
+  reviews_added_7d: "market_metrics",
+  self_published: "storefront",
+  steam_deck: "pics",
+  tags: "pics",
+  total_reviews: "market_metrics",
+};
+
+const RULE_INPUT_PROJECTION_BATCH_SIZE = 500;
 
 interface ProfileRow extends QueryResultRow {
   current_version: number | null;
@@ -174,6 +217,27 @@ function stableHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function ruleInputSourceWatermarks(
+  input: OpportunityEvaluationInput,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    OPPORTUNITY_RULE_FIELDS.map((field) => {
+      const evidence = input.fields[field];
+      return [
+        field,
+        evidence
+          ? {
+              calculationVersion: evidence.calculationVersion ?? null,
+              source: evidence.source,
+              sourceAt: evidence.sourceAt,
+              state: evidence.state,
+            }
+          : null,
+      ];
+    }),
+  );
+}
+
 function knownField(
   value: unknown,
   source: string,
@@ -234,7 +298,22 @@ function normalizeStringArray(value: unknown): string[] {
   return [];
 }
 
-function buildRuleInput(row: RuleInputRow): OpportunityEvaluationInput {
+export function assertOpportunityRuleInputComplete(
+  input: OpportunityEvaluationInput,
+): void {
+  const missing = OPPORTUNITY_RULE_FIELDS.filter(
+    (field) => input.fields[field] === undefined,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Opportunity rule-input projection ${OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION} does not support: ${missing.join(", ")}.`,
+    );
+  }
+}
+
+function buildOpportunityRuleInput(
+  row: RuleInputRow,
+): OpportunityEvaluationInput {
   const storefrontReady = row.storefront_status === "ready";
   const picsReady = row.pics_status === "ready";
   const catalogSourceAt = iso(row.catalog_source_at);
@@ -347,11 +426,13 @@ function buildRuleInput(row: RuleInputRow): OpportunityEvaluationInput {
     "signal-windows/v1",
   );
 
-  return {
+  const input = {
     appid: row.appid,
     fields,
     name: row.name,
   };
+  assertOpportunityRuleInputComplete(input);
+  return input;
 }
 
 const RULE_INPUT_SELECT = `
@@ -465,6 +546,156 @@ const RULE_INPUT_SELECT = `
   LEFT JOIN ops.app_data_readiness readiness_market
     ON readiness_market.appid = a.appid
     AND readiness_market.source = 'market_metrics'
+`;
+
+const RULE_INPUT_BATCH_SELECT = `
+  WITH input_appids AS MATERIALIZED (
+    SELECT DISTINCT input.appid
+    FROM unnest($1::integer[]) AS input(appid)
+  ),
+  tag_values AS MATERIALIZED (
+    SELECT
+      app_tag.appid,
+      array_agg(tag.name ORDER BY app_tag.rank NULLS LAST, tag.name) AS tags
+    FROM legacy.app_steam_tags app_tag
+    JOIN input_appids input ON input.appid = app_tag.appid
+    JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id
+    GROUP BY app_tag.appid
+  ),
+  genre_values AS MATERIALIZED (
+    SELECT
+      app_genre.appid,
+      array_agg(
+        genre.name
+        ORDER BY app_genre.is_primary DESC, genre.name
+      ) AS genres
+    FROM legacy.app_genres app_genre
+    JOIN input_appids input ON input.appid = app_genre.appid
+    JOIN legacy.steam_genres genre
+      ON genre.genre_id = app_genre.genre_id
+    GROUP BY app_genre.appid
+  ),
+  category_values AS MATERIALIZED (
+    SELECT
+      app_category.appid,
+      array_agg(category.name ORDER BY category.name) AS categories
+    FROM legacy.app_categories app_category
+    JOIN input_appids input ON input.appid = app_category.appid
+    JOIN legacy.steam_categories category
+      ON category.category_id = app_category.category_id
+    GROUP BY app_category.appid
+  ),
+  publisher_values AS MATERIALIZED (
+    SELECT
+      app_publisher.appid,
+      array_agg(publisher.name ORDER BY publisher.name) AS publishers,
+      max(publisher.game_count) AS publisher_game_count
+    FROM legacy.app_publishers app_publisher
+    JOIN input_appids input ON input.appid = app_publisher.appid
+    JOIN legacy.publishers publisher
+      ON publisher.id = app_publisher.publisher_id
+    GROUP BY app_publisher.appid
+  ),
+  developer_values AS MATERIALIZED (
+    SELECT
+      app_developer.appid,
+      array_agg(developer.name ORDER BY developer.name) AS developers,
+      max(developer.game_count) AS developer_game_count
+    FROM legacy.app_developers app_developer
+    JOIN input_appids input ON input.appid = app_developer.appid
+    JOIN legacy.developers developer
+      ON developer.id = app_developer.developer_id
+    GROUP BY app_developer.appid
+  ),
+  demo_values AS MATERIALIZED (
+    SELECT demo.parent_appid AS appid, true AS has_demo
+    FROM legacy.app_demos demo
+    JOIN input_appids input ON input.appid = demo.parent_appid
+    GROUP BY demo.parent_appid
+  )
+  SELECT
+    a.appid,
+    a.name,
+    a.type AS app_type,
+    a.is_free,
+    a.is_released,
+    a.release_state,
+    a.release_date,
+    COALESCE(a.current_price_cents, m.price_cents) AS price_cents,
+    COALESCE(
+      a.current_discount_percent,
+      m.discount_percent
+    ) AS discount_percent,
+    a.has_purchase_packages,
+    a.platforms,
+    a.controller_support,
+    a.languages,
+    a.content_descriptors,
+    m.total_reviews,
+    m.positive_percentage,
+    m.ccu_peak,
+    sw.review_change_7d AS reviews_added_7d,
+    sw.review_change_30d AS reviews_added_30d,
+    CASE
+      WHEN sw.ccu_peak_first_7d IS NULL
+        OR sw.ccu_peak_latest_7d IS NULL
+        THEN NULL
+      WHEN sw.ccu_peak_first_7d = 0
+        THEN CASE WHEN sw.ccu_peak_latest_7d > 0 THEN 1.0 ELSE 0.0 END
+      ELSE
+        (sw.ccu_peak_latest_7d - sw.ccu_peak_first_7d)::numeric
+        / ABS(sw.ccu_peak_first_7d)::numeric
+    END AS ccu_change_7d,
+    CASE
+      WHEN sw.ccu_peak_first_30d IS NULL
+        OR sw.ccu_peak_latest_30d IS NULL
+        THEN NULL
+      WHEN sw.ccu_peak_first_30d = 0
+        THEN CASE WHEN sw.ccu_peak_latest_30d > 0 THEN 1.0 ELSE 0.0 END
+      ELSE
+        (sw.ccu_peak_latest_30d - sw.ccu_peak_first_30d)::numeric
+        / ABS(sw.ccu_peak_first_30d)::numeric
+    END AS ccu_change_30d,
+    sw.source_max_metric_date,
+    readiness_catalog.source_at AS catalog_source_at,
+    readiness_storefront.status AS storefront_status,
+    readiness_storefront.source_at AS storefront_source_at,
+    readiness_pics.status AS pics_status,
+    readiness_pics.source_at AS pics_source_at,
+    readiness_market.status AS market_status,
+    COALESCE(tag_values.tags, '{}'::text[]) AS tags,
+    COALESCE(genre_values.genres, '{}'::text[]) AS genres,
+    COALESCE(category_values.categories, '{}'::text[]) AS categories,
+    COALESCE(publisher_values.publishers, '{}'::text[]) AS publishers,
+    COALESCE(developer_values.developers, '{}'::text[]) AS developers,
+    publisher_values.publisher_game_count,
+    developer_values.developer_game_count,
+    COALESCE(demo_values.has_demo, false) AS has_demo,
+    deck.category AS steam_deck
+  FROM input_appids input
+  JOIN legacy.apps a ON a.appid = input.appid
+  LEFT JOIN legacy.latest_daily_metrics m ON m.appid = a.appid
+  LEFT JOIN metrics.app_signal_windows_v1 sw ON sw.appid = a.appid
+  LEFT JOIN ops.app_data_readiness readiness_catalog
+    ON readiness_catalog.appid = a.appid
+    AND readiness_catalog.source = 'catalog'
+  LEFT JOIN ops.app_data_readiness readiness_storefront
+    ON readiness_storefront.appid = a.appid
+    AND readiness_storefront.source = 'storefront'
+  LEFT JOIN ops.app_data_readiness readiness_pics
+    ON readiness_pics.appid = a.appid
+    AND readiness_pics.source = 'pics'
+  LEFT JOIN ops.app_data_readiness readiness_market
+    ON readiness_market.appid = a.appid
+    AND readiness_market.source = 'market_metrics'
+  LEFT JOIN tag_values ON tag_values.appid = a.appid
+  LEFT JOIN genre_values ON genre_values.appid = a.appid
+  LEFT JOIN category_values ON category_values.appid = a.appid
+  LEFT JOIN publisher_values ON publisher_values.appid = a.appid
+  LEFT JOIN developer_values ON developer_values.appid = a.appid
+  LEFT JOIN demo_values ON demo_values.appid = a.appid
+  LEFT JOIN legacy.app_steam_deck deck ON deck.appid = a.appid
+  ORDER BY a.appid
 `;
 
 export class OpportunityRepository {
@@ -1905,10 +2136,79 @@ export class OpportunityRepository {
       `,
       compiled.values,
     );
-    return result.rows.map(buildRuleInput);
+    return result.rows.map(buildOpportunityRuleInput);
   }
 
-  async getRuleInputs(appids: number[]): Promise<OpportunityEvaluationInput[]> {
+  private async persistRuleInputProjection(
+    inputs: OpportunityEvaluationInput[],
+  ): Promise<void> {
+    for (
+      let offset = 0;
+      offset < inputs.length;
+      offset += RULE_INPUT_PROJECTION_BATCH_SIZE
+    ) {
+      const batch = inputs
+        .slice(offset, offset + RULE_INPUT_PROJECTION_BATCH_SIZE)
+        .map((input) => ({
+          appid: input.appid,
+          fields: input.fields,
+          input_fingerprint: stableHash({
+            appid: input.appid,
+            fields: input.fields,
+            name: input.name,
+          }),
+          name: input.name,
+          source_watermarks: ruleInputSourceWatermarks(input),
+        }));
+      await this.pool.query(
+        `
+          INSERT INTO opportunity.rule_input_projection_v1 (
+            appid,
+            projection_version,
+            as_of_date,
+            input_fingerprint,
+            name,
+            fields,
+            source_watermarks,
+            calculated_at
+          )
+          SELECT
+            projected.appid,
+            $2,
+            CURRENT_DATE,
+            projected.input_fingerprint,
+            projected.name,
+            projected.fields,
+            projected.source_watermarks,
+            clock_timestamp()
+          FROM jsonb_to_recordset($1::jsonb) AS projected(
+            appid integer,
+            fields jsonb,
+            input_fingerprint text,
+            name text,
+            source_watermarks jsonb
+          )
+          ON CONFLICT (appid, projection_version)
+          DO UPDATE SET
+            as_of_date = EXCLUDED.as_of_date,
+            input_fingerprint = EXCLUDED.input_fingerprint,
+            name = EXCLUDED.name,
+            fields = EXCLUDED.fields,
+            source_watermarks = EXCLUDED.source_watermarks,
+            calculated_at = EXCLUDED.calculated_at
+          WHERE opportunity.rule_input_projection_v1.input_fingerprint
+              IS DISTINCT FROM EXCLUDED.input_fingerprint
+             OR opportunity.rule_input_projection_v1.as_of_date
+              IS DISTINCT FROM EXCLUDED.as_of_date
+        `,
+        [JSON.stringify(batch), OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION],
+      );
+    }
+  }
+
+  async getRuleInputsLegacy(
+    appids: number[],
+  ): Promise<OpportunityEvaluationInput[]> {
     const bounded = Array.from(
       new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
     ).slice(0, 5_000);
@@ -1923,7 +2223,44 @@ export class OpportunityRepository {
       `,
       [bounded],
     );
-    return result.rows.map(buildRuleInput);
+    return result.rows.map(buildOpportunityRuleInput);
+  }
+
+  async getRuleInputs(appids: number[]): Promise<OpportunityEvaluationInput[]> {
+    const bounded = Array.from(
+      new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
+    ).slice(0, 5_000);
+    if (bounded.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<RuleInputRow>(
+      RULE_INPUT_BATCH_SELECT,
+      [bounded],
+    );
+    const inputs = result.rows.map(buildOpportunityRuleInput);
+    await this.persistRuleInputProjection(inputs);
+    return inputs;
+  }
+
+  /**
+   * Executes the production set-based projection without persistence.
+   * Callers must hold a read-only transaction when using this for live shadow
+   * validation so every downstream comparison sees one stable source snapshot.
+   */
+  async getRuleInputsShadow(
+    appids: number[],
+    client: PoolClient | null = null,
+  ): Promise<OpportunityEvaluationInput[]> {
+    const bounded = Array.from(
+      new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
+    ).slice(0, 5_000);
+    if (bounded.length === 0) {
+      return [];
+    }
+    const result = client
+      ? await client.query<RuleInputRow>(RULE_INPUT_BATCH_SELECT, [bounded])
+      : await this.pool.query<RuleInputRow>(RULE_INPUT_BATCH_SELECT, [bounded]);
+    return result.rows.map(buildOpportunityRuleInput);
   }
 
   async getPresetHealthInputs(
@@ -1944,7 +2281,7 @@ export class OpportunityRepository {
       `,
       compiled.values,
     );
-    return result.rows.map(buildRuleInput);
+    return result.rows.map(buildOpportunityRuleInput);
   }
 
   async getPreviewHistoryEstimate(

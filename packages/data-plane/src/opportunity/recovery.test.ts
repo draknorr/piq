@@ -72,8 +72,17 @@ describe("opportunity failure recovery and preservation contracts", () => {
     assert.match(repositorySource, /LIMIT 51/);
     assert.match(
       repositorySource,
-      /\.filter\(\(row\) => row\.appid !== input\.appid\)[\s\S]*?\.slice\(0, 50\)/,
+      /\.filter\(\(row\) => row\.appid !== subject\.appid\)[\s\S]*?\.slice\(0, 50\)/,
     );
+    assert.match(workerSource, /getReleasedCohorts\(/);
+    assert.match(
+      repositorySource,
+      /opportunity\.released_cohort_features_v2 feature/,
+    );
+    assert.match(repositorySource, /const tagPostings = new Map/);
+    assert.match(repositorySource, /const genrePostings = new Map/);
+    assert.match(repositorySource, /rows\.slice\(0, 51\)/);
+    assert.match(repositorySource, /opportunity\.released_cohort_cache_v1/);
     assert.match(repositorySource, /attempt <= 2/);
     assert.match(repositorySource, /isStatementTimeout\(error\)/);
     assert.match(repositorySource, /signal\.as_of_date < CURRENT_DATE - 1/);

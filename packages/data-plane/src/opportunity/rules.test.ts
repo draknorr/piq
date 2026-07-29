@@ -2,16 +2,21 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  OPPORTUNITY_RULE_FIELDS,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityEvaluationInput,
   type OpportunityFieldValue,
+  type OpportunityRuleOperator,
   type OpportunityRuleSet,
 } from "./types.js";
 import {
   describeOpportunityRuleSet,
+  evaluateOpportunityClause,
+  evaluateOpportunityGroup,
   evaluateOpportunityProfile,
   supportsReleasedMarketHealth,
 } from "./rules.js";
+import { OPPORTUNITY_RULE_INPUT_FIELD_SOURCES } from "./repository.js";
 
 function known(value: unknown): OpportunityFieldValue {
   return {
@@ -112,6 +117,173 @@ function input(
 }
 
 describe("opportunity rule engine", () => {
+  it("preserves all 33 supported fields through the versioned input contract", () => {
+    assert.equal(OPPORTUNITY_RULE_FIELDS.length, 33);
+    assert.deepEqual(
+      Object.keys(OPPORTUNITY_RULE_INPUT_FIELD_SOURCES).sort(),
+      [...OPPORTUNITY_RULE_FIELDS].sort(),
+    );
+    const fields = Object.fromEntries(
+      OPPORTUNITY_RULE_FIELDS.map((field) => [field, known(`${field}-value`)]),
+    ) as OpportunityEvaluationInput["fields"];
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: [],
+        required: [
+          {
+            clauses: OPPORTUNITY_RULE_FIELDS.map((field) => ({
+              field,
+              id: field,
+              operator: "exists" as const,
+            })),
+            id: "all-supported-fields",
+            label: "All supported fields",
+            operator: "all",
+          },
+        ],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input(fields),
+    );
+
+    assert.equal(result.outcome, "eligible");
+    assert.equal(result.requiredOutcomes[0]?.clauseOutcomes.length, 33);
+  });
+
+  it("preserves the truth contract for all 13 operators", () => {
+    const fixtures: Array<{
+      actual: unknown;
+      expected?: boolean | number | string | Array<boolean | number | string>;
+      operator: OpportunityRuleOperator;
+    }> = [
+      { actual: "Indie", expected: "indie", operator: "equals" },
+      { actual: "Indie", expected: "AAA", operator: "not_equals" },
+      { actual: "Indie", expected: ["AAA", "indie"], operator: "in" },
+      { actual: "Indie", expected: ["AAA", "AA"], operator: "not_in" },
+      {
+        actual: ["Roguelike", "Deckbuilding"],
+        expected: ["roguelike", "deckbuilding"],
+        operator: "contains",
+      },
+      {
+        actual: ["Roguelike", "Deckbuilding"],
+        expected: "horror",
+        operator: "not_contains",
+      },
+      { actual: 101, expected: 100, operator: "greater_than" },
+      {
+        actual: 100,
+        expected: 100,
+        operator: "greater_than_or_equal",
+      },
+      { actual: 99, expected: 100, operator: "less_than" },
+      {
+        actual: 100,
+        expected: 100,
+        operator: "less_than_or_equal",
+      },
+      { actual: 100, expected: [99, 101], operator: "between" },
+      { actual: false, operator: "exists" },
+      { actual: null, operator: "not_exists" },
+    ];
+
+    for (const fixture of fixtures) {
+      const result = evaluateOpportunityClause(
+        {
+          field: "tags",
+          id: fixture.operator,
+          operator: fixture.operator,
+          value: fixture.expected,
+        },
+        input({ tags: known(fixture.actual) }),
+      );
+      assert.equal(result.state, "true", fixture.operator);
+    }
+  });
+
+  it("preserves ANY and ALL three-state truth tables", () => {
+    const group = (operator: "any" | "all") => ({
+      clauses: [
+        {
+          field: "has_demo" as const,
+          id: "known",
+          operator: "equals" as const,
+          value: true,
+        },
+        {
+          field: "is_free" as const,
+          id: "unknown",
+          operator: "equals" as const,
+          value: true,
+        },
+      ],
+      id: operator,
+      label: operator,
+      operator,
+    });
+
+    assert.equal(
+      evaluateOpportunityGroup(
+        group("all"),
+        input({ has_demo: known(false), is_free: unknown("pending") }),
+      ).state,
+      "false",
+    );
+    assert.equal(
+      evaluateOpportunityGroup(
+        group("all"),
+        input({ has_demo: known(true), is_free: unknown("pending") }),
+      ).state,
+      "unknown",
+    );
+    assert.equal(
+      evaluateOpportunityGroup(
+        group("any"),
+        input({ has_demo: known(true), is_free: unknown("pending") }),
+      ).state,
+      "true",
+    );
+    assert.equal(
+      evaluateOpportunityGroup(
+        group("any"),
+        input({ has_demo: known(false), is_free: unknown("pending") }),
+      ).state,
+      "unknown",
+    );
+  });
+
+  it("preserves low, medium, and high preference weights", () => {
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: (["low", "medium", "high"] as const).map((importance) => ({
+          clauses: [
+            {
+              field: "has_demo" as const,
+              id: importance,
+              operator: "equals" as const,
+              value: true,
+            },
+          ],
+          id: importance,
+          importance,
+          label: importance,
+          operator: "all" as const,
+        })),
+        required: [],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input({ has_demo: known(true) }),
+    );
+
+    assert.deepEqual(
+      result.preferredOutcomes.map((outcome) => outcome.contribution),
+      [1 / 6, 2 / 6, 3 / 6],
+    );
+    assert.equal(result.preferenceContribution, 1);
+  });
+
   it("excludes explicitly unreleased rule sets from released-market health", () => {
     assert.equal(supportsReleasedMarketHealth(RULES), false);
     assert.equal(

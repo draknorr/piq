@@ -1,4 +1,5 @@
 import {
+  OPPORTUNITY_RULE_FIELDS,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityClauseOutcome,
   type OpportunityEvaluationInput,
@@ -38,41 +39,7 @@ const SUPPORTED_OPERATORS = new Set<OpportunityRuleOperator>([
   "not_exists",
 ]);
 
-const SUPPORTED_FIELDS = new Set<OpportunityRuleField>([
-  "appid",
-  "name",
-  "app_type",
-  "developer",
-  "publisher",
-  "release_state",
-  "is_released",
-  "release_date",
-  "days_until_release",
-  "tags",
-  "genres",
-  "categories",
-  "is_free",
-  "price_cents",
-  "discount_percent",
-  "has_purchase_packages",
-  "platforms",
-  "controller_support",
-  "steam_deck",
-  "languages",
-  "has_demo",
-  "no_publisher_listed",
-  "self_published",
-  "publisher_game_count",
-  "developer_game_count",
-  "content_descriptors",
-  "total_reviews",
-  "positive_percentage",
-  "reviews_added_7d",
-  "reviews_added_30d",
-  "ccu_peak",
-  "ccu_change_7d",
-  "ccu_change_30d",
-]);
+const SUPPORTED_FIELDS = new Set<OpportunityRuleField>(OPPORTUNITY_RULE_FIELDS);
 
 function clauseRequiresUnreleasedGame(clause: OpportunityRuleClause): boolean {
   return (
