@@ -1,7 +1,6 @@
 """PICS-specific operations for fetching Steam app data."""
 
 import logging
-import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional
 
@@ -10,6 +9,12 @@ import gevent
 from .client import PICSSteamClient
 
 logger = logging.getLogger(__name__)
+
+
+def _cooperative_sleep(seconds: float) -> None:
+    """Yield the Steam/gevent hub during delays and retry backoff."""
+
+    gevent.sleep(seconds)
 
 
 @dataclass
@@ -60,6 +65,8 @@ class PICSFetcher:
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
         self.change_poll_timeout = change_poll_timeout or self.timeout
+        self.last_product_info_attempts = 0
+        self.last_change_poll_attempts = 0
 
     def _ensure_connection(self, wait_timeout: float = AUTO_RECONNECT_WAIT_TIMEOUT) -> None:
         """Recover a disconnected Steam client before issuing a request."""
@@ -81,7 +88,9 @@ class PICSFetcher:
         Returns:
             Dict mapping appid to PICS data
         """
+        self.last_product_info_attempts = 0
         for attempt in range(self.max_retries):
+            self.last_product_info_attempts = attempt + 1
             self._ensure_connection(wait_timeout=120)
 
             try:
@@ -105,7 +114,7 @@ class PICSFetcher:
                         f"Batch attempt {attempt + 1}/{self.max_retries} failed "
                         f"(connection age: {age_str}), retrying in {delay}s: {e}"
                     )
-                    time.sleep(delay)
+                    _cooperative_sleep(delay)
                 else:
                     logger.error(
                         f"Error fetching PICS data after {self.max_retries} attempts "
@@ -152,13 +161,13 @@ class PICSFetcher:
                 yield result
 
                 # Rate limiting
-                time.sleep(self.request_delay)
+                _cooperative_sleep(self.request_delay)
 
             except Exception as e:
                 logger.error(f"Batch failed at offset {i} ({len(batch)} apps): {e}")
                 failed_batches.append(batch)
                 # Continue with next batch after delay
-                time.sleep(2)
+                _cooperative_sleep(2)
 
         # Log summary of failed batches
         if failed_batches:
@@ -181,7 +190,9 @@ class PICSFetcher:
         Returns:
             PICSChange with new change_number and list of changed app IDs
         """
+        self.last_change_poll_attempts = 0
         for attempt in range(self.max_retries):
+            self.last_change_poll_attempts = attempt + 1
             try:
                 self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
                 timeout_error = TimeoutError(
@@ -227,7 +238,7 @@ class PICSFetcher:
                         delay,
                         e,
                     )
-                    time.sleep(delay)
+                    _cooperative_sleep(delay)
                     continue
 
                 logger.error(
