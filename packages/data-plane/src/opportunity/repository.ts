@@ -35,6 +35,17 @@ import {
   describeOpportunityRuleSet,
   supportsReleasedMarketHealth,
 } from "./rules.js";
+import {
+  cleanOpportunityCoverageWarning,
+  cleanOpportunityEvidence,
+  cleanOpportunityProfileName,
+  cleanOpportunityUserText,
+  decodeOpportunityText,
+  decodeOpportunityValue,
+  opportunityChangeSummary,
+  presentOpportunityChange,
+  type OpportunityTaxonomyNames,
+} from "./intelligence.js";
 
 interface WorkspaceContext {
   id: string;
@@ -216,6 +227,105 @@ function stableSlug(userId: string): string {
 
 function stableHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function collectNumericIdentifiers(
+  value: unknown,
+  result = new Set<number>(),
+  depth = 0,
+): Set<number> {
+  if (depth > 8 || result.size >= 2_000) {
+    return result;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectNumericIdentifiers(item, result, depth + 1);
+    }
+    return result;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) {
+      collectNumericIdentifiers(item, result, depth + 1);
+    }
+    return result;
+  }
+  const number = Number(value);
+  if (Number.isSafeInteger(number) && number >= 0 && number <= 2_147_483_647) {
+    result.add(number);
+  }
+  return result;
+}
+
+async function loadOpportunityTaxonomyNames(
+  queryable: Pool | PoolClient,
+  changes: Array<OpportunityResultSummary["change"]>,
+): Promise<OpportunityTaxonomyNames> {
+  const identifiers = Array.from(
+    changes.reduce((result, change) => {
+      if (
+        change?.affectedRuleFields.some((field) =>
+          ["categories", "genres", "tags"].includes(field),
+        )
+      ) {
+        collectNumericIdentifiers(change.before, result);
+        collectNumericIdentifiers(change.after, result);
+      }
+      return result;
+    }, new Set<number>()),
+  ).slice(0, 2_000);
+  const names: OpportunityTaxonomyNames = {
+    categories: new Map<string, string>(),
+    genres: new Map<string, string>(),
+    tags: new Map<string, string>(),
+  };
+  if (identifiers.length === 0) {
+    return names;
+  }
+  const result = await queryable.query<
+    QueryResultRow & {
+      id: number;
+      kind: "categories" | "genres" | "tags";
+      name: string;
+    }
+  >(
+    `
+      SELECT 'tags'::text AS kind, tag_id AS id, name
+      FROM legacy.steam_tags
+      WHERE tag_id = ANY($1::integer[])
+      UNION ALL
+      SELECT 'categories'::text AS kind, category_id AS id, name
+      FROM legacy.steam_categories
+      WHERE category_id = ANY($1::integer[])
+      UNION ALL
+      SELECT 'genres'::text AS kind, genre_id AS id, name
+      FROM legacy.steam_genres
+      WHERE genre_id = ANY($1::integer[])
+      LIMIT 6000
+    `,
+    [identifiers],
+  );
+  for (const row of result.rows) {
+    (names[row.kind] as Map<string, string>).set(
+      String(row.id),
+      decodeOpportunityText(row.name),
+    );
+  }
+  return names;
+}
+
+export async function presentOpportunityChanges(
+  queryable: Pool | PoolClient,
+  changes: Array<OpportunityResultSummary["change"]>,
+  fallbackLabels: OpportunityResultSummary["eventLabel"][],
+): Promise<Array<OpportunityResultSummary["change"]>> {
+  const taxonomy = await loadOpportunityTaxonomyNames(queryable, changes);
+  return changes.map((change, index) =>
+    presentOpportunityChange(
+      change,
+      fallbackLabels[index] ?? "newly_qualified",
+      taxonomy,
+    ),
+  );
 }
 
 function ruleInputSourceWatermarks(
@@ -869,12 +979,14 @@ export class OpportunityRepository {
     return result.rows.map((row) => {
       const healthSupported = supportsReleasedMarketHealth(row.rules);
       return {
-        description: row.description,
+        description: cleanOpportunityUserText(row.description),
         healthState: healthSupported ? row.health_state : null,
         healthUnavailableReason: healthSupported ? null : "unreleased_only",
         id: row.id,
-        name: row.name,
-        ruleSummary: describeOpportunityRuleSet(row.rules),
+        name: decodeOpportunityText(row.name),
+        ruleSummary: describeOpportunityRuleSet(row.rules).map(
+          decodeOpportunityText,
+        ),
         slug: row.slug,
         version: row.version,
       };
@@ -915,13 +1027,13 @@ export class OpportunityRepository {
 
     return result.rows.map((row) => ({
       currentVersion: row.current_version,
-      description: row.description,
+      description: cleanOpportunityUserText(row.description),
       id: row.id,
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
       localDeliveryTime: row.local_delivery_time,
-      name: row.name,
+      name: cleanOpportunityProfileName(row.name),
       nextEvaluationAt: iso(row.next_evaluation_at),
-      sourcePresetName: row.source_preset_name,
+      sourcePresetName: cleanOpportunityUserText(row.source_preset_name),
       status: row.status,
       timezone: row.timezone,
       updatedAt: iso(row.updated_at)!,
@@ -994,9 +1106,20 @@ export class OpportunityRepository {
         return {
           asOfDate: iso(row.as_of_date)!,
           evaluatedGames,
-          explanation: row.explanation,
+          explanation: [
+            {
+              active: "Recent demand among matching games is broadly steady.",
+              cooling: "Recent demand among matching games has softened.",
+              growing: "More matching games are showing positive demand.",
+              insufficient_data:
+                "More released games are needed for a reliable market comparison.",
+              quiet: "Few matching games are showing material demand changes.",
+              surging:
+                "Reviews and player activity are improving across matching games.",
+            }[row.state],
+          ],
           maximumEvaluated,
-          name: row.name,
+          name: decodeOpportunityText(row.name),
           priorState: row.prior_state,
           sampleCapped:
             maximumEvaluated > 0 && evaluatedGames >= maximumEvaluated,
@@ -1125,12 +1248,23 @@ export class OpportunityRepository {
       `,
       [run.id, userId, run.window_start, run.window_end, run.run_kind],
     );
-    const summaries = results.rows.map((row) => this.mapResult(row));
+    const changes = await presentOpportunityChanges(
+      this.pool,
+      results.rows.map((row) => row.change),
+      results.rows.map((row) => row.event_label),
+    );
+    const summaries = results.rows.map((row, index) =>
+      this.mapResult({ ...row, change: changes[index] ?? null }),
+    );
     const group = (label: OpportunityResultSummary["eventLabel"]) =>
       summaries.filter((summary) => summary.eventLabel === label);
 
     return {
-      coverageWarnings: run.coverage_warnings ?? [],
+      coverageWarnings: Array.from(
+        new Set(
+          (run.coverage_warnings ?? []).map(cleanOpportunityCoverageWarning),
+        ),
+      ),
       groups: {
         materiallyChanged: group("materially_changed"),
         newlyDiscovered: group("newly_discovered"),
@@ -1202,7 +1336,14 @@ export class OpportunityRepository {
     `);
 
     return result.rows.map((row) => ({
-      label: row.source.replaceAll("_", " "),
+      label:
+        {
+          catalog: "Steam catalog",
+          creator: "Creator coverage",
+          market_metrics: "Player and review activity",
+          pics: "Steam features and positioning",
+          storefront: "Steam store details",
+        }[row.source] ?? "Game information",
       source: row.source,
       state: row.state,
       updatedAt: iso(row.updated_at),
@@ -1228,7 +1369,7 @@ export class OpportunityRepository {
       presets,
       profiles,
       sourceHealth,
-      workspace,
+      workspace: decodeOpportunityValue(workspace),
     };
   }
 
@@ -1726,13 +1867,13 @@ export class OpportunityRepository {
     }
 
     return this.createProfile({
-      description: row.description,
+      description: cleanOpportunityUserText(row.description),
       enabled: false,
       eventSubscriptions: row.event_subscriptions,
       identity: params.identity,
       immediateFullMatchEnabled: false,
       localDeliveryTime: params.localDeliveryTime,
-      name: params.name?.trim() || row.name,
+      name: params.name?.trim() || cleanOpportunityProfileName(row.name),
       rules: row.rules,
       sourcePresetVersionId: row.version_id,
       timezone: params.timezone,
@@ -1810,13 +1951,13 @@ export class OpportunityRepository {
         rules: row.rules,
         version: row.current_version,
       },
-      description: row.description,
+      description: cleanOpportunityUserText(row.description),
       id: row.id,
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
       localDeliveryTime: row.local_delivery_time,
-      name: row.name,
+      name: cleanOpportunityProfileName(row.name),
       nextEvaluationAt: iso(row.next_evaluation_at),
-      sourcePresetName: row.source_preset_name,
+      sourcePresetName: cleanOpportunityUserText(row.source_preset_name),
       status: row.status,
       timezone: row.timezone,
       updatedAt: iso(row.updated_at)!,
@@ -2660,6 +2801,43 @@ export class OpportunityRepository {
     if (!row) {
       throw new Error("Opportunity result not found.");
     }
+    const presentedChanges = await presentOpportunityChanges(
+      this.pool,
+      [
+        row.result_summary.change,
+        ...row.recent_changes.map((change) => change),
+      ],
+      [
+        row.result_summary.eventLabel,
+        ...row.recent_changes.map(() => "materially_changed" as const),
+      ],
+    );
+    const primaryChange = presentedChanges[0] ?? null;
+    const changeSummary = opportunityChangeSummary(
+      primaryChange,
+      row.result_summary.eventLabel,
+    );
+    const resultSummary: OpportunityResultSummary = {
+      ...decodeOpportunityValue(row.result_summary),
+      change: primaryChange,
+      changeSummary,
+      matchedProfiles: row.result_summary.matchedProfiles.map((profile) => ({
+        ...profile,
+        name: cleanOpportunityProfileName(profile.name),
+      })),
+      name: decodeOpportunityText(row.result_summary.name),
+      strongestEvidence: cleanOpportunityEvidence(
+        row.result_summary.strongestEvidence,
+        changeSummary,
+      ),
+      whyNow: `${changeSummary} The game matches your sourcing criteria.`,
+    };
+    const recentChanges = row.recent_changes.map((change, index) => ({
+      ...decodeOpportunityValue(change),
+      ...(presentedChanges[index + 1] ?? {
+        summary: opportunityChangeSummary(null, "materially_changed"),
+      }),
+    }));
     await this.recordTeamActivity({
       activityType: "viewed",
       appid: params.appid,
@@ -2667,29 +2845,39 @@ export class OpportunityRepository {
       note: null,
     });
     return {
-      app: row.app,
-      cohort: row.cohort,
-      currentMetrics: row.current_metrics ?? {},
-      evidence: row.evidence ?? [],
-      marketContext: row.market_context,
-      matchedProfiles: row.matched_profiles,
+      app: decodeOpportunityValue(row.app),
+      cohort: decodeOpportunityValue(row.cohort),
+      currentMetrics: decodeOpportunityValue(row.current_metrics ?? {}),
+      evidence: decodeOpportunityValue(row.evidence ?? []),
+      marketContext: decodeOpportunityValue(row.market_context),
+      matchedProfiles: decodeOpportunityValue(row.matched_profiles).map(
+        (profile) => ({
+          ...profile,
+          name: cleanOpportunityProfileName(profile.name),
+        }),
+      ),
       missingEvidence: row.missing_evidence ?? [],
-      officialNews: row.official_news,
-      previousAppearances: row.previous_appearances,
+      officialNews: decodeOpportunityValue(row.official_news),
+      previousAppearances: decodeOpportunityValue(row.previous_appearances).map(
+        (appearance) => ({
+          ...appearance,
+          whyNow: opportunityChangeSummary(null, appearance.eventLabel),
+        }),
+      ),
       provenance: row.provenance,
-      recentChanges: row.recent_changes,
-      rank: row.rank,
-      result: row.result_summary,
-      teamActivity: row.team_activity,
+      recentChanges,
+      rank: decodeOpportunityValue(row.rank),
+      result: resultSummary,
+      teamActivity: decodeOpportunityValue(row.team_activity),
       userState: row.user_state ?? {
         dismissedAt: null,
         ignoredAt: null,
         researching: false,
         trackedAt: null,
       },
-      youtubeEvidence: row.youtube_evidence,
+      youtubeEvidence: decodeOpportunityValue(row.youtube_evidence),
       workspace: {
-        name: workspace.name,
+        name: decodeOpportunityText(workspace.name),
         role: workspace.role,
       },
     };
@@ -2857,22 +3045,30 @@ export class OpportunityRepository {
   }
 
   private mapResult(row: ResultRow): OpportunityResultSummary {
+    const changeSummary = opportunityChangeSummary(row.change, row.event_label);
     return {
       appid: row.appid,
       change: row.change ?? null,
+      changeSummary,
       confidence: row.confidence,
       createdAt: iso(row.created_at)!,
       eventLabel: row.event_label,
       eventFingerprint: row.event_fingerprint,
       id: row.id,
       marketPotential: row.market_potential,
-      matchedProfiles: row.matched_profiles ?? [],
-      name: row.name,
+      matchedProfiles: (row.matched_profiles ?? []).map((profile) => ({
+        ...profile,
+        name: cleanOpportunityProfileName(profile.name),
+      })),
+      name: decodeOpportunityText(row.name),
       rank: row.rank,
       rankComponents: row.rank_components,
       score: numberValue(row.score),
-      strongestEvidence: row.strongest_evidence ?? [],
-      whyNow: row.why_now,
+      strongestEvidence: cleanOpportunityEvidence(
+        row.strongest_evidence ?? [],
+        changeSummary,
+      ),
+      whyNow: `${changeSummary} The game matches your sourcing criteria.`,
     };
   }
 }

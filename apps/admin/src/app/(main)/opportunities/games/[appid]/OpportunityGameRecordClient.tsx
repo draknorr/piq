@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
-  Database,
   ExternalLink,
   Eye,
   Flag,
@@ -23,11 +22,9 @@ import {
 } from "lucide-react";
 
 import {
-  describeOpportunityChange,
   describeOpportunityRuleClause,
   formatOpportunityDate,
   formatOpportunityMetricValue,
-  humanizeOpportunity,
   OPPORTUNITY_COMPONENTS,
   opportunityComponentStrength,
   opportunityConfidenceExplanation,
@@ -44,16 +41,6 @@ import type {
   OpportunityRuleField,
   OpportunityRuleOperator,
 } from "../../lib/types";
-
-function displayDiagnostic(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "Not available";
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value, null, 2);
-  }
-  return String(value);
-}
 
 function metricToken(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -80,6 +67,49 @@ function metricKind(value: string): string | null {
     return "positivepercentage";
   }
   return null;
+}
+
+function changeLabel(
+  value: OpportunityGameRecord["recentChanges"][number]["eventType"],
+): string {
+  return {
+    announcement: "Official announcement",
+    business_model_changed: "Pricing or business model",
+    ccu_breakthrough: "Player milestone",
+    demo_added: "Playable demo",
+    developer_changed: "Developer",
+    first_observed: "New discovery",
+    material_change: "Steam update",
+    platform_expanded: "Platform support",
+    publisher_changed: "Publisher",
+    release_timing_changed: "Release timing",
+    released: "Steam release",
+    review_breakthrough: "Review milestone",
+    store_readiness_improved: "Store page",
+    taxonomy_repositioned: "Steam positioning",
+  }[value];
+}
+
+function resultLabel(value: string): string {
+  return (
+    {
+      materially_changed: "Commercial change",
+      newly_discovered: "New discovery",
+      newly_qualified: "New match",
+      newly_released: "Newly released",
+      tracked_update: "Tracked update",
+    }[value] ?? "Prior brief"
+  );
+}
+
+function activityLabel(
+  value: OpportunityGameRecord["teamActivity"][number]["activityType"],
+): string {
+  return {
+    researching_cleared: "finished researching",
+    researching_started: "started researching",
+    viewed: "opened this game",
+  }[value];
 }
 
 function findCurrentMetric(
@@ -138,9 +168,9 @@ export function OpportunityGameRecordClient({
         }),
       );
       setError(null);
-    } catch (nextError) {
+    } catch {
       setError(
-        nextError instanceof Error ? nextError.message : "Record unavailable.",
+        "PublisherIQ could not load this opportunity. Please try again.",
       );
     } finally {
       setLoading(false);
@@ -163,10 +193,8 @@ export function OpportunityGameRecordClient({
         eventFingerprint: record.result.eventFingerprint,
       });
       await load();
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Action failed.",
-      );
+    } catch {
+      setError("PublisherIQ could not update this game. Please try again.");
     } finally {
       setActing(null);
     }
@@ -180,10 +208,8 @@ export function OpportunityGameRecordClient({
         appid,
       });
       await load();
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Action failed.",
-      );
+    } catch {
+      setError("PublisherIQ could not update team activity. Please try again.");
     } finally {
       setActing(null);
     }
@@ -210,7 +236,7 @@ export function OpportunityGameRecordClient({
           className="inline-flex items-center gap-2 text-sm text-text-tertiary hover:text-text-primary"
         >
           <ArrowLeft className="h-4 w-4" />
-          Daily brief
+          Daily Intelligence Desk
         </Link>
         <div className="mt-10 border-l-2 border-semantic-error pl-6">
           <h1 className="text-2xl font-semibold text-text-primary">
@@ -225,9 +251,7 @@ export function OpportunityGameRecordClient({
   const market = record.marketContext;
   const tracked = Boolean(record.userState.trackedAt);
   const researching = record.userState.researching;
-  const primaryChange =
-    record.result.change ?? record.recentChanges.at(0) ?? null;
-  const canSeeDiagnostics =
+  const canSeeCoverage =
     record.workspace.role === "owner" || record.workspace.role === "admin";
   const currentMetrics = Object.entries(record.currentMetrics).filter(
     ([name, value]) => metricKind(name) !== null && value !== null,
@@ -243,7 +267,7 @@ export function OpportunityGameRecordClient({
             className="inline-flex items-center gap-2 text-xs font-medium text-text-tertiary transition hover:text-text-primary"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Daily opportunity brief
+            Daily Intelligence Desk
           </Link>
           <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
             <div>
@@ -328,7 +352,7 @@ export function OpportunityGameRecordClient({
                 What changed
               </p>
               <p className="mt-3 text-[clamp(1.25rem,2.5vw,1.8rem)] font-medium leading-tight text-text-primary">
-                {describeOpportunityChange(primaryChange)}
+                {record.result.changeSummary}
               </p>
               <p className="mt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
                 Why it matters
@@ -557,14 +581,14 @@ export function OpportunityGameRecordClient({
                 >
                   <div>
                     <p className="text-xs font-semibold text-text-primary">
-                      {humanizeOpportunity(change.eventType)}
+                      {changeLabel(change.eventType)}
                     </p>
                     <p className="mt-1 text-[10px] text-text-muted">
                       Observed {formatOpportunityDate(change.observedAt)}
                     </p>
                   </div>
                   <p className="text-sm font-medium leading-6 text-text-secondary">
-                    {describeOpportunityChange(change)}
+                    {change.summary}
                   </p>
                 </article>
               ))}
@@ -645,7 +669,7 @@ export function OpportunityGameRecordClient({
             </section>
           </div>
 
-          {canSeeDiagnostics && <DataStatus record={record} />}
+          {canSeeCoverage && <SourceCoverage record={record} />}
         </div>
 
         <aside className="border-t border-border-subtle bg-surface-sunken px-5 py-8 lg:border-l lg:border-t-0 lg:px-6 lg:py-10">
@@ -692,7 +716,7 @@ export function OpportunityGameRecordClient({
                       <span className="font-medium text-text-primary">
                         {activity.userDisplay}
                       </span>{" "}
-                      {humanizeOpportunity(activity.activityType)}
+                      {activityLabel(activity.activityType)}
                       <span className="block text-text-muted">
                         {formatOpportunityDate(activity.occurredAt)}
                       </span>
@@ -723,7 +747,7 @@ export function OpportunityGameRecordClient({
                     className="block border-l border-border-prominent pl-3"
                   >
                     <p className="text-xs font-medium text-text-primary">
-                      {humanizeOpportunity(appearance.eventLabel)}
+                      {resultLabel(appearance.eventLabel)}
                     </p>
                     <p className="mt-1 text-[10px] text-text-muted">
                       {formatOpportunityDate(appearance.createdAt)}
@@ -816,88 +840,37 @@ function MetricBenchmark({
   );
 }
 
-function DataStatus({ record }: { record: OpportunityGameRecord }) {
+function SourceCoverage({ record }: { record: OpportunityGameRecord }) {
   return (
     <details className="mt-12 border-y border-border-muted py-5">
       <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-text-tertiary transition hover:text-text-primary">
-        <Database className="h-4 w-4" />
-        Data status and technical details
+        <Check className="h-4 w-4" />
+        Source coverage
       </summary>
-      <div className="mt-6 space-y-8">
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-            Evidence sources
-          </h3>
-          <div className="mt-3 divide-y divide-border-subtle">
-            {record.evidence.map((evidence) => (
-              <div
-                key={`${evidence.label}:${evidence.source}`}
-                className="grid gap-2 py-4 text-xs md:grid-cols-[160px_minmax(0,1fr)_180px]"
-              >
-                <span className="font-semibold text-text-primary">
-                  {evidence.label}
-                </span>
-                <pre className="whitespace-pre-wrap break-words font-sans text-text-secondary">
-                  {displayDiagnostic(evidence.value)}
-                </pre>
-                <span className="text-text-tertiary md:text-right">
-                  {evidence.source}
-                  <br />
-                  {formatOpportunityDate(evidence.sourceAt)}
-                </span>
-              </div>
-            ))}
+      <div className="mt-4 divide-y divide-border-subtle">
+        {record.evidence.map((evidence) => (
+          <div
+            key={`${evidence.label}:${evidence.source}`}
+            className="grid gap-1 py-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          >
+            <span className="font-medium text-text-primary">
+              {opportunityMetricLabel(evidence.label)}
+            </span>
+            <span className="text-text-tertiary sm:text-right">
+              {evidence.confidence === "high"
+                ? "Well covered"
+                : "Partial coverage"}
+              {evidence.sourceAt
+                ? ` · Updated ${formatOpportunityDate(evidence.sourceAt)}`
+                : ""}
+            </span>
           </div>
-        </section>
-
-        <section className="grid gap-5 md:grid-cols-2">
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Evaluation run
-            </h3>
-            <p className="mt-2 break-all font-mono text-[11px] text-text-secondary">
-              {record.provenance.run.id}
-            </p>
-            <p className="mt-2 text-xs leading-5 text-text-tertiary">
-              {humanizeOpportunity(record.provenance.run.kind)} ·{" "}
-              {formatOpportunityDate(record.provenance.run.windowStart)} through{" "}
-              {formatOpportunityDate(record.provenance.run.windowEnd)}
-            </p>
-          </div>
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Calculation versions
-            </h3>
-            <dl className="mt-2 space-y-1.5">
-              {Object.entries(record.provenance.calculationVersions).map(
-                ([name, version]) => (
-                  <div
-                    key={name}
-                    className="flex justify-between gap-4 text-xs"
-                  >
-                    <dt className="text-text-tertiary">
-                      {humanizeOpportunity(name)}
-                    </dt>
-                    <dd className="font-mono text-text-secondary">{version}</dd>
-                  </div>
-                ),
-              )}
-            </dl>
-          </div>
-        </section>
-
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-            Score inputs and weights
-          </h3>
-          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-lg bg-surface-elevated p-4 font-mono text-[11px] leading-5 text-text-secondary">
-            {displayDiagnostic({
-              components: record.rank.components,
-              reasons: record.rank.reasons,
-              weights: record.rank.weights,
-            })}
-          </pre>
-        </section>
+        ))}
+        {record.evidence.length === 0 && (
+          <p className="py-3 text-xs text-text-tertiary">
+            Supporting game information is still being collected.
+          </p>
+        )}
       </div>
     </details>
   );

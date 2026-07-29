@@ -28,7 +28,13 @@ const verifier: OpportunityIdentityVerifier = {
 
 const service = {
   async getBootstrap(received: OpportunityIdentity) {
-    return { received };
+    return {
+      received,
+      result: {
+        changeSummary: "Tags added: Roguelike and Deckbuilding.",
+        matchedProfiles: [{ id: "profile", name: "Roguelike Deckbuilder" }],
+      },
+    };
   },
 } as unknown as OpportunityService;
 
@@ -74,10 +80,22 @@ describe("opportunity query-api routes", () => {
     });
     const payload = (await response.json()) as {
       received: OpportunityIdentity;
+      result: {
+        changeSummary: string;
+        matchedProfiles: Array<{ id: string; name: string }>;
+      };
     };
 
     assert.equal(response.status, 200);
     assert.equal(payload.received.userId, identity.userId);
+    assert.equal(
+      payload.result.changeSummary,
+      "Tags added: Roguelike and Deckbuilding.",
+    );
+    assert.equal(
+      payload.result.matchedProfiles[0]?.name,
+      "Roguelike Deckbuilder",
+    );
   });
 
   it("validates Supabase tokens against the auth user endpoint", async () => {

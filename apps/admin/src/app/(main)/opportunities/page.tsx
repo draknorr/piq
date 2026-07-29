@@ -6,9 +6,9 @@ import { isSupabaseConfigured } from "@/lib/supabase";
 import { OpportunityWorkspace } from "./OpportunityWorkspace";
 
 export const metadata: Metadata = {
-  title: "Opportunity Brief | PublisherIQ",
+  title: "Daily Intelligence Desk | PublisherIQ",
   description:
-    "Build custom Steam sourcing profiles and investigate a daily evidence-backed opportunity brief.",
+    "Review Steam games that match your sourcing strategy and the commercial changes that made them relevant.",
 };
 
 export const dynamic = "force-dynamic";
