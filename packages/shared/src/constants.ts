@@ -12,8 +12,8 @@ export const RATE_LIMITS = {
   /** Steam Storefront API - 0.33 req/sec per worker (3 workers = ~1 req/sec total) */
   STOREFRONT: { requestsPerSecond: 0.33, burst: 3 },
 
-  /** Steam Reviews API - 60 requests per minute (summary endpoint is lightweight) */
-  REVIEWS: { requestsPerSecond: 1, burst: 10 },
+  /** Steam Reviews API - hard ceiling of one actual HTTP attempt per second */
+  REVIEWS: { requestsPerSecond: 1, burst: 1 },
 
   /** Steam Review Histogram API - approximately 60 requests per minute */
   HISTOGRAM: { requestsPerSecond: 1, burst: 5 },

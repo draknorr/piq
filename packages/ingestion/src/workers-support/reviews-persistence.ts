@@ -9,6 +9,8 @@ import type { ReviewSummary } from '../apis/reviews.js';
 export interface PreviousReviewSyncData {
   consecutiveErrors: number;
   intervalHours: number;
+  isPinned: boolean;
+  lastActivityAt: Date | null;
   lastSync: Date | null;
   positiveReviews: number;
   totalReviews: number;
@@ -17,7 +19,9 @@ export interface PreviousReviewSyncData {
 interface PersistReviewSummaryParams {
   appid: number;
   env?: NodeJS.ProcessEnv;
+  lane?: string | null;
   previous: PreviousReviewSyncData | undefined;
+  priorityScore?: number | null;
   summary: ReviewSummary;
   supabase?: TypedSupabaseClient | null;
   tiger?: TigerWriter;
@@ -79,7 +83,10 @@ export async function loadPreviousReviewSyncData(
   supabase: TypedSupabaseClient | null | undefined,
   appIds: number[],
   options: ReviewPersistenceOptions = {}
-): Promise<{ previousSyncData: Map<number, PreviousReviewSyncData>; neverSyncedSet: Set<number> }> {
+): Promise<{
+  previousSyncData: Map<number, PreviousReviewSyncData>;
+  neverSyncedSet: Set<number>;
+}> {
   if (shouldUseTiger(options)) {
     return (options.tiger ?? getTigerWriter(options.env)).reviews.loadPreviousSyncData(appIds);
   }
@@ -119,6 +126,8 @@ export async function loadPreviousReviewSyncData(
     previousSyncData.set(status.appid, {
       consecutiveErrors: status.consecutive_errors ?? 0,
       intervalHours: normalizeIntervalHours(status.reviews_interval_hours),
+      isPinned: false,
+      lastActivityAt: null,
       lastSync: status.last_reviews_sync ? new Date(status.last_reviews_sync) : null,
       positiveReviews: 0,
       totalReviews: status.last_known_total_reviews ?? 0,
@@ -152,7 +161,9 @@ export async function loadPreviousReviewSyncData(
 export async function persistReviewSummary({
   appid,
   env,
+  lane,
   previous,
+  priorityScore,
   summary,
   supabase,
   tiger,
@@ -168,7 +179,9 @@ export async function persistReviewSummary({
   if (shouldUseTiger({ env, tiger })) {
     return (tiger ?? getTigerWriter(env)).reviews.persistReviewSummary({
       appid,
+      lane,
       previous,
+      priorityScore,
       summary,
       today,
       velocityTier,
