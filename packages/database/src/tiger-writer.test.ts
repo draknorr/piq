@@ -2,7 +2,13 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { QueryResult, QueryResultRow } from 'pg';
 
-import { createTigerWriterForPool, type TigerQueryClient, type TigerWriterPool } from './tiger-writer.js';
+import {
+  createTigerWriterForPool,
+  getReviewCadenceHours,
+  type PreviousReviewSyncData,
+  type TigerQueryClient,
+  type TigerWriterPool
+} from './tiger-writer.js';
 
 interface QueryCall {
   sql: string;
@@ -17,14 +23,18 @@ class CapturingClient implements TigerQueryClient {
   readonly calls: QueryCall[] = [];
   released = false;
 
-  constructor(private readonly responses: Array<QueryResult<QueryResultRow>>) {}
+  constructor(private readonly responses: Array<QueryResult<QueryResultRow> | Error>) {}
 
   async query<T extends QueryResultRow>(
     sql: string,
     values?: readonly unknown[]
   ): Promise<QueryResult<T>> {
     this.calls.push({ sql, values });
-    return (this.responses.shift() ?? result()) as QueryResult<T>;
+    const response = this.responses.shift() ?? result();
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response as QueryResult<T>;
   }
 
   release(): void {
@@ -36,14 +46,18 @@ class CapturingPool implements TigerWriterPool {
   readonly calls: QueryCall[] = [];
   client: CapturingClient | null = null;
 
-  constructor(private readonly responses: Array<QueryResult<QueryResultRow>> = []) {}
+  constructor(private readonly responses: Array<QueryResult<QueryResultRow> | Error> = []) {}
 
   async query<T extends QueryResultRow>(
     sql: string,
     values?: readonly unknown[]
   ): Promise<QueryResult<T>> {
     this.calls.push({ sql, values });
-    return (this.responses.shift() ?? result()) as QueryResult<T>;
+    const response = this.responses.shift() ?? result();
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response as QueryResult<T>;
   }
 
   async connect(): Promise<TigerQueryClient> {
@@ -820,13 +834,288 @@ test('reviews.loadPreviousSyncData ignores latest CCU-only daily metric rows', a
   assert.equal(previous?.totalReviews, 7794);
   assert.equal(previous?.positiveReviews, 7418);
   assert.equal(previous?.intervalHours, 4);
+  assert.equal(previous?.isPinned, false);
+  assert.equal(previous?.lastActivityAt, null);
   assert.match(pool.calls[0]?.sql ?? '', /LEFT JOIN LATERAL/);
   assert.match(pool.calls[0]?.sql ?? '', /metrics\.review_deltas/);
   assert.match(pool.calls[0]?.sql ?? '', /COALESCE\(m\.positive_reviews, rd\.positive_reviews\)/);
   assert.match(pool.calls[0]?.sql ?? '', /m\.total_reviews IS NOT NULL/);
   assert.match(pool.calls[0]?.sql ?? '', /m\.positive_reviews IS NOT NULL/);
   assert.match(pool.calls[0]?.sql ?? '', /ORDER BY m\.metric_date DESC/);
+  assert.match(pool.calls[0]?.sql ?? '', /FROM legacy\.user_pins pin/);
   assert.deepEqual(pool.calls[0]?.values, [[2416450]]);
+});
+
+function previousReviewData(overrides: Partial<PreviousReviewSyncData> = {}): PreviousReviewSyncData {
+  return {
+    consecutiveErrors: 0,
+    intervalHours: 72,
+    isPinned: false,
+    lastActivityAt: null,
+    lastSync: new Date('2026-07-28T12:00:00.000Z'),
+    positiveReviews: 80,
+    totalReviews: 100,
+    ...overrides
+  };
+}
+
+test('review cadence preserves active tiers and segments dormant value', () => {
+  const nowMs = Date.parse('2026-07-29T12:00:00.000Z');
+
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      summaryTotalReviews: 100,
+      velocityTier: 'high'
+    }),
+    4
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      summaryTotalReviews: 100,
+      velocityTier: 'medium'
+    }),
+    12
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      summaryTotalReviews: 100,
+      velocityTier: 'low'
+    }),
+    24
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      lane: 'change_critical',
+      nowMs,
+      summaryTotalReviews: 100,
+      velocityTier: 'dormant'
+    }),
+    24
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      previous: previousReviewData({ isPinned: true }),
+      summaryTotalReviews: 100,
+      velocityTier: 'dormant'
+    }),
+    168
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      priorityScore: 50,
+      summaryTotalReviews: 100,
+      velocityTier: 'dormant'
+    }),
+    168
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      summaryTotalReviews: 100,
+      velocityTier: 'dormant'
+    }),
+    720
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      previous: previousReviewData({
+        lastActivityAt: new Date('2026-07-01T00:00:00.000Z'),
+        totalReviews: 0
+      }),
+      summaryTotalReviews: 0,
+      velocityTier: 'dormant'
+    }),
+    168
+  );
+  assert.equal(
+    getReviewCadenceHours({
+      nowMs,
+      previous: previousReviewData({
+        lastActivityAt: new Date('2025-01-01T00:00:00.000Z'),
+        totalReviews: 0
+      }),
+      summaryTotalReviews: 0,
+      velocityTier: 'dormant'
+    }),
+    2160
+  );
+});
+
+test('reviews.persistReviewSummaryBatch commits three set-based writes atomically', async () => {
+  const pool = new CapturingPool([result(), result([], 2), result([], 2), result([], 2), result()]);
+  const writer = createTigerWriterForPool(pool);
+
+  const persisted = await writer.reviews.persistReviewSummaryBatch({
+    items: [
+      {
+        appid: 10,
+        lane: 'active_reviews',
+        previous: previousReviewData(),
+        priorityScore: 0,
+        summary: {
+          negativeReviews: 21,
+          positiveReviews: 84,
+          reviewScore: 8,
+          reviewScoreDesc: 'Very Positive',
+          totalReviews: 105
+        },
+        today: '2026-07-29',
+        velocityTier: 'high'
+      },
+      {
+        appid: 20,
+        lane: 'unknown_sweep',
+        previous: previousReviewData({
+          lastSync: null,
+          positiveReviews: 0,
+          totalReviews: 0
+        }),
+        priorityScore: 0,
+        summary: {
+          negativeReviews: 0,
+          positiveReviews: 0,
+          reviewScore: 0,
+          reviewScoreDesc: 'No user reviews',
+          totalReviews: 0
+        },
+        today: '2026-07-29',
+        velocityTier: 'dormant'
+      }
+    ],
+    persistedAt: '2026-07-29T12:00:00.000Z',
+    workerId: 'reviews-test'
+  });
+
+  assert.equal(persisted.length, 2);
+  assert.equal(persisted[0]?.reviewsAdded, 5);
+  assert.equal(persisted[0]?.positiveAdded, 4);
+  assert.equal(persisted[0]?.negativeAdded, 1);
+  assert.equal(persisted[0]?.intervalHours, 4);
+  assert.equal(persisted[1]?.intervalHours, 2160);
+  assert.equal(pool.client?.released, true);
+  assert.deepEqual(
+    pool.client?.calls.map((call) => call.sql.trim().split(/\s+/).slice(0, 4).join(' ')),
+    [
+      'BEGIN',
+      'INSERT INTO metrics.review_deltas (',
+      'WITH input_rows AS MATERIALIZED',
+      'UPDATE ops.sync_status AS status',
+      'COMMIT'
+    ]
+  );
+  assert.match(pool.client?.calls[2]?.sql ?? '', /INSERT INTO metrics\.daily_metrics/);
+  assert.match(pool.client?.calls[2]?.sql ?? '', /INSERT INTO legacy\.latest_daily_metrics/);
+  assert.doesNotMatch(pool.client?.calls[2]?.sql ?? '', /\bccu_peak\b/);
+  assert.doesNotMatch(pool.client?.calls[2]?.sql ?? '', /\bowners_midpoint\b/);
+  assert.match(pool.client?.calls[3]?.sql ?? '', /status\.reviews_claimed_by = \$2/);
+  assert.equal(pool.client?.calls[3]?.values?.[1], 'reviews-test');
+});
+
+test('reviews.persistReviewSummaryBatch rolls back on claim ownership mismatch', async () => {
+  const pool = new CapturingPool([result(), result([], 2), result([], 2), result([], 1)]);
+  const writer = createTigerWriterForPool(pool);
+
+  await assert.rejects(
+    () =>
+      writer.reviews.persistReviewSummaryBatch({
+        items: [10, 20].map((appid) => ({
+          appid,
+          lane: 'unknown_sweep',
+          previous: previousReviewData(),
+          priorityScore: 0,
+          summary: {
+            negativeReviews: 20,
+            positiveReviews: 80,
+            reviewScore: 8,
+            reviewScoreDesc: 'Very Positive',
+            totalReviews: 100
+          },
+          today: '2026-07-29',
+          velocityTier: 'dormant'
+        })),
+        persistedAt: '2026-07-29T12:00:00.000Z',
+        workerId: 'reviews-test'
+      }),
+    /claim ownership mismatch/
+  );
+
+  assert.equal(pool.client?.calls.at(-1)?.sql, 'ROLLBACK');
+  assert.equal(pool.client?.released, true);
+});
+
+test('reviews.persistReviewSummaryBatch rolls back when a set-based write fails', async () => {
+  const pool = new CapturingPool([
+    result(),
+    result([], 1),
+    new Error('daily metrics unavailable'),
+    result()
+  ]);
+  const writer = createTigerWriterForPool(pool);
+
+  await assert.rejects(
+    () =>
+      writer.reviews.persistReviewSummaryBatch({
+        items: [
+          {
+            appid: 10,
+            lane: 'unknown_sweep',
+            previous: previousReviewData(),
+            priorityScore: 0,
+            summary: {
+              negativeReviews: 20,
+              positiveReviews: 80,
+              reviewScore: 8,
+              reviewScoreDesc: 'Very Positive',
+              totalReviews: 100
+            },
+            today: '2026-07-29',
+            velocityTier: 'dormant'
+          }
+        ],
+        persistedAt: '2026-07-29T12:00:00.000Z',
+        workerId: 'reviews-test'
+      }),
+    /daily metrics unavailable/
+  );
+
+  assert.equal(pool.client?.calls.at(-1)?.sql, 'ROLLBACK');
+  assert.equal(pool.client?.released, true);
+});
+
+test('reviews.persistReviewFailuresBatch updates and releases owned claims in one statement', async () => {
+  const pool = new CapturingPool([result([], 2)]);
+  const writer = createTigerWriterForPool(pool);
+
+  const updated = await writer.reviews.persistReviewFailuresBatch({
+    failedAt: '2026-07-29T12:00:00.000Z',
+    failures: [
+      {
+        appid: 10,
+        errorMessage: 'http_429: rate limited',
+        previousConsecutiveErrors: 0
+      },
+      {
+        appid: 20,
+        errorMessage: 'timeout: request timed out',
+        previousConsecutiveErrors: 2
+      }
+    ],
+    workerId: 'reviews-test'
+  });
+
+  assert.equal(updated, 2);
+  assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.sync_status AS status/);
+  assert.match(pool.calls[0]?.sql ?? '', /reviews_claimed_by = NULL/);
+  assert.match(pool.calls[0]?.sql ?? '', /status\.reviews_claimed_by = \$2/);
+  const rows = JSON.parse(String(pool.calls[0]?.values?.[0]));
+  assert.equal(rows[0]?.next_reviews_sync, '2026-07-29T12:15:00.000Z');
+  assert.equal(rows[1]?.next_reviews_sync, '2026-07-29T13:00:00.000Z');
 });
 
 test('catalog.replaceAppRelations rejects unsupported relation tables', async () => {

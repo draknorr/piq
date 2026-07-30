@@ -1,4 +1,4 @@
-import { API_URLS, logger, ApiError } from '@publisheriq/shared';
+import { API_URLS, logger, ApiError, RETRY_CONFIG } from '@publisheriq/shared';
 import { withRetry } from '../utils/retry.js';
 import { rateLimiters } from '../utils/rate-limiter.js';
 
@@ -56,46 +56,366 @@ export interface ReviewSummary {
   reviewScoreDesc: string;
 }
 
-/**
- * Fetch review summary for an app
- * Rate limit: ~20 requests per minute
- *
- * @param appid - Steam app ID
- * @returns Review summary or null if failed
- */
-export async function fetchReviewSummary(appid: number): Promise<ReviewSummary | null> {
-  await rateLimiters.reviews.acquire();
+export interface ReviewAttemptTelemetry {
+  attempts: number;
+  forbidden: number;
+  networkErrors: number;
+  rateLimited: number;
+  retries: number;
+  serverErrors: number;
+  timeouts: number;
+}
 
-  const url = `${API_URLS.STEAM_STORE}/appreviews/${appid}?json=1&num_per_page=0&filter=all&language=all&review_type=all&purchase_type=all`;
+export type ReviewSummaryFetchResult =
+  | {
+      circuitOpened: false;
+      status: 'success';
+      statusCode: number;
+      summary: ReviewSummary;
+      telemetry: ReviewAttemptTelemetry;
+    }
+  | {
+      circuitOpenUntil?: string;
+      circuitOpened: boolean;
+      errorCode: string;
+      errorMessage: string;
+      retryAfterMs?: number;
+      status: 'failed';
+      statusCode?: number;
+      telemetry: ReviewAttemptTelemetry;
+    };
 
-  try {
-    const response = await withRetry(async () => {
-      const res = await fetch(url);
+interface ReviewRateLimiter {
+  acquire(): Promise<void>;
+}
 
-      if (!res.ok) {
-        throw new ApiError(`Failed to fetch reviews for ${appid}`, res.status, url);
-      }
+export interface ReviewSummaryFetchOptions {
+  beforeAttempt?: () => Promise<void>;
+  circuitBreaker?: ReviewRateLimitCircuit;
+  deadlineMs?: number;
+  fetchImpl?: typeof fetch;
+  limiter?: ReviewRateLimiter;
+  now?: () => number;
+  random?: () => number;
+  requestTimeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
 
-      return res.json() as Promise<ReviewsResponse>;
-    });
+export interface ReviewCircuitState {
+  openUntilMs: number | null;
+  opened: boolean;
+  remainingMs: number;
+}
 
-    if (response.success !== 1) {
-      return null;
+const DEFAULT_REVIEWS_REQUEST_TIMEOUT_MS = 15000;
+const REVIEW_CIRCUIT_THRESHOLD = 3;
+const REVIEW_CIRCUIT_WINDOW_MS = 10 * 60 * 1000;
+const REVIEW_CIRCUIT_OPEN_MS = 15 * 60 * 1000;
+
+export class ReviewRateLimitCircuit {
+  private readonly rateLimitedAtMs: number[] = [];
+  private openUntilMs = 0;
+
+  constructor(
+    private readonly threshold = REVIEW_CIRCUIT_THRESHOLD,
+    private readonly windowMs = REVIEW_CIRCUIT_WINDOW_MS,
+    private readonly openMs = REVIEW_CIRCUIT_OPEN_MS
+  ) {}
+
+  getState(nowMs = Date.now()): ReviewCircuitState {
+    const remainingMs = Math.max(0, this.openUntilMs - nowMs);
+    return {
+      openUntilMs: remainingMs > 0 ? this.openUntilMs : null,
+      opened: remainingMs > 0,
+      remainingMs
+    };
+  }
+
+  openFor(durationMs: number, nowMs = Date.now()): ReviewCircuitState {
+    this.openUntilMs = Math.max(this.openUntilMs, nowMs + Math.max(0, durationMs));
+    return this.getState(nowMs);
+  }
+
+  recordRateLimit(nowMs = Date.now()): ReviewCircuitState {
+    const windowStart = nowMs - this.windowMs;
+    while (this.rateLimitedAtMs.length > 0 && (this.rateLimitedAtMs[0] ?? nowMs) < windowStart) {
+      this.rateLimitedAtMs.shift();
     }
 
-    const summary = response.query_summary;
-    return {
-      appid,
-      totalReviews: summary.total_reviews,
-      positiveReviews: summary.total_positive,
-      negativeReviews: summary.total_negative,
-      reviewScore: summary.review_score,
-      reviewScoreDesc: summary.review_score_desc,
-    };
-  } catch (error) {
-    log.error('Failed to fetch review summary', { appid, error });
+    this.rateLimitedAtMs.push(nowMs);
+    if (this.rateLimitedAtMs.length >= this.threshold) {
+      this.openFor(this.openMs, nowMs);
+    }
+
+    return this.getState(nowMs);
+  }
+}
+
+export function parseRetryAfterMs(retryAfter: string | null, nowMs = Date.now()): number | null {
+  if (!retryAfter) {
     return null;
   }
+
+  const seconds = Number(retryAfter.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const retryAtMs = Date.parse(retryAfter);
+  if (Number.isNaN(retryAtMs)) {
+    return null;
+  }
+
+  return Math.max(0, retryAtMs - nowMs);
+}
+
+function createReviewAttemptTelemetry(): ReviewAttemptTelemetry {
+  return {
+    attempts: 0,
+    forbidden: 0,
+    networkErrors: 0,
+    rateLimited: 0,
+    retries: 0,
+    serverErrors: 0,
+    timeouts: 0
+  };
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.name === 'TimeoutError' || error.message.includes('ETIMEDOUT'))
+  );
+}
+
+function reviewFailure(
+  telemetry: ReviewAttemptTelemetry,
+  params: {
+    circuitState?: ReviewCircuitState;
+    errorCode: string;
+    errorMessage: string;
+    retryAfterMs?: number | null;
+    statusCode?: number;
+  }
+): ReviewSummaryFetchResult {
+  const circuitState = params.circuitState;
+  return {
+    circuitOpened: circuitState?.opened ?? false,
+    errorCode: params.errorCode,
+    errorMessage: params.errorMessage,
+    status: 'failed',
+    telemetry,
+    ...(params.statusCode === undefined ? {} : { statusCode: params.statusCode }),
+    ...(params.retryAfterMs === null || params.retryAfterMs === undefined ? {} : { retryAfterMs: params.retryAfterMs }),
+    ...(circuitState?.openUntilMs ? { circuitOpenUntil: new Date(circuitState.openUntilMs).toISOString() } : {})
+  };
+}
+
+/**
+ * Fetch review summary for an app
+ * Rate limit: one actual HTTP attempt per second
+ *
+ * @param appid - Steam app ID
+ * @returns A structured success or failure result with per-attempt telemetry
+ */
+export async function fetchReviewSummary(
+  appid: number,
+  options: ReviewSummaryFetchOptions = {}
+): Promise<ReviewSummaryFetchResult> {
+  const url = `${API_URLS.STEAM_STORE}/appreviews/${appid}?json=1&num_per_page=0&filter=all&language=all&review_type=all&purchase_type=all`;
+  const telemetry = createReviewAttemptTelemetry();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const limiter = options.limiter ?? rateLimiters.reviews;
+  const now = options.now ?? Date.now;
+  const random = options.random ?? Math.random;
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REVIEWS_REQUEST_TIMEOUT_MS;
+  const sleep =
+    options.sleep ??
+    ((ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+
+  for (let retryIndex = 0; retryIndex <= RETRY_CONFIG.MAX_RETRIES; retryIndex++) {
+    const attemptStartedAtMs = now();
+    const existingCircuit = options.circuitBreaker?.getState(attemptStartedAtMs);
+    if (existingCircuit?.opened) {
+      return reviewFailure(telemetry, {
+        circuitState: existingCircuit,
+        errorCode: 'circuit_open',
+        errorMessage: 'Steam Reviews circuit is open'
+      });
+    }
+    if (options.deadlineMs !== undefined && attemptStartedAtMs >= options.deadlineMs) {
+      return reviewFailure(telemetry, {
+        errorCode: 'deadline_exceeded',
+        errorMessage: 'Reviews worker deadline was reached before the next attempt'
+      });
+    }
+
+    try {
+      await limiter.acquire();
+      await options.beforeAttempt?.();
+    } catch (error) {
+      const deadlineReached =
+        error instanceof Error && error.name === 'ReviewsDeadlineReachedError';
+      return reviewFailure(telemetry, {
+        errorCode: deadlineReached ? 'deadline_exceeded' : 'request_guard_failed',
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : 'Reviews request guard failed before the HTTP attempt'
+      });
+    }
+    if (options.deadlineMs !== undefined && now() >= options.deadlineMs) {
+      return reviewFailure(telemetry, {
+        errorCode: 'deadline_exceeded',
+        errorMessage: 'Reviews worker deadline was reached before the HTTP attempt'
+      });
+    }
+    telemetry.attempts += 1;
+    telemetry.retries = Math.max(0, telemetry.attempts - 1);
+
+    let retryDelayMs: number | null = null;
+    let retryAfterFloorMs = 0;
+    let failure: ReviewSummaryFetchResult | null = null;
+
+    try {
+      const response = await fetchImpl(url, {
+        signal: AbortSignal.timeout(requestTimeoutMs)
+      });
+
+      if (response.ok) {
+        let body: ReviewsResponse;
+        try {
+          body = (await response.json()) as ReviewsResponse;
+        } catch (error) {
+          return reviewFailure(telemetry, {
+            errorCode: 'invalid_response',
+            errorMessage:
+              error instanceof Error
+                ? `Steam returned invalid review JSON: ${error.message}`
+                : 'Steam returned invalid review JSON'
+          });
+        }
+
+        if (body.success !== 1 || !body.query_summary) {
+          return reviewFailure(telemetry, {
+            errorCode: 'invalid_response',
+            errorMessage: `Steam returned an invalid review summary for ${appid}`
+          });
+        }
+
+        const summary = body.query_summary;
+        return {
+          circuitOpened: false,
+          status: 'success',
+          statusCode: response.status,
+          summary: {
+            appid,
+            totalReviews: summary.total_reviews,
+            positiveReviews: summary.total_positive,
+            negativeReviews: summary.total_negative,
+            reviewScore: summary.review_score,
+            reviewScoreDesc: summary.review_score_desc
+          },
+          telemetry
+        };
+      }
+
+      const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), now());
+      retryAfterFloorMs = retryAfterMs ?? 0;
+      if (response.status === 403) {
+        telemetry.forbidden += 1;
+        return reviewFailure(telemetry, {
+          errorCode: 'http_403',
+          errorMessage: `Steam returned HTTP 403 for reviews app ${appid}`,
+          retryAfterMs,
+          statusCode: response.status
+        });
+      }
+
+      if (response.status === 408) {
+        telemetry.timeouts += 1;
+      } else if (response.status === 429) {
+        telemetry.rateLimited += 1;
+        const circuitState = options.circuitBreaker?.recordRateLimit(now());
+        if (circuitState?.opened) {
+          return reviewFailure(telemetry, {
+            circuitState,
+            errorCode: 'http_429',
+            errorMessage: `Steam returned HTTP 429 for reviews app ${appid}`,
+            retryAfterMs,
+            statusCode: response.status
+          });
+        }
+      } else if (response.status >= 500) {
+        telemetry.serverErrors += 1;
+      }
+
+      const retryable =
+        response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599);
+      failure = reviewFailure(telemetry, {
+        errorCode:
+          response.status === 429 ? 'http_429' : response.status >= 500 ? 'http_5xx' : `http_${response.status}`,
+        errorMessage: `Steam returned HTTP ${response.status} for reviews app ${appid}`,
+        retryAfterMs,
+        statusCode: response.status
+      });
+
+      if (!retryable || retryIndex >= RETRY_CONFIG.MAX_RETRIES) {
+        return failure;
+      }
+
+      const exponentialDelayMs = Math.min(
+        RETRY_CONFIG.INITIAL_DELAY_MS * RETRY_CONFIG.BACKOFF_MULTIPLIER ** retryIndex,
+        RETRY_CONFIG.MAX_DELAY_MS
+      );
+      retryDelayMs = exponentialDelayMs;
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        telemetry.timeouts += 1;
+        failure = reviewFailure(telemetry, {
+          errorCode: 'timeout',
+          errorMessage: `Steam Reviews request timed out for ${appid}`
+        });
+      } else {
+        telemetry.networkErrors += 1;
+        failure = reviewFailure(telemetry, {
+          errorCode: 'network_error',
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
+
+      if (retryIndex >= RETRY_CONFIG.MAX_RETRIES) {
+        log.error('Failed to fetch review summary', { appid, error });
+        return failure;
+      }
+
+      retryDelayMs = Math.min(
+        RETRY_CONFIG.INITIAL_DELAY_MS * RETRY_CONFIG.BACKOFF_MULTIPLIER ** retryIndex,
+        RETRY_CONFIG.MAX_DELAY_MS
+      );
+    }
+
+    const jitter = retryDelayMs * 0.1 * (random() * 2 - 1);
+    const finalDelayMs = Math.max(retryAfterFloorMs, Math.max(0, Math.round(retryDelayMs + jitter)));
+    if (options.deadlineMs !== undefined && now() + finalDelayMs >= options.deadlineMs) {
+      return reviewFailure(telemetry, {
+        errorCode: 'retry_deferred',
+        errorMessage: 'Retry delay would exceed the Reviews worker deadline',
+        retryAfterMs: finalDelayMs,
+        statusCode: failure?.status === 'failed' ? failure.statusCode : undefined
+      });
+    }
+
+    await sleep(finalDelayMs);
+  }
+
+  return reviewFailure(telemetry, {
+    errorCode: 'request_failed',
+    errorMessage: `Steam Reviews request failed for ${appid}`
+  });
 }
 
 /**

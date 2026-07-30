@@ -8,7 +8,7 @@ import {
 } from '@publisheriq/database/ingestion';
 import { logger } from '@publisheriq/shared';
 import pLimit from 'p-limit';
-import { fetchReviewSummary } from '../apis/reviews.js';
+import { fetchReviewSummary, ReviewRateLimitCircuit } from '../apis/reviews.js';
 import {
   loadPreviousReviewSyncData,
   persistReviewSummary,
@@ -114,19 +114,21 @@ async function repairCandidate(
   today: string,
   previousSyncData: Map<number, PreviousReviewSyncData>,
   stats: RepairStats,
-  workerId: string
+  workerId: string,
+  circuitBreaker: ReviewRateLimitCircuit
 ): Promise<void> {
-  await waitForReviewRateToken(workerId, stats);
-
-  const summary = await fetchReviewSummary(candidate.appid);
-  if (!summary) {
-    throw new Error('Steam did not return a reviews summary');
+  const result = await fetchReviewSummary(candidate.appid, {
+    beforeAttempt: () => waitForReviewRateToken(workerId, stats),
+    circuitBreaker
+  });
+  if (result.status === 'failed') {
+    throw new Error(`${result.errorCode}: ${result.errorMessage}`);
   }
 
   await persistReviewSummary({
     appid: candidate.appid,
     previous: previousSyncData.get(candidate.appid),
-    summary,
+    summary: result.summary,
     supabase,
     today,
   });
@@ -216,11 +218,12 @@ async function main(): Promise<void> {
     );
 
     const limit = pLimit(Math.max(1, concurrency));
+    const circuitBreaker = new ReviewRateLimitCircuit();
     await Promise.all(
       candidates.map((candidate) =>
         limit(async () => {
           try {
-            await repairCandidate(candidate, supabase, today, previousSyncData, stats, workerId);
+            await repairCandidate(candidate, supabase, today, previousSyncData, stats, workerId, circuitBreaker);
             stats.appsRepaired += 1;
           } catch (error) {
             stats.appsFailed += 1;

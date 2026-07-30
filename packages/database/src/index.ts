@@ -44,6 +44,7 @@ export {
 
 export {
   createTigerWriterForPool,
+  getReviewCadenceHours,
   getTigerWriter,
   shutdownTigerWriter,
   TigerWriter,
@@ -88,6 +89,9 @@ export {
   type HistogramServiceTier,
   type HistogramSyncCandidate,
   type PersistReviewSummaryParams,
+  type PersistReviewSummaryBatchParams,
+  type PersistReviewSummaryResult,
+  type PersistReviewFailureBatchParams,
   type PinAlertSettingsRow,
   type PinAlertSettingsUpsert,
   type PinnedAlertEntity,

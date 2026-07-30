@@ -145,6 +145,8 @@ interface PriorityInputRow extends QueryResultRow {
 interface PreviousReviewSyncRow extends QueryResultRow {
   appid: number;
   consecutive_errors: number | string | null;
+  is_pinned: boolean | string | null;
+  last_activity_at: Date | string | null;
   last_known_total_reviews: number | string | null;
   last_reviews_sync: Date | string | null;
   positive_reviews: number | string | null;
@@ -761,6 +763,8 @@ export interface ReviewPromotion {
 export interface PreviousReviewSyncData {
   consecutiveErrors: number;
   intervalHours: number;
+  isPinned: boolean;
+  lastActivityAt: Date | null;
   lastSync: Date | null;
   positiveReviews: number;
   totalReviews: number;
@@ -776,10 +780,38 @@ export interface ReviewSummaryForPersistence {
 
 export interface PersistReviewSummaryParams {
   appid: number;
+  lane?: string | null;
   previous: PreviousReviewSyncData | undefined;
+  priorityScore?: number | null;
   summary: ReviewSummaryForPersistence;
   today: string;
   velocityTier?: string | null;
+}
+
+export interface PersistReviewSummaryBatchParams {
+  items: PersistReviewSummaryParams[];
+  persistedAt?: string;
+  workerId: string;
+}
+
+export interface PersistReviewSummaryResult {
+  appid: number;
+  intervalHours: number;
+  negativeAdded: number;
+  nextSyncAt: string;
+  nowIso: string;
+  positiveAdded: number;
+  reviewsAdded: number;
+}
+
+export interface PersistReviewFailureBatchParams {
+  failedAt?: string;
+  failures: Array<{
+    appid: number;
+    errorMessage: string;
+    previousConsecutiveErrors: number;
+  }>;
+  workerId: string;
 }
 
 export interface EmbeddingCandidate {
@@ -1300,19 +1332,51 @@ function normalizeIntervalHours(value: number | null | undefined): number {
   return Math.max(1, Math.round(value));
 }
 
-function getIntervalHoursForVelocityTier(velocityTier: string | null | undefined): number {
-  switch (velocityTier) {
+export function getReviewCadenceHours(params: {
+  lane?: string | null;
+  nowMs?: number;
+  previous?: PreviousReviewSyncData;
+  priorityScore?: number | null;
+  summaryTotalReviews: number;
+  velocityTier?: string | null;
+}): number {
+  switch (params.velocityTier) {
     case 'high':
       return 4;
     case 'medium':
       return 12;
     case 'low':
       return 24;
-    case 'dormant':
-      return 72;
-    default:
-      return 24;
   }
+
+  if (params.lane === 'launch_critical' || params.lane === 'change_critical' || params.lane === 'active_reviews') {
+    return 24;
+  }
+
+  if ((params.priorityScore ?? 0) >= 50 || params.previous?.isPinned) {
+    return 7 * 24;
+  }
+
+  if (params.summaryTotalReviews > 0) {
+    return 30 * 24;
+  }
+
+  const nowMs = params.nowMs ?? Date.now();
+  const lastActivityAtMs = params.previous?.lastActivityAt?.getTime();
+  if (
+    lastActivityAtMs !== undefined &&
+    Number.isFinite(lastActivityAtMs) &&
+    lastActivityAtMs >= nowMs - 90 * 24 * 60 * 60 * 1000
+  ) {
+    return 7 * 24;
+  }
+
+  return 90 * 24;
+}
+
+function calculateReviewFailureBackoffMinutes(consecutiveErrors: number): number {
+  const cappedErrors = Math.max(1, Math.min(consecutiveErrors, 6));
+  return Math.min(15 * 2 ** (cappedErrors - 1), 360);
 }
 
 function jsonRows(rows: unknown[]): string {
@@ -3790,9 +3854,16 @@ export class TigerReviewsRepository {
         SELECT DISTINCT ON (s.appid)
           s.appid,
           s.last_reviews_sync,
+          s.last_activity_at,
           s.last_known_total_reviews,
           s.consecutive_errors,
           s.reviews_interval_hours,
+          EXISTS (
+            SELECT 1
+            FROM legacy.user_pins pin
+            WHERE pin.entity_type = 'game'
+              AND pin.entity_id = s.appid
+          ) AS is_pinned,
           COALESCE(m.total_reviews, rd.total_reviews) AS total_reviews,
           COALESCE(m.positive_reviews, rd.positive_reviews) AS positive_reviews
         FROM ops.sync_status s
@@ -3833,6 +3904,10 @@ export class TigerReviewsRepository {
       previousSyncData.set(row.appid, {
         consecutiveErrors: parseNumber(row.consecutive_errors),
         intervalHours: normalizeIntervalHours(parseNumber(row.reviews_interval_hours)),
+        isPinned: parseBoolean(row.is_pinned),
+        lastActivityAt: normalizeTimestamp(row.last_activity_at)
+          ? new Date(normalizeTimestamp(row.last_activity_at)!)
+          : null,
         lastSync: lastSync ? new Date(lastSync) : null,
         positiveReviews: parseNumber(row.positive_reviews),
         totalReviews: parseNumber(row.total_reviews ?? row.last_known_total_reviews),
@@ -3858,8 +3933,13 @@ export class TigerReviewsRepository {
     const hoursSinceLastSync = lastSyncTime
       ? (Date.now() - lastSyncTime.getTime()) / (1000 * 60 * 60)
       : null;
-    const intervalHours =
-      params.previous?.intervalHours ?? getIntervalHoursForVelocityTier(params.velocityTier);
+    const intervalHours = getReviewCadenceHours({
+      lane: params.lane,
+      previous: params.previous,
+      priorityScore: params.priorityScore,
+      summaryTotalReviews: params.summary.totalReviews,
+      velocityTier: params.velocityTier,
+    });
     const nextSyncAt = new Date(Date.now() + intervalHours * 60 * 60 * 1000).toISOString();
     const nowIso = new Date().toISOString();
 
@@ -3899,6 +3979,7 @@ export class TigerReviewsRepository {
       last_known_total_reviews: params.summary.totalReviews,
       last_reviews_sync: nowIso,
       next_reviews_sync: nextSyncAt,
+      reviews_interval_hours: intervalHours,
       reviews_claimed_at: null,
       reviews_claim_expires_at: null,
       reviews_claimed_by: null,
@@ -3910,6 +3991,320 @@ export class TigerReviewsRepository {
     });
 
     return { negativeAdded, nextSyncAt, nowIso, positiveAdded, reviewsAdded };
+  }
+
+  async persistReviewSummaryBatch(params: PersistReviewSummaryBatchParams): Promise<PersistReviewSummaryResult[]> {
+    if (params.items.length === 0) {
+      return [];
+    }
+
+    const nowIso = params.persistedAt ?? new Date().toISOString();
+    const nowMs = Date.parse(nowIso);
+    if (Number.isNaN(nowMs)) {
+      throw new Error('persistedAt must be a valid timestamp');
+    }
+
+    const results: Array<PersistReviewSummaryResult & { hoursSinceLastSync: number | null }> = params.items.map(
+      (item) => {
+        const previousTotal = item.previous?.totalReviews ?? 0;
+        const previousPositive = item.previous?.positiveReviews ?? 0;
+        const reviewsAdded = Math.max(0, item.summary.totalReviews - previousTotal);
+        const positiveAdded = Math.max(0, item.summary.positiveReviews - previousPositive);
+        const negativeAdded = Math.max(0, reviewsAdded - positiveAdded);
+        const hoursSinceLastSync = item.previous?.lastSync
+          ? (nowMs - item.previous.lastSync.getTime()) / (1000 * 60 * 60)
+          : null;
+        const intervalHours = getReviewCadenceHours({
+          lane: item.lane,
+          nowMs,
+          previous: item.previous,
+          priorityScore: item.priorityScore,
+          summaryTotalReviews: item.summary.totalReviews,
+          velocityTier: item.velocityTier
+        });
+        const nextSyncAt = new Date(nowMs + intervalHours * 60 * 60 * 1000).toISOString();
+
+        return {
+          appid: item.appid,
+          hoursSinceLastSync,
+          intervalHours,
+          negativeAdded,
+          nextSyncAt,
+          nowIso,
+          positiveAdded,
+          reviewsAdded
+        };
+      }
+    );
+    const resultByAppid = new Map(results.map((result) => [result.appid, result]));
+    const itemByAppid = new Map(params.items.map((item) => [item.appid, item]));
+
+    const deltaRows = results.map((result) => {
+      const item = itemByAppid.get(result.appid)!;
+      return {
+        appid: item.appid,
+        delta_date: item.today,
+        hours_since_last_sync: result.hoursSinceLastSync,
+        is_interpolated: false,
+        negative_added: result.negativeAdded,
+        positive_added: result.positiveAdded,
+        positive_reviews: item.summary.positiveReviews,
+        review_score: item.summary.reviewScore,
+        review_score_desc: item.summary.reviewScoreDesc,
+        reviews_added: result.reviewsAdded,
+        total_reviews: item.summary.totalReviews
+      };
+    });
+    const metricRows = params.items.map((item) => ({
+      appid: item.appid,
+      metric_date: item.today,
+      negative_reviews: item.summary.negativeReviews,
+      positive_reviews: item.summary.positiveReviews,
+      review_score: item.summary.reviewScore,
+      review_score_desc: item.summary.reviewScoreDesc,
+      total_reviews: item.summary.totalReviews
+    }));
+    const statusRows = params.items.map((item) => {
+      const result = resultByAppid.get(item.appid)!;
+      return {
+        appid: item.appid,
+        last_activity_at: result.reviewsAdded > 0 ? nowIso : null,
+        last_known_total_reviews: item.summary.totalReviews,
+        last_reviews_sync: nowIso,
+        next_reviews_sync: result.nextSyncAt,
+        reviews_interval_hours: result.intervalHours
+      };
+    });
+
+    const client = await this.pool.connect();
+    try {
+      await runQuery(client, 'reviews.persistReviewSummaryBatch.begin', 'BEGIN');
+      await runQuery(
+        client,
+        'reviews.persistReviewSummaryBatch.reviewDeltas',
+        `
+          INSERT INTO metrics.review_deltas (
+            appid,
+            delta_date,
+            hours_since_last_sync,
+            is_interpolated,
+            negative_added,
+            positive_added,
+            positive_reviews,
+            review_score,
+            review_score_desc,
+            reviews_added,
+            total_reviews
+          )
+          SELECT
+            appid,
+            delta_date,
+            hours_since_last_sync,
+            is_interpolated,
+            negative_added,
+            positive_added,
+            positive_reviews,
+            review_score,
+            review_score_desc,
+            reviews_added,
+            total_reviews
+          FROM jsonb_populate_recordset(
+            NULL::metrics.review_deltas,
+            $1::jsonb
+          ) AS rows
+          ON CONFLICT (appid, delta_date)
+          DO UPDATE SET
+            hours_since_last_sync = EXCLUDED.hours_since_last_sync,
+            is_interpolated = EXCLUDED.is_interpolated,
+            negative_added = EXCLUDED.negative_added,
+            positive_added = EXCLUDED.positive_added,
+            positive_reviews = EXCLUDED.positive_reviews,
+            review_score = EXCLUDED.review_score,
+            review_score_desc = EXCLUDED.review_score_desc,
+            reviews_added = EXCLUDED.reviews_added,
+            total_reviews = EXCLUDED.total_reviews
+        `,
+        [jsonRows(deltaRows)]
+      );
+      await runQuery(
+        client,
+        'reviews.persistReviewSummaryBatch.dailyMetrics',
+        `
+          WITH input_rows AS MATERIALIZED (
+            SELECT
+              appid,
+              metric_date,
+              negative_reviews,
+              positive_reviews,
+              review_score,
+              review_score_desc,
+              total_reviews
+            FROM jsonb_populate_recordset(
+              NULL::metrics.daily_metrics,
+              $1::jsonb
+            ) AS rows
+          ),
+          daily_upsert AS (
+            INSERT INTO metrics.daily_metrics (
+              appid,
+              metric_date,
+              negative_reviews,
+              positive_reviews,
+              review_score,
+              review_score_desc,
+              total_reviews
+            )
+            SELECT
+              appid,
+              metric_date,
+              negative_reviews,
+              positive_reviews,
+              review_score,
+              review_score_desc,
+              total_reviews
+            FROM input_rows
+            ON CONFLICT (appid, metric_date)
+            DO UPDATE SET
+              negative_reviews = EXCLUDED.negative_reviews,
+              positive_reviews = EXCLUDED.positive_reviews,
+              review_score = EXCLUDED.review_score,
+              review_score_desc = EXCLUDED.review_score_desc,
+              total_reviews = EXCLUDED.total_reviews
+            RETURNING appid
+          )
+          INSERT INTO legacy.latest_daily_metrics (
+            appid,
+            metric_date,
+            negative_reviews,
+            positive_reviews,
+            review_score,
+            review_score_desc,
+            total_reviews
+          )
+          SELECT
+            appid,
+            metric_date,
+            negative_reviews,
+            positive_reviews,
+            review_score,
+            review_score_desc,
+            total_reviews
+          FROM input_rows
+          ON CONFLICT (appid)
+          DO UPDATE SET
+            metric_date = EXCLUDED.metric_date,
+            negative_reviews = EXCLUDED.negative_reviews,
+            positive_reviews = EXCLUDED.positive_reviews,
+            review_score = EXCLUDED.review_score,
+            review_score_desc = EXCLUDED.review_score_desc,
+            total_reviews = EXCLUDED.total_reviews
+        `,
+        [jsonRows(metricRows)]
+      );
+      const statusResult = await runQuery(
+        client,
+        'reviews.persistReviewSummaryBatch.syncStatus',
+        `
+          UPDATE ops.sync_status AS status
+          SET
+            consecutive_errors = 0,
+            last_error_at = NULL,
+            last_error_message = NULL,
+            last_error_source = NULL,
+            last_known_total_reviews = rows.last_known_total_reviews,
+            last_reviews_sync = rows.last_reviews_sync,
+            next_reviews_sync = rows.next_reviews_sync,
+            reviews_interval_hours = rows.reviews_interval_hours,
+            reviews_claimed_at = NULL,
+            reviews_claim_expires_at = NULL,
+            reviews_claimed_by = NULL,
+            reviews_priority_override_bucket = NULL,
+            reviews_priority_override_reason = NULL,
+            reviews_priority_override_score = NULL,
+            reviews_priority_override_until = NULL,
+            last_activity_at = COALESCE(rows.last_activity_at, status.last_activity_at),
+            updated_at = now()
+          FROM jsonb_to_recordset($1::jsonb) AS rows (
+            appid integer,
+            last_activity_at timestamptz,
+            last_known_total_reviews integer,
+            last_reviews_sync timestamptz,
+            next_reviews_sync timestamptz,
+            reviews_interval_hours integer
+          )
+          WHERE status.appid = rows.appid
+            AND status.reviews_claimed_by = $2
+        `,
+        [jsonRows(statusRows), params.workerId]
+      );
+
+      if ((statusResult.rowCount ?? 0) !== params.items.length) {
+        throw new Error(
+          `Reviews batch claim ownership mismatch: updated ${statusResult.rowCount ?? 0} of ${params.items.length}`
+        );
+      }
+
+      await runQuery(client, 'reviews.persistReviewSummaryBatch.commit', 'COMMIT');
+      return results.map(({ hoursSinceLastSync: _hoursSinceLastSync, ...result }) => result);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release?.();
+    }
+  }
+
+  async persistReviewFailuresBatch(params: PersistReviewFailureBatchParams): Promise<number> {
+    if (params.failures.length === 0) {
+      return 0;
+    }
+
+    const failedAt = params.failedAt ?? new Date().toISOString();
+    const failedAtMs = Date.parse(failedAt);
+    if (Number.isNaN(failedAtMs)) {
+      throw new Error('failedAt must be a valid timestamp');
+    }
+    const rows = params.failures.map((failure) => {
+      const consecutiveErrors = failure.previousConsecutiveErrors + 1;
+      return {
+        appid: failure.appid,
+        consecutive_errors: consecutiveErrors,
+        error_message: failure.errorMessage.slice(0, 1000),
+        failed_at: failedAt,
+        next_reviews_sync: new Date(
+          failedAtMs + calculateReviewFailureBackoffMinutes(consecutiveErrors) * 60 * 1000
+        ).toISOString()
+      };
+    });
+    const result = await runQuery(
+      this.pool,
+      'reviews.persistReviewFailuresBatch',
+      `
+        UPDATE ops.sync_status AS status
+        SET
+          consecutive_errors = rows.consecutive_errors,
+          last_error_source = 'reviews',
+          last_error_message = rows.error_message,
+          last_error_at = rows.failed_at,
+          next_reviews_sync = rows.next_reviews_sync,
+          reviews_claimed_by = NULL,
+          reviews_claimed_at = NULL,
+          reviews_claim_expires_at = NULL,
+          updated_at = now()
+        FROM jsonb_to_recordset($1::jsonb) AS rows (
+          appid integer,
+          consecutive_errors integer,
+          error_message text,
+          failed_at timestamptz,
+          next_reviews_sync timestamptz
+        )
+        WHERE status.appid = rows.appid
+          AND status.reviews_claimed_by = $2
+      `,
+      [jsonRows(rows), params.workerId]
+    );
+
+    return result.rowCount ?? 0;
   }
 }
 
