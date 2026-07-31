@@ -3139,6 +3139,61 @@ export class OpportunityWorkerRepository {
     );
   }
 
+  private async enqueueMissingStorefrontTagEvidence(
+    client: PoolClient,
+    params: {
+      evaluations: OpportunityCandidateEvaluation[];
+      results: OpportunityEvaluatedResult[];
+      runId: string;
+    },
+  ): Promise<void> {
+    if (
+      !["1", "true", "yes", "on"].includes(
+        (process.env.STOREFRONT_TAGS_ENABLED ?? "").trim().toLowerCase(),
+      )
+    ) {
+      return;
+    }
+    const priorities = new Map<number, number>();
+    for (const result of params.results) {
+      if (result.missingEvidence.includes("tags")) {
+        priorities.set(
+          result.appid,
+          Math.max(
+            priorities.get(result.appid) ?? 0,
+            1_000 + Math.round(result.rank.finalScore * 100),
+          ),
+        );
+      }
+    }
+    for (const candidate of params.evaluations) {
+      if (candidate.evaluation.missingRequiredFields.includes("tags")) {
+        priorities.set(
+          candidate.appid,
+          Math.max(priorities.get(candidate.appid) ?? 0, 950),
+        );
+      }
+    }
+    if (priorities.size === 0) {
+      return;
+    }
+
+    const jobs = Array.from(priorities, ([appid, priority]) => ({
+      appid,
+      payload: {
+        requested_by: "opportunity_worker",
+      },
+      priority,
+      source: "storefront_tags",
+      trigger_cursor: params.runId,
+      trigger_reason: "opportunity_missing_tags",
+    }));
+    await client.query(
+      "SELECT ops.mark_app_capture_work_dirty($1::jsonb, $2::integer)",
+      [JSON.stringify(jobs), 1],
+    );
+  }
+
   async persistRunOutcomeLegacy(params: {
     evaluations: OpportunityCandidateEvaluation[];
     pending: OpportunityPendingEvaluation[];
@@ -3510,6 +3565,12 @@ export class OpportunityWorkerRepository {
         );
       }
 
+      await this.enqueueMissingStorefrontTagEvidence(client, {
+        evaluations: params.evaluations,
+        results: params.results,
+        runId: params.run.id,
+      });
+
       await client.query(
         `
           WITH ranked AS (
@@ -3805,6 +3866,12 @@ export class OpportunityWorkerRepository {
           workspaceId: params.workspaceId,
         });
       }
+
+      await this.enqueueMissingStorefrontTagEvidence(client, {
+        evaluations: params.evaluations,
+        results: params.results,
+        runId: params.run.id,
+      });
 
       await client.query(
         `

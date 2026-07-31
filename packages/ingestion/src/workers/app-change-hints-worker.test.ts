@@ -6,11 +6,15 @@ import type {
   TigerWriter,
 } from '@publisheriq/database';
 import type { TigerChangeIntelRepository } from '../change-intel/tiger-repository.js';
-import { runAppChangeHints } from './app-change-hints-worker.js';
+import { buildStorefrontTagHintJobs, runAppChangeHints } from './app-change-hints-worker.js';
 
 function buildHintStatusRows(): Array<{
   appid: number;
+  catalog_first_observation_kind: string | null;
+  catalog_first_observed_at: string | null;
+  has_known_tags: boolean;
   is_released: boolean;
+  parent_appid: number | null;
   priority_score: number;
   release_date: string | null;
   steam_last_modified: number;
@@ -20,7 +24,11 @@ function buildHintStatusRows(): Array<{
   return [
     {
       appid: 10,
+      catalog_first_observation_kind: 'baseline',
+      catalog_first_observed_at: '2026-01-01T00:00:00.000Z',
+      has_known_tags: true,
       is_released: true,
+      parent_appid: null,
       priority_score: 10,
       release_date: null,
       steam_last_modified: 100,
@@ -29,7 +37,11 @@ function buildHintStatusRows(): Array<{
     },
     {
       appid: 20,
+      catalog_first_observation_kind: 'baseline',
+      catalog_first_observed_at: '2026-01-01T00:00:00.000Z',
+      has_known_tags: true,
       is_released: true,
+      parent_appid: null,
       priority_score: 10,
       release_date: null,
       steam_last_modified: 150,
@@ -38,6 +50,63 @@ function buildHintStatusRows(): Array<{
     },
   ];
 }
+
+test('buildStorefrontTagHintJobs prioritizes new games and deduplicates demos onto parents', () => {
+  const jobs = buildStorefrontTagHintJobs(
+    [
+      { appid: 10, lastModified: 100, priceChangeNumber: 1 },
+      { appid: 11, lastModified: 101, priceChangeNumber: 1 },
+      { appid: 12, lastModified: 102, priceChangeNumber: 1 },
+    ],
+    new Map([
+      [
+        10,
+        {
+          catalogFirstObservationKind: 'new',
+          catalogFirstObservedAt: '2026-07-31T10:00:00.000Z',
+          hasKnownTags: false,
+          isReleased: false,
+          parentAppid: null,
+          priorityScore: 0,
+          releaseDate: null,
+          type: 'game',
+        },
+      ],
+      [
+        11,
+        {
+          catalogFirstObservationKind: 'new',
+          catalogFirstObservedAt: '2026-07-31T10:00:00.000Z',
+          hasKnownTags: false,
+          isReleased: false,
+          parentAppid: 10,
+          priorityScore: 0,
+          releaseDate: null,
+          type: 'demo',
+        },
+      ],
+      [
+        12,
+        {
+          catalogFirstObservationKind: 'baseline',
+          catalogFirstObservedAt: '2025-01-01T00:00:00.000Z',
+          hasKnownTags: false,
+          isReleased: false,
+          parentAppid: null,
+          priorityScore: 0,
+          releaseDate: null,
+          type: 'game',
+        },
+      ],
+    ]),
+    Date.parse('2026-07-31T12:00:00.000Z')
+  );
+
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0]?.appid, 10);
+  assert.equal(jobs[0]?.priority, 900);
+  assert.equal(jobs[0]?.source, 'storefront_tags');
+});
 
 test('runAppChangeHints shadow mode durably disposes unknown IDs and changed hints', async () => {
   const committedRows: CatalogObservationRow[][] = [];

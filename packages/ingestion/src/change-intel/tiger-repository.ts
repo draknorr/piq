@@ -10,10 +10,7 @@ import { archiveJsonPayload, createChangeIntelArchiveStore } from './archive-sto
 import { hashNormalizedContent } from './hashing.js';
 import { stringifyJsonValue } from './json-sanitize.js';
 import { readChangeIntelRuntimeConfig } from './runtime-config.js';
-import {
-  toComparableMediaVersion,
-  toComparableStorefrontSnapshot,
-} from './storefront.js';
+import { toComparableMediaVersion, toComparableStorefrontSnapshot } from './storefront.js';
 import type {
   AppCaptureSource,
   AppChangeEventDraft,
@@ -22,6 +19,7 @@ import type {
   NormalizedMediaVersion,
   NormalizedNewsVersion,
   NormalizedStorefrontSnapshot,
+  StorefrontTagEvidenceWrite,
   VersionWriteResult,
 } from './types.js';
 
@@ -60,6 +58,7 @@ interface ClaimCaptureQueueRow extends QueryResultRow {
   attempts: number | string;
   id: number | string;
   payload: Record<string, unknown> | null;
+  priority: number | string;
   source: AppCaptureSource;
   trigger_cursor: string | null;
   trigger_reason: string;
@@ -69,13 +68,30 @@ interface CountRow extends QueryResultRow {
   count: number | string;
 }
 
+interface StorefrontTrafficPressureQueryRow extends QueryResultRow {
+  oldest_dirty_at: Date | string | null;
+  queued: number | string;
+  running_sweeps: number | string;
+}
+
+export interface StorefrontTrafficPressure {
+  active: boolean;
+  oldestDirtyAt: string | null;
+  queued: number;
+  runningSweeps: number;
+}
+
 interface IdRow extends QueryResultRow {
   id: number | string;
 }
 
 export interface TigerHintStatusRow {
   appid: number;
+  catalog_first_observation_kind: string | null;
+  catalog_first_observed_at: string | null;
+  has_known_tags: boolean;
   is_released: boolean | null;
+  parent_appid: number | null;
   priority_score: number | null;
   release_date: string | null;
   steam_last_modified: number | null;
@@ -93,7 +109,11 @@ export interface TigerReviewPromotion {
 
 interface HintStatusQueryRow extends QueryResultRow {
   appid: number;
+  catalog_first_observation_kind: string | null;
+  catalog_first_observed_at: Date | string | null;
+  has_known_tags: boolean;
   is_released: boolean | null;
+  parent_appid: number | string | null;
   priority_score: number | string | null;
   release_date: Date | string | null;
   steam_last_modified: number | string | null;
@@ -177,14 +197,16 @@ function truncateText(value: string | null | undefined, length: number): string 
   return value.length > length ? value.slice(0, length) : value;
 }
 
-function summarizeStorefrontSnapshot(snapshot: NormalizedStorefrontSnapshot): Record<string, unknown> {
+function summarizeStorefrontSnapshot(
+  snapshot: NormalizedStorefrontSnapshot
+): Record<string, unknown> {
   return {
     comingSoon: snapshot.comingSoon,
     isDelisted: snapshot.isDelisted,
     isFree: snapshot.isFree,
-    hasPurchasePackages: snapshot.hasPurchasePackages ?? (
-      (snapshot.packageIds?.length ?? 0) + (snapshot.packageGroupSubs?.length ?? 0)
-    ) > 0,
+    hasPurchasePackages:
+      snapshot.hasPurchasePackages ??
+      (snapshot.packageIds?.length ?? 0) + (snapshot.packageGroupSubs?.length ?? 0) > 0,
     name: snapshot.name,
     price: snapshot.price,
     releaseDate: snapshot.releaseDate,
@@ -223,10 +245,7 @@ function requireArchivePointer<T extends { key: string } | null>(
   return pointer as Exclude<T, null>;
 }
 
-async function readArchivedJson<T>(
-  row: ArchiveColumns,
-  label: string
-): Promise<T> {
+async function readArchivedJson<T>(row: ArchiveColumns, label: string): Promise<T> {
   if (!row.archive_bucket || !row.archive_key) {
     throw new Error(`${label} does not have an archive pointer in Tiger.`);
   }
@@ -275,7 +294,9 @@ export class TigerChangeIntelRepository {
   constructor(private readonly pool: Pool) {}
 
   async listHintStatusRows(appids: number[]): Promise<TigerHintStatusRow[]> {
-    const uniqueAppids = Array.from(new Set(appids.filter(Number.isFinite))).sort((left, right) => left - right);
+    const uniqueAppids = Array.from(new Set(appids.filter(Number.isFinite))).sort(
+      (left, right) => left - right
+    );
     if (uniqueAppids.length === 0) {
       return [];
     }
@@ -287,11 +308,29 @@ export class TigerChangeIntelRepository {
           a.type,
           a.is_released,
           a.release_date,
+          a.parent_appid,
+          catalog.first_observation_kind AS catalog_first_observation_kind,
+          catalog.first_observed_at AS catalog_first_observed_at,
+          (
+            EXISTS (
+              SELECT 1
+              FROM ops.app_field_evidence evidence
+              WHERE evidence.appid = COALESCE(a.parent_appid, a.appid)
+                AND evidence.field_name = 'tags'
+                AND evidence.evidence_state = 'known'
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM legacy.app_steam_tags app_tag
+              WHERE app_tag.appid = COALESCE(a.parent_appid, a.appid)
+            )
+          ) AS has_known_tags,
           s.steam_last_modified,
           s.steam_price_change_number,
           s.priority_score
         FROM legacy.apps a
         LEFT JOIN ops.sync_status s ON s.appid = a.appid
+        LEFT JOIN ops.app_catalog_state catalog ON catalog.appid = a.appid
         WHERE a.appid = ANY($1::integer[])
       `,
       [uniqueAppids]
@@ -299,9 +338,19 @@ export class TigerChangeIntelRepository {
 
     return rows.map((row) => ({
       appid: Number(row.appid),
+      catalog_first_observation_kind: row.catalog_first_observation_kind,
+      catalog_first_observed_at:
+        row.catalog_first_observed_at instanceof Date
+          ? row.catalog_first_observed_at.toISOString()
+          : row.catalog_first_observed_at,
+      has_known_tags: row.has_known_tags === true,
       is_released: row.is_released,
+      parent_appid: toNullableNumber(row.parent_appid),
       priority_score: toNullableNumber(row.priority_score),
-      release_date: row.release_date instanceof Date ? row.release_date.toISOString().slice(0, 10) : row.release_date,
+      release_date:
+        row.release_date instanceof Date
+          ? row.release_date.toISOString().slice(0, 10)
+          : row.release_date,
       steam_last_modified: toNullableNumber(row.steam_last_modified),
       steam_price_change_number: toNullableNumber(row.steam_price_change_number),
       type: row.type,
@@ -439,7 +488,10 @@ export class TigerChangeIntelRepository {
     triggerReason: string,
     triggerCursor: string | null,
     observedAt = new Date().toISOString(),
-    options: { idOverride?: string | null; previousIdOverride?: string | null } = {}
+    options: {
+      idOverride?: string | null;
+      previousIdOverride?: string | null;
+    } = {}
   ): Promise<VersionWriteResult> {
     const previousSnapshot = await this.getLatestStorefrontSnapshotMeta(appid);
     const contentHash = hashNormalizedContent(toComparableStorefrontSnapshot(snapshot));
@@ -463,11 +515,14 @@ export class TigerChangeIntelRepository {
       };
     }
 
-    const pointer = requireArchivePointer(await archiveJsonPayload({
-      kind: 'app-source-snapshot',
-      keyParts: [String(appid), 'storefront', contentHash],
-      payload: snapshot,
-    }), 'storefront snapshots');
+    const pointer = requireArchivePointer(
+      await archiveJsonPayload({
+        kind: 'app-source-snapshot',
+        keyParts: [String(appid), 'storefront', contentHash],
+        payload: snapshot,
+      }),
+      'storefront snapshots'
+    );
     const idOverride = toNullableNumber(options.idOverride);
     const previousId = previousSnapshot?.id ?? options.previousIdOverride ?? null;
     const params = [
@@ -521,7 +576,10 @@ export class TigerChangeIntelRepository {
     storefrontSnapshotId: string,
     mediaVersion: NormalizedMediaVersion,
     observedAt = new Date().toISOString(),
-    options: { idOverride?: string | null; previousIdOverride?: string | null } = {}
+    options: {
+      idOverride?: string | null;
+      previousIdOverride?: string | null;
+    } = {}
   ): Promise<VersionWriteResult> {
     const previousVersion = await this.getLatestMediaVersionRow(appid);
     const contentHash = hashNormalizedContent(toComparableMediaVersion(mediaVersion));
@@ -620,7 +678,10 @@ export class TigerChangeIntelRepository {
   async writeNewsVersion(
     newsVersion: NormalizedNewsVersion,
     observedAt = new Date().toISOString(),
-    options: { idOverride?: string | null; previousIdOverride?: string | null } = {}
+    options: {
+      idOverride?: string | null;
+      previousIdOverride?: string | null;
+    } = {}
   ): Promise<VersionWriteResult> {
     const previousVersion = await this.getLatestNewsVersionRow(newsVersion.gid);
     const contentHash = hashNormalizedContent(newsVersion);
@@ -643,11 +704,14 @@ export class TigerChangeIntelRepository {
       };
     }
 
-    const pointer = requireArchivePointer(await archiveJsonPayload({
-      kind: 'steam-news-version',
-      keyParts: [newsVersion.gid, contentHash],
-      payload: newsVersion,
-    }), 'news versions');
+    const pointer = requireArchivePointer(
+      await archiveJsonPayload({
+        kind: 'steam-news-version',
+        keyParts: [newsVersion.gid, contentHash],
+        payload: newsVersion,
+      }),
+      'news versions'
+    );
     const idOverride = toNullableNumber(options.idOverride);
     const previousId = previousVersion?.id ?? options.previousIdOverride ?? null;
     const params = [
@@ -861,7 +925,8 @@ export class TigerChangeIntelRepository {
   async claimCaptureQueue(
     sources: AppCaptureSource[],
     limit: number,
-    workerId: string
+    workerId: string,
+    minPriority?: number
   ): Promise<CaptureQueueJob[]> {
     if (sources.length === 0) {
       return [];
@@ -869,10 +934,10 @@ export class TigerChangeIntelRepository {
 
     const { rows } = await this.pool.query<ClaimCaptureQueueRow>(
       `
-        SELECT id, appid, source, trigger_reason, trigger_cursor, payload, attempts
-        FROM ops.claim_app_capture_work($1::text[], $2::text, $3::integer)
+        SELECT id, appid, source, priority, trigger_reason, trigger_cursor, payload, attempts
+        FROM ops.claim_app_capture_work_v2($1::text[], $2::text, $3::integer, $4::integer)
       `,
-      [sources, workerId, limit]
+      [sources, workerId, limit, minPriority ?? null]
     );
 
     return rows.map((row) => ({
@@ -880,10 +945,116 @@ export class TigerChangeIntelRepository {
       attempts: parseCount(row.attempts),
       id: String(row.id),
       payload: isRecord(row.payload) ? row.payload : {},
+      priority: parseCount(row.priority),
       source: row.source,
       triggerCursor: row.trigger_cursor ?? '',
       triggerReason: row.trigger_reason,
     }));
+  }
+
+  async deferCaptureQueueItems(
+    jobIds: string[],
+    delaySeconds: number,
+    errorMessage: string
+  ): Promise<void> {
+    if (jobIds.length === 0) {
+      return;
+    }
+    await this.pool.query(
+      'SELECT ops.defer_app_capture_work_v1($1::bigint[], $2::integer, $3::text)',
+      [jobIds.map(Number), Math.max(1, Math.min(Math.floor(delaySeconds), 86_400)), errorMessage]
+    );
+  }
+
+  async upsertStorefrontTagEvidence(rows: StorefrontTagEvidenceWrite[]): Promise<number> {
+    if (rows.length === 0) {
+      return 0;
+    }
+    const payload = rows.map((row) => ({
+      appid: row.appid,
+      provenance: {
+        authority: 'steam_store_page',
+        country: row.country,
+        items: row.tags,
+        locale: row.locale,
+        missingVersusEmptyPreserved: true,
+        pageUrl: row.pageUrl,
+        rankDepth: row.tags.length,
+        responseHash: row.responseHash,
+        surface: 'public_app_html',
+      },
+      source_at: row.observedAt,
+      value: row.tags.map((tag) => tag.name),
+      version: row.parserVersion,
+    }));
+    const { rows: result } = await this.pool.query<CountRow>(
+      'SELECT ops.upsert_storefront_tag_evidence_v1($1::jsonb) AS count',
+      [stringifyJsonValue(payload)]
+    );
+    return parseCount(result[0]?.count);
+  }
+
+  async countStorefrontTagAttemptsSince(sinceIso: string): Promise<number> {
+    const { rows } = await this.pool.query<CountRow>(
+      `
+        SELECT COALESCE(
+          sum(greatest(COALESCE(items_processed, 0), COALESCE(batch_size, 0))),
+          0
+        ) AS count
+        FROM ops.change_intel_sync_jobs
+        WHERE job_type = 'change-intel-storefront_tags'
+          AND started_at >= $1::timestamptz
+      `,
+      [sinceIso]
+    );
+    return parseCount(rows[0]?.count);
+  }
+
+  async inspectStorefrontTrafficPressure(params: {
+    freshSweepAfterIso: string;
+    oldestQueueBeforeIso: string;
+    queueCountThreshold: number;
+  }): Promise<StorefrontTrafficPressure> {
+    const { rows } = await this.pool.query<StorefrontTrafficPressureQueryRow>(
+      `
+        WITH sweep AS MATERIALIZED (
+          SELECT count(*)::integer AS running_sweeps
+          FROM ops.sync_jobs
+          WHERE job_type = 'storefront'
+            AND status = 'running'
+            AND started_at >= $1::timestamptz
+        ), queue AS MATERIALIZED (
+          SELECT
+            count(*)::integer AS queued,
+            min(dirty_since) AS oldest_dirty_at
+          FROM ops.app_capture_work_state
+          WHERE source = 'storefront'
+            AND dirty_since IS NOT NULL
+            AND dead_lettered_at IS NULL
+        )
+        SELECT sweep.running_sweeps, queue.queued, queue.oldest_dirty_at
+        FROM sweep
+        CROSS JOIN queue
+      `,
+      [params.freshSweepAfterIso]
+    );
+    const row = rows[0];
+    const queued = parseCount(row?.queued);
+    const runningSweeps = parseCount(row?.running_sweeps);
+    const oldestDirtyAt = row?.oldest_dirty_at
+      ? row.oldest_dirty_at instanceof Date
+        ? row.oldest_dirty_at.toISOString()
+        : row.oldest_dirty_at
+      : null;
+    return {
+      active:
+        runningSweeps > 0 ||
+        queued >= Math.max(1, params.queueCountThreshold) ||
+        (oldestDirtyAt !== null && oldestDirtyAt <= params.oldestQueueBeforeIso),
+      oldestDirtyAt,
+      queued,
+      runningSweeps,
+    };
   }
 
   async completeCaptureQueueItems(
@@ -944,7 +1115,12 @@ export class TigerChangeIntelRepository {
 
     const columns = entries.map(([key]) => STATUS_FIELD_COLUMNS.get(key)!);
     const insertColumns = ['appid', ...columns, 'created_at', 'updated_at'];
-    const valuePlaceholders = ['$1', ...columns.map((_, index) => `$${index + 2}`), 'now()', 'now()'];
+    const valuePlaceholders = [
+      '$1',
+      ...columns.map((_, index) => `$${index + 2}`),
+      'now()',
+      'now()',
+    ];
     const updateSet = columns.map((column) => `${column} = EXCLUDED.${column}`);
     updateSet.push('updated_at = now()');
 
@@ -960,7 +1136,9 @@ export class TigerChangeIntelRepository {
   }
 
   async getLastNewsSyncAt(appid: number): Promise<string | null> {
-    const { rows } = await this.pool.query<{ last_news_sync: Date | string | null }>(
+    const { rows } = await this.pool.query<{
+      last_news_sync: Date | string | null;
+    }>(
       `
         SELECT last_news_sync
         FROM ops.change_intel_app_status

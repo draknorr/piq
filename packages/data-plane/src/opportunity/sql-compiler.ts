@@ -87,7 +87,7 @@ function fieldEvidenceKnownSql(
 }
 
 function resolvedFieldEvidenceValueSql(
-  field: "genres" | "categories" | "platforms" | "languages",
+  field: "tags" | "genres" | "categories" | "platforms" | "languages",
   legacyValueSql: string,
 ): string {
   return `COALESCE((
@@ -105,7 +105,7 @@ function resolvedFieldEvidenceValueSql(
 }
 
 function resolvedTextCollection(
-  field: "genres" | "categories" | "platforms" | "languages",
+  field: "tags" | "genres" | "categories" | "platforms" | "languages",
   legacyValueSql: string,
 ): FieldSql["collection"] {
   return {
@@ -308,13 +308,17 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "tags":
       return {
-        collection: {
-          appidExpression: "app_tag.appid",
-          nameExpression: "tag.name",
-          relationSql: `legacy.app_steam_tags app_tag
-            JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id`,
-        },
-        knownSql: fieldEvidenceKnownSql("tags", ["pics"]),
+        collection: resolvedTextCollection(
+          "tags",
+          `SELECT COALESCE(
+            jsonb_agg(tag.name ORDER BY app_tag.rank NULLS LAST, tag.name),
+            '[]'::jsonb
+          )
+          FROM legacy.app_steam_tags app_tag
+          JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id
+          WHERE app_tag.appid = a.appid`,
+        ),
+        knownSql: fieldEvidenceKnownSql("tags", ["pics", "storefront"]),
       };
     case "genres":
       return {

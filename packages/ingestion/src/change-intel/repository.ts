@@ -5,14 +5,8 @@ import {
   resolveChangeEventDefinition,
 } from '@publisheriq/shared';
 import { hashNormalizedContent } from './hashing.js';
-import {
-  readChangeIntelRuntimeConfig,
-  shouldWriteTiger,
-} from './runtime-config.js';
-import {
-  toComparableMediaVersion,
-  toComparableStorefrontSnapshot,
-} from './storefront.js';
+import { readChangeIntelRuntimeConfig, shouldWriteTiger } from './runtime-config.js';
+import { toComparableMediaVersion, toComparableStorefrontSnapshot } from './storefront.js';
 import { getTigerChangeIntelRepository } from './tiger-repository.js';
 import type {
   AppCaptureSource,
@@ -59,10 +53,7 @@ async function mirrorTigerWrite(operation: string, fn: () => Promise<void>): Pro
   }
 }
 
-async function mirrorTigerResult<T>(
-  operation: string,
-  fn: () => Promise<T>
-): Promise<T | null> {
+async function mirrorTigerResult<T>(operation: string, fn: () => Promise<T>): Promise<T | null> {
   const config = readChangeIntelRuntimeConfig();
   if (!shouldWriteTiger(config)) {
     return null;
@@ -107,11 +98,23 @@ function castRecords<T>(value: Array<Record<string, unknown>>): T {
 }
 
 function getSupabaseRetryAttempts(): number {
-  return Math.max(1, parseInt(process.env.CHANGE_INTEL_SUPABASE_RETRY_ATTEMPTS || `${DEFAULT_SUPABASE_RETRY_ATTEMPTS}`, 10));
+  return Math.max(
+    1,
+    parseInt(
+      process.env.CHANGE_INTEL_SUPABASE_RETRY_ATTEMPTS || `${DEFAULT_SUPABASE_RETRY_ATTEMPTS}`,
+      10
+    )
+  );
 }
 
 function getSupabaseRetryDelayMs(): number {
-  return Math.max(25, parseInt(process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS || `${DEFAULT_SUPABASE_RETRY_DELAY_MS}`, 10));
+  return Math.max(
+    25,
+    parseInt(
+      process.env.CHANGE_INTEL_SUPABASE_RETRY_DELAY_MS || `${DEFAULT_SUPABASE_RETRY_DELAY_MS}`,
+      10
+    )
+  );
 }
 
 function getCaptureDirtyWindowHours(): number {
@@ -483,23 +486,21 @@ export async function upsertNewsItem(
   }
 
   const now = new Date().toISOString();
-  const { error } = await getDb(supabase)
-    .from('steam_news_items')
-    .upsert(
-      {
-        gid: newsVersion.gid,
-        appid,
-        url: newsVersion.url,
-        author: newsVersion.author,
-        feedlabel: newsVersion.feedlabel,
-        feedname: newsVersion.feedname,
-        published_at: newsVersion.publishedAt,
-        first_seen_at: now,
-        last_seen_at: now,
-        updated_at: now,
-      },
-      { onConflict: 'gid' }
-    );
+  const { error } = await getDb(supabase).from('steam_news_items').upsert(
+    {
+      gid: newsVersion.gid,
+      appid,
+      url: newsVersion.url,
+      author: newsVersion.author,
+      feedlabel: newsVersion.feedlabel,
+      feedname: newsVersion.feedname,
+      published_at: newsVersion.publishedAt,
+      first_seen_at: now,
+      last_seen_at: now,
+      updated_at: now,
+    },
+    { onConflict: 'gid' }
+  );
 
   if (error) {
     throw new Error(`Failed to upsert steam_news_items: ${error.message}`);
@@ -714,7 +715,10 @@ export async function refreshChangePatternActivityDaysForApp(
   lookbackDays = 180
 ): Promise<number> {
   if (shouldUseTigerWriteAuthority()) {
-    return getTigerChangeIntelRepository().refreshChangePatternActivityDaysForApp(appid, lookbackDays);
+    return getTigerChangeIntelRepository().refreshChangePatternActivityDaysForApp(
+      appid,
+      lookbackDays
+    );
   }
 
   const { data, error } = await runSupabaseOperation<number | null>(
@@ -744,7 +748,10 @@ export async function refreshChangePatternAppWindowsForApp(
   lookbackDays = 180
 ): Promise<number> {
   if (shouldUseTigerWriteAuthority()) {
-    return getTigerChangeIntelRepository().refreshChangePatternAppWindowsForApp(appid, lookbackDays);
+    return getTigerChangeIntelRepository().refreshChangePatternAppWindowsForApp(
+      appid,
+      lookbackDays
+    );
   }
 
   const { data, error } = await runSupabaseOperation<number | null>(
@@ -900,14 +907,14 @@ export async function listRecentChangeActivityAppIds(
   afterAppid = 0,
   limit = 1000
 ): Promise<number[]> {
-  const { data, error } = await runSupabaseOperation<Array<{ appid: number }> | null>(
-    'list_recent_change_activity_appids',
-    () =>
-      getDb(supabase).rpc('list_recent_change_activity_appids', {
-        p_lookback_days: lookbackDays,
-        p_after_appid: afterAppid,
-        p_limit: limit,
-      })
+  const { data, error } = await runSupabaseOperation<Array<{
+    appid: number;
+  }> | null>('list_recent_change_activity_appids', () =>
+    getDb(supabase).rpc('list_recent_change_activity_appids', {
+      p_lookback_days: lookbackDays,
+      p_after_appid: afterAppid,
+      p_limit: limit,
+    })
   );
 
   if (error) {
@@ -923,10 +930,15 @@ export async function claimCaptureQueue(
   supabase: TypedSupabaseClient,
   sources: AppCaptureSource[],
   limit: number,
-  workerId: string
+  workerId: string,
+  minPriority?: number
 ): Promise<CaptureQueueJob[]> {
   if (shouldUseTigerWriteAuthority()) {
-    return getTigerChangeIntelRepository().claimCaptureQueue(sources, limit, workerId);
+    return getTigerChangeIntelRepository().claimCaptureQueue(sources, limit, workerId, minPriority);
+  }
+
+  if (minPriority !== undefined) {
+    throw new Error('Minimum-priority capture claims require Tiger write authority');
   }
 
   const { data, error } = await runSupabaseOperation<Array<Record<string, unknown>> | null>(
@@ -953,6 +965,7 @@ export async function claimCaptureQueue(
       row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
         ? (row.payload as Record<string, unknown>)
         : {},
+    priority: Number(row.priority ?? 0),
     attempts: Number(row.attempts ?? 0),
   }));
 }
@@ -1001,7 +1014,11 @@ export async function requeueStaleCaptureClaims(
   }
 
   if (shouldUseTigerWriteAuthority()) {
-    return getTigerChangeIntelRepository().requeueStaleCaptureClaims(sources, claimedBeforeIso, limit);
+    return getTigerChangeIntelRepository().requeueStaleCaptureClaims(
+      sources,
+      claimedBeforeIso,
+      limit
+    );
   }
 
   const boundedLimit = Math.max(1, Math.min(limit, 500));
@@ -1021,7 +1038,11 @@ export async function requeueStaleCaptureClaims(
 
   const requeued = Number(data ?? 0);
   await mirrorTigerResult('requeueStaleCaptureClaims', async () =>
-    getTigerChangeIntelRepository().requeueStaleCaptureClaims(sources, claimedBeforeIso, boundedLimit)
+    getTigerChangeIntelRepository().requeueStaleCaptureClaims(
+      sources,
+      claimedBeforeIso,
+      boundedLimit
+    )
   );
 
   return requeued;
@@ -1039,17 +1060,13 @@ export async function seedDiscoveredApps(
     appid: record.appid,
     app_type: record.appType ?? 'game',
     discovery_reason: record.discoveryReason ?? 'discovered_reference',
-    ...(record.placeholderName?.trim()
-      ? { placeholder_name: record.placeholderName.trim() }
-      : {}),
+    ...(record.placeholderName?.trim() ? { placeholder_name: record.placeholderName.trim() } : {}),
   }));
 
-  const { data, error } = await runSupabaseOperation<number | null>(
-    'seed_discovered_apps',
-    () =>
-      getDb(supabase).rpc('seed_discovered_apps', {
-        p_records: payload,
-      })
+  const { data, error } = await runSupabaseOperation<number | null>('seed_discovered_apps', () =>
+    getDb(supabase).rpc('seed_discovered_apps', {
+      p_records: payload,
+    })
   );
 
   if (error) {
@@ -1098,14 +1115,10 @@ export async function getLastNewsSyncAt(
     return getTigerChangeIntelRepository().getLastNewsSyncAt(appid);
   }
 
-  const { data, error } = await runSupabaseOperation<{ last_news_sync: string | null } | null>(
-    'select_last_news_sync',
-    () =>
-      getDb(supabase)
-        .from('sync_status')
-        .select('last_news_sync')
-        .eq('appid', appid)
-        .maybeSingle()
+  const { data, error } = await runSupabaseOperation<{
+    last_news_sync: string | null;
+  } | null>('select_last_news_sync', () =>
+    getDb(supabase).from('sync_status').select('last_news_sync').eq('appid', appid).maybeSingle()
   );
 
   if (error) {
@@ -1124,18 +1137,18 @@ export async function createSyncJobRecord(
     return getTigerChangeIntelRepository().createSyncJobRecord(jobType, batchSize);
   }
 
-  const { data, error } = await runSupabaseOperation<{ id: string | number } | null>(
-    'insert_sync_job',
-    () =>
-      getDb(supabase)
-        .from('sync_jobs')
-        .insert({
-          job_type: jobType,
-          status: 'running',
-          batch_size: batchSize,
-        })
-        .select('id')
-        .maybeSingle()
+  const { data, error } = await runSupabaseOperation<{
+    id: string | number;
+  } | null>('insert_sync_job', () =>
+    getDb(supabase)
+      .from('sync_jobs')
+      .insert({
+        job_type: jobType,
+        status: 'running',
+        batch_size: batchSize,
+      })
+      .select('id')
+      .maybeSingle()
   );
 
   if (error) {
@@ -1163,10 +1176,7 @@ export async function updateSyncJobRecord(
   }
 
   const { error } = await runSupabaseOperation('update_sync_job', () =>
-    getDb(supabase)
-      .from('sync_jobs')
-      .update(values)
-      .eq('id', id)
+    getDb(supabase).from('sync_jobs').update(values).eq('id', id)
   );
 
   if (error) {
@@ -1197,20 +1207,20 @@ export async function abandonStaleChangeIntelSyncJobs(
   }
 
   const completedAt = new Date().toISOString();
-  const { data, error } = await runSupabaseOperation<Array<{ id: string | number }> | null>(
-    'abandon_stale_change_intel_sync_jobs',
-    () =>
-      getDb(supabase)
-        .from('sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: completedAt,
-          error_message: errorMessage,
-        })
-        .in('job_type', jobTypes)
-        .eq('status', 'running')
-        .lt('started_at', startedBeforeIso)
-        .select('id')
+  const { data, error } = await runSupabaseOperation<Array<{
+    id: string | number;
+  }> | null>('abandon_stale_change_intel_sync_jobs', () =>
+    getDb(supabase)
+      .from('sync_jobs')
+      .update({
+        status: 'failed',
+        completed_at: completedAt,
+        error_message: errorMessage,
+      })
+      .in('job_type', jobTypes)
+      .eq('status', 'running')
+      .lt('started_at', startedBeforeIso)
+      .select('id')
   );
 
   if (error) {
@@ -1303,10 +1313,11 @@ export async function getArchiveEligibility(
   appid: number
 ): Promise<boolean> {
   const db = getDb(supabase);
-  const [{ data: appRow, error: appError }, { data: syncRow, error: syncError }] = await Promise.all([
-    db.from('apps').select('release_date, is_released').eq('appid', appid).maybeSingle(),
-    db.from('sync_status').select('refresh_tier').eq('appid', appid).maybeSingle(),
-  ]);
+  const [{ data: appRow, error: appError }, { data: syncRow, error: syncError }] =
+    await Promise.all([
+      db.from('apps').select('release_date, is_released').eq('appid', appid).maybeSingle(),
+      db.from('sync_status').select('refresh_tier').eq('appid', appid).maybeSingle(),
+    ]);
 
   if (appError || syncError) {
     log.warn('Failed to fetch archive eligibility', {
@@ -1319,7 +1330,14 @@ export async function getArchiveEligibility(
 
   const refreshTier = syncRow?.refresh_tier ?? null;
   const releaseDate = appRow?.release_date ? new Date(appRow.release_date) : null;
-  const releasedRecently = releaseDate ? releaseDate.getTime() >= Date.now() - 365 * 24 * 60 * 60 * 1000 : false;
+  const releasedRecently = releaseDate
+    ? releaseDate.getTime() >= Date.now() - 365 * 24 * 60 * 60 * 1000
+    : false;
 
-  return refreshTier === 'active' || refreshTier === 'moderate' || releasedRecently || appRow?.is_released === false;
+  return (
+    refreshTier === 'active' ||
+    refreshTier === 'moderate' ||
+    releasedRecently ||
+    appRow?.is_released === false
+  );
 }

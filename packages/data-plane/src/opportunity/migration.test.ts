@@ -39,6 +39,15 @@ const evidenceMigration = readFileSync(
   ),
   "utf8",
 );
+const storefrontTagMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../sql/tiger-bootstrap/0101_public_storefront_tag_evidence.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const workerRepository = readFileSync(
   fileURLToPath(new URL("./worker-repository.ts", import.meta.url)),
   "utf8",
@@ -230,6 +239,38 @@ describe("opportunity evaluation performance migration", () => {
     assert.match(
       workerRepository,
       /INSERT INTO opportunity\.released_cohort_cache_v1/,
+    );
+  });
+});
+
+describe("public Storefront tag evidence migration", () => {
+  it("widens only the existing queue source constraint and adds a batch writer", () => {
+    assert.match(
+      storefrontTagMigration,
+      /ADD CONSTRAINT app_capture_work_state_source_check[\s\S]*'storefront_tags'/,
+    );
+    assert.match(
+      storefrontTagMigration,
+      /CREATE OR REPLACE FUNCTION ops\.upsert_storefront_tag_evidence_v1/,
+    );
+    assert.match(
+      storefrontTagMigration,
+      /ON CONFLICT \(appid, field_name, source\)/,
+    );
+    assert.doesNotMatch(storefrontTagMigration, /\bDROP\s+(?:TABLE|COLUMN)\b/i);
+    assert.doesNotMatch(storefrontTagMigration, /\bTRUNCATE\b/i);
+    assert.doesNotMatch(storefrontTagMigration, /\bDELETE\s+FROM\b/i);
+    assert.doesNotMatch(storefrontTagMigration, /\bUPDATE\s+legacy\./i);
+  });
+
+  it("does not rewrite unchanged normalized tag evidence", () => {
+    assert.match(
+      storefrontTagMigration,
+      /app_field_evidence\.value IS DISTINCT FROM EXCLUDED\.value/,
+    );
+    assert.match(
+      storefrontTagMigration,
+      /provenance->'items'[\s\S]*IS DISTINCT FROM EXCLUDED\.provenance->'items'/,
     );
   });
 });

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { getServiceClient, getTigerWriter } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
 import { fetchStorefrontAppDetails } from '../apis/storefront.js';
+import { fetchStorefrontTags } from '../apis/storefront-tags.js';
 import {
   abandonStaleChangeIntelSyncJobs,
   claimCaptureQueue,
@@ -27,7 +28,10 @@ import {
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
 import { readChangeIntelRuntimeConfig } from '../change-intel/runtime-config.js';
+import { getTigerChangeIntelRepository } from '../change-intel/tiger-repository.js';
+import type { AppCaptureSource } from '../change-intel/types.js';
 import { upsertLatestStorefrontState } from '../change-intel/storefront-latest-state.js';
+import { RateLimiter } from '../utils/rate-limiter.js';
 import {
   archiveHeroAssetsForApp,
   classifyNewsCaptureError,
@@ -38,6 +42,11 @@ import {
   seedHotNewsRefresh,
   seedStaleNewsCatchup,
 } from '../workers-support/change-intel.js';
+import {
+  isScheduledStorefrontSweepWindow,
+  processStorefrontTagBatch,
+  storefrontTagMinimumPriority,
+} from '../workers-support/storefront-tags.js';
 
 const log = logger.child({ worker: 'change-intel' });
 
@@ -45,7 +54,25 @@ type SupabaseClient = ReturnType<typeof getServiceClient>;
 
 const DEFAULT_SOURCES = ['storefront', 'news', 'projection_refresh', 'hero_asset'] as const;
 
-type QueueSource = (typeof DEFAULT_SOURCES)[number];
+type QueueSource = AppCaptureSource;
+
+function readBoolean(value: string | undefined, fallback = false): boolean {
+  if (!value) {
+    return fallback;
+  }
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function utcDayStartIso(date = new Date()): string {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  ).toISOString();
+}
 
 function shouldUseTigerPrimary(): boolean {
   return readChangeIntelRuntimeConfig().writeTarget === 'tiger';
@@ -116,7 +143,11 @@ async function markStorefrontInaccessible(
   );
 }
 
-async function processStorefrontJob(supabase: SupabaseClient, appid: number, triggerCursor: string | null): Promise<void> {
+async function processStorefrontJob(
+  supabase: SupabaseClient,
+  appid: number,
+  triggerCursor: string | null
+): Promise<void> {
   const result = await fetchStorefrontAppDetails(appid);
   const observedAt = new Date().toISOString();
 
@@ -147,7 +178,9 @@ async function processProjectionRefreshJob(
   const shouldRunFullProjectionRefresh =
     triggerReason === 'projection_backfill' ||
     triggerReason === 'projection_reconcile' ||
-    (triggerReason === 'news_change_event' && newsGids.length === 0 && deletedNewsGids.length === 0);
+    (triggerReason === 'news_change_event' &&
+      newsGids.length === 0 &&
+      deletedNewsGids.length === 0);
 
   if (shouldRunFullProjectionRefresh) {
     await refreshSteamNewsSearchProjectionForApp(supabase, appid);
@@ -190,9 +223,93 @@ async function processJob(
     case 'hero_asset':
       await archiveHeroAssetsForApp(supabase, appid);
       break;
+    case 'storefront_tags':
+      throw new Error('Storefront tag jobs must be processed through the batch tag path');
     default:
       throw new Error(`Unsupported capture source: ${source}`);
   }
+}
+
+async function processClaimedTagJobs(params: {
+  claimLimit: number;
+  maxRetries: number;
+  overlapLimiter: RateLimiter;
+  regularLimiter: RateLimiter;
+  storefrontSweepActive: boolean;
+  supabase: SupabaseClient;
+  workerId: string;
+}): Promise<{ attempts: number; claimed: number }> {
+  const tiger = getTigerChangeIntelRepository();
+  const minimumPriority = storefrontTagMinimumPriority(
+    new Date(),
+    process.env,
+    params.storefrontSweepActive
+  );
+  const claimedJobs = await claimCaptureQueue(
+    params.supabase,
+    ['storefront_tags'],
+    params.claimLimit,
+    params.workerId,
+    minimumPriority
+  );
+  if (claimedJobs.length === 0) {
+    return { attempts: 0, claimed: 0 };
+  }
+
+  const syncJobId = await createSyncJobRecord(
+    params.supabase,
+    'change-intel-storefront_tags',
+    claimedJobs.length
+  );
+  let batchError: string | null = null;
+  let batchResult = {
+    attempts: 0,
+    changed: 0,
+    claimed: claimedJobs.length,
+    failed: 0,
+    succeeded: 0,
+  };
+
+  try {
+    batchResult = await processStorefrontTagBatch(claimedJobs, {
+      complete: async (jobIds, status, errorMessage) =>
+        completeCaptureQueueItems(params.supabase, jobIds, status, errorMessage),
+      defer: async (jobIds, delaySeconds, errorMessage) =>
+        tiger.deferCaptureQueueItems(jobIds, delaySeconds, errorMessage),
+      fetchTags: async (appid) =>
+        fetchStorefrontTags(appid, {
+          limiter: params.storefrontSweepActive ? params.overlapLimiter : params.regularLimiter,
+          maxRetries: params.maxRetries,
+        }),
+      upsertEvidence: async (rows) => tiger.upsertStorefrontTagEvidence(rows),
+    });
+  } catch (error) {
+    batchError = error instanceof Error ? error.message : String(error);
+    await tiger.deferCaptureQueueItems(
+      claimedJobs.map((job) => job.id),
+      5 * 60,
+      batchError
+    );
+    log.error('Failed to process Storefront tag batch', {
+      workerId: params.workerId,
+      batchSize: claimedJobs.length,
+      error,
+    });
+  } finally {
+    if (syncJobId) {
+      await updateSyncJobRecord(params.supabase, syncJobId, {
+        status: batchError ? 'failed' : 'completed',
+        completed_at: new Date().toISOString(),
+        items_processed: batchResult.attempts,
+        items_succeeded: batchResult.succeeded,
+        items_failed: batchResult.failed,
+        items_created: batchResult.changed,
+        error_message: batchError,
+      });
+    }
+  }
+
+  return { attempts: batchResult.attempts, claimed: batchResult.claimed };
 }
 
 async function processClaimedJobs(
@@ -206,7 +323,11 @@ async function processClaimedJobs(
     return 0;
   }
 
-  const syncJobId = await createSyncJobRecord(supabase, `change-intel-${source}`, claimedJobs.length);
+  const syncJobId = await createSyncJobRecord(
+    supabase,
+    `change-intel-${source}`,
+    claimedJobs.length
+  );
 
   const completedJobIds: string[] = [];
   let failedCount = 0;
@@ -227,7 +348,8 @@ async function processClaimedJobs(
       } catch (error) {
         failedCount += 1;
         const isTerminalNewsFailure = source === 'news' && isTerminalNewsCaptureError(error);
-        const failureStatus = isTerminalNewsFailure || claimedJob.attempts >= 5 ? 'dead_letter' : 'queued';
+        const failureStatus =
+          isTerminalNewsFailure || claimedJob.attempts >= 5 ? 'dead_letter' : 'queued';
 
         if (source === 'news') {
           try {
@@ -290,12 +412,36 @@ async function processClaimedJobs(
 async function main(): Promise<void> {
   const workerId = process.env.WORKER_ID || randomUUID();
   const claimLimit = parseInt(process.env.CLAIM_LIMIT || '25', 10);
+  const tagClaimLimit = readPositiveInteger(process.env.STOREFRONT_TAG_CLAIM_LIMIT, 25);
+  const tagDailyRequestCap = readPositiveInteger(process.env.STOREFRONT_TAG_DAILY_REQUEST_CAP, 500);
+  const parsedTagMaxRetries = Number.parseInt(process.env.STOREFRONT_TAG_MAX_RETRIES ?? '2', 10);
+  const tagMaxRetries = Number.isFinite(parsedTagMaxRetries)
+    ? Math.max(0, Math.min(parsedTagMaxRetries, 3))
+    : 2;
+  const tagRequestIntervalMs = Math.max(
+    3_000,
+    readPositiveInteger(process.env.STOREFRONT_TAG_REQUEST_INTERVAL_MS, 5_000)
+  );
+  const tagOverlapIntervalMs = Math.max(
+    tagRequestIntervalMs,
+    readPositiveInteger(process.env.STOREFRONT_TAG_OVERLAP_INTERVAL_MS, 10_000)
+  );
+  const tagFeatureEnabled = readBoolean(process.env.STOREFRONT_TAGS_ENABLED, false);
   const pollIntervalMs = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10);
   const catchupSeedLimit = parseInt(process.env.NEWS_CATCHUP_SEED_LIMIT || '0', 10);
-  const maxCatchupSeedBatches = Math.max(0, parseInt(process.env.NEWS_CATCHUP_MAX_SEED_BATCHES || '0', 10));
-  const maxHotNewsSeedBatches = Math.max(0, parseInt(process.env.HOT_NEWS_MAX_SEED_BATCHES || '0', 10));
+  const maxCatchupSeedBatches = Math.max(
+    0,
+    parseInt(process.env.NEWS_CATCHUP_MAX_SEED_BATCHES || '0', 10)
+  );
+  const maxHotNewsSeedBatches = Math.max(
+    0,
+    parseInt(process.env.HOT_NEWS_MAX_SEED_BATCHES || '0', 10)
+  );
   const maxIdlePolls = parseInt(process.env.MAX_IDLE_POLLS || '0', 10);
-  const staleClaimAfterMs = Math.max(0, parseInt(process.env.CLAIM_STALE_AFTER_MS || '1800000', 10));
+  const staleClaimAfterMs = Math.max(
+    0,
+    parseInt(process.env.CLAIM_STALE_AFTER_MS || '1800000', 10)
+  );
   const staleSyncJobAfterMs = Math.max(
     3600000,
     parseInt(process.env.SYNC_JOB_STALE_AFTER_MS || `${Math.max(staleClaimAfterMs, 3600000)}`, 10)
@@ -304,14 +450,58 @@ async function main(): Promise<void> {
     pollIntervalMs,
     parseInt(process.env.STALE_CLAIM_SWEEP_INTERVAL_MS || '60000', 10)
   );
-  const sources = (process.env.QUEUE_SOURCES?.split(',').map((value) => value.trim()).filter(Boolean) ?? [
-    ...DEFAULT_SOURCES,
-  ]) as QueueSource[];
+  const configuredSources = (process.env.QUEUE_SOURCES?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean) ?? [...DEFAULT_SOURCES]) as QueueSource[];
+  const sources = configuredSources
+    .filter((source) => source !== 'storefront_tags' || tagFeatureEnabled)
+    .sort((left, right) => (left === 'storefront_tags' ? -1 : right === 'storefront_tags' ? 1 : 0));
   const supabase = shouldUseTigerPrimary() ? ({} as SupabaseClient) : getServiceClient();
+  const regularTagLimiter = new RateLimiter({
+    requestsPerSecond: 1_000 / tagRequestIntervalMs,
+    burst: 1,
+  });
+  const overlapTagLimiter = new RateLimiter({
+    requestsPerSecond: 1_000 / tagOverlapIntervalMs,
+    burst: 1,
+  });
+  let tagBudgetDayStart = utcDayStartIso();
+  let tagAttemptsToday =
+    tagFeatureEnabled && shouldUseTigerPrimary()
+      ? await getTigerChangeIntelRepository().countStorefrontTagAttemptsSince(tagBudgetDayStart)
+      : 0;
   let idlePolls = 0;
   let lastStaleClaimSweepAt = 0;
   let catchupSeedBatches = 0;
   let hotNewsSeedBatches = 0;
+  let storefrontSweepActive = false;
+  let storefrontSweepCheckedAt = 0;
+
+  const inspectStorefrontSweep = async (): Promise<boolean> => {
+    if (isScheduledStorefrontSweepWindow()) {
+      return true;
+    }
+    const now = Date.now();
+    if (now - storefrontSweepCheckedAt < 60_000) {
+      return storefrontSweepActive;
+    }
+    storefrontSweepCheckedAt = now;
+    const pressure = await getTigerChangeIntelRepository().inspectStorefrontTrafficPressure({
+      freshSweepAfterIso: new Date(
+        now - readPositiveInteger(process.env.STOREFRONT_TAG_SWEEP_FRESH_MINUTES, 75) * 60_000
+      ).toISOString(),
+      oldestQueueBeforeIso: new Date(
+        now - readPositiveInteger(process.env.STOREFRONT_TAG_QUEUE_MAX_AGE_MINUTES, 30) * 60_000
+      ).toISOString(),
+      queueCountThreshold: readPositiveInteger(process.env.STOREFRONT_TAG_QUEUE_PRESSURE_COUNT, 50),
+    });
+    if (pressure.active) {
+      log.info('Storefront tag traffic-pressure guard is active', {
+        ...pressure,
+      });
+    }
+    return pressure.active;
+  };
 
   log.info('Starting change-intel queue worker', {
     workerId,
@@ -325,6 +515,16 @@ async function main(): Promise<void> {
     staleSyncJobAfterMs,
     staleClaimSweepIntervalMs: staleClaimAfterMs > 0 ? staleClaimSweepIntervalMs : null,
     maxIdlePolls: maxIdlePolls > 0 ? maxIdlePolls : null,
+    storefrontTags: {
+      configured: configuredSources.includes('storefront_tags'),
+      enabled: tagFeatureEnabled,
+      claimLimit: tagClaimLimit,
+      dailyRequestCap: tagDailyRequestCap,
+      attemptsToday: tagAttemptsToday,
+      requestIntervalMs: tagRequestIntervalMs,
+      overlapIntervalMs: tagOverlapIntervalMs,
+      maxRetries: tagMaxRetries,
+    },
   });
 
   try {
@@ -378,7 +578,43 @@ async function main(): Promise<void> {
 
     for (const source of sources) {
       try {
-        const claimed = await processClaimedJobs(supabase, source, workerId, claimLimit);
+        let claimed = 0;
+        if (source === 'storefront_tags') {
+          const previousSweepActive: boolean = storefrontSweepActive;
+          storefrontSweepActive = await inspectStorefrontSweep();
+          if (storefrontSweepActive !== previousSweepActive) {
+            log.info('Storefront tag overlap guard changed', {
+              storefrontSweepActive,
+              minimumPriority:
+                storefrontTagMinimumPriority(new Date(), process.env, storefrontSweepActive) ??
+                null,
+            });
+          }
+          const currentDayStart = utcDayStartIso();
+          if (currentDayStart !== tagBudgetDayStart) {
+            tagBudgetDayStart = currentDayStart;
+            tagAttemptsToday =
+              await getTigerChangeIntelRepository().countStorefrontTagAttemptsSince(
+                tagBudgetDayStart
+              );
+          }
+          const remainingBudget = Math.max(0, tagDailyRequestCap - tagAttemptsToday);
+          if (remainingBudget > 0) {
+            const tagResult = await processClaimedTagJobs({
+              claimLimit: Math.min(tagClaimLimit, remainingBudget),
+              maxRetries: tagMaxRetries,
+              overlapLimiter: overlapTagLimiter,
+              regularLimiter: regularTagLimiter,
+              storefrontSweepActive,
+              supabase,
+              workerId,
+            });
+            claimed = tagResult.claimed;
+            tagAttemptsToday += tagResult.attempts;
+          }
+        } else {
+          claimed = await processClaimedJobs(supabase, source, workerId, claimLimit);
+        }
         processedAny = processedAny || claimed > 0;
       } catch (error) {
         log.error('Failed to process claimed change-intel jobs', {
@@ -433,7 +669,11 @@ async function main(): Promise<void> {
       idlePolls += 1;
 
       if (maxIdlePolls > 0 && idlePolls >= maxIdlePolls) {
-        log.info('Exiting change-intel worker after idle poll limit', { idlePolls, maxIdlePolls, sources });
+        log.info('Exiting change-intel worker after idle poll limit', {
+          idlePolls,
+          maxIdlePolls,
+          sources,
+        });
         break;
       }
 

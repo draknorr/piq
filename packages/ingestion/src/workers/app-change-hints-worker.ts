@@ -73,6 +73,100 @@ export interface AppChangeHintsDependencies {
   now?: () => Date;
 }
 
+export interface TagCandidateMeta {
+  catalogFirstObservationKind: string | null;
+  catalogFirstObservedAt: string | null;
+  hasKnownTags: boolean;
+  isReleased: boolean | null;
+  parentAppid: number | null;
+  priorityScore: number;
+  releaseDate: string | null;
+  type: string | null;
+}
+
+export interface StorefrontTagHintJob {
+  appid: number;
+  payload: Record<string, unknown>;
+  priority: number;
+  source: 'storefront_tags';
+  triggerCursor: string;
+  triggerReason: string;
+}
+
+function daysFromNow(value: string | null, nowMs: number): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : (parsed - nowMs) / (24 * 60 * 60 * 1000);
+}
+
+function storefrontTagHintsEnabled(env: NodeJS.ProcessEnv): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(
+    (env.STOREFRONT_TAGS_ENABLED ?? '').trim().toLowerCase()
+  );
+}
+
+export function buildStorefrontTagHintJobs(
+  changedRows: HintRow[],
+  metadataByAppid: Map<number, TagCandidateMeta>,
+  nowMs = Date.now()
+): StorefrontTagHintJob[] {
+  const jobs = new Map<number, StorefrontTagHintJob>();
+  for (const row of changedRows) {
+    const app = metadataByAppid.get(row.appid);
+    if (!app || app.hasKnownTags) {
+      continue;
+    }
+    const type = app.type?.toLowerCase();
+    if (type !== 'game' && type !== 'demo') {
+      continue;
+    }
+    const targetAppid = app.parentAppid && app.parentAppid > 0 ? app.parentAppid : row.appid;
+    const releaseDistance = daysFromNow(app.releaseDate, nowMs);
+    const firstObservedDistance = daysFromNow(app.catalogFirstObservedAt, nowMs);
+    const newlyObserved =
+      app.catalogFirstObservationKind === 'new' &&
+      firstObservedDistance !== null &&
+      firstObservedDistance >= -2;
+
+    let priority = 0;
+    let triggerReason = '';
+    if (type === 'demo') {
+      priority = 900;
+      triggerReason = 'new_or_changed_demo_missing_tags';
+    } else if (newlyObserved) {
+      priority = 900;
+      triggerReason = 'new_game_missing_tags';
+    } else if (releaseDistance !== null && releaseDistance >= -14 && releaseDistance <= 30) {
+      priority = 800;
+      triggerReason = 'launch_window_game_missing_tags';
+    } else if (app.priorityScore >= 50) {
+      priority = 700;
+      triggerReason = 'priority_game_missing_tags';
+    } else {
+      continue;
+    }
+
+    const candidate = {
+      appid: targetAppid,
+      payload: {
+        requested_appid: row.appid,
+        requested_type: type,
+      },
+      priority,
+      source: 'storefront_tags' as const,
+      triggerCursor: buildHintCursor(row.lastModified, row.priceChangeNumber),
+      triggerReason,
+    };
+    const existing = jobs.get(targetAppid);
+    if (!existing || existing.priority < candidate.priority) {
+      jobs.set(targetAppid, candidate);
+    }
+  }
+  return Array.from(jobs.values());
+}
+
 function shouldUseTigerPrimary(env: NodeJS.ProcessEnv = process.env): boolean {
   return readChangeIntelRuntimeConfig(env).writeTarget === 'tiger';
 }
@@ -126,6 +220,21 @@ async function processHintBatch(
         },
       ])
     );
+    const tagMetaByAppid = new Map<number, TagCandidateMeta>(
+      hintRows.map((row) => [
+        row.appid,
+        {
+          catalogFirstObservationKind: row.catalog_first_observation_kind,
+          catalogFirstObservedAt: row.catalog_first_observed_at,
+          hasKnownTags: row.has_known_tags,
+          isReleased: row.is_released,
+          parentAppid: row.parent_appid,
+          priorityScore: row.priority_score ?? 0,
+          releaseDate: row.release_date,
+          type: row.type,
+        },
+      ])
+    );
 
     const partitioned = partitionHintRows(batch, knownAppids, existingByAppid);
 
@@ -137,7 +246,7 @@ async function processHintBatch(
       }))
     );
 
-    const enqueued = await tiger.enqueueCaptureJobs(
+    const storefrontEnqueued = await tiger.enqueueCaptureJobs(
       partitioned.changedRows.map((row) => ({
         appid: row.appid,
         source: 'storefront',
@@ -146,6 +255,10 @@ async function processHintBatch(
         priority: 100,
       }))
     );
+    const tagJobs = storefrontTagHintsEnabled(env)
+      ? buildStorefrontTagHintJobs(partitioned.changedRows, tagMetaByAppid)
+      : [];
+    const tagEnqueued = tagJobs.length > 0 ? await tiger.enqueueCaptureJobs(tagJobs) : 0;
 
     const promotions = buildReviewPromotions(
       partitioned.changedRows,
@@ -156,7 +269,7 @@ async function processHintBatch(
 
     return {
       changed: partitioned.changedRows.length,
-      enqueued,
+      enqueued: storefrontEnqueued + tagEnqueued,
       skipped: partitioned.skippedRows.length,
       promoted,
     };
@@ -372,6 +485,7 @@ async function processObservedHintBatch(params: {
   scan: CatalogScanStart;
   tiger: TigerWriter;
   tigerChangeIntel: TigerChangeIntelRepository;
+  tagHintsEnabled: boolean;
   verifyParity: boolean;
 }): Promise<{
   changed: number;
@@ -428,15 +542,35 @@ async function processObservedHintBatch(params: {
       },
     ])
   );
+  const tagMetaByAppid = new Map<number, TagCandidateMeta>(
+    existingRows.map((row) => [
+      row.appid,
+      {
+        catalogFirstObservationKind: row.catalog_first_observation_kind,
+        catalogFirstObservedAt: row.catalog_first_observed_at,
+        hasKnownTags: row.has_known_tags,
+        isReleased: row.is_released,
+        parentAppid: row.parent_appid,
+        priorityScore: row.priority_score ?? 0,
+        releaseDate: row.release_date,
+        type: row.type,
+      },
+    ])
+  );
   const priorityByAppid = new Map(existingRows.map((row) => [row.appid, row.priority_score ?? 0]));
   const promotions = buildReviewPromotions(changedRows, knownAppMetaByAppid, priorityByAppid);
   const promoted =
     promotions.length > 0 ? await params.tigerChangeIntel.promoteReviewsSyncBatch(promotions) : 0;
+  const tagJobs = params.tagHintsEnabled
+    ? buildStorefrontTagHintJobs(changedRows, tagMetaByAppid)
+    : [];
+  const tagEnqueued =
+    tagJobs.length > 0 ? await params.tigerChangeIntel.enqueueCaptureJobs(tagJobs) : 0;
 
   return {
     changed: committed.changedKnownRows,
     committed,
-    enqueued: committed.enqueuedRows,
+    enqueued: committed.enqueuedRows + tagEnqueued,
     promoted,
   };
 }
@@ -579,6 +713,7 @@ export async function runAppChangeHints(
           scan: scan!,
           tiger: tiger!,
           tigerChangeIntel: tigerChangeIntel!,
+          tagHintsEnabled: storefrontTagHintsEnabled(env),
           verifyParity: batchIndex > scan!.lastCommittedBatch,
         });
         changed += result.changed;

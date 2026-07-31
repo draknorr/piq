@@ -4,6 +4,15 @@ import { rateLimiters } from '../utils/rate-limiter.js';
 
 const log = logger.child({ component: 'StorefrontAPI' });
 
+interface StorefrontAttemptLimiter {
+  acquire(): Promise<void>;
+}
+
+export interface StorefrontFetchOptions {
+  fetchImpl?: typeof fetch;
+  limiter?: StorefrontAttemptLimiter;
+}
+
 /**
  * Steam Storefront API app details response
  */
@@ -201,7 +210,7 @@ export interface ParsedStorefrontApp {
  */
 export type StorefrontResult =
   | { status: 'success'; data: ParsedStorefrontApp }
-  | { status: 'no_data' }  // Steam returned success=false (private/removed/age-gated)
+  | { status: 'no_data' } // Steam returned success=false (private/removed/age-gated)
   | { status: 'error'; error: string };
 
 /**
@@ -248,9 +257,7 @@ function hasWorkshopSupport(categories?: Array<{ id: number }>): boolean {
 function normalizeAppidList(values: Array<number | string | null | undefined>): number[] {
   return Array.from(
     new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
+      values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
     )
   ).sort((left, right) => left - right);
 }
@@ -273,9 +280,8 @@ export function parseStorefrontResponse(
 
   const data = response.data;
   const packageIds = data.packages ?? [];
-  const packageGroupSubs = data.package_groups?.flatMap((group) =>
-    (group.subs ?? []).map((sub) => sub.packageid)
-  ) ?? [];
+  const packageGroupSubs =
+    data.package_groups?.flatMap((group) => (group.subs ?? []).map((sub) => sub.packageid)) ?? [];
   const hasPurchasePackages = packageIds.length > 0 || packageGroupSubs.length > 0;
 
   return {
@@ -342,16 +348,19 @@ export function parseStorefrontResponse(
  * @returns StorefrontResult with status indicating success, no_data, or error
  */
 export async function fetchStorefrontAppDetails(
-  appid: number
+  appid: number,
+  options: StorefrontFetchOptions = {}
 ): Promise<StorefrontResult> {
-  await rateLimiters.storefront.acquire();
-
   const url = `${API_URLS.STEAM_STORE}/api/appdetails/?appids=${appid}&cc=us`;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const limiter = options.limiter ?? rateLimiters.storefront;
 
   try {
     const response = await withRetry(async () => {
+      // Every actual attempt consumes a Storefront-origin governor token.
+      await limiter.acquire();
       // Include age-gate cookies to access adult content
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         headers: {
           Cookie: 'birthtime=0; mature_content=1',
         },
@@ -379,7 +388,10 @@ export async function fetchStorefrontAppDetails(
     return { status: 'success', data: parsed };
   } catch (error) {
     log.error('Failed to fetch Storefront app details', { appid, error });
-    return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -409,18 +421,21 @@ export async function fetchStorefrontAppDetailsBatch(
  * This is faster as it uses the filters parameter
  */
 export async function fetchStorefrontPrices(
-  appids: number[]
+  appids: number[],
+  options: StorefrontFetchOptions = {}
 ): Promise<Map<number, { priceCents: number | null; discountPercent: number }>> {
-  await rateLimiters.storefront.acquire();
-
   const url = `${API_URLS.STEAM_STORE}/api/appdetails/?appids=${appids.join(',')}&filters=price_overview&cc=us`;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const limiter = options.limiter ?? rateLimiters.storefront;
 
   const results = new Map<number, { priceCents: number | null; discountPercent: number }>();
 
   try {
     const response = await withRetry(async () => {
+      // Every actual attempt consumes a Storefront-origin governor token.
+      await limiter.acquire();
       // Include age-gate cookies to access adult content
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         headers: {
           Cookie: 'birthtime=0; mature_content=1',
         },

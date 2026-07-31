@@ -118,7 +118,12 @@ test('requeueStaleCaptureClaims requeues stale claimed rows through requeue_stal
     },
   } as any;
 
-  const requeued = await requeueStaleCaptureClaims(supabase, ['storefront', 'news'], '2026-03-14T09:00:00.000Z', 100);
+  const requeued = await requeueStaleCaptureClaims(
+    supabase,
+    ['storefront', 'news'],
+    '2026-03-14T09:00:00.000Z',
+    100
+  );
 
   assert.equal(requeued, 2);
   assert.equal(rpcName, 'requeue_stale_app_capture_work');
@@ -139,7 +144,12 @@ test('requeueStaleCaptureClaims returns zero when the stale-claim RPC finds noth
     },
   } as any;
 
-  const requeued = await requeueStaleCaptureClaims(supabase, ['hero_asset'], '2026-03-14T09:00:00.000Z', 100);
+  const requeued = await requeueStaleCaptureClaims(
+    supabase,
+    ['hero_asset'],
+    '2026-03-14T09:00:00.000Z',
+    100
+  );
 
   assert.equal(requeued, 0);
   assert.equal(rpcCalled, true);
@@ -230,7 +240,10 @@ test('claimCaptureQueue retries transient RPC failures before succeeding', async
       rpc() {
         attempts += 1;
         if (attempts === 1) {
-          return Promise.resolve({ data: null, error: { message: '502 Bad gateway' } });
+          return Promise.resolve({
+            data: null,
+            error: { message: '502 Bad gateway' },
+          });
         }
 
         return Promise.resolve({
@@ -242,6 +255,7 @@ test('claimCaptureQueue retries transient RPC failures before succeeding', async
               trigger_reason: 'storefront_snapshot_change',
               trigger_cursor: '',
               payload: { news_gids: ['gid-1'] },
+              priority: 75,
               attempts: 1,
             },
           ],
@@ -261,6 +275,7 @@ test('claimCaptureQueue retries transient RPC failures before succeeding', async
         triggerReason: 'storefront_snapshot_change',
         triggerCursor: '',
         payload: { news_gids: ['gid-1'] },
+        priority: 75,
         attempts: 1,
       },
     ]);
