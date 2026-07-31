@@ -3,13 +3,13 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   ChevronDown,
   Eye,
   Plus,
   Save,
   Trash2,
-  X,
 } from "lucide-react";
 
 import { opportunityPost } from "./lib/api";
@@ -578,26 +578,31 @@ export function ProfileBuilder({
   };
 
   return (
-    <section className="min-h-[72vh] border-t border-border-subtle bg-surface-raised lg:border-l lg:border-t-0">
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-subtle bg-surface-raised/95 px-5 py-4 backdrop-blur">
+    <section className="min-h-[72vh] bg-surface-raised pt-16 md:pt-0">
+      <div className="sticky top-16 z-10 flex items-center gap-4 border-b border-border-subtle bg-surface-raised/95 px-5 py-4 backdrop-blur md:top-0">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Back to Profiles & Presets"
+          className="inline-flex items-center gap-2 rounded-md px-2.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-surface-elevated hover:text-text-primary"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span className="hidden sm:inline">
+            Back to Profiles &amp; presets
+          </span>
+          <span className="sm:hidden">Back</span>
+        </button>
+        <div className="h-7 w-px bg-border-muted" aria-hidden="true" />
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
             Profile workshop
           </p>
-          <h2 className="mt-1 text-lg font-semibold text-text-primary">
+          <h2 className="mt-1 text-sm font-semibold text-text-primary">
             {initialProfile
               ? `Version ${initialProfile.currentVersion}`
               : "New profile"}
           </h2>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-elevated hover:text-text-primary"
-          aria-label="Close profile builder"
-        >
-          <X className="h-4 w-4" />
-        </button>
       </div>
 
       <div className="grid xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -626,31 +631,44 @@ export function ProfileBuilder({
             </label>
           </div>
 
-          <div className="rounded-xl border border-border-muted bg-surface px-4 py-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
-              Quick filters
-            </p>
-            <p className="mt-1 text-xs leading-5 text-text-tertiary">
-              Add a complete must-have group, then refine it alongside your
-              other criteria.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => addRequiredShortcut("demo_only")}
-                className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
-              >
-                Only Demo
-              </button>
-              <button
-                type="button"
-                onClick={() => addRequiredShortcut("undated_unreleased")}
-                className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
-              >
-                Unreleased date TBD
-              </button>
+          <details className="group rounded-xl border border-border-muted bg-surface">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3.5 transition hover:bg-surface-elevated/50 [&::-webkit-details-marker]:hidden">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+                  Quick filters
+                </p>
+                <p className="mt-1 text-xs leading-5 text-text-muted">
+                  Add a ready-made must-have group.
+                </p>
+              </div>
+              <ChevronDown
+                className="h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 group-open:rotate-180"
+                aria-hidden="true"
+              />
+            </summary>
+            <div className="border-t border-border-subtle px-4 py-4">
+              <p className="text-xs leading-5 text-text-tertiary">
+                Add a complete must-have group, then refine it alongside your
+                other criteria.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => addRequiredShortcut("demo_only")}
+                  className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
+                >
+                  Only Demo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addRequiredShortcut("undated_unreleased")}
+                  className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
+                >
+                  Unreleased date TBD
+                </button>
+              </div>
             </div>
-          </div>
+          </details>
 
           {(
             [
@@ -820,12 +838,9 @@ export function ProfileBuilder({
           </p>
           {!preview ? (
             <div className="mt-8 border-l-2 border-border-prominent pl-4">
-              <p className="text-sm font-medium text-text-primary">
-                Test before enabling
-              </p>
-              <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                See which games match today and where missing information may
-                narrow the result.
+              <p className="text-sm leading-6 text-text-secondary">
+                Click Preview Profile to see which games match today and where
+                missing information may narrow the result
               </p>
             </div>
           ) : (

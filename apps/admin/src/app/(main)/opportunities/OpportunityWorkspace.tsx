@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowLeft,
   ArrowRight,
   Bell,
   BookOpen,
@@ -36,6 +37,7 @@ import type {
 } from "./lib/types";
 
 type WorkspaceTab = "brief" | "profiles" | "delivery";
+type ProfilesView = "catalog" | "loading" | "editor";
 
 const RESULT_SECTIONS: Array<{
   key: keyof OpportunityBootstrap["dailyOverview"]["groups"];
@@ -67,14 +69,14 @@ const RESULT_SECTIONS: Array<{
 
 function presetMarketLabel(state: string | null): string {
   const labels: Record<string, string> = {
-    active: "Steady opportunity flow",
-    cooling: "Fewer new matches",
-    growing: "More matching games emerging",
-    insufficient_data: "Still gathering market history",
-    quiet: "Few recent matches",
-    surging: "Opportunity pool expanding quickly",
+    active: "Steady",
+    cooling: "Cooling",
+    growing: "Growing",
+    insufficient_data: "Developing",
+    quiet: "Quiet",
+    surging: "Surging",
   };
-  return labels[state ?? ""] ?? "Market history is developing";
+  return labels[state ?? ""] ?? "Developing";
 }
 
 function briefStatusLabel(
@@ -128,10 +130,11 @@ export function OpportunityWorkspace() {
   const [tab, setTab] = useState<WorkspaceTab>("brief");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [builderOpen, setBuilderOpen] = useState(false);
+  const [profilesView, setProfilesView] = useState<ProfilesView>("catalog");
   const [profileDetail, setProfileDetail] =
     useState<OpportunityProfileDetail | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState(false);
+  const profileRequestId = useRef(0);
+  const workspaceContentRef = useRef<HTMLElement>(null);
 
   const load = async () => {
     setLoading(true);
@@ -151,31 +154,70 @@ export function OpportunityWorkspace() {
     void load();
   }, []);
 
+  const closeProfileEditor = () => {
+    profileRequestId.current += 1;
+    setProfileDetail(null);
+    setProfilesView("catalog");
+  };
+
+  const revealProfilesContent = () => {
+    requestAnimationFrame(() => {
+      workspaceContentRef.current?.scrollIntoView({ block: "start" });
+    });
+  };
+
+  const selectTab = (nextTab: WorkspaceTab) => {
+    if (nextTab !== "profiles") {
+      closeProfileEditor();
+    }
+    setTab(nextTab);
+  };
+
   const openProfile = async (profileId: string) => {
-    setLoadingProfile(true);
+    const requestId = profileRequestId.current + 1;
+    profileRequestId.current = requestId;
+    setTab("profiles");
+    setProfileDetail(null);
+    setProfilesView("loading");
     setError(null);
+    revealProfilesContent();
     try {
-      setProfileDetail(
-        await opportunityPost<OpportunityProfileDetail>("get-profile", {
-          profileId,
-        }),
+      const detail = await opportunityPost<OpportunityProfileDetail>(
+        "get-profile",
+        { profileId },
       );
-      setBuilderOpen(true);
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfileDetail(detail);
+      setProfilesView("editor");
     } catch {
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfilesView("catalog");
       setError("PublisherIQ could not open this profile. Please try again.");
-    } finally {
-      setLoadingProfile(false);
     }
   };
 
   const startProfile = () => {
+    profileRequestId.current += 1;
+    setTab("profiles");
     setProfileDetail(null);
-    setBuilderOpen(true);
+    setProfilesView("editor");
+    setError(null);
+    revealProfilesContent();
   };
 
   const clonePreset = async (presetId: string, name: string) => {
-    setLoadingProfile(true);
+    const requestId = profileRequestId.current + 1;
+    let cloned = false;
+    profileRequestId.current = requestId;
+    setTab("profiles");
+    setProfileDetail(null);
+    setProfilesView("loading");
     setError(null);
+    revealProfilesContent();
     try {
       const schedule = data?.profiles[0];
       const version = await opportunityPost<{ profileId: string }>(
@@ -189,31 +231,86 @@ export function OpportunityWorkspace() {
             Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
       );
+      cloned = true;
       await load();
-      await openProfile(version.profileId);
+      const detail = await opportunityPost<OpportunityProfileDetail>(
+        "get-profile",
+        { profileId: version.profileId },
+      );
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfileDetail(detail);
+      setProfilesView("editor");
     } catch {
-      setError("PublisherIQ could not copy this preset. Please try again.");
-    } finally {
-      setLoadingProfile(false);
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfilesView("catalog");
+      setError(
+        cloned
+          ? "The preset was cloned, but PublisherIQ could not open the new profile."
+          : "PublisherIQ could not copy this preset. Please try again.",
+      );
     }
   };
 
   const saved = async (profileId: string) => {
+    const requestId = profileRequestId.current + 1;
+    profileRequestId.current = requestId;
     await load();
-    await openProfile(profileId);
+    try {
+      const detail = await opportunityPost<OpportunityProfileDetail>(
+        "get-profile",
+        { profileId },
+      );
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfileDetail(detail);
+      setProfilesView("editor");
+    } catch {
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setError(
+        "Your profile was saved, but PublisherIQ could not refresh the workshop.",
+      );
+    }
   };
 
   const profileStatusChanged = async (
     profileId: string,
     status: "enabled" | "paused" | "archived",
   ) => {
+    const requestId = profileRequestId.current + 1;
+    profileRequestId.current = requestId;
     await load();
-    if (status === "archived") {
-      setBuilderOpen(false);
-      setProfileDetail(null);
+    if (profileRequestId.current !== requestId) {
       return;
     }
-    await openProfile(profileId);
+    if (status === "archived") {
+      closeProfileEditor();
+      return;
+    }
+    try {
+      const detail = await opportunityPost<OpportunityProfileDetail>(
+        "get-profile",
+        { profileId },
+      );
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setProfileDetail(detail);
+      setProfilesView("editor");
+    } catch {
+      if (profileRequestId.current !== requestId) {
+        return;
+      }
+      setError(
+        "The profile status changed, but PublisherIQ could not refresh the workshop.",
+      );
+    }
   };
 
   const resultCount = data?.dailyOverview.matchedCount ?? 0;
@@ -300,7 +397,7 @@ export function OpportunityWorkspace() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setTab(value)}
+                  onClick={() => selectTab(value)}
                   className={`relative flex shrink-0 items-center gap-2 px-3 py-3 text-sm font-medium transition ${
                     tab === value
                       ? "text-text-primary"
@@ -317,14 +414,16 @@ export function OpportunityWorkspace() {
                 </button>
               ))}
             </nav>
-            <button
-              type="button"
-              onClick={startProfile}
-              className="hidden items-center gap-2 rounded-lg bg-accent-primary px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-accent-primary-hover sm:inline-flex"
-            >
-              <Plus className="h-4 w-4" />
-              New profile
-            </button>
+            {profilesView === "catalog" && (
+              <button
+                type="button"
+                onClick={startProfile}
+                className="hidden items-center gap-2 rounded-lg bg-accent-primary px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-accent-primary-hover sm:inline-flex"
+              >
+                <Plus className="h-4 w-4" />
+                New profile
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -335,55 +434,32 @@ export function OpportunityWorkspace() {
         </div>
       )}
 
-      <main className="mx-auto max-w-[1500px]">
+      <main ref={workspaceContentRef} className="mx-auto max-w-[1500px]">
         {tab === "brief" && <DailyBrief data={data} />}
-        {tab === "profiles" && (
+        {tab === "profiles" && profilesView === "catalog" && (
           <ProfilesDesk
             data={data}
-            loadingProfile={loadingProfile}
             onClone={clonePreset}
             onNew={startProfile}
             onOpen={openProfile}
           />
         )}
-        {tab === "delivery" && <DeliveryDesk data={data} onChanged={load} />}
-      </main>
-
-      {builderOpen && (
-        <div className="border-t border-border-muted bg-surface-raised lg:grid lg:grid-cols-[minmax(260px,0.33fr)_minmax(0,1fr)]">
-          <div className="hidden px-8 py-12 lg:block">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-text-muted">
-              How matching works
-            </p>
-            <ol className="mt-6 space-y-6">
-              {[
-                ["01", "Check every must-have criterion you choose."],
-                ["02", "Reward strengths and screen for dealbreakers."],
-                ["03", "Compare qualified games with similar releases."],
-                ["04", "Show the evidence behind every recommendation."],
-              ].map(([number, label]) => (
-                <li key={number} className="flex gap-4">
-                  <span className="font-mono text-xs text-accent-primary">
-                    {number}
-                  </span>
-                  <span className="max-w-xs text-sm leading-6 text-text-secondary">
-                    {label}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </div>
+        {tab === "profiles" && profilesView === "loading" && (
+          <ProfileWorkshopLoading onBack={closeProfileEditor} />
+        )}
+        {tab === "profiles" && profilesView === "editor" && (
           <ProfileBuilder
             key={profileDetail?.currentVersionDetail.id ?? "new"}
             defaultLocalDeliveryTime={data.profiles[0]?.localDeliveryTime}
             defaultTimezone={data.profiles[0]?.timezone}
             initialProfile={profileDetail}
-            onClose={() => setBuilderOpen(false)}
+            onClose={closeProfileEditor}
             onSaved={saved}
             onStatusChanged={profileStatusChanged}
           />
-        </div>
-      )}
+        )}
+        {tab === "delivery" && <DeliveryDesk data={data} onChanged={load} />}
+      </main>
     </div>
   );
 }
@@ -398,6 +474,51 @@ function DispatchMetric({ label, value }: { label: string; value: string }) {
         {label}
       </p>
     </div>
+  );
+}
+
+function ProfileWorkshopLoading({ onBack }: { onBack: () => void }) {
+  return (
+    <section
+      className="min-h-[72vh] bg-surface-raised pt-16 md:pt-0"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div className="sticky top-16 z-10 flex items-center gap-4 border-b border-border-subtle bg-surface-raised/95 px-5 py-4 backdrop-blur md:top-0">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to Profiles & Presets"
+          className="inline-flex items-center gap-2 rounded-md px-2.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-surface-elevated hover:text-text-primary"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span className="hidden sm:inline">
+            Back to Profiles &amp; presets
+          </span>
+          <span className="sm:hidden">Back</span>
+        </button>
+        <div className="h-7 w-px bg-border-muted" aria-hidden="true" />
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+            Profile workshop
+          </p>
+          <p className="mt-1 text-sm font-semibold text-text-primary">
+            Opening profile
+          </p>
+        </div>
+      </div>
+      <div className="grid min-h-[520px] place-items-center px-5 py-16">
+        <div className="text-center">
+          <RefreshCw className="mx-auto h-5 w-5 animate-spin text-accent-primary" />
+          <p className="mt-4 text-sm font-medium text-text-primary">
+            Preparing your profile
+          </p>
+          <p className="mt-1 text-xs text-text-tertiary">
+            Loading its latest criteria and delivery settings.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -670,42 +791,61 @@ function BriefRail({ data }: { data: OpportunityBootstrap }) {
 
 function ProfilesDesk({
   data,
-  loadingProfile,
   onClone,
   onNew,
   onOpen,
 }: {
   data: OpportunityBootstrap;
-  loadingProfile: boolean;
   onClone: (presetId: string, name: string) => Promise<void>;
   onNew: () => void;
   onOpen: (profileId: string) => Promise<void>;
 }) {
   return (
     <div className="px-5 py-8 md:px-8 md:py-10">
-      <div className="grid gap-10 xl:grid-cols-[minmax(0,0.85fr)_minmax(420px,1.15fr)]">
-        <section>
+      <div className="flex flex-col gap-5 border-b border-border-muted pb-7 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+            Profiles &amp; presets
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
+            Shape what reaches your brief
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-text-tertiary">
+            Refine a personal sourcing profile or start from a maintained
+            PublisherIQ strategy.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onNew}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-accent-primary px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-primary-hover"
+        >
+          <Plus className="h-4 w-4" />
+          Build from scratch
+        </button>
+      </div>
+
+      <div className="mt-10 space-y-12">
+        <section aria-labelledby="personal-profiles-heading">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
-                Personal
+              <h3
+                id="personal-profiles-heading"
+                className="text-lg font-semibold text-text-primary"
+              >
+                Your profiles
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-text-tertiary">
+                Personal criteria, delivery timing, and current status.
               </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
-                Your sourcing profiles
-              </h2>
             </div>
-            <button
-              type="button"
-              onClick={onNew}
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-semibold text-accent-primary transition hover:bg-accent-primary-muted"
-            >
-              <Plus className="h-4 w-4" />
-              Build from scratch
-            </button>
+            <span className="text-xs tabular-nums text-text-muted">
+              {data.profiles.length} saved
+            </span>
           </div>
-          <div className="mt-6 divide-y divide-border-subtle border-y border-border-muted">
+          <div className="mt-4 divide-y divide-border-subtle border-y border-border-muted">
             {data.profiles.length === 0 ? (
-              <div className="py-12">
+              <div className="py-10">
                 <p className="text-sm font-medium text-text-primary">
                   No personal profiles yet.
                 </p>
@@ -720,14 +860,10 @@ function ProfilesDesk({
                   key={profile.id}
                   type="button"
                   onClick={() => onOpen(profile.id)}
-                  disabled={loadingProfile}
-                  className="group grid w-full gap-3 py-5 text-left transition hover:bg-surface-elevated/50 md:grid-cols-[minmax(0,1fr)_auto_24px] md:px-2"
+                  className="group grid w-full gap-4 px-1 py-4 text-left transition hover:bg-surface-elevated/50 sm:px-3 md:grid-cols-[minmax(0,1.35fr)_minmax(150px,0.55fr)_minmax(210px,0.75fr)_auto] md:items-center"
                 >
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-semibold text-text-primary">
-                        {profile.name}
-                      </h3>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           profile.status === "enabled"
@@ -737,100 +873,143 @@ function ProfilesDesk({
                       >
                         {profileStatusLabel(profile.status)}
                       </span>
+                      <h3 className="text-base font-semibold text-text-primary">
+                        {profile.name}
+                      </h3>
                     </div>
-                    <p className="mt-1 text-sm text-text-tertiary">
+                    <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-text-tertiary">
                       {profile.description || "No research note"}
                     </p>
-                    <p className="mt-2 text-xs text-text-muted">
-                      {profile.sourcePresetName
+                  </div>
+                  <CatalogFact
+                    label="Origin"
+                    value={
+                      profile.sourcePresetName
                         ? `Based on ${profile.sourcePresetName}`
-                        : "Custom profile"}
-                    </p>
-                    <p className="mt-1 text-xs text-text-muted">
-                      Daily at {profile.localDeliveryTime} {profile.timezone}
-                    </p>
-                  </div>
-                  <div className="text-xs text-text-muted md:text-right">
-                    {profile.nextEvaluationAt
-                      ? `Next ${formatOpportunityDate(profile.nextEvaluationAt)}`
-                      : "Not scheduled"}
-                  </div>
-                  <ArrowRight className="h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary" />
+                        : "Custom profile"
+                    }
+                  />
+                  <CatalogFact
+                    label="Delivery"
+                    value={`Daily at ${profile.localDeliveryTime}`}
+                    detail={
+                      profile.nextEvaluationAt
+                        ? `Next ${formatOpportunityDate(profile.nextEvaluationAt)} · ${profile.timezone}`
+                        : `Not scheduled · ${profile.timezone}`
+                    }
+                  />
+                  <ArrowRight
+                    className="h-4 w-4 justify-self-end text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary"
+                    aria-hidden="true"
+                  />
                 </button>
               ))
             )}
           </div>
         </section>
 
-        <section>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              PublisherIQ maintained
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
-              Preset field notes
-            </h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-text-tertiary">
-              PublisherIQ-maintained starting points you can clone and tailor to
-              your strategy. Cloning does not turn on alerts automatically.
-            </p>
+        <section aria-labelledby="preset-library-heading">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h3
+                id="preset-library-heading"
+                className="text-lg font-semibold text-text-primary"
+              >
+                Preset library
+              </h3>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-text-tertiary">
+                PublisherIQ-maintained starting points. Cloning creates a draft
+                and leaves alerts off.
+              </p>
+            </div>
+            <span className="text-xs tabular-nums text-text-muted">
+              {data.presets.length} maintained
+            </span>
           </div>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            {data.presets.map((preset, index) => (
+          <div className="mt-4 divide-y divide-border-subtle border-y border-border-muted">
+            {data.presets.map((preset) => (
               <article
                 key={preset.id}
-                className={`group relative overflow-hidden border border-border-muted bg-surface-raised p-5 ${
-                  index === 0 ? "sm:col-span-2" : ""
-                }`}
+                className="group grid gap-4 px-1 py-4 transition hover:bg-surface-elevated/50 sm:px-3 md:grid-cols-[minmax(0,1.35fr)_minmax(150px,0.55fr)_minmax(210px,0.75fr)_auto] md:items-center"
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`h-2 w-2 rounded-full ${
-                      preset.healthState === "surging"
-                        ? "bg-accent-primary"
-                        : preset.healthState === "growing"
-                          ? "bg-semantic-success"
-                          : "bg-border-prominent"
-                    }`}
-                  />
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                    {preset.healthUnavailableReason === "unreleased_only"
-                      ? "Unreleased health model pending"
-                      : presetMarketLabel(preset.healthState)}
-                  </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-sunken px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          preset.healthState === "surging"
+                            ? "bg-accent-primary"
+                            : preset.healthState === "growing"
+                              ? "bg-semantic-success"
+                              : "bg-border-prominent"
+                        }`}
+                        aria-hidden="true"
+                      />
+                      {preset.healthUnavailableReason === "unreleased_only"
+                        ? "Health pending"
+                        : presetMarketLabel(preset.healthState)}
+                    </span>
+                    <h3 className="text-base font-semibold text-text-primary">
+                      {preset.name}
+                    </h3>
+                  </div>
+                  <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-text-tertiary">
+                    {preset.description}
+                  </p>
                 </div>
-                <h3 className="mt-4 pr-10 text-lg font-semibold text-text-primary">
-                  {preset.name}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-text-tertiary">
-                  {preset.description}
-                </p>
-                <ul className="mt-4 space-y-1.5">
-                  {preset.ruleSummary
-                    .slice(0, index === 0 ? 3 : 2)
-                    .map((rule) => (
-                      <li
-                        key={rule}
-                        className="line-clamp-1 text-xs text-text-secondary"
-                      >
-                        {rule}
-                      </li>
-                    ))}
-                </ul>
+                <CatalogFact
+                  label="Source"
+                  value="PublisherIQ maintained"
+                  detail={`Version ${preset.version}`}
+                />
+                <CatalogFact
+                  label="Criteria"
+                  value={preset.ruleSummary[0] ?? "No summary available"}
+                  detail={
+                    preset.ruleSummary.length > 1
+                      ? `+${preset.ruleSummary.length - 1} more`
+                      : undefined
+                  }
+                />
                 <button
                   type="button"
-                  disabled={loadingProfile}
                   onClick={() => onClone(preset.id, preset.name)}
-                  className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-accent-primary transition group-hover:gap-3 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 justify-self-start rounded-md border border-border-muted px-3 py-2 text-sm font-semibold text-accent-primary transition hover:border-accent-primary/35 hover:bg-accent-primary-muted md:justify-self-end"
                 >
                   <Copy className="h-3.5 w-3.5" />
-                  Clone and customize
+                  Clone
                 </button>
               </article>
             ))}
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function CatalogFact({
+  detail,
+  label,
+  value,
+}: {
+  detail?: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+        {label}
+      </p>
+      <p className="mt-1 line-clamp-1 text-xs font-medium leading-5 text-text-secondary">
+        {value}
+      </p>
+      {detail && (
+        <p className="line-clamp-1 text-[11px] leading-4 text-text-muted">
+          {detail}
+        </p>
+      )}
     </div>
   );
 }
