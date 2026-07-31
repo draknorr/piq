@@ -286,6 +286,18 @@ const GAME_RECORD = {
       value: ["Cozy", "Exploration"],
     },
   ],
+  evidenceResolution: {
+    currentResolvedAt: "2026-07-31T19:30:00.000Z",
+    evaluatedAt: "2026-07-27T08:00:00.000Z",
+    previouslyMissingNowAvailable: [
+      {
+        field: "ccu_peak",
+        source: "market_metrics",
+        sourceAt: "2026-07-31T19:29:00.000Z",
+        value: 64,
+      },
+    ],
+  },
   marketContext: {
     concentration: { topOneShare: 0.22, warning: null },
     confidence: "high",
@@ -651,6 +663,7 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await expect(page.getByText("Demo now available")).toBeVisible();
   await expect(page.getByText("Five demos worth playing")).toBeVisible();
   await expect(page.getByText("Source coverage")).toBeVisible();
+  await expect(page.getByText("Available now")).toBeVisible();
   await expect(page.getByText("opportunity-ranking/v1")).not.toBeVisible();
   await expect(page.getByText("Reproduction contract")).toHaveCount(0);
 });
@@ -812,7 +825,7 @@ test("labels presets that do not support released-market health", async ({
   await page.goto("/opportunities");
 
   await page.getByRole("button", { name: "Profiles & presets" }).click();
-  await expect(page.getByText("Unreleased health model pending")).toBeVisible();
+  await expect(page.getByText("Health pending", { exact: true })).toBeVisible();
 });
 
 test("Vampire Crawlers explains its Steam build update consistently", async ({
