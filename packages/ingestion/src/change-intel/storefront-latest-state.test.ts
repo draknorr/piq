@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildNormalizedStorefrontSnapshotUpsertArgs,
   normalizeAppType,
+  parseStorefrontLanguages,
   sanitizeStorefrontPriceCents,
   upsertLatestStorefrontState,
 } from './storefront-latest-state.js';
@@ -106,6 +107,15 @@ test('sanitizeStorefrontPriceCents drops unreasonable storefront prices', () => 
   assert.equal(sanitizeStorefrontPriceCents(-1), null);
   assert.equal(sanitizeStorefrontPriceCents(50001), null);
   assert.equal(sanitizeStorefrontPriceCents(1999), 1999);
+});
+
+test('parseStorefrontLanguages removes Steam full-audio footnote without joining it to the final language', () => {
+  assert.deepEqual(
+    parseStorefrontLanguages(
+      'English<strong>*</strong>, Simplified Chinese, Russian, Japanese<strong>*</strong><br><strong>*</strong>languages with full audio support'
+    ),
+    ['English', 'Simplified Chinese', 'Russian', 'Japanese']
+  );
 });
 
 test('upsertLatestStorefrontState sends null release_date to Tiger when parsing failed', async () => {

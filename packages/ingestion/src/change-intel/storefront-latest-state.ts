@@ -44,9 +44,19 @@ export function parseStorefrontLanguages(value: string | null): string[] {
   if (value === null) {
     return [];
   }
+
+  // Steam appends this HTML footnote after the final language rather than as
+  // another comma-delimited value. Remove it before stripping markup so the
+  // final language cannot be concatenated with the explanatory sentence.
+  const withoutFullAudioFootnote = value.replace(
+    /<br\s*\/?\s*>\s*(?:<strong>\s*\*\s*<\/strong>|\*)\s*languages\s+with\s+full\s+audio\s+support\s*$/i,
+    ''
+  );
+
   return Array.from(
     new Set(
-      value
+      withoutFullAudioFootnote
+        .replace(/<br\s*\/?\s*>/gi, ',')
         .replace(/<[^>]*>/g, '')
         .replace(/&amp;/gi, '&')
         .replace(/&quot;/gi, '"')
