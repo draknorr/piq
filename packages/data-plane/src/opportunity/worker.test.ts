@@ -53,6 +53,7 @@ const PROFILE: OpportunityWorkerProfile = {
   immediateFullMatchEnabled: false,
   name: "Profile",
   rules: RULES,
+  timezone: "UTC",
   versionId: "version",
   versionNumber: 1,
 };
@@ -241,6 +242,9 @@ describe("opportunity evaluation recovery", () => {
         persisted = true;
       },
       productRepository: {
+        async getRelativeDateTransitionAppids(): Promise<number[]> {
+          return [];
+        },
         async getRuleInputs(): Promise<OpportunityEvaluationInput[]> {
           return inputs;
         },
@@ -268,6 +272,124 @@ describe("opportunity evaluation recovery", () => {
 
     assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
     assert.equal(heartbeatCount, 8);
+    assert.equal(persisted, true);
+  });
+
+  it("uses a nullable ephemeral trigger for daily relative-window transitions", async () => {
+    const relativeRules: OpportunityRuleSet = {
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "release_date",
+              id: "today",
+              operator: "in_window",
+              value: { kind: "relative_window", window: "today" },
+            },
+          ],
+          id: "today",
+          label: "Launching today",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    };
+    const item: OpportunityWorkItem = {
+      appid: null,
+      attempts: 1,
+      id: 497,
+      kind: "daily_evaluation",
+      lane: "daily",
+      materialEventId: null,
+      payload: {},
+      profileId: null,
+      userId: "user",
+      workspaceId: "workspace",
+    };
+    let persisted = false;
+    const repository = {
+      async claimWork(): Promise<OpportunityWorkItem[]> {
+        return [item];
+      },
+      createReleasedCohortCache() {
+        return new Map();
+      },
+      async createRunContext() {
+        return {
+          id: "run",
+          kind: "daily" as const,
+          windowEnd: "2026-07-30T16:00:00.000Z",
+          windowStart: "2026-07-29T16:00:00.000Z",
+        };
+      },
+      async failRun(): Promise<void> {
+        return;
+      },
+      async failWork(params: { error: string }): Promise<void> {
+        throw new Error(params.error);
+      },
+      async getActiveProfiles(): Promise<OpportunityWorkerProfile[]> {
+        return [
+          {
+            ...PROFILE,
+            rules: relativeRules,
+            timezone: "UTC",
+          },
+        ];
+      },
+      async getCandidateOutcomes() {
+        return new Map();
+      },
+      async getPriorUserStates() {
+        return new Map();
+      },
+      async getReleasedCohorts() {
+        return new Map();
+      },
+      async getRunMaterialEvents() {
+        return [];
+      },
+      async heartbeatWork(): Promise<void> {
+        return;
+      },
+      async persistRunOutcome(params: {
+        evaluations: Array<{ eventId: string | null }>;
+        results: unknown[];
+      }): Promise<void> {
+        assert.equal(params.evaluations.length, 1);
+        assert.equal(params.evaluations[0]?.eventId, null);
+        assert.deepEqual(params.results, []);
+        persisted = true;
+      },
+      productRepository: {
+        async getRelativeDateTransitionAppids(): Promise<number[]> {
+          return [10];
+        },
+        async getRuleInputs(): Promise<OpportunityEvaluationInput[]> {
+          return [
+            {
+              appid: 10,
+              fields: { release_date: knownField("2026-07-29") },
+              name: "Window Transition",
+            },
+          ];
+        },
+      },
+      async refreshSignalWindows(): Promise<number> {
+        return 0;
+      },
+      async scheduleWork(): Promise<number> {
+        return 0;
+      },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "relative-window-test",
+    });
+
+    assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
     assert.equal(persisted, true);
   });
 });
@@ -1320,6 +1442,70 @@ describe("opportunity worker event policy", () => {
       }),
       "newly_released",
     );
+  });
+});
+
+describe("opportunity worker date evaluation", () => {
+  it("evaluates added timestamps in each profile timezone at the run cutoff", async () => {
+    const rules: OpportunityRuleSet = {
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "publisheriq_added_at",
+              id: "added",
+              operator: "equals",
+              value: { date: "2026-03-08", kind: "absolute_date" },
+            },
+          ],
+          id: "added",
+          label: "Added date",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    };
+    const profile: OpportunityWorkerProfile = {
+      ...PROFILE,
+      rules,
+      timezone: "America/Los_Angeles",
+    };
+    const worker = new OpportunityWorker({} as OpportunityWorkerRepository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "date-test",
+    });
+
+    const evaluated = await worker.evaluateGame({
+      appid: 10,
+      candidateOutcomes: new Map(),
+      event: event({ appid: 10 }),
+      input: {
+        appid: 10,
+        fields: {
+          publisheriq_added_at: knownField("2026-03-09T06:30:00.000Z"),
+        },
+        name: "Timezone Test",
+      },
+      priorState: {
+        dismissedEventFingerprint: null,
+        ignored: true,
+        priorEventFingerprints: new Set(),
+        priorResultId: null,
+        tracked: false,
+      },
+      profiles: [profile],
+      run: {
+        id: "run",
+        kind: "daily",
+        windowEnd: "2026-03-09T16:00:00.000Z",
+        windowStart: "2026-03-08T16:00:00.000Z",
+      },
+    });
+
+    assert.equal(evaluated.evaluations[0]?.evaluation.outcome, "eligible");
+    assert.equal(evaluated.result, null);
   });
 });
 

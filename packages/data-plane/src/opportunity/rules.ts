@@ -1,7 +1,9 @@
 import {
   OPPORTUNITY_RULE_FIELDS,
+  OPPORTUNITY_RULE_SCHEMA_V1,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityClauseOutcome,
+  type OpportunityEvaluationContext,
   type OpportunityEvaluationInput,
   type OpportunityFieldValue,
   type OpportunityGroupOutcome,
@@ -16,6 +18,12 @@ import {
   type OpportunityRuleValue,
   type OpportunityTriState,
 } from "./types.js";
+import {
+  evaluateOpportunityDateComparison,
+  isOpportunityDateField,
+  isOpportunityDateOperand,
+  opportunityDateOperandFromValue,
+} from "./date-rules.js";
 
 const IMPORTANCE_WEIGHT: Record<OpportunityPreferenceImportance, number> = {
   high: 3,
@@ -35,11 +43,28 @@ const SUPPORTED_OPERATORS = new Set<OpportunityRuleOperator>([
   "less_than",
   "less_than_or_equal",
   "between",
+  "in_window",
   "exists",
   "not_exists",
 ]);
 
 const SUPPORTED_FIELDS = new Set<OpportunityRuleField>(OPPORTUNITY_RULE_FIELDS);
+const DATE_OPERATORS = new Set<OpportunityRuleOperator>([
+  "equals",
+  "not_equals",
+  "greater_than",
+  "greater_than_or_equal",
+  "less_than",
+  "less_than_or_equal",
+  "in_window",
+  "exists",
+  "not_exists",
+]);
+const V1_FIELDS = new Set<OpportunityRuleField>(
+  OPPORTUNITY_RULE_FIELDS.filter(
+    (field) => field !== "publisheriq_added_at" && field !== "demo_only",
+  ),
+);
 
 function clauseRequiresUnreleasedGame(clause: OpportunityRuleClause): boolean {
   return (
@@ -97,6 +122,16 @@ function compareNumeric(
   expected: unknown,
   predicate: (left: number, right: number) => boolean,
 ): boolean | null {
+  if (
+    actual === null ||
+    actual === undefined ||
+    actual === "" ||
+    expected === null ||
+    expected === undefined ||
+    expected === ""
+  ) {
+    return null;
+  }
   const left = typeof actual === "number" ? actual : Number(actual);
   const right = typeof expected === "number" ? expected : Number(expected);
 
@@ -190,6 +225,8 @@ function evaluateKnownValue(
       );
       return lower === null || upper === null ? null : lower && upper;
     }
+    case "in_window":
+      return null;
   }
 }
 
@@ -200,6 +237,11 @@ function renderValue(value: unknown): string {
 
   if (value === null || value === undefined || value === "") {
     return "no value";
+  }
+  if (isOpportunityDateOperand(value)) {
+    return value.kind === "absolute_date"
+      ? value.date
+      : value.window.replaceAll("_", " ");
   }
 
   return String(value);
@@ -215,6 +257,10 @@ function fieldValueFor(
 export function evaluateOpportunityClause(
   clause: OpportunityRuleClause,
   input: OpportunityEvaluationInput,
+  context: OpportunityEvaluationContext = {
+    asOf: new Date().toISOString(),
+    timezone: "UTC",
+  },
 ): OpportunityClauseOutcome {
   const fieldValue = fieldValueFor(input, clause.field);
   const isUnknown = !fieldValue || fieldValue.state === "unknown";
@@ -237,11 +283,18 @@ export function evaluateOpportunityClause(
     };
   }
 
-  const matched = evaluateKnownValue(
-    clause.operator,
-    fieldValue.value,
-    clause.value,
-  );
+  const dateOperand = isOpportunityDateField(clause.field)
+    ? opportunityDateOperandFromValue(clause.value)
+    : null;
+  const matched = dateOperand
+    ? evaluateOpportunityDateComparison({
+        actual: fieldValue.value,
+        context,
+        field: clause.field,
+        operand: dateOperand,
+        operator: clause.operator,
+      })
+    : evaluateKnownValue(clause.operator, fieldValue.value, clause.value);
   const state: OpportunityTriState =
     matched === null ? "unknown" : matched ? "true" : "false";
   const operatorText = clause.operator.replaceAll("_", " ");
@@ -288,9 +341,10 @@ function combineStates(
 export function evaluateOpportunityGroup(
   group: OpportunityRuleGroup,
   input: OpportunityEvaluationInput,
+  context?: OpportunityEvaluationContext,
 ): OpportunityGroupOutcome {
   const clauseOutcomes = group.clauses.map((clause) =>
-    evaluateOpportunityClause(clause, input),
+    evaluateOpportunityClause(clause, input, context),
   );
 
   return {
@@ -309,8 +363,9 @@ function evaluatePreferredGroup(
   group: OpportunityPreferredRuleGroup,
   input: OpportunityEvaluationInput,
   totalWeight: number,
+  context?: OpportunityEvaluationContext,
 ): OpportunityProfileEvaluation["preferredOutcomes"][number] {
-  const outcome = evaluateOpportunityGroup(group, input);
+  const outcome = evaluateOpportunityGroup(group, input, context);
   const weight = IMPORTANCE_WEIGHT[group.importance];
 
   return {
@@ -324,21 +379,22 @@ function evaluatePreferredGroup(
 export function evaluateOpportunityProfile(
   rules: OpportunityRuleSet,
   input: OpportunityEvaluationInput,
+  context?: OpportunityEvaluationContext,
 ): OpportunityProfileEvaluation {
   assertOpportunityRuleSet(rules);
 
   const requiredOutcomes = rules.required.map((group) =>
-    evaluateOpportunityGroup(group, input),
+    evaluateOpportunityGroup(group, input, context),
   );
   const excludedOutcomes = rules.excluded.map((group) =>
-    evaluateOpportunityGroup(group, input),
+    evaluateOpportunityGroup(group, input, context),
   );
   const totalPreferenceWeight = rules.preferred.reduce(
     (sum, group) => sum + IMPORTANCE_WEIGHT[group.importance],
     0,
   );
   const preferredOutcomes = rules.preferred.map((group) =>
-    evaluatePreferredGroup(group, input, totalPreferenceWeight),
+    evaluatePreferredGroup(group, input, totalPreferenceWeight, context),
   );
   const excluded = excludedOutcomes.some((outcome) => outcome.state === "true");
   const requiredState = combineStates(
@@ -379,6 +435,7 @@ function assertRuleGroup(
   value: unknown,
   path: string,
   preferred: boolean,
+  schemaVersion: string,
 ): asserts value is OpportunityRuleGroup | OpportunityPreferredRuleGroup {
   if (!isRecord(value)) {
     throw new Error(`${path} must be an object.`);
@@ -407,7 +464,9 @@ function assertRuleGroup(
     }
     if (
       typeof clause.field !== "string" ||
-      !SUPPORTED_FIELDS.has(clause.field as OpportunityRuleField)
+      !SUPPORTED_FIELDS.has(clause.field as OpportunityRuleField) ||
+      (schemaVersion === OPPORTUNITY_RULE_SCHEMA_V1 &&
+        !V1_FIELDS.has(clause.field as OpportunityRuleField))
     ) {
       throw new Error(`${path}.clauses[${index}].field is not supported.`);
     }
@@ -416,6 +475,71 @@ function assertRuleGroup(
       !SUPPORTED_OPERATORS.has(clause.operator as OpportunityRuleOperator)
     ) {
       throw new Error(`${path}.clauses[${index}].operator is not supported.`);
+    }
+    const field = clause.field as OpportunityRuleField;
+    const operator = clause.operator as OpportunityRuleOperator;
+    if (
+      schemaVersion === OPPORTUNITY_RULE_SCHEMA_VERSION &&
+      isOpportunityDateField(field) &&
+      !DATE_OPERATORS.has(operator)
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].operator is not supported for date fields.`,
+      );
+    }
+    if (
+      !isOpportunityDateField(field) &&
+      isOpportunityDateOperand(clause.value)
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].value uses a date operand with a non-date field.`,
+      );
+    }
+    if (operator === "in_window" && !isOpportunityDateField(field)) {
+      throw new Error(
+        `${path}.clauses[${index}].operator in_window requires a date field.`,
+      );
+    }
+    if (
+      schemaVersion === OPPORTUNITY_RULE_SCHEMA_V1 &&
+      operator === "in_window"
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].operator is not supported by ${OPPORTUNITY_RULE_SCHEMA_V1}.`,
+      );
+    }
+    if (
+      schemaVersion === OPPORTUNITY_RULE_SCHEMA_VERSION &&
+      isOpportunityDateField(field) &&
+      operator !== "exists" &&
+      operator !== "not_exists" &&
+      !isOpportunityDateOperand(clause.value)
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].value must be a valid date operand.`,
+      );
+    }
+    if (
+      operator === "in_window" &&
+      (!isOpportunityDateOperand(clause.value) ||
+        clause.value.kind !== "relative_window")
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].value must be a relative date window.`,
+      );
+    }
+    if (
+      schemaVersion === OPPORTUNITY_RULE_SCHEMA_VERSION &&
+      isOpportunityDateField(field) &&
+      operator !== "in_window" &&
+      operator !== "exists" &&
+      operator !== "not_exists" &&
+      isOpportunityDateOperand(clause.value) &&
+      clause.value.kind !== "absolute_date"
+    ) {
+      throw new Error(
+        `${path}.clauses[${index}].value must be an absolute date.`,
+      );
     }
   });
 
@@ -435,9 +559,12 @@ export function assertOpportunityRuleSet(
   if (!isRecord(value)) {
     throw new Error("Opportunity rules must be an object.");
   }
-  if (value.schemaVersion !== OPPORTUNITY_RULE_SCHEMA_VERSION) {
+  if (
+    value.schemaVersion !== OPPORTUNITY_RULE_SCHEMA_V1 &&
+    value.schemaVersion !== OPPORTUNITY_RULE_SCHEMA_VERSION
+  ) {
     throw new Error(
-      `Opportunity rules must use ${OPPORTUNITY_RULE_SCHEMA_VERSION}.`,
+      `Opportunity rules must use ${OPPORTUNITY_RULE_SCHEMA_V1} or ${OPPORTUNITY_RULE_SCHEMA_VERSION}.`,
     );
   }
 
@@ -451,6 +578,7 @@ export function assertOpportunityRuleSet(
         group,
         `Opportunity rules.${section}[${index}]`,
         section === "preferred",
+        value.schemaVersion as string,
       ),
     );
   }

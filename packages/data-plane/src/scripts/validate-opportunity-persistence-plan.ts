@@ -54,6 +54,7 @@ const PROFILE: OpportunityWorkerProfile = {
   immediateFullMatchEnabled: true,
   name: "Persistence plan validation",
   rules: RULES,
+  timezone: "UTC",
   versionId: PROFILE_VERSION_ID,
   versionNumber: 1,
 };

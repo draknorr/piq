@@ -62,6 +62,7 @@ const PROFILE_A: OpportunityWorkerProfile = {
   immediateFullMatchEnabled: false,
   name: "Daily profile",
   rules: RULES,
+  timezone: "UTC",
   versionId: PROFILE_A_VERSION_ID,
   versionNumber: 4,
 };
@@ -72,6 +73,7 @@ const PROFILE_B: OpportunityWorkerProfile = {
   immediateFullMatchEnabled: true,
   name: "Immediate profile",
   rules: RULES,
+  timezone: "UTC",
   versionId: PROFILE_B_VERSION_ID,
   versionNumber: 7,
 };

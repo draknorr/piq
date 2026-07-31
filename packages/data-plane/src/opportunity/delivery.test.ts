@@ -85,4 +85,27 @@ describe("opportunity delivery rendering", () => {
     assert.match(rendered.html, /top 1 of 12 results/);
     assert.match(JSON.stringify(rendered.slackBlocks), /top 1 of 12 results/);
   });
+
+  it("includes matched profile criteria in email, text, and Slack reports", () => {
+    const rendered = renderOpportunityDelivery({
+      ...DELIVERY,
+      results: [
+        {
+          ...DELIVERY.results[0]!,
+          strongestEvidence: [
+            "Only demo available",
+            "Unreleased date TBD",
+            "Added in the last 30 days",
+          ],
+        },
+      ],
+    });
+
+    assert.match(rendered.text, /Only demo available/);
+    assert.match(rendered.html, /Unreleased date TBD/);
+    assert.match(
+      JSON.stringify(rendered.slackBlocks),
+      /Added in the last 30 days/,
+    );
+  });
 });

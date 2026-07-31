@@ -33,6 +33,7 @@ import {
   OPPORTUNITY_MARKET_VERSION,
   OPPORTUNITY_MATERIALITY_VERSION,
   OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
+  OPPORTUNITY_RULE_SCHEMA_VERSION,
 } from "./types.js";
 import {
   OpportunityRepository,
@@ -71,6 +72,7 @@ export interface OpportunityWorkerProfile {
   immediateFullMatchEnabled: boolean;
   name: string;
   rules: OpportunityRuleSet;
+  timezone: string;
   versionId: string;
   versionNumber: number;
 }
@@ -86,7 +88,7 @@ export interface OpportunityWorkerMaterialEvent {
   eligibleForImmediate: boolean;
   eventFingerprint: string;
   eventType: OpportunityMaterialEventType;
-  id: string;
+  id: string | null;
   materiality: number;
   observedAt: string;
   reevaluateEligibility: boolean;
@@ -1305,7 +1307,7 @@ export class OpportunityWorkerRepository {
           materiality: "opportunity-materiality/v1",
           ranking: "opportunity-ranking/v1",
           ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
-          rules: "opportunity-rules/v1",
+          rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
           signals: "signal-windows/v1",
         }),
       ],
@@ -1350,6 +1352,7 @@ export class OpportunityWorkerRepository {
         immediate_full_match_enabled: boolean;
         name: string;
         rules: OpportunityRuleSet;
+        timezone: string;
         version_id: string;
         version_number: number;
       }
@@ -1359,6 +1362,7 @@ export class OpportunityWorkerRepository {
           profile.id,
           profile.name,
           profile.immediate_full_match_enabled,
+          profile.timezone,
           version.id AS version_id,
           version.version AS version_number,
           version.rules,
@@ -1381,6 +1385,7 @@ export class OpportunityWorkerRepository {
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
       name: row.name,
       rules: row.rules,
+      timezone: row.timezone,
       versionId: row.version_id,
       versionNumber: row.version_number,
     }));
@@ -1413,7 +1418,7 @@ export class OpportunityWorkerRepository {
       `
         SELECT
           id,
-          appid,
+          opportunity.material_events.appid AS appid,
           event_type,
           signal_family,
           affected_rule_fields,
@@ -1428,6 +1433,8 @@ export class OpportunityWorkerRepository {
           creates_daily_result,
           eligible_for_immediate
         FROM opportunity.material_events
+        JOIN legacy.apps canonical_app
+          ON canonical_app.appid = opportunity.material_events.appid
         WHERE (
             (
               $4::uuid IS NULL
@@ -1436,8 +1443,13 @@ export class OpportunityWorkerRepository {
             )
             OR id = $4
           )
-          AND ($3::integer IS NULL OR appid = $3)
-        ORDER BY appid, observed_at DESC, id
+          AND (
+            $3::integer IS NULL
+            OR opportunity.material_events.appid = $3
+          )
+          AND canonical_app.type IN ('game', 'Game')
+          AND COALESCE(canonical_app.is_delisted, false) = false
+        ORDER BY opportunity.material_events.appid, observed_at DESC, id
         LIMIT 10000
       `,
       [run.windowStart, run.windowEnd, appid ?? null, materialEventId ?? null],
@@ -2741,7 +2753,7 @@ export class OpportunityWorkerRepository {
         materiality: "opportunity-materiality/v1",
         ranking: "opportunity-ranking/v1",
         ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
-        rules: "opportunity-rules/v1",
+        rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
         signals: "signal-windows/v1",
       },
       cohort: {
@@ -3347,7 +3359,7 @@ export class OpportunityWorkerRepository {
               market: "opportunity-market/v1",
               materiality: "opportunity-materiality/v1",
               ranking: "opportunity-ranking/v1",
-              rules: "opportunity-rules/v1",
+              rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
               signals: "signal-windows/v1",
             }),
             JSON.stringify(result.missingEvidence),

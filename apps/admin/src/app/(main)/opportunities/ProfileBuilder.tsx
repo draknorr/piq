@@ -13,9 +13,16 @@ import {
 } from "lucide-react";
 
 import { opportunityPost } from "./lib/api";
+import {
+  createOpportunityShortcutGroup,
+  upgradeOpportunityRules,
+  type OpportunityRuleShortcut,
+} from "./lib/rule-builder";
 import type {
+  OpportunityDateOperand,
   OpportunityPreview,
   OpportunityProfileDetail,
+  OpportunityRelativeDateWindow,
   OpportunityRuleClause,
   OpportunityRuleField,
   OpportunityRuleGroup,
@@ -28,7 +35,7 @@ const FIELD_OPTIONS: Array<{
   field: OpportunityRuleField;
   group: string;
   label: string;
-  valueType: "boolean" | "number" | "string";
+  valueType: "boolean" | "date" | "number" | "string";
 }> = [
   {
     field: "tags",
@@ -61,6 +68,18 @@ const FIELD_OPTIONS: Array<{
     valueType: "boolean",
   },
   {
+    field: "release_date",
+    group: "Release",
+    label: "Steam launch date",
+    valueType: "date",
+  },
+  {
+    field: "publisheriq_added_at",
+    group: "Release",
+    label: "Added to PublisherIQ",
+    valueType: "date",
+  },
+  {
     field: "days_until_release",
     group: "Release",
     label: "Days until release",
@@ -70,6 +89,12 @@ const FIELD_OPTIONS: Array<{
     field: "has_demo",
     group: "Product",
     label: "Has playable demo",
+    valueType: "boolean",
+  },
+  {
+    field: "demo_only",
+    group: "Product",
+    label: "Only demo available",
     valueType: "boolean",
   },
   {
@@ -206,12 +231,55 @@ const OPERATOR_LABELS: Record<OpportunityRuleOperator, string> = {
   greater_than: "Is more than",
   greater_than_or_equal: "Is at least",
   in: "Is one of",
+  in_window: "Is in",
   less_than: "Is fewer than",
   less_than_or_equal: "Is no more than",
   not_contains: "Does not include",
   not_equals: "Is not",
   not_exists: "Is not available",
   not_in: "Is not one of",
+};
+
+const DATE_OPERATORS: OpportunityRuleOperator[] = [
+  "equals",
+  "greater_than",
+  "greater_than_or_equal",
+  "less_than",
+  "less_than_or_equal",
+  "in_window",
+  "exists",
+  "not_exists",
+];
+
+const DATE_OPERATOR_LABELS: Partial<Record<OpportunityRuleOperator, string>> = {
+  equals: "Is on",
+  exists: "Has a date",
+  greater_than: "Is after",
+  greater_than_or_equal: "Is on or after",
+  in_window: "Is in",
+  less_than: "Is before",
+  less_than_or_equal: "Is on or before",
+  not_exists: "Has no date",
+};
+
+const RELATIVE_WINDOWS: Record<
+  "publisheriq_added_at" | "release_date",
+  Array<{ label: string; value: OpportunityRelativeDateWindow }>
+> = {
+  publisheriq_added_at: [
+    { label: "Today", value: "today" },
+    { label: "This week", value: "this_week" },
+    { label: "Last 7 days", value: "last_7_days" },
+    { label: "Last 30 days", value: "last_30_days" },
+    { label: "This month", value: "this_month" },
+  ],
+  release_date: [
+    { label: "Today", value: "today" },
+    { label: "This week", value: "this_week" },
+    { label: "This month", value: "this_month" },
+    { label: "Next 7 days", value: "next_7_days" },
+    { label: "Next 30 days", value: "next_30_days" },
+  ],
 };
 
 const SIGNALS: Array<{ label: string; value: OpportunitySignalFamily }> = [
@@ -245,8 +313,29 @@ const EMPTY_RULES: OpportunityRuleSet = {
       operator: "all",
     },
   ],
-  schemaVersion: "opportunity-rules/v1",
+  schemaVersion: "opportunity-rules/v2",
 };
+
+function localToday(): string {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function defaultDateValue(
+  field: "publisheriq_added_at" | "release_date",
+  relative = false,
+): OpportunityDateOperand {
+  return relative
+    ? {
+        kind: "relative_window",
+        window: field === "release_date" ? "next_30_days" : "last_30_days",
+      }
+    : { date: localToday(), kind: "absolute_date" };
+}
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -300,6 +389,15 @@ function displayValue(
   value: OpportunityRuleClause["value"],
   field: OpportunityRuleField,
 ): string {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value
+  ) {
+    const operand = value as OpportunityDateOperand;
+    return operand.kind === "absolute_date" ? operand.date : operand.window;
+  }
   const values = Array.isArray(value) ? value : [value];
   return values
     .map((item) =>
@@ -337,7 +435,10 @@ export function ProfileBuilder({
     initialProfile?.description ?? "",
   );
   const [rules, setRules] = useState<OpportunityRuleSet>(
-    initialProfile?.currentVersionDetail.rules ?? EMPTY_RULES,
+    upgradeOpportunityRules(
+      initialProfile?.currentVersionDetail.rules ?? EMPTY_RULES,
+      localToday(),
+    ),
   );
   const [subscriptions, setSubscriptions] = useState<OpportunitySignalFamily[]>(
     initialProfile?.currentVersionDetail.eventSubscriptions ?? [
@@ -394,6 +495,13 @@ export function ProfileBuilder({
     updateSection(section, [...rules[section], group]);
   };
 
+  const addRequiredShortcut = (shortcut: OpportunityRuleShortcut) => {
+    updateSection("required", [
+      ...rules.required,
+      createOpportunityShortcutGroup(shortcut, id),
+    ]);
+  };
+
   const runPreview = async () => {
     setPreviewing(true);
     setError(null);
@@ -402,6 +510,7 @@ export function ProfileBuilder({
         await opportunityPost<OpportunityPreview>("preview-profile", {
           profileId: initialProfile?.id,
           rules,
+          timezone,
         }),
       );
     } catch {
@@ -521,6 +630,32 @@ export function ProfileBuilder({
                 className="w-full rounded-lg border border-border-muted bg-surface px-3 py-2.5 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15"
               />
             </label>
+          </div>
+
+          <div className="rounded-xl border border-border-muted bg-surface px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+              Quick filters
+            </p>
+            <p className="mt-1 text-xs leading-5 text-text-tertiary">
+              Add a complete must-have group, then refine it alongside your
+              other criteria.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => addRequiredShortcut("demo_only")}
+                className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
+              >
+                Only Demo
+              </button>
+              <button
+                type="button"
+                onClick={() => addRequiredShortcut("undated_unreleased")}
+                className="rounded-full border border-border-muted bg-surface-raised px-3 py-1.5 text-xs font-semibold text-text-secondary transition hover:border-accent-primary/40 hover:text-accent-primary"
+              >
+                Unreleased date TBD
+              </button>
+            </div>
           </div>
 
           {(
@@ -957,6 +1092,7 @@ function ClauseEditor({
   const meta = fieldMeta(clause.field);
   const hasValue =
     clause.operator !== "exists" && clause.operator !== "not_exists";
+  const operators = meta.valueType === "date" ? DATE_OPERATORS : OPERATORS;
 
   return (
     <div className="grid gap-2 rounded-lg bg-surface-raised p-2 md:grid-cols-[minmax(145px,1.2fr)_minmax(145px,1fr)_minmax(120px,1fr)_32px]">
@@ -970,7 +1106,21 @@ function ClauseEditor({
             onChange({
               ...clause,
               field,
-              value: nextMeta.valueType === "boolean" ? true : "",
+              operator:
+                nextMeta.valueType === "date" ||
+                nextMeta.valueType === "boolean"
+                  ? "equals"
+                  : nextMeta.valueType === "number"
+                    ? "greater_than_or_equal"
+                    : "contains",
+              value:
+                nextMeta.valueType === "boolean"
+                  ? true
+                  : nextMeta.valueType === "date"
+                    ? defaultDateValue(
+                        field as "publisheriq_added_at" | "release_date",
+                      )
+                    : "",
             });
           }}
           className="h-9 w-full appearance-none rounded-md border border-border-subtle bg-surface px-2.5 pr-7 text-xs text-text-primary"
@@ -993,23 +1143,93 @@ function ClauseEditor({
       </label>
       <select
         value={clause.operator}
-        onChange={(event) =>
+        onChange={(event) => {
+          const operator = event.target.value as OpportunityRuleOperator;
           onChange({
             ...clause,
-            operator: event.target.value as OpportunityRuleOperator,
-          })
-        }
+            operator,
+            value:
+              meta.valueType === "date" && operator === "in_window"
+                ? defaultDateValue(
+                    clause.field as "publisheriq_added_at" | "release_date",
+                    true,
+                  )
+                : meta.valueType === "date" &&
+                    operator !== "exists" &&
+                    operator !== "not_exists"
+                  ? defaultDateValue(
+                      clause.field as "publisheriq_added_at" | "release_date",
+                    )
+                  : operator === "exists" || operator === "not_exists"
+                    ? undefined
+                    : clause.value === undefined
+                      ? meta.valueType === "boolean"
+                        ? true
+                        : meta.valueType === "number"
+                          ? 0
+                          : ""
+                      : clause.value,
+          });
+        }}
         className="h-9 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-text-primary"
         aria-label="Comparison"
       >
-        {OPERATORS.map((operator) => (
+        {operators.map((operator) => (
           <option key={operator} value={operator}>
-            {OPERATOR_LABELS[operator]}
+            {DATE_OPERATOR_LABELS[operator] ?? OPERATOR_LABELS[operator]}
           </option>
         ))}
       </select>
       {hasValue ? (
-        meta.valueType === "boolean" ? (
+        meta.valueType === "date" && clause.operator === "in_window" ? (
+          <select
+            value={
+              typeof clause.value === "object" &&
+              clause.value !== null &&
+              !Array.isArray(clause.value) &&
+              clause.value.kind === "relative_window"
+                ? clause.value.window
+                : clause.field === "release_date"
+                  ? "next_30_days"
+                  : "last_30_days"
+            }
+            onChange={(event) =>
+              onChange({
+                ...clause,
+                value: {
+                  kind: "relative_window",
+                  window: event.target.value as OpportunityRelativeDateWindow,
+                },
+              })
+            }
+            className="h-9 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-text-primary"
+            aria-label="Relative date window"
+          >
+            {RELATIVE_WINDOWS[
+              clause.field as "publisheriq_added_at" | "release_date"
+            ].map((window) => (
+              <option key={window.value} value={window.value}>
+                {window.label}
+              </option>
+            ))}
+          </select>
+        ) : meta.valueType === "date" ? (
+          <input
+            type="date"
+            value={displayValue(clause.value, clause.field)}
+            onChange={(event) =>
+              onChange({
+                ...clause,
+                value: {
+                  date: event.target.value,
+                  kind: "absolute_date",
+                },
+              })
+            }
+            className="h-9 min-w-0 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent-primary"
+            aria-label="Calendar date"
+          />
+        ) : meta.valueType === "boolean" ? (
           <select
             value={String(clause.value ?? true)}
             onChange={(event) =>

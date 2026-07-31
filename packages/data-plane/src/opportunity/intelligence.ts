@@ -805,6 +805,8 @@ export function describeOpportunityChange(
       return "The game was released on Steam.";
     case "first_observed":
       return "PublisherIQ identified this game on Steam.";
+    case "date_window_changed":
+      return "The game entered or left a saved calendar-date window.";
     case "announcement": {
       const title = findNestedValue(change.after, [
         "title",

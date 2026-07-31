@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   OPPORTUNITY_RULE_FIELDS,
+  OPPORTUNITY_RULE_SCHEMA_V1,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityEvaluationInput,
   type OpportunityFieldValue,
@@ -117,8 +118,8 @@ function input(
 }
 
 describe("opportunity rule engine", () => {
-  it("preserves all 33 supported fields through the versioned input contract", () => {
-    assert.equal(OPPORTUNITY_RULE_FIELDS.length, 33);
+  it("preserves all 35 supported fields through the versioned input contract", () => {
+    assert.equal(OPPORTUNITY_RULE_FIELDS.length, 35);
     assert.deepEqual(
       Object.keys(OPPORTUNITY_RULE_INPUT_FIELD_SOURCES).sort(),
       [...OPPORTUNITY_RULE_FIELDS].sort(),
@@ -148,7 +149,7 @@ describe("opportunity rule engine", () => {
     );
 
     assert.equal(result.outcome, "eligible");
-    assert.equal(result.requiredOutcomes[0]?.clauseOutcomes.length, 33);
+    assert.equal(result.requiredOutcomes[0]?.clauseOutcomes.length, 35);
   });
 
   it("preserves the truth contract for all 13 operators", () => {
@@ -200,6 +201,87 @@ describe("opportunity rule engine", () => {
       );
       assert.equal(result.state, "true", fixture.operator);
     }
+  });
+
+  it("never coerces a known null into zero for numeric comparisons", () => {
+    const outcome = evaluateOpportunityClause(
+      {
+        field: "price_cents",
+        id: "price",
+        operator: "less_than",
+        value: 100,
+      },
+      input({ price_cents: known(null) }),
+    );
+
+    assert.equal(outcome.state, "unknown");
+  });
+
+  it("continues to read v1 rules while reserving v2 fields for v2", () => {
+    const v1Rules: OpportunityRuleSet = {
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "is_released",
+              id: "released",
+              operator: "equals",
+              value: false,
+            },
+          ],
+          id: "release",
+          label: "Release",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_V1,
+    };
+
+    assert.equal(
+      evaluateOpportunityProfile(v1Rules, input({ is_released: known(false) }))
+        .outcome,
+      "eligible",
+    );
+    assert.equal(
+      evaluateOpportunityClause(
+        {
+          field: "release_date",
+          id: "legacy-date",
+          operator: "equals",
+          value: "2026-09-01",
+        },
+        input({ release_date: known("2026-09-01") }),
+        { asOf: "2026-07-30T18:00:00.000Z", timezone: "UTC" },
+      ).state,
+      "true",
+    );
+    assert.throws(
+      () =>
+        evaluateOpportunityProfile(
+          {
+            ...v1Rules,
+            required: [
+              {
+                clauses: [
+                  {
+                    field: "demo_only",
+                    id: "demo-only",
+                    operator: "equals",
+                    value: true,
+                  },
+                ],
+                id: "demo",
+                label: "Demo",
+                operator: "all",
+              },
+            ],
+          },
+          input({ demo_only: known(true) }),
+        ),
+      /not supported/,
+    );
   });
 
   it("preserves ANY and ALL three-state truth tables", () => {

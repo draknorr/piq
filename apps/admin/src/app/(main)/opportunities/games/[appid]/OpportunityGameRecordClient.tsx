@@ -76,6 +76,7 @@ function changeLabel(
     announcement: "Official announcement",
     business_model_changed: "Pricing or business model",
     ccu_breakthrough: "Player milestone",
+    date_window_changed: "Saved date window",
     demo_added: "Playable demo",
     developer_changed: "Developer",
     first_observed: "New discovery",

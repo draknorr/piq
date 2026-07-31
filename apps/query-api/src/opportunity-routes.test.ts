@@ -36,6 +36,9 @@ const service = {
       },
     };
   },
+  async previewProfile(received: OpportunityIdentity, request: unknown) {
+    return { received, request };
+  },
 } as unknown as OpportunityService;
 
 const server = createServer(async (request, response) => {
@@ -96,6 +99,101 @@ describe("opportunity query-api routes", () => {
       payload.result.matchedProfiles[0]?.name,
       "Roguelike Deckbuilder",
     );
+  });
+
+  it("forwards v2 date operands and the profile timezone unchanged", async () => {
+    const request = {
+      rules: {
+        excluded: [],
+        preferred: [],
+        required: [
+          {
+            clauses: [
+              {
+                field: "publisheriq_added_at",
+                id: "recent",
+                operator: "in_window",
+                value: { kind: "relative_window", window: "last_7_days" },
+              },
+            ],
+            id: "recent",
+            label: "Recently added",
+            operator: "all",
+          },
+        ],
+        schemaVersion: "opportunity-rules/v2",
+      },
+      timezone: "America/Los_Angeles",
+    };
+    const response = await fetch(
+      `${baseUrl}/v1/opportunities/preview-profile`,
+      {
+        body: JSON.stringify(request),
+        headers: {
+          "content-type": "application/json",
+          "x-supabase-access-token": "token",
+        },
+        method: "POST",
+      },
+    );
+    const payload = (await response.json()) as {
+      request: typeof request;
+    };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload.request, request);
+  });
+
+  it("reports catalog statement timeouts as gateway timeouts", async () => {
+    const timeoutService = {
+      async previewProfile() {
+        throw Object.assign(
+          new Error("canceling statement due to statement timeout"),
+          { code: "57014" },
+        );
+      },
+    } as unknown as OpportunityService;
+    const timeoutServer = createServer(async (request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      await tryHandleOpportunityRequest({
+        identityVerifier: verifier,
+        opportunityService: timeoutService,
+        request,
+        response,
+        url,
+      });
+    });
+    await new Promise<void>((resolve) =>
+      timeoutServer.listen(0, "127.0.0.1", resolve),
+    );
+    const timeoutAddress = timeoutServer.address();
+    if (!timeoutAddress || typeof timeoutAddress === "string") {
+      throw new Error("Timeout test server did not bind.");
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${timeoutAddress.port}/v1/opportunities/preview-profile`,
+        {
+          body: JSON.stringify({}),
+          headers: {
+            "content-type": "application/json",
+            "x-supabase-access-token": "token",
+          },
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as {
+        code: string;
+        error: string;
+      };
+
+      assert.equal(response.status, 504);
+      assert.equal(payload.code, "OPPORTUNITY_QUERY_TIMEOUT");
+      assert.match(payload.error, /catalog data/);
+    } finally {
+      timeoutServer.close();
+      await once(timeoutServer, "close");
+    }
   });
 
   it("validates Supabase tokens against the auth user endpoint", async () => {

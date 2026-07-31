@@ -13,6 +13,7 @@ import {
   type OpportunityChannelPreferenceSummary,
   type OpportunityDailyOverview,
   type OpportunityEvaluationInput,
+  type OpportunityEvaluationContext,
   type OpportunityFieldValue,
   type OpportunityGameRecord,
   type OpportunityIdentity,
@@ -28,13 +29,16 @@ import {
 } from "./types.js";
 import {
   compileOpportunityPreview,
-  OPPORTUNITY_PREVIEW_FROM_SQL,
   type OpportunityCompiledPreview,
 } from "./sql-compiler.js";
 import {
   describeOpportunityRuleSet,
   supportsReleasedMarketHealth,
 } from "./rules.js";
+import {
+  isOpportunityDateOperand,
+  previousLocalDayEvaluationContext,
+} from "./date-rules.js";
 import {
   cleanOpportunityCoverageWarning,
   cleanOpportunityEvidence,
@@ -54,15 +58,28 @@ interface WorkspaceContext {
 }
 
 interface PreviewAggregateRow extends QueryResultRow {
+  candidate_appids?: number[] | string;
   coverage_counts: Record<string, number> | string;
   stage_counts: Record<string, number> | string;
   total_catalog: string | number;
   total_matches: string | number;
 }
 
+export interface OpportunityPreviewCatalog {
+  aggregate: {
+    coverage: Record<string, number>;
+    stageCounts: Record<string, number>;
+    totalCatalog: number;
+    totalMatches: number;
+  };
+  inputs: OpportunityEvaluationInput[];
+}
+
 interface RuleInputRow extends QueryResultRow {
   appid: number;
   app_type: string | null;
+  catalog_first_observation_kind: string | null;
+  catalog_first_observed_at: Date | string | null;
   catalog_source_at: Date | string | null;
   categories: string[] | null;
   ccu_change_30d: string | number | null;
@@ -113,11 +130,12 @@ export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   content_descriptors: "pics",
   controller_support: "pics",
   days_until_release: "storefront",
+  demo_only: "storefront",
   developer: "storefront",
   developer_game_count: "storefront",
   discount_percent: "storefront",
   genres: "pics",
-  has_demo: "pics",
+  has_demo: "storefront",
   has_purchase_packages: "storefront",
   is_free: "storefront",
   is_released: "storefront",
@@ -129,6 +147,7 @@ export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   price_cents: "storefront",
   publisher: "storefront",
   publisher_game_count: "storefront",
+  publisheriq_added_at: "catalog",
   release_date: "storefront",
   release_state: "storefront",
   reviews_added_30d: "market_metrics",
@@ -219,6 +238,22 @@ function recordValue(
   return typeof value === "string"
     ? (JSON.parse(value) as Record<string, number>)
     : value;
+}
+
+function integerArrayValue(value: number[] | string | undefined): number[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(Number)
+      .filter((item) => Number.isSafeInteger(item) && item > 0);
+  }
+  if (!value || value === "{}") {
+    return [];
+  }
+  return value
+    .replace(/^\{|\}$/g, "")
+    .split(",")
+    .map(Number)
+    .filter((item) => Number.isSafeInteger(item) && item > 0);
 }
 
 function stableSlug(userId: string): string {
@@ -409,6 +444,16 @@ function normalizeStringArray(value: unknown): string[] {
   return [];
 }
 
+function dateOnly(value: Date | string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  return new Date(value).toISOString().slice(0, 10);
+}
+
 export function assertOpportunityRuleInputComplete(
   input: OpportunityEvaluationInput,
 ): void {
@@ -434,7 +479,11 @@ function buildOpportunityRuleInput(
   const fields: OpportunityEvaluationInput["fields"] = {
     appid: knownField(row.appid, "legacy.apps", catalogSourceAt),
     name: knownField(row.name, "legacy.apps", catalogSourceAt),
-    app_type: knownField(row.app_type, "legacy.apps", catalogSourceAt),
+    app_type: knownField(
+      row.app_type?.toLocaleLowerCase() ?? null,
+      "legacy.apps",
+      catalogSourceAt,
+    ),
   };
 
   const setStorefront = (field: OpportunityRuleField, value: unknown): void => {
@@ -475,7 +524,7 @@ function buildOpportunityRuleInput(
 
   setStorefront("is_released", row.is_released);
   setStorefront("release_state", row.release_state);
-  setStorefront("release_date", iso(row.release_date));
+  setStorefront("release_date", dateOnly(row.release_date));
   setStorefront(
     "days_until_release",
     row.release_date
@@ -502,6 +551,21 @@ function buildOpportunityRuleInput(
   );
   setStorefront("publisher_game_count", row.publisher_game_count);
   setStorefront("developer_game_count", row.developer_game_count);
+  fields.publisheriq_added_at =
+    row.catalog_first_observation_kind === "new" &&
+    row.catalog_first_observed_at
+      ? knownField(
+          iso(row.catalog_first_observed_at),
+          "ops.app_catalog_state",
+          iso(row.catalog_first_observed_at),
+        )
+      : unknownField(
+          "ops.app_catalog_state",
+          row.catalog_first_observation_kind === "baseline"
+            ? "PublisherIQ first observed this game during the catalog baseline, so its true added date is unknown."
+            : "PublisherIQ has not recorded a durable first observation for this game.",
+          iso(row.catalog_first_observed_at),
+        );
 
   setPics("tags", row.tags ?? []);
   setPics("genres", row.genres ?? []);
@@ -511,7 +575,25 @@ function buildOpportunityRuleInput(
   setPics("steam_deck", row.steam_deck);
   setPics("languages", normalizeStringArray(row.languages));
   setPics("content_descriptors", normalizeStringArray(row.content_descriptors));
-  setPics("has_demo", row.has_demo);
+  setStorefront("has_demo", row.has_demo);
+  fields.demo_only =
+    storefrontReady &&
+    row.is_released !== null &&
+    row.has_purchase_packages !== null
+      ? knownField(
+          row.has_demo &&
+            row.is_released === false &&
+            row.has_purchase_packages === false,
+          "steam_storefront",
+          storefrontSourceAt,
+        )
+      : unknownField(
+          "steam_storefront",
+          storefrontReady
+            ? "Release or purchase-package status is unavailable."
+            : `Storefront readiness is ${row.storefront_status ?? "unknown"}.`,
+          storefrontSourceAt,
+        );
 
   setMetric("total_reviews", row.total_reviews);
   setMetric("positive_percentage", numberValue(row.positive_percentage));
@@ -555,6 +637,8 @@ const RULE_INPUT_SELECT = `
     a.is_released,
     a.release_state,
     a.release_date,
+    catalog_state.first_observed_at AS catalog_first_observed_at,
+    catalog_state.first_observation_kind AS catalog_first_observation_kind,
     COALESCE(a.current_price_cents, m.price_cents) AS price_cents,
     COALESCE(a.current_discount_percent, m.discount_percent) AS discount_percent,
     a.has_purchase_packages,
@@ -657,6 +741,8 @@ const RULE_INPUT_SELECT = `
   LEFT JOIN ops.app_data_readiness readiness_market
     ON readiness_market.appid = a.appid
     AND readiness_market.source = 'market_metrics'
+  LEFT JOIN ops.app_catalog_state catalog_state
+    ON catalog_state.appid = a.appid
 `;
 
 const RULE_INPUT_BATCH_SELECT = `
@@ -732,6 +818,8 @@ const RULE_INPUT_BATCH_SELECT = `
     a.is_released,
     a.release_state,
     a.release_date,
+    catalog_state.first_observed_at AS catalog_first_observed_at,
+    catalog_state.first_observation_kind AS catalog_first_observation_kind,
     COALESCE(a.current_price_cents, m.price_cents) AS price_cents,
     COALESCE(
       a.current_discount_percent,
@@ -799,6 +887,8 @@ const RULE_INPUT_BATCH_SELECT = `
   LEFT JOIN ops.app_data_readiness readiness_market
     ON readiness_market.appid = a.appid
     AND readiness_market.source = 'market_metrics'
+  LEFT JOIN ops.app_catalog_state catalog_state
+    ON catalog_state.appid = a.appid
   LEFT JOIN tag_values ON tag_values.appid = a.appid
   LEFT JOIN genre_values ON genre_values.appid = a.appid
   LEFT JOIN category_values ON category_values.appid = a.appid
@@ -806,6 +896,8 @@ const RULE_INPUT_BATCH_SELECT = `
   LEFT JOIN developer_values ON developer_values.appid = a.appid
   LEFT JOIN demo_values ON demo_values.appid = a.appid
   LEFT JOIN legacy.app_steam_deck deck ON deck.appid = a.appid
+  WHERE a.type IN ('game', 'Game')
+    AND COALESCE(a.is_delisted, false) = false
   ORDER BY a.appid
 `;
 
@@ -1718,7 +1810,8 @@ export class OpportunityRepository {
             calculation_config,
             source_preset_version_id,
             activated_at,
-            created_by
+            created_by,
+            rule_schema_version
           )
           VALUES (
             $1,
@@ -1728,7 +1821,8 @@ export class OpportunityRepository {
             $4::jsonb,
             $5,
             CASE WHEN $6 THEN now() ELSE NULL END,
-            $7
+            $7,
+            $8
           )
           RETURNING
             id,
@@ -1752,6 +1846,7 @@ export class OpportunityRepository {
           sourcePreset?.rows[0]?.version_id ?? null,
           params.enabled,
           params.identity.userId,
+          params.rules.schemaVersion,
         ],
       );
       const row = version.rows[0]!;
@@ -2028,7 +2123,8 @@ export class OpportunityRepository {
             calculation_config,
             source_preset_version_id,
             activated_at,
-            created_by
+            created_by,
+            rule_schema_version
           )
           VALUES (
             $1,
@@ -2038,7 +2134,8 @@ export class OpportunityRepository {
             $5::jsonb,
             $6,
             CASE WHEN $7 = 'enabled' THEN now() ELSE NULL END,
-            $8
+            $8,
+            $9
           )
           RETURNING
             id,
@@ -2065,6 +2162,7 @@ export class OpportunityRepository {
           current.source_preset_version_id,
           current.status,
           params.identity.userId,
+          params.rules.schemaVersion,
         ],
       );
       const row = inserted.rows[0]!;
@@ -2260,7 +2358,7 @@ export class OpportunityRepository {
           COUNT(1) FILTER (WHERE ${compiled.matchSql}) AS total_matches,
           ${stageObject} AS stage_counts,
           ${coverageObject} AS coverage_counts
-        ${OPPORTUNITY_PREVIEW_FROM_SQL}
+        ${compiled.fromSql}
       `,
       compiled.values,
     );
@@ -2274,15 +2372,144 @@ export class OpportunityRepository {
     };
   }
 
+  async getPreviewCatalog(
+    compiled: OpportunityCompiledPreview,
+    limit = 80,
+  ): Promise<OpportunityPreviewCatalog> {
+    const boundedLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+    const requiredAliases = compiled.requiredGroups.map(
+      (_group, index) => `required_group_${index}`,
+    );
+    const coverageAliases = compiled.coverageFields.map(
+      (_coverage, index) => `coverage_${index}`,
+    );
+    const requiredMatch =
+      requiredAliases.length === 0
+        ? "TRUE"
+        : requiredAliases
+            .map((alias) => `COALESCE(${alias}, FALSE)`)
+            .join(" AND ");
+    const stageObject =
+      compiled.requiredGroups.length === 0
+        ? `'{}'::jsonb`
+        : `jsonb_build_object(${compiled.requiredGroups
+            .flatMap((group, index) => [
+              `'${group.groupId.replaceAll("'", "''")}'`,
+              `COUNT(1) FILTER (WHERE ${requiredAliases
+                .slice(0, index + 1)
+                .map((alias) => `COALESCE(${alias}, FALSE)`)
+                .join(" AND ")})`,
+            ])
+            .join(", ")})`;
+    const coverageObject =
+      compiled.coverageFields.length === 0
+        ? `'{}'::jsonb`
+        : `jsonb_build_object(${compiled.coverageFields
+            .flatMap((coverage, index) => [
+              `'${coverage.field}'`,
+              `COUNT(1) FILTER (WHERE COALESCE(${coverageAliases[index]}, FALSE))`,
+            ])
+            .join(", ")})`;
+    const client = await this.pool.connect();
+    try {
+      const aggregateResult = await client.query<PreviewAggregateRow>(
+        `
+          WITH rule_groups AS MATERIALIZED (
+            SELECT
+              a.appid,
+              a.release_date,
+              (${compiled.excludedSql}) AS excluded_match
+              ${
+                compiled.requiredGroups.length > 0
+                  ? `,${compiled.requiredGroups
+                      .map(
+                        (group, index) =>
+                          `\n              (${group.matchSql}) AS ${requiredAliases[index]}`,
+                      )
+                      .join(",")}`
+                  : ""
+              }
+              ${
+                compiled.coverageFields.length > 0
+                  ? `,${compiled.coverageFields
+                      .map(
+                        (coverage, index) =>
+                          `\n              (${coverage.knownSql}) AS ${coverageAliases[index]}`,
+                      )
+                      .join(",")}`
+                  : ""
+              }
+            ${compiled.fromSql}
+          ),
+          evaluated AS MATERIALIZED (
+            SELECT
+              rule_groups.*,
+              ((${requiredMatch}) AND NOT COALESCE(excluded_match, FALSE))
+                AS is_match
+            FROM rule_groups
+          )
+          SELECT
+            COUNT(1) AS total_catalog,
+            COUNT(1) FILTER (WHERE is_match) AS total_matches,
+            ${stageObject} AS stage_counts,
+            ${coverageObject} AS coverage_counts,
+            ARRAY(
+              SELECT candidate.appid
+              FROM evaluated candidate
+              LEFT JOIN legacy.latest_daily_metrics candidate_metrics
+                ON candidate_metrics.appid = candidate.appid
+              WHERE candidate.is_match
+              ORDER BY
+                COALESCE(candidate.release_date, DATE '9999-12-31'),
+                COALESCE(candidate_metrics.total_reviews, 0) DESC,
+                candidate.appid
+              LIMIT ${boundedLimit}
+            ) AS candidate_appids
+          FROM evaluated
+        `,
+        compiled.values,
+      );
+      const aggregateRow = aggregateResult.rows[0]!;
+      const candidateAppids = integerArrayValue(aggregateRow.candidate_appids);
+      const inputResult =
+        candidateAppids.length === 0
+          ? { rows: [] as RuleInputRow[] }
+          : await client.query<RuleInputRow>(RULE_INPUT_BATCH_SELECT, [
+              candidateAppids,
+            ]);
+      const inputByAppid = new Map(
+        inputResult.rows.map((row) => [
+          row.appid,
+          buildOpportunityRuleInput(row),
+        ]),
+      );
+      return {
+        aggregate: {
+          coverage: recordValue(aggregateRow.coverage_counts),
+          stageCounts: recordValue(aggregateRow.stage_counts),
+          totalCatalog: Number(aggregateRow.total_catalog),
+          totalMatches: Number(aggregateRow.total_matches),
+        },
+        inputs: candidateAppids.flatMap((appid) => {
+          const input = inputByAppid.get(appid);
+          return input ? [input] : [];
+        }),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
   async getPreviewInputs(
     rules: OpportunityRuleSet,
     limit = 60,
+    evaluation?: OpportunityEvaluationContext,
   ): Promise<OpportunityEvaluationInput[]> {
-    const compiled = compileOpportunityPreview(rules);
+    const compiled = compileOpportunityPreview(rules, evaluation);
     const result = await this.pool.query<RuleInputRow>(
       `
         ${RULE_INPUT_SELECT}
-        WHERE a.type = 'game'
+        WHERE a.type IN ('game', 'Game')
           AND COALESCE(a.is_delisted, false) = false
           AND ${compiled.matchSql}
         ORDER BY
@@ -2376,6 +2603,8 @@ export class OpportunityRepository {
     const sql = `
         ${RULE_INPUT_SELECT}
         WHERE a.appid = ANY($1::integer[])
+          AND a.type IN ('game', 'Game')
+          AND COALESCE(a.is_delisted, false) = false
         ORDER BY a.appid
       `;
     const result = client
@@ -2430,7 +2659,7 @@ export class OpportunityRepository {
     const result = await this.pool.query<RuleInputRow>(
       `
         ${RULE_INPUT_SELECT}
-        WHERE a.type = 'game'
+        WHERE a.type IN ('game', 'Game')
           AND a.is_released = true
           AND COALESCE(a.is_delisted, false) = false
           AND ${compiled.matchSql}
@@ -2479,6 +2708,78 @@ export class OpportunityRepository {
       high: Math.ceil(average * 1.5),
       low: Math.max(0, Math.floor(average * 0.5)),
     };
+  }
+
+  async getRelativeDateTransitionAppids(
+    profiles: Array<{
+      rules: OpportunityRuleSet;
+      timezone: string;
+    }>,
+    asOf: string,
+    limit = 10_000,
+  ): Promise<number[]> {
+    const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const relativeProfiles = profiles.filter((profile) =>
+      [
+        ...profile.rules.required,
+        ...profile.rules.preferred,
+        ...profile.rules.excluded,
+      ].some((group) =>
+        group.clauses.some(
+          (clause) =>
+            isOpportunityDateOperand(clause.value) &&
+            clause.value.kind === "relative_window",
+        ),
+      ),
+    );
+    const changed = new Set<number>();
+
+    for (const profile of relativeProfiles) {
+      if (changed.size >= boundedLimit) {
+        break;
+      }
+      const currentContext: OpportunityEvaluationContext = {
+        asOf,
+        timezone: profile.timezone,
+      };
+      const previousContext = previousLocalDayEvaluationContext(currentContext);
+      const current = compileOpportunityPreview(profile.rules, currentContext);
+      const previous = compileOpportunityPreview(
+        profile.rules,
+        previousContext,
+      );
+      const previousSql = previous.matchSql.replace(
+        /\$(\d+)/g,
+        (_, index: string) => `$${Number(index) + current.values.length}`,
+      );
+      const remaining = boundedLimit - changed.size;
+      const result = await this.pool.query<QueryResultRow & { appid: number }>(
+        `
+          WITH current_matches AS MATERIALIZED (
+            SELECT a.appid
+            ${current.fromSql}
+              AND ${current.matchSql}
+          ),
+          previous_matches AS MATERIALIZED (
+            SELECT a.appid
+            ${previous.fromSql}
+              AND ${previousSql}
+          )
+          SELECT COALESCE(current.appid, previous.appid) AS appid
+          FROM current_matches current
+          FULL OUTER JOIN previous_matches previous USING (appid)
+          WHERE current.appid IS NULL OR previous.appid IS NULL
+          ORDER BY appid
+          LIMIT ${remaining}
+        `,
+        [...current.values, ...previous.values],
+      );
+      for (const row of result.rows) {
+        changed.add(row.appid);
+      }
+    }
+
+    return Array.from(changed).sort((left, right) => left - right);
   }
 
   async getGameRecord(params: {
@@ -3075,8 +3376,9 @@ export class OpportunityRepository {
 
 export function compilePreviewForRepository(
   rules: OpportunityRuleSet,
+  evaluation?: OpportunityEvaluationContext,
 ): OpportunityCompiledPreview {
-  return compileOpportunityPreview(rules);
+  return compileOpportunityPreview(rules, evaluation);
 }
 
 export function previewRepresentativeFromInput(
