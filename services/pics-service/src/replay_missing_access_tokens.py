@@ -39,6 +39,12 @@ def _plan_sha256(plan: dict[str, Any]) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _json_safe(value: Any) -> Any:
+    """Canonicalize database-native values before hashing and R2 archival."""
+
+    return json.loads(json.dumps(value, default=_json_default))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--appid", action="append", default=[])
@@ -55,13 +61,15 @@ def main() -> None:
         appids=appids,
         limit=args.limit,
     )
-    plan = {
-        "schemaVersion": "pics-token-replay-plan/v1",
-        "requestedBy": args.requested_by,
-        "reason": args.reason,
-        "exactAppids": appids,
-        "affected": [asdict(candidate) for candidate in candidates],
-    }
+    plan = _json_safe(
+        {
+            "schemaVersion": "pics-token-replay-plan/v1",
+            "requestedBy": args.requested_by,
+            "reason": args.reason,
+            "exactAppids": appids,
+            "affected": [asdict(candidate) for candidate in candidates],
+        }
+    )
     plan_sha256 = _plan_sha256(plan)
     if not args.apply:
         print(

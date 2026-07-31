@@ -165,4 +165,10 @@ def test_token_replay_archives_and_requeues_only_the_reviewed_plan(
     assert output["requeued"] == 1
     assert output["planSha256"] == plan_sha256
     assert archive.writes[0]["payload"]["planSha256"] == plan_sha256
+    assert archive.writes[0]["payload"]["affected"][0]["blocked_at"] == (
+        "2026-07-31T00:00:00+00:00"
+    )
+    assert archive.writes[0]["payload"]["affected"][0]["storefront_source_at"] == (
+        "2026-07-31T00:00:00+00:00"
+    )
     assert store.requeues[0]["appids"] == [5005180]
