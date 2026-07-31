@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { Pool } from "pg";
 
 import { OpportunityRepository } from "./repository.js";
+import { compileOpportunityPreview } from "./sql-compiler.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityObservedChange,
@@ -409,6 +410,87 @@ describe("opportunity workspace provisioning", () => {
   });
 });
 
+describe("opportunity profile rule-version persistence", () => {
+  it("records the v2 schema explicitly when creating an immutable profile version", async () => {
+    const calls: QueryCall[] = [];
+    const client = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        calls.push({ text, values });
+        if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") {
+          return { rows: [] };
+        }
+        if (
+          text.includes("FROM opportunity.workspace_memberships membership")
+        ) {
+          return {
+            rows: [{ id: "workspace", name: "Workspace", role: "owner" }],
+          };
+        }
+        if (text.includes("FROM opportunity.profiles profile")) {
+          return {
+            rows: [
+              {
+                calculation_config: {},
+                source_preset_version_id: null,
+                status: "draft",
+                version: 1,
+              },
+            ],
+          };
+        }
+        if (text.includes("INSERT INTO opportunity.profile_versions")) {
+          return {
+            rows: [
+              {
+                calculation_config: {},
+                created_at: "2026-07-30T18:00:00.000Z",
+                event_subscriptions: ["release"],
+                id: "version-2",
+                profile_id: "profile",
+                rules: releaseRules(false),
+                version: 2,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+      release: (): void => undefined,
+    };
+    const pool = {
+      connect: async () => client,
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    await repository.saveProfileVersion({
+      eventSubscriptions: ["release"],
+      identity: {
+        accessToken: "token",
+        email: "owner@example.com",
+        userId: "user",
+      },
+      immediateFullMatchEnabled: false,
+      name: "Upcoming",
+      profileId: "profile",
+      rules: releaseRules(false),
+      timezone: "UTC",
+    });
+
+    const insertion = calls.find((call) =>
+      call.text.includes("INSERT INTO opportunity.profile_versions"),
+    );
+    assert.ok(insertion);
+    assert.match(insertion.text, /rule_schema_version/);
+    assert.equal(
+      insertion.values[insertion.values.length - 1],
+      OPPORTUNITY_RULE_SCHEMA_VERSION,
+    );
+  });
+});
+
 describe("opportunity rule-input provenance", () => {
   it("maps canonical readiness timestamps and preserves missing sources", async () => {
     const catalogSourceAt = new Date("2026-07-27T11:36:16.366Z");
@@ -426,13 +508,17 @@ describe("opportunity rule-input provenance", () => {
           rows: [
             {
               appid: 42,
-              app_type: "game",
+              app_type: "Game",
+              catalog_first_observation_kind: "new",
+              catalog_first_observed_at: new Date("2026-07-27T10:00:00.000Z"),
               catalog_source_at: catalogSourceAt,
               categories: [],
               content_descriptors: [],
               developers: [],
               genres: [],
               has_demo: true,
+              has_purchase_packages: false,
+              is_released: false,
               languages: [],
               market_status: "ready",
               name: "Timestamp Test",
@@ -440,6 +526,7 @@ describe("opportunity rule-input provenance", () => {
               pics_status: "ready",
               platforms: "windows",
               publishers: [],
+              release_date: null,
               release_state: "prerelease",
               source_max_metric_date: metricSourceAt,
               storefront_source_at: storefrontSourceAt,
@@ -450,6 +537,8 @@ describe("opportunity rule-input provenance", () => {
             {
               appid: 43,
               app_type: "game",
+              catalog_first_observation_kind: "baseline",
+              catalog_first_observed_at: new Date("2026-07-24T00:00:00.000Z"),
               catalog_source_at: catalogSourceAt,
               categories: [],
               content_descriptors: [],
@@ -489,6 +578,20 @@ describe("opportunity rule-input provenance", () => {
     );
     assert.equal(inputs[1]?.fields.release_state?.state, "unknown");
     assert.equal(inputs[1]?.fields.release_state?.sourceAt, null);
+    assert.equal(inputs[0]?.fields.release_date?.state, "known");
+    assert.equal(inputs[0]?.fields.release_date?.value, null);
+    assert.equal(inputs[0]?.fields.app_type?.value, "game");
+    assert.equal(inputs[0]?.fields.has_demo?.source, "steam_storefront");
+    assert.equal(inputs[0]?.fields.demo_only?.value, true);
+    assert.equal(
+      inputs[0]?.fields.publisheriq_added_at?.value,
+      "2026-07-27T10:00:00.000Z",
+    );
+    assert.equal(inputs[1]?.fields.publisheriq_added_at?.state, "unknown");
+    assert.match(
+      inputs[1]?.fields.publisheriq_added_at?.reason ?? "",
+      /catalog baseline/,
+    );
 
     assert.deepEqual(calls[0]?.values, [[42, 43]]);
     assert.match(
@@ -504,6 +607,109 @@ describe("opportunity rule-input provenance", () => {
       /readiness_pics\.source_at AS pics_source_at/,
     );
     assert.match(calls[0]?.text ?? "", /readiness_catalog\.source = 'catalog'/);
+    assert.match(calls[0]?.text ?? "", /a\.type IN \('game', 'Game'\)/);
+  });
+});
+
+describe("opportunity preview query pipeline", () => {
+  it("evaluates a lean catalog once and hydrates bounded candidates on one connection", async () => {
+    const calls: QueryCall[] = [];
+    let releases = 0;
+    const client = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        calls.push({ text, values });
+        if (text.includes("WITH rule_groups AS MATERIALIZED")) {
+          return {
+            rows: [
+              {
+                candidate_appids: [42],
+                coverage_counts: { demo_only: 100 },
+                stage_counts: { demo: 1 },
+                total_catalog: 100,
+                total_matches: 1,
+              },
+            ],
+          };
+        }
+        if (text.includes("WITH input_appids AS MATERIALIZED")) {
+          return {
+            rows: [
+              {
+                appid: 42,
+                app_type: "Game",
+                catalog_first_observation_kind: "baseline",
+                catalog_first_observed_at: null,
+                catalog_source_at: null,
+                categories: [],
+                content_descriptors: [],
+                developers: [],
+                genres: [],
+                has_demo: true,
+                has_purchase_packages: false,
+                is_released: false,
+                languages: [],
+                name: "Demo Candidate",
+                pics_status: "ready",
+                platforms: [],
+                publishers: [],
+                release_date: null,
+                storefront_status: "ready",
+                tags: [],
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected preview query: ${text}`);
+      },
+      release() {
+        releases += 1;
+      },
+    };
+    const pool = {
+      async connect() {
+        return client;
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    const compiled = compileOpportunityPreview({
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "demo_only",
+              id: "demo-only",
+              operator: "equals",
+              value: true,
+            },
+          ],
+          id: "demo",
+          label: "Only demo available",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    });
+
+    const preview = await repository.getPreviewCatalog(compiled, 80);
+
+    assert.equal(releases, 1);
+    assert.equal(calls.length, 2);
+    assert.match(calls[0]!.text, /WITH rule_groups AS MATERIALIZED/);
+    assert.match(calls[0]!.text, /required_group_0/);
+    assert.match(calls[0]!.text, /candidate_metrics/);
+    assert.match(calls[0]!.text, /readiness_storefront/);
+    assert.doesNotMatch(calls[0]!.text, /app_signal_windows_v1/);
+    assert.match(calls[1]!.text, /WITH input_appids AS MATERIALIZED/);
+    assert.deepEqual(calls[0]!.values, [true]);
+    assert.deepEqual(calls[1]!.values, [[42]]);
+    assert.equal(preview.aggregate.totalMatches, 1);
+    assert.equal(preview.inputs[0]?.appid, 42);
+    assert.equal(preview.inputs[0]?.fields.demo_only?.value, true);
   });
 });
 
@@ -619,4 +825,78 @@ describe("opportunity personal game state", () => {
       ]);
     });
   }
+});
+
+describe("opportunity relative-date transitions", () => {
+  it("compares current and prior local-day match sets without metric-history scans", async () => {
+    const calls: QueryCall[] = [];
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: Array<{ appid: number }> }> => {
+        calls.push({ text, values });
+        return { rows: [{ appid: 10 }, { appid: 20 }] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    const rules: OpportunityRuleSet = {
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "release_date",
+              id: "launch",
+              operator: "in_window",
+              value: { kind: "relative_window", window: "next_7_days" },
+            },
+          ],
+          id: "launch",
+          label: "Upcoming",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    };
+
+    const appids = await repository.getRelativeDateTransitionAppids(
+      [{ rules, timezone: "America/Los_Angeles" }],
+      "2026-07-30T18:00:00.000Z",
+    );
+
+    assert.deepEqual(appids, [10, 20]);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]!.text, /current_matches AS MATERIALIZED/);
+    assert.match(calls[0]!.text, /previous_matches AS MATERIALIZED/);
+    assert.match(calls[0]!.text, /FULL OUTER JOIN/);
+    assert.match(calls[0]!.text, /a\.type IN \('game', 'Game'\)/);
+    assert.doesNotMatch(calls[0]!.text, /legacy\.daily_metrics/);
+    assert.equal(calls[0]!.values.length, 4);
+  });
+
+  it("does no catalog work for absolute-only profiles", async () => {
+    let queries = 0;
+    const pool = {
+      query: async (): Promise<{ rows: unknown[] }> => {
+        queries += 1;
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    const appids = await repository.getRelativeDateTransitionAppids(
+      [
+        {
+          rules: releaseRules(false),
+          timezone: "UTC",
+        },
+      ],
+      "2026-07-30T18:00:00.000Z",
+    );
+
+    assert.deepEqual(appids, []);
+    assert.equal(queries, 0);
+  });
 });

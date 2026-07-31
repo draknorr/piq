@@ -1,4 +1,6 @@
 import type {
+  OpportunityDateOperand,
+  OpportunityEvaluationContext,
   OpportunityRuleClause,
   OpportunityRuleField,
   OpportunityRuleGroup,
@@ -6,6 +8,12 @@ import type {
   OpportunityRuleValue,
 } from "./types.js";
 import { assertOpportunityRuleSet } from "./rules.js";
+import {
+  localDateStartUtc,
+  opportunityDateRangeForOperand,
+  isOpportunityDateField,
+  opportunityDateOperandFromValue,
+} from "./date-rules.js";
 
 export interface OpportunitySqlFragment {
   sql: string;
@@ -18,7 +26,13 @@ export interface OpportunityCompiledPreview {
     knownSql: string;
   }>;
   excludedSql: string;
+  fromSql: string;
   matchSql: string;
+  requiredGroups: Array<{
+    groupId: string;
+    label: string;
+    matchSql: string;
+  }>;
   requiredStages: Array<{
     groupId: string;
     label: string;
@@ -28,6 +42,7 @@ export interface OpportunityCompiledPreview {
 }
 
 interface SqlBuildContext {
+  evaluation: OpportunityEvaluationContext;
   values: unknown[];
 }
 
@@ -42,21 +57,50 @@ interface FieldSql {
   textCollectionSql?: string;
 }
 
-const STOREFRONT_READY = `EXISTS (
-  SELECT 1
-  FROM ops.app_data_readiness readiness_storefront
-  WHERE readiness_storefront.appid = a.appid
-    AND readiness_storefront.source = 'storefront'
-    AND readiness_storefront.status = 'ready'
-)`;
+const STOREFRONT_READY = "readiness_storefront.status = 'ready'";
+const PICS_READY = "readiness_pics.status = 'ready'";
 
-const PICS_READY = `EXISTS (
-  SELECT 1
-  FROM ops.app_data_readiness readiness_pics
-  WHERE readiness_pics.appid = a.appid
-    AND readiness_pics.source = 'pics'
-    AND readiness_pics.status = 'ready'
-)`;
+const METRIC_FIELDS = new Set<OpportunityRuleField>([
+  "price_cents",
+  "discount_percent",
+  "total_reviews",
+  "positive_percentage",
+  "ccu_peak",
+]);
+const SIGNAL_WINDOW_FIELDS = new Set<OpportunityRuleField>([
+  "reviews_added_7d",
+  "reviews_added_30d",
+  "ccu_change_7d",
+  "ccu_change_30d",
+]);
+const STOREFRONT_FIELDS = new Set<OpportunityRuleField>([
+  "release_state",
+  "is_released",
+  "release_date",
+  "days_until_release",
+  "is_free",
+  "price_cents",
+  "discount_percent",
+  "has_purchase_packages",
+  "developer",
+  "publisher",
+  "has_demo",
+  "demo_only",
+  "no_publisher_listed",
+  "self_published",
+  "publisher_game_count",
+  "developer_game_count",
+]);
+const PICS_FIELDS = new Set<OpportunityRuleField>([
+  "controller_support",
+  "steam_deck",
+  "tags",
+  "genres",
+  "categories",
+  "platforms",
+  "languages",
+  "content_descriptors",
+]);
 
 function relativeCcuGrowthSql(window: "7d" | "30d"): string {
   const first = `sw.ccu_peak_first_${window}`;
@@ -78,7 +122,10 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
         scalarSql: "a.name",
       };
     case "app_type":
-      return { knownSql: "a.type IS NOT NULL", scalarSql: "a.type" };
+      return {
+        knownSql: "a.type IS NOT NULL",
+        scalarSql: "LOWER(a.type)",
+      };
     case "release_state":
       return {
         knownSql: `${STOREFRONT_READY} AND a.release_state IS NOT NULL`,
@@ -88,8 +135,13 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       return { knownSql: STOREFRONT_READY, scalarSql: "a.is_released" };
     case "release_date":
       return {
-        knownSql: `${STOREFRONT_READY} AND a.release_date IS NOT NULL`,
+        knownSql: STOREFRONT_READY,
         scalarSql: "a.release_date",
+      };
+    case "publisheriq_added_at":
+      return {
+        knownSql: `catalog_state.first_observation_kind = 'new'`,
+        scalarSql: "catalog_state.first_observed_at",
       };
     case "days_until_release":
       return {
@@ -259,10 +311,24 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "has_demo":
       return {
-        knownSql: PICS_READY,
+        knownSql: STOREFRONT_READY,
         scalarSql: `EXISTS (
           SELECT 1 FROM legacy.app_demos demo
           WHERE demo.parent_appid = a.appid
+        )`,
+      };
+    case "demo_only":
+      return {
+        knownSql: `${STOREFRONT_READY}
+          AND a.is_released IS NOT NULL
+          AND a.has_purchase_packages IS NOT NULL`,
+        scalarSql: `(
+          a.is_released = false
+          AND a.has_purchase_packages = false
+          AND EXISTS (
+            SELECT 1 FROM legacy.app_demos demo_only_relation
+            WHERE demo_only_relation.parent_appid = a.appid
+          )
         )`,
       };
     case "no_publisher_listed":
@@ -300,6 +366,42 @@ function addValue(context: SqlBuildContext, value: unknown): string {
 
 function normalizedValues(value: OpportunityRuleValue | undefined): unknown[] {
   return Array.isArray(value) ? value : [value];
+}
+
+function dateClauseSql(
+  expression: string,
+  clause: OpportunityRuleClause,
+  operand: OpportunityDateOperand,
+  context: SqlBuildContext,
+): string {
+  const range = opportunityDateRangeForOperand(operand, context.evaluation);
+  const timestampField = clause.field === "publisheriq_added_at";
+  const startValue = timestampField
+    ? localDateStartUtc(range.startDate, context.evaluation.timezone)
+    : range.startDate;
+  const endValue = timestampField
+    ? localDateStartUtc(range.endDateExclusive, context.evaluation.timezone)
+    : range.endDateExclusive;
+  const start = addValue(context, startValue);
+  const end = addValue(context, endValue);
+
+  switch (clause.operator) {
+    case "in_window":
+    case "equals":
+      return `(${expression} >= ${start} AND ${expression} < ${end})`;
+    case "not_equals":
+      return `(${expression} < ${start} OR ${expression} >= ${end})`;
+    case "greater_than":
+      return `${expression} >= ${end}`;
+    case "greater_than_or_equal":
+      return `${expression} >= ${start}`;
+    case "less_than":
+      return `${expression} < ${start}`;
+    case "less_than_or_equal":
+      return `${expression} < ${end}`;
+    default:
+      return "FALSE";
+  }
 }
 
 function equalitySql(
@@ -364,6 +466,8 @@ function scalarClauseSql(
       const upper = addValue(context, clause.value[1]);
       return `${expression} BETWEEN ${lower} AND ${upper}`;
     }
+    case "in_window":
+      return "FALSE";
     case "contains":
     case "not_contains": {
       const comparisons = values.map((value) => {
@@ -434,14 +538,19 @@ function clauseTrueSql(
   context: SqlBuildContext,
 ): string {
   const field = fieldSql(clause.field);
+  const dateOperand = isOpportunityDateField(clause.field)
+    ? opportunityDateOperandFromValue(clause.value)
+    : null;
   const comparison = field.collection
     ? collectionClauseSql(field, clause, context)
-    : scalarClauseSql(
-        field.scalarSql ?? field.textCollectionSql ?? "NULL",
-        clause,
-        context,
-      );
-  return `((${field.knownSql}) AND (${comparison}))`;
+    : dateOperand
+      ? dateClauseSql(field.scalarSql ?? "NULL", clause, dateOperand, context)
+      : scalarClauseSql(
+          field.scalarSql ?? field.textCollectionSql ?? "NULL",
+          clause,
+          context,
+        );
+  return `((${field.knownSql}) AND COALESCE((${comparison}), FALSE))`;
 }
 
 function groupTrueSql(
@@ -457,9 +566,13 @@ function groupTrueSql(
 
 export function compileOpportunityPreview(
   rules: OpportunityRuleSet,
+  evaluation: OpportunityEvaluationContext = {
+    asOf: new Date().toISOString(),
+    timezone: "UTC",
+  },
 ): OpportunityCompiledPreview {
   assertOpportunityRuleSet(rules);
-  const context: SqlBuildContext = { values: [] };
+  const context: SqlBuildContext = { evaluation, values: [] };
   const requiredGroupSql = rules.required.map((group) => ({
     group,
     sql: groupTrueSql(group, context),
@@ -498,16 +611,56 @@ export function compileOpportunityPreview(
       knownSql: fieldSql(field).knownSql,
     })),
     excludedSql,
+    fromSql: opportunityPreviewFromSql(fields),
     matchSql: `((${requiredSql}) AND NOT (${excludedSql}))`,
+    requiredGroups: requiredGroupSql.map((entry) => ({
+      groupId: entry.group.id,
+      label: entry.group.label,
+      matchSql: entry.sql,
+    })),
     requiredStages,
     values: context.values,
   };
 }
 
-export const OPPORTUNITY_PREVIEW_FROM_SQL = `
+export function opportunityPreviewFromSql(
+  requestedFields: readonly OpportunityRuleField[] | boolean,
+): string {
+  const fields = new Set<OpportunityRuleField>(
+    typeof requestedFields === "boolean"
+      ? requestedFields
+        ? ["publisheriq_added_at"]
+        : []
+      : requestedFields,
+  );
+  const joins = [
+    [...fields].some((field) => METRIC_FIELDS.has(field))
+      ? "LEFT JOIN legacy.latest_daily_metrics m ON m.appid = a.appid"
+      : null,
+    [...fields].some((field) => SIGNAL_WINDOW_FIELDS.has(field))
+      ? "LEFT JOIN metrics.app_signal_windows_v1 sw ON sw.appid = a.appid"
+      : null,
+    fields.has("publisheriq_added_at")
+      ? `LEFT JOIN ops.app_catalog_state catalog_state
+    ON catalog_state.appid = a.appid`
+      : null,
+    [...fields].some((field) => STOREFRONT_FIELDS.has(field))
+      ? `LEFT JOIN ops.app_data_readiness readiness_storefront
+    ON readiness_storefront.appid = a.appid
+    AND readiness_storefront.source = 'storefront'`
+      : null,
+    [...fields].some((field) => PICS_FIELDS.has(field))
+      ? `LEFT JOIN ops.app_data_readiness readiness_pics
+    ON readiness_pics.appid = a.appid
+    AND readiness_pics.source = 'pics'`
+      : null,
+  ].filter((join): join is string => join !== null);
+  return `
   FROM legacy.apps a
-  LEFT JOIN legacy.latest_daily_metrics m ON m.appid = a.appid
-  LEFT JOIN metrics.app_signal_windows_v1 sw ON sw.appid = a.appid
-  WHERE a.type = 'game'
+  ${joins.join("\n  ")}
+  WHERE a.type IN ('game', 'Game')
     AND COALESCE(a.is_delisted, false) = false
 `;
+}
+
+export const OPPORTUNITY_PREVIEW_FROM_SQL = opportunityPreviewFromSql(false);

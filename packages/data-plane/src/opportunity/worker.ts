@@ -247,16 +247,34 @@ function evidenceQuality(
 
 function buildEvidenceItems(
   input: OpportunityEvaluationInput,
+  matches: OpportunityEvaluatedMatch[],
 ): Array<Record<string, unknown>> {
-  const labels: Array<[OpportunityRuleField, string]> = [
-    ["release_state", "Release state"],
-    ["tags", "Steam tags"],
-    ["has_demo", "Playable demo"],
-    ["total_reviews", "Total Steam reviews"],
-    ["reviews_added_30d", "Steam reviews added in the last 30 days"],
-    ["ccu_peak", "Peak concurrent players"],
-  ];
-  return labels.flatMap(([field, label]) => {
+  const labels: Partial<Record<OpportunityRuleField, string>> = {
+    app_type: "Steam app type",
+    categories: "Steam features",
+    ccu_peak: "Peak concurrent players",
+    demo_only: "Only demo available",
+    has_demo: "Playable demo",
+    is_released: "Released",
+    publisheriq_added_at: "Added to PublisherIQ",
+    release_date: "Steam launch date",
+    release_state: "Release state",
+    reviews_added_30d: "Steam reviews added in the last 30 days",
+    tags: "Steam tags",
+    total_reviews: "Total Steam reviews",
+  };
+  const fields = Array.from(
+    new Set<OpportunityRuleField>([
+      ...requiredFields(matches),
+      "release_state",
+      "tags",
+      "has_demo",
+      "total_reviews",
+      "reviews_added_30d",
+      "ccu_peak",
+    ]),
+  );
+  return fields.flatMap((field) => {
     const evidence = input.fields[field];
     if (!evidence || evidence.state !== "known") {
       return [];
@@ -265,7 +283,7 @@ function buildEvidenceItems(
       {
         confidence: evidence.confidence,
         evidenceClass: evidence.evidenceClass,
-        label,
+        label: labels[field] ?? field.replaceAll("_", " "),
         source: evidence.source,
         sourceAt: evidence.sourceAt,
         value: evidence.value,
@@ -567,16 +585,52 @@ export class OpportunityWorker {
         item.userId,
         { immediateOnly: item.kind === "immediate_evaluation" },
       );
-      const events = await this.repository.getRunMaterialEvents(
-        run,
-        item.appid,
-        item.materialEventId,
-      );
+      const [events, dateTransitionAppids] = await Promise.all([
+        this.repository.getRunMaterialEvents(
+          run,
+          item.appid,
+          item.materialEventId,
+        ),
+        item.kind === "daily_evaluation"
+          ? this.repository.productRepository.getRelativeDateTransitionAppids(
+              profiles,
+              run.windowEnd,
+            )
+          : Promise.resolve([]),
+      ]);
       const selectedByAppid = new Map<number, OpportunityWorkerMaterialEvent>();
       for (const event of events) {
         if (!selectedByAppid.has(event.appid)) {
           selectedByAppid.set(event.appid, event);
         }
+      }
+      for (const appid of dateTransitionAppids) {
+        if (selectedByAppid.has(appid)) {
+          continue;
+        }
+        selectedByAppid.set(appid, {
+          affectedRuleFields: ["release_date", "publisheriq_added_at"],
+          after: { evaluationDate: run.windowEnd },
+          appid,
+          before: { evaluationDate: run.windowStart },
+          confidence: "high",
+          createsDailyResult: true,
+          effectiveAt: run.windowEnd,
+          eligibleForImmediate: false,
+          eventFingerprint: stableFingerprint([
+            "date-window",
+            String(appid),
+            run.windowEnd,
+          ]),
+          eventType: "date_window_changed",
+          id: null,
+          materiality: 1,
+          observedAt: run.windowEnd,
+          reevaluateEligibility: true,
+          signalFamily: "release",
+          summary:
+            "The game entered or left a saved calendar-date window in this daily evaluation.",
+        });
       }
       const selectedEvents = Array.from(selectedByAppid.values());
       const appids = selectedEvents.map((event) => event.appid);
@@ -722,6 +776,10 @@ export class OpportunityWorker {
       const evaluation = evaluateOpportunityProfile(
         profile.rules,
         context.input,
+        {
+          asOf: context.run.windowEnd,
+          timezone: profile.timezone,
+        },
       );
       const priorOutcome = context.candidateOutcomes.get(
         `${context.appid}:${profile.versionId}`,
@@ -829,7 +887,12 @@ export class OpportunityWorker {
           .map(([field]) => field),
       ),
     );
-    const evidenceItems = buildEvidenceItems(context.input);
+    const evidenceItems = buildEvidenceItems(context.input, matches);
+    const requiredEvidence = matches.flatMap((match) =>
+      match.evaluation.requiredOutcomes
+        .filter((outcome) => outcome.state === "true")
+        .map((outcome) => outcome.label),
+    );
     const preferenceEvidence = matches.flatMap((match) =>
       match.evaluation.preferredOutcomes
         .filter((outcome) => outcome.state === "true")
@@ -839,9 +902,10 @@ export class OpportunityWorker {
     const strongestEvidence = Array.from(
       new Set(
         [
-          eventDescription(context.event),
+          ...requiredEvidence,
           ...preferenceEvidence,
           tags ? `Positioned around ${tags}` : null,
+          eventDescription(context.event),
         ].filter((item): item is string => Boolean(item)),
       ),
     ).slice(0, 4);

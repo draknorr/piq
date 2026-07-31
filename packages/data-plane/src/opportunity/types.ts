@@ -1,10 +1,14 @@
-export const OPPORTUNITY_RULE_SCHEMA_VERSION = "opportunity-rules/v1" as const;
+export const OPPORTUNITY_RULE_SCHEMA_V1 = "opportunity-rules/v1" as const;
+export const OPPORTUNITY_RULE_SCHEMA_VERSION = "opportunity-rules/v2" as const;
+export type OpportunityRuleSchemaVersion =
+  | typeof OPPORTUNITY_RULE_SCHEMA_V1
+  | typeof OPPORTUNITY_RULE_SCHEMA_VERSION;
 export const OPPORTUNITY_RANKING_VERSION = "opportunity-ranking/v1" as const;
 export const OPPORTUNITY_COHORT_VERSION = "opportunity-cohort/v1" as const;
 export const OPPORTUNITY_MARKET_VERSION = "opportunity-market/v1" as const;
 export const OPPORTUNITY_HEALTH_VERSION = "opportunity-health/v1" as const;
 export const OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION =
-  "opportunity-rule-input-projection/v1" as const;
+  "opportunity-rule-input-projection/v2" as const;
 export const OPPORTUNITY_COHORT_CACHE_VERSION =
   "opportunity-cohort-cache/v1" as const;
 export const OPPORTUNITY_COHORT_RESOLVER_VERSION =
@@ -34,6 +38,7 @@ export const OPPORTUNITY_RULE_FIELDS = [
   "release_state",
   "is_released",
   "release_date",
+  "publisheriq_added_at",
   "days_until_release",
   "tags",
   "genres",
@@ -47,6 +52,7 @@ export const OPPORTUNITY_RULE_FIELDS = [
   "steam_deck",
   "languages",
   "has_demo",
+  "demo_only",
   "no_publisher_listed",
   "self_published",
   "publisher_game_count",
@@ -84,14 +90,35 @@ export type OpportunityRuleOperator =
   | "less_than"
   | "less_than_or_equal"
   | "between"
+  | "in_window"
   | "exists"
   | "not_exists";
+
+export type OpportunityRelativeDateWindow =
+  | "today"
+  | "this_week"
+  | "last_7_days"
+  | "last_30_days"
+  | "this_month"
+  | "next_7_days"
+  | "next_30_days";
+
+export type OpportunityDateOperand =
+  | {
+      date: string;
+      kind: "absolute_date";
+    }
+  | {
+      kind: "relative_window";
+      window: OpportunityRelativeDateWindow;
+    };
 
 export type OpportunityRuleValue =
   | boolean
   | number
   | string
   | null
+  | OpportunityDateOperand
   | Array<boolean | number | string>;
 
 export interface OpportunityRuleClause {
@@ -117,7 +144,12 @@ export interface OpportunityRuleSet {
   excluded: OpportunityRuleGroup[];
   preferred: OpportunityPreferredRuleGroup[];
   required: OpportunityRuleGroup[];
-  schemaVersion: typeof OPPORTUNITY_RULE_SCHEMA_VERSION;
+  schemaVersion: OpportunityRuleSchemaVersion;
+}
+
+export interface OpportunityEvaluationContext {
+  asOf: string;
+  timezone: string;
 }
 
 export interface OpportunityFieldValue {
@@ -194,6 +226,7 @@ export type OpportunityMaterialEventType =
   | "announcement"
   | "review_breakthrough"
   | "ccu_breakthrough"
+  | "date_window_changed"
   | "material_change";
 
 export type OpportunitySignalFamily =
@@ -265,6 +298,7 @@ export interface OpportunityPresetSummary {
 export interface OpportunityPreviewRequest {
   profileId?: string;
   rules: OpportunityRuleSet;
+  timezone?: string;
 }
 
 export interface OpportunityPreviewRepresentative {

@@ -187,6 +187,7 @@ function baseMateriality(type: OpportunityMaterialEventType): number {
     announcement: 0.65,
     business_model_changed: 0.55,
     ccu_breakthrough: 0.85,
+    date_window_changed: 1,
     demo_added: 0.95,
     developer_changed: 0.9,
     first_observed: 1,

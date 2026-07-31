@@ -58,6 +58,7 @@ const FIELD_LABELS: Record<OpportunityRuleField, string> = {
   content_descriptors: "Content descriptors",
   controller_support: "Controller support",
   days_until_release: "Time until release",
+  demo_only: "Only demo available",
   developer: "Developer",
   developer_game_count: "Developer's Steam releases",
   discount_percent: "Current discount",
@@ -74,6 +75,7 @@ const FIELD_LABELS: Record<OpportunityRuleField, string> = {
   price_cents: "Price",
   publisher: "Publisher",
   publisher_game_count: "Publisher's Steam releases",
+  publisheriq_added_at: "Added to PublisherIQ",
   release_date: "Release date",
   release_state: "Release status",
   reviews_added_30d: "Steam reviews added in the last 30 days",
@@ -314,6 +316,21 @@ export function formatOpportunityMetricValue(
 }
 
 function comparisonText(value: unknown): string {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value
+  ) {
+    const operand = value as {
+      date?: string;
+      kind: string;
+      window?: string;
+    };
+    return operand.kind === "absolute_date"
+      ? (operand.date ?? "the selected date")
+      : (operand.window?.replaceAll("_", " ") ?? "the selected window");
+  }
   const formatted = formatCompactValue(value);
   return formatted ?? "the selected value";
 }
@@ -340,6 +357,19 @@ export function describeOpportunityRuleClause(
     return state === "true"
       ? "Playable demo available"
       : "No playable demo identified";
+  }
+  if (field === "demo_only" && operator === "equals" && expected === true) {
+    return state === "true"
+      ? "Only a playable demo is currently available"
+      : "The canonical game is released, purchasable, or has no linked demo";
+  }
+  if (
+    (field === "release_date" || field === "publisheriq_added_at") &&
+    operator === "in_window"
+  ) {
+    return state === "true"
+      ? `${label} is in ${comparisonText(expected)}`
+      : `${label} is outside ${comparisonText(expected)}`;
   }
   if (
     field === "publisher_game_count" &&

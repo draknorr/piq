@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Pool } from "pg";
 
-import { presentOpportunityChanges } from "./repository.js";
-import { normalizeOpportunityLocalDeliveryTime } from "./service.js";
+import {
+  OpportunityRepository,
+  presentOpportunityChanges,
+} from "./repository.js";
+import {
+  normalizeOpportunityLocalDeliveryTime,
+  OpportunityService,
+} from "./service.js";
+import type { OpportunityRuleSet } from "./types.js";
 
 describe("opportunity profile delivery schedule", () => {
   it("defaults new profiles to 09:00 local time", () => {
@@ -60,5 +67,158 @@ describe("opportunity API presentation", () => {
     assert.equal(presented?.summary, "Tags added: Roguelike and Deckbuilding.");
     assert.deepEqual(queries[0]?.values, [[4195, 4305]]);
     assert.match(queries[0]?.text ?? "", /legacy\.steam_tags/);
+  });
+});
+
+describe("opportunity preview date context", () => {
+  const rules: OpportunityRuleSet = {
+    excluded: [],
+    preferred: [],
+    required: [
+      {
+        clauses: [
+          {
+            field: "publisheriq_added_at",
+            id: "added",
+            operator: "equals",
+            value: { date: "2026-03-08", kind: "absolute_date" },
+          },
+        ],
+        id: "added",
+        label: "Added date",
+        operator: "all",
+      },
+    ],
+    schemaVersion: "opportunity-rules/v2",
+  };
+
+  it("uses one profile timezone for SQL and representative evaluation", async () => {
+    let compiledValues: unknown[] = [];
+    let workspaceWrites = 0;
+    const repository = {
+      async ensureWorkspace() {
+        workspaceWrites += 1;
+        return { id: "workspace", name: "Workspace", role: "owner" as const };
+      },
+      async getPreviewCatalog(compiled: { values: unknown[] }) {
+        compiledValues = compiled.values;
+        return {
+          aggregate: {
+            coverage: { publisheriq_added_at: 1 },
+            stageCounts: { added: 1 },
+            totalCatalog: 1,
+            totalMatches: 1,
+          },
+          inputs: [
+            {
+              appid: 10,
+              fields: {
+                publisheriq_added_at: {
+                  confidence: "high" as const,
+                  evidenceClass: "observed_fact" as const,
+                  source: "ops.app_catalog_state",
+                  sourceAt: "2026-03-08T20:00:00.000Z",
+                  state: "known" as const,
+                  value: "2026-03-08T20:00:00.000Z",
+                },
+              },
+              name: "Date Test",
+            },
+          ],
+        };
+      },
+      async getPreviewHistoryEstimate() {
+        return { high: null, low: null };
+      },
+    } as unknown as OpportunityRepository;
+    const service = new OpportunityService(repository);
+
+    const preview = await service.previewProfile(
+      {
+        accessToken: "token",
+        email: "user@example.com",
+        userId: "user",
+      },
+      {
+        rules,
+        timezone: "America/Los_Angeles",
+      },
+    );
+
+    assert.deepEqual(compiledValues, [
+      "2026-03-08T08:00:00.000Z",
+      "2026-03-09T07:00:00.000Z",
+    ]);
+    assert.equal(workspaceWrites, 0);
+    assert.equal(preview.totalMatches, 1);
+    assert.equal(preview.representativeMatches[0]?.appid, 10);
+  });
+
+  it("coalesces identical in-flight catalog previews without caching completed results", async () => {
+    let catalogQueries = 0;
+    let releaseCatalog: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    const repository = {
+      async getPreviewCatalog() {
+        catalogQueries += 1;
+        await gate;
+        return {
+          aggregate: {
+            coverage: { publisheriq_added_at: 0 },
+            stageCounts: { added: 0 },
+            totalCatalog: 1,
+            totalMatches: 0,
+          },
+          inputs: [],
+        };
+      },
+      async getPreviewHistoryEstimate() {
+        return { high: null, low: null };
+      },
+    } as unknown as OpportunityRepository;
+    const service = new OpportunityService(repository);
+    const identity = {
+      accessToken: "token",
+      email: null,
+      userId: "user",
+    };
+
+    const first = service.previewProfile(identity, {
+      rules,
+      timezone: "America/Los_Angeles",
+    });
+    const second = service.previewProfile(identity, {
+      rules,
+      timezone: "America/Los_Angeles",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(catalogQueries, 1);
+    releaseCatalog?.();
+    await Promise.all([first, second]);
+
+    await service.previewProfile(identity, {
+      rules,
+      timezone: "America/Los_Angeles",
+    });
+    assert.equal(catalogQueries, 2);
+  });
+
+  it("rejects invalid preview timezones before querying", async () => {
+    const service = new OpportunityService({} as OpportunityRepository);
+
+    await assert.rejects(
+      () =>
+        service.previewProfile(
+          {
+            accessToken: "token",
+            email: null,
+            userId: "user",
+          },
+          { rules, timezone: "Mars/Olympus_Mons" },
+        ),
+      /Unsupported timezone/,
+    );
   });
 });

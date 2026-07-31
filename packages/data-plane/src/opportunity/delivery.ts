@@ -381,9 +381,14 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
     const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
     const name = decodeOpportunityText(result.name);
     const summary = decodeOpportunityText(result.changeSummary);
+    const evidence = result.strongestEvidence
+      .slice(0, 3)
+      .map(decodeOpportunityText)
+      .join("; ");
     return [
       `${index + 1}. ${name} — ${resultLabel(result.eventLabel)}`,
       summary,
+      ...(evidence ? [`Matched criteria and evidence: ${evidence}`] : []),
       `Market potential: ${potentialLabel(result.marketPotential)}`,
       link,
     ].join("\n");
@@ -400,11 +405,16 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
       const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
       const name = decodeOpportunityText(result.name);
       const summary = decodeOpportunityText(result.changeSummary);
+      const evidence = result.strongestEvidence
+        .slice(0, 3)
+        .map(decodeOpportunityText)
+        .join("; ");
       return `
         <article style="border:1px solid #dbe4ea;border-radius:12px;padding:16px;margin:12px 0">
           <h2 style="font-size:18px;margin:0 0 8px">${escapeHtml(name)}</h2>
           <p style="margin:0 0 8px;color:#475569">${escapeHtml(resultLabel(result.eventLabel))} · ${escapeHtml(potentialLabel(result.marketPotential))} market potential</p>
           <p style="margin:0 0 12px">${escapeHtml(summary)}</p>
+          ${evidence ? `<p style="margin:0 0 12px;color:#475569"><strong>Matched criteria and evidence:</strong> ${escapeHtml(evidence)}</p>` : ""}
           <a href="${escapeHtml(link)}" style="color:#0f766e;font-weight:600">View full analysis</a>
         </article>`;
     })
@@ -441,11 +451,15 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
       const link = `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
       const name = decodeOpportunityText(result.name);
       const summary = decodeOpportunityText(result.changeSummary);
+      const evidence = result.strongestEvidence
+        .slice(0, 3)
+        .map(decodeOpportunityText)
+        .join("; ");
       return [
         { type: "divider" },
         {
           text: {
-            text: `*<${link}|${escapeSlackMrkdwn(name)}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(summary)}\n_${potentialLabel(result.marketPotential)} market potential_`,
+            text: `*<${link}|${escapeSlackMrkdwn(name)}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(summary)}${evidence ? `\n*Matched criteria and evidence:* ${escapeSlackMrkdwn(evidence)}` : ""}\n_${potentialLabel(result.marketPotential)} market potential_`,
             type: "mrkdwn",
           },
           type: "section",

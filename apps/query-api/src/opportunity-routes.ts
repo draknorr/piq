@@ -97,6 +97,20 @@ function isOpportunityPath(pathname: string): boolean {
   return pathname.startsWith("/v1/opportunities/");
 }
 
+function isOpportunityQueryTimeout(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "57014" ||
+    (typeof candidate.message === "string" &&
+      /statement timeout|timeout exceeded when trying to connect/i.test(
+        candidate.message,
+      ))
+  );
+}
+
 export async function tryHandleOpportunityRequest(params: {
   identityVerifier: OpportunityIdentityVerifier | null;
   opportunityService: OpportunityService | null;
@@ -279,6 +293,13 @@ export async function tryHandleOpportunityRequest(params: {
         return true;
     }
   } catch (error) {
+    if (isOpportunityQueryTimeout(error)) {
+      sendJson(params.response, 504, {
+        code: "OPPORTUNITY_QUERY_TIMEOUT",
+        error: "Opportunity preview timed out while querying catalog data.",
+      });
+      return true;
+    }
     sendJson(params.response, 400, {
       code: "OPPORTUNITY_REQUEST_INVALID",
       error:

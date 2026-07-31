@@ -6,7 +6,9 @@ import {
   compilePreviewForRepository,
   OpportunityRepository,
   previewRepresentativeFromInput,
+  type OpportunityPreviewCatalog,
 } from "./repository.js";
+import type { OpportunityCompiledPreview } from "./sql-compiler.js";
 import type { OpportunityDestinationCipher } from "./delivery-secrets.js";
 import type {
   OpportunityBootstrapResponse,
@@ -106,6 +108,7 @@ const PREVIEW_FIELD_LABELS: Partial<Record<OpportunityRuleField, string>> = {
   developer: "developer",
   developer_game_count: "developer's Steam releases",
   discount_percent: "current discount",
+  demo_only: "demo-only status",
   genres: "Steam genres",
   has_demo: "playable demo availability",
   has_purchase_packages: "purchase availability",
@@ -119,6 +122,7 @@ const PREVIEW_FIELD_LABELS: Partial<Record<OpportunityRuleField, string>> = {
   price_cents: "Steam price",
   publisher: "publisher",
   publisher_game_count: "publisher's Steam releases",
+  publisheriq_added_at: "PublisherIQ added date",
   release_date: "release date",
   release_state: "release status",
   reviews_added_30d: "Steam reviews added in the last 30 days",
@@ -134,10 +138,40 @@ function previewFieldLabel(field: OpportunityRuleField): string {
 }
 
 export class OpportunityService {
+  private readonly previewCatalogInFlight = new Map<
+    string,
+    Promise<OpportunityPreviewCatalog>
+  >();
+
   constructor(
     private readonly repository: OpportunityRepository,
     private readonly destinationCipher: OpportunityDestinationCipher | null = null,
   ) {}
+
+  private getPreviewCatalog(
+    compiled: OpportunityCompiledPreview,
+  ): Promise<OpportunityPreviewCatalog> {
+    const key = JSON.stringify(compiled);
+    const existing = this.previewCatalogInFlight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const pending = this.repository.getPreviewCatalog(compiled, 80);
+    this.previewCatalogInFlight.set(key, pending);
+    void pending.then(
+      () => {
+        if (this.previewCatalogInFlight.get(key) === pending) {
+          this.previewCatalogInFlight.delete(key);
+        }
+      },
+      () => {
+        if (this.previewCatalogInFlight.get(key) === pending) {
+          this.previewCatalogInFlight.delete(key);
+        }
+      },
+    );
+    return pending;
+  }
 
   getBootstrap(
     identity: OpportunityIdentity,
@@ -150,19 +184,28 @@ export class OpportunityService {
     request: OpportunityPreviewRequest,
   ): Promise<OpportunityPreviewResponse> {
     assertOpportunityRuleSet(request.rules);
-    await this.repository.ensureWorkspace(identity);
-    const compiled = compilePreviewForRepository(request.rules);
-    const [aggregate, inputs, history] = await Promise.all([
-      this.repository.getPreviewAggregate(compiled),
-      this.repository.getPreviewInputs(request.rules, 80),
+    const timezone = request.timezone ?? "UTC";
+    assertTimezone(timezone);
+    const evaluation = {
+      asOf: new Date().toISOString(),
+      timezone,
+    };
+    const compiled = compilePreviewForRepository(request.rules, evaluation);
+    const [catalog, history] = await Promise.all([
+      this.getPreviewCatalog(compiled),
       this.repository.getPreviewHistoryEstimate(
         identity.userId,
         request.profileId,
       ),
     ]);
+    const { aggregate, inputs } = catalog;
     const evaluated = inputs
       .map((input) => ({
-        evaluation: evaluateOpportunityProfile(request.rules, input),
+        evaluation: evaluateOpportunityProfile(
+          request.rules,
+          input,
+          evaluation,
+        ),
         input,
       }))
       .filter((item) => item.evaluation.outcome === "eligible")

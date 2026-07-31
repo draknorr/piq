@@ -20,6 +20,7 @@ export type OpportunityRuleField =
   | "release_state"
   | "is_released"
   | "release_date"
+  | "publisheriq_added_at"
   | "days_until_release"
   | "tags"
   | "genres"
@@ -33,6 +34,7 @@ export type OpportunityRuleField =
   | "steam_deck"
   | "languages"
   | "has_demo"
+  | "demo_only"
   | "no_publisher_listed"
   | "self_published"
   | "publisher_game_count"
@@ -58,15 +60,35 @@ export type OpportunityRuleOperator =
   | "less_than"
   | "less_than_or_equal"
   | "between"
+  | "in_window"
   | "exists"
   | "not_exists";
+
+export type OpportunityRelativeDateWindow =
+  | "today"
+  | "this_week"
+  | "last_7_days"
+  | "last_30_days"
+  | "this_month"
+  | "next_7_days"
+  | "next_30_days";
+
+export type OpportunityDateOperand =
+  | { date: string; kind: "absolute_date" }
+  | { kind: "relative_window"; window: OpportunityRelativeDateWindow };
 
 export interface OpportunityRuleClause {
   field: OpportunityRuleField;
   id: string;
   label?: string;
   operator: OpportunityRuleOperator;
-  value?: boolean | number | string | null | Array<boolean | number | string>;
+  value?:
+    | boolean
+    | number
+    | string
+    | null
+    | OpportunityDateOperand
+    | Array<boolean | number | string>;
 }
 
 export interface OpportunityRuleGroup {
@@ -81,7 +103,7 @@ export interface OpportunityRuleSet {
   excluded: OpportunityRuleGroup[];
   preferred: OpportunityRuleGroup[];
   required: OpportunityRuleGroup[];
-  schemaVersion: "opportunity-rules/v1";
+  schemaVersion: "opportunity-rules/v1" | "opportunity-rules/v2";
 }
 
 export interface OpportunityResultSummary {
@@ -133,6 +155,7 @@ export interface OpportunityObservedChange {
     | "announcement"
     | "review_breakthrough"
     | "ccu_breakthrough"
+    | "date_window_changed"
     | "material_change";
   observedAt: string;
   signalFamily: OpportunitySignalFamily;
