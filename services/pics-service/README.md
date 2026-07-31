@@ -136,9 +136,9 @@ old gap was reconstructed.
 
 ## Exact Missing-Token Replay
 
-Migration `0100_opportunity_field_sources_token_pics.sql` must be separately
-approved and applied before this command is available in production. Its
-default mode is a bounded, read-only preview:
+Migration `0100_opportunity_field_sources_token_pics.sql` was explicitly
+approved and applied to Tiger production on July 31, 2026 UTC. The command's
+default mode remains a bounded, read-only preview:
 
 ```bash
 python -m src.replay_missing_access_tokens \

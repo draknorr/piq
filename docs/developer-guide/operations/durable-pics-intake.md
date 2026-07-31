@@ -24,11 +24,21 @@ orchestration remain disabled by default with
 `PICS_PROCESSING_ENABLED=false`. The explicit production shadow setting is
 validation evidence, not approval for primary mode.
 
-Migration `0100_opportunity_field_sources_token_pics.sql` is an unapplied,
-additive follow-up. It introduces field-level source evidence, durable
-`needs_token` routing, and an audited exact-app token replay surface. The code
-and migration do not authorize a production schema change, service rollout,
-Storefront refresh, PICS requeue, or backfill.
+Migration `0100_opportunity_field_sources_token_pics.sql` was explicitly
+approved and applied to Tiger production on July 31, 2026 UTC. The compatible
+PICS, Storefront, query API, opportunity worker, and admin runtimes were then
+deployed. The migration adds field-level source evidence, durable `needs_token`
+routing, and an audited exact-app token replay surface.
+
+The approved app `5005180` repair populated current Storefront evidence for
+genres, categories, platforms, and languages. Its exact PICS replay was
+archived and audited, then returned to terminal `source_blocked` with
+`missing_access_token` because Steam supplied no compliant token. This is the
+expected fail-closed result: Storefront may satisfy those four current fields,
+but it does not make PICS ready or invent PICS-only evidence. The historical
+opportunity result remains immutable. Existing source-blocked rows were not
+bulk-requeued; any later replay campaign still requires an exact reviewed plan
+and separate production approval.
 
 Migration `0092_pics_cursor_checkpoint_reconciliation.sql` was applied on
 July 25, 2026 UTC. Its first separately approved checkpoint call failed before
@@ -254,9 +264,9 @@ empty collection is `known` with an empty value. It does not mark the PICS
 source ready. Historical Storefront archive replay also cannot overwrite the
 current field-evidence row.
 
-After migration `0100` has been separately approved and applied, the replay
-command is read-only by default. This exact-app preview is the required first
-step for app `5005180`:
+Migration `0100` is applied in production. The replay command remains read-only
+by default. This exact-app preview is the required first step for an approved
+app:
 
 ```bash
 python -m src.replay_missing_access_tokens \
@@ -368,8 +378,7 @@ For migration `0100` and app `5005180`, the separate approval boundaries are:
 
 None of these boundaries is implied by code review or a successful dry run.
 
-`PICS_WORK_MODE=durable` remains prohibited until the audited checkpoint
-migration is merged and separately applied, fresh evidence identifies the
-exact source-blocked gap and healthy shadow-head batches, the checkpoint
-transaction receives separate approval, and the exact genuine-service Railway
-rollout receives separate approval.
+The genuine PICS production service runs the approved durable-primary runtime.
+Changing its cursor checkpoint, replaying additional source-blocked work, or
+altering its rollout scope remains a separate production action requiring fresh
+evidence and explicit approval.
