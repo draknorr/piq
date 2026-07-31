@@ -275,9 +275,41 @@ function fieldValue(
   aliases: string[] = [],
 ): unknown {
   const source = change[side];
+  const parsedSource = parseMaybeJson(source);
+  if (
+    Array.isArray(parsedSource) &&
+    change.affectedRuleFields.includes("price_cents") &&
+    change.affectedRuleFields.includes("discount_percent")
+  ) {
+    const groupedPricingIndex =
+      field === "price_cents" ? 0 : field === "discount_percent" ? 1 : -1;
+    const groupedPricingValue = parsedSource[groupedPricingIndex];
+    if (
+      groupedPricingIndex >= 0 &&
+      groupedPricingValue !== undefined &&
+      (groupedPricingValue === null ||
+        ["boolean", "number", "string"].includes(typeof groupedPricingValue))
+    ) {
+      return parseMaybeJson(groupedPricingValue);
+    }
+  }
   const found = findNestedValue(source, [field, ...aliases]);
   if (found !== undefined) {
     if (Array.isArray(found) && !LIST_FIELDS.has(field)) {
+      // Grouped pricing moments store price and discount as ordered scalar
+      // summaries: [price_cents, discount_percent, ...optional package refs].
+      // Do not treat the trailing discount as a cent-denominated price.
+      if (
+        change.affectedRuleFields.includes("price_cents") &&
+        change.affectedRuleFields.includes("discount_percent")
+      ) {
+        if (field === "price_cents") {
+          return found[0];
+        }
+        if (field === "discount_percent") {
+          return found[1];
+        }
+      }
       return side === "before" ? found[0] : found.at(-1);
     }
     return found;
@@ -573,6 +605,15 @@ function describePlatformChange(change: OpportunityChangeInput): string {
 }
 
 function describePriceChange(change: OpportunityChangeInput): string {
+  if (
+    change.affectedRuleFields.includes("discount_percent") &&
+    !change.affectedRuleFields.includes("price_cents") &&
+    !change.affectedRuleFields.includes("is_free") &&
+    !change.affectedRuleFields.includes("has_purchase_packages")
+  ) {
+    return describeDiscountChange(change);
+  }
+
   const wasFree = booleanValue(fieldValue(change, "before", "is_free"));
   const isFree = booleanValue(fieldValue(change, "after", "is_free"));
   if (wasFree === false && isFree === true) {
@@ -594,6 +635,13 @@ function describePriceChange(change: OpportunityChangeInput): string {
   const afterAmount = Number(afterPrice);
   const previous = formatCurrency(beforePrice);
   const next = formatCurrency(afterPrice);
+  const afterDiscount = discountValue(
+    fieldValue(change, "after", "discount_percent"),
+  );
+  const discountSuffix =
+    afterDiscount !== null && afterDiscount > 0
+      ? ` (${formatDiscount(afterDiscount)} off)`
+      : "";
   if (
     previous &&
     next &&
@@ -601,7 +649,7 @@ function describePriceChange(change: OpportunityChangeInput): string {
     Number.isFinite(afterAmount) &&
     beforeAmount !== afterAmount
   ) {
-    return `Price ${afterAmount < beforeAmount ? "lowered" : "raised"} from ${previous} to ${next}.`;
+    return `Price ${afterAmount < beforeAmount ? "lowered" : "raised"} from ${previous} to ${next}${discountSuffix}.`;
   }
 
   const hadPackage = booleanValue(
@@ -622,7 +670,51 @@ function describePriceChange(change: OpportunityChangeInput): string {
   if (previous && !next) {
     return `The previous Steam price was ${previous}; the new price is unavailable.`;
   }
+  if (change.affectedRuleFields.includes("discount_percent")) {
+    return describeDiscountChange(change);
+  }
   return "Steam pricing changed, but the before-and-after prices are unavailable.";
+}
+
+function discountValue(value: unknown): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean" ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100
+    ? number
+    : null;
+}
+
+function formatDiscount(value: number): string {
+  return `${value.toLocaleString("en-US", {
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
+function describeDiscountChange(change: OpportunityChangeInput): string {
+  const before = discountValue(
+    fieldValue(change, "before", "discount_percent"),
+  );
+  const after = discountValue(fieldValue(change, "after", "discount_percent"));
+  if (before !== null && after !== null && before !== after) {
+    if (before === 0 && after > 0) {
+      return `A Steam discount started at ${formatDiscount(after)} off.`;
+    }
+    if (before > 0 && after === 0) {
+      return `The ${formatDiscount(before)} Steam discount ended.`;
+    }
+    return `Steam discount ${after > before ? "increased" : "decreased"} from ${formatDiscount(before)} to ${formatDiscount(after)} off.`;
+  }
+  if (after !== null && after > 0) {
+    return `The Steam discount is now ${formatDiscount(after)} off.`;
+  }
+  return "The Steam discount changed, but the before-and-after percentages are unavailable.";
 }
 
 function describeReleaseDateChange(change: OpportunityChangeInput): string {
@@ -735,6 +827,9 @@ function describeKnownFieldChange(
     field === "has_purchase_packages"
   ) {
     return describePriceChange(change);
+  }
+  if (field === "discount_percent") {
+    return describeDiscountChange(change);
   }
   if (field === "tags" || field === "genres" || field === "categories") {
     return describeTaxonomyChange(change, taxonomy);

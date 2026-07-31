@@ -124,6 +124,35 @@ describe("opportunity SQL compiler", () => {
     assert.deepEqual(compiled.values, [0.2]);
   });
 
+  it("compiles discount profile values as whole percentages", () => {
+    const compiled = compileOpportunityPreview({
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "discount_percent",
+              id: "discount",
+              operator: "greater_than_or_equal",
+              value: 35,
+            },
+          ],
+          id: "commercial",
+          label: "Discounted",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    });
+
+    assert.match(
+      compiled.matchSql,
+      /COALESCE\(a\.current_discount_percent, m\.discount_percent\)/,
+    );
+    assert.deepEqual(compiled.values, [35]);
+  });
+
   it("compiles release-date absence as known when storefront data is ready", () => {
     const compiled = compileOpportunityPreview({
       excluded: [],

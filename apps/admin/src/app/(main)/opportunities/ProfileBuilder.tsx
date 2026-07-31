@@ -15,6 +15,7 @@ import {
 import { opportunityPost } from "./lib/api";
 import {
   createOpportunityShortcutGroup,
+  parseOpportunityNumericRuleValue,
   upgradeOpportunityRules,
   type OpportunityRuleShortcut,
 } from "./lib/rule-builder";
@@ -362,11 +363,8 @@ function parseValue(
   if (operator === "between") {
     return raw
       .split(",")
-      .map((value) => {
-        const number = Number(value.trim());
-        return field === "price_cents" ? Math.round(number * 100) : number;
-      })
-      .filter(Number.isFinite)
+      .map((value) => parseOpportunityNumericRuleValue(value.trim(), field))
+      .filter((value): value is number => value !== null)
       .slice(0, 2);
   }
   if (operator === "in" || operator === "not_in") {
@@ -376,11 +374,7 @@ function parseValue(
       .filter(Boolean);
   }
   if (valueType === "number") {
-    const number = Number(raw);
-    if (!Number.isFinite(number)) {
-      return 0;
-    }
-    return field === "price_cents" ? Math.round(number * 100) : number;
+    return parseOpportunityNumericRuleValue(raw, field) ?? 0;
   }
   return raw;
 }
@@ -1267,6 +1261,35 @@ function ClauseEditor({
                 : clause.field === "price_cents"
                   ? "US dollars"
                   : "Value"
+            }
+            min={
+              meta.valueType === "number" &&
+              clause.operator !== "between" &&
+              (clause.field === "price_cents" ||
+                clause.field === "discount_percent" ||
+                clause.field === "positive_percentage")
+                ? 0
+                : undefined
+            }
+            max={
+              meta.valueType === "number" &&
+              clause.operator !== "between" &&
+              (clause.field === "discount_percent" ||
+                clause.field === "positive_percentage")
+                ? 100
+                : undefined
+            }
+            step={
+              meta.valueType === "number" &&
+              clause.operator !== "between" &&
+              clause.field === "price_cents"
+                ? 0.01
+                : meta.valueType === "number" &&
+                    clause.operator !== "between" &&
+                    (clause.field === "discount_percent" ||
+                      clause.field === "positive_percentage")
+                  ? 1
+                  : undefined
             }
             className="h-9 min-w-0 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent-primary"
             aria-label="Value"

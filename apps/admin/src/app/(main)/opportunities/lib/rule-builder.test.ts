@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   createOpportunityShortcutGroup,
+  parseOpportunityNumericRuleValue,
   upgradeOpportunityRules,
 } from "./rule-builder";
 import type { OpportunityRuleSet } from "./types";
@@ -73,6 +74,21 @@ describe("opportunity rule builder", () => {
           value: undefined,
         },
       ],
+    );
+  });
+
+  it("converts dollar prices to cents but keeps percentages as percentages", () => {
+    assert.equal(
+      parseOpportunityNumericRuleValue("32.49", "price_cents"),
+      3249,
+    );
+    assert.equal(
+      parseOpportunityNumericRuleValue("35", "discount_percent"),
+      35,
+    );
+    assert.equal(
+      parseOpportunityNumericRuleValue("92", "positive_percentage"),
+      92,
     );
   });
 });
