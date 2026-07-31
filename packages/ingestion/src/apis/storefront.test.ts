@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseStorefrontResponse, type StorefrontAppDetails } from './storefront.js';
+import {
+  fetchStorefrontAppDetails,
+  parseStorefrontResponse,
+  type StorefrontAppDetails,
+} from './storefront.js';
 
-function buildResponse(data: Partial<NonNullable<StorefrontAppDetails['data']>> = {}): StorefrontAppDetails {
+function buildResponse(
+  data: Partial<NonNullable<StorefrontAppDetails['data']>> = {}
+): StorefrontAppDetails {
   return {
     success: true,
     data: {
@@ -26,11 +32,7 @@ test('parseStorefrontResponse captures parent demo references', () => {
     4615010,
     buildResponse({
       name: 'Kibble Cats',
-      demos: [
-        { appid: 4707330, description: '' },
-        { appid: '4707330' },
-        { appid: 'not-an-appid' },
-      ],
+      demos: [{ appid: 4707330, description: '' }, { appid: '4707330' }, { appid: 'not-an-appid' }],
     })
   );
 
@@ -39,9 +41,7 @@ test('parseStorefrontResponse captures parent demo references', () => {
 
 test('parseStorefrontResponse records source field presence before applying defaults', () => {
   const absentResponse = buildResponse();
-  delete (
-    absentResponse.data as Partial<NonNullable<StorefrontAppDetails['data']>>
-  ).platforms;
+  delete (absentResponse.data as Partial<NonNullable<StorefrontAppDetails['data']>>).platforms;
   const absent = parseStorefrontResponse(10, absentResponse);
   const empty = parseStorefrontResponse(
     10,
@@ -132,4 +132,30 @@ test('parseStorefrontResponse computes hasPurchasePackages from package group su
 
   assert.equal(parsed?.hasPurchasePackages, true);
   assert.deepEqual(parsed?.packageGroupSubs, [123]);
+});
+
+test('fetchStorefrontAppDetails rate-limits every retry attempt', async () => {
+  let attempts = 0;
+  let limiterAcquires = 0;
+  const result = await fetchStorefrontAppDetails(10, {
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response('busy', { status: 500 });
+      }
+      return new Response(JSON.stringify({ 10: buildResponse() }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      });
+    },
+    limiter: {
+      acquire: async () => {
+        limiterAcquires += 1;
+      },
+    },
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(attempts, 2);
+  assert.equal(limiterAcquires, 2);
 });

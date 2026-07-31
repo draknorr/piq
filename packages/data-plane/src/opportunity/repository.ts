@@ -155,7 +155,7 @@ export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   reviews_added_7d: "market_metrics",
   self_published: "storefront",
   steam_deck: "pics",
-  tags: "pics",
+  tags: "resolved",
   total_reviews: "market_metrics",
 };
 
@@ -612,7 +612,7 @@ function buildOpportunityRuleInput(
           iso(row.catalog_first_observed_at),
         );
 
-  setPics("tags", row.tags ?? []);
+  setResolved("tags", row.tags ?? []);
   setResolved("genres", row.genres ?? []);
   setResolved("categories", row.categories ?? []);
   setResolved("platforms", normalizeStringArray(row.platforms));

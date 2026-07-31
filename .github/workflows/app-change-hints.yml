@@ -25,6 +25,7 @@ env:
   DATA_READ_TARGET: tiger
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
   STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+  STOREFRONT_TAGS_ENABLED: ${{ vars.STOREFRONT_TAGS_ENABLED || 'false' }}
 
 jobs:
   sync:

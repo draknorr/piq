@@ -1,4 +1,9 @@
-export type AppCaptureSource = 'storefront' | 'news' | 'hero_asset' | 'projection_refresh';
+export type AppCaptureSource =
+  | 'storefront'
+  | 'storefront_tags'
+  | 'news'
+  | 'hero_asset'
+  | 'projection_refresh';
 
 export type AppSnapshotSource = 'storefront' | 'pics';
 
@@ -135,7 +140,24 @@ export interface CaptureQueueJob {
   triggerReason: string;
   triggerCursor: string | null;
   payload: Record<string, unknown>;
+  priority: number;
   attempts: number;
+}
+
+export interface StorefrontTagEvidenceWrite {
+  appid: number;
+  country: 'us';
+  locale: 'english';
+  observedAt: string;
+  pageUrl: string;
+  parserVersion: string;
+  responseHash: string;
+  tags: Array<{
+    count: number;
+    name: string;
+    rank: number;
+    tagid: number;
+  }>;
 }
 
 export interface VersionWriteResult {

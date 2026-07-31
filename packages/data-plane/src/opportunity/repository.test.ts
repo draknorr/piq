@@ -432,6 +432,13 @@ describe("opportunity field-level Steam evidence resolution", () => {
                   state: "missing",
                   value: null,
                 },
+                tags: {
+                  picsRecorded: false,
+                  source: "storefront",
+                  sourceAt: "2026-07-31T08:10:00.000Z",
+                  state: "known",
+                  value: ["Action Roguelike", "Strategy"],
+                },
               },
               genres: [],
               has_demo: false,
@@ -473,8 +480,12 @@ describe("opportunity field-level Steam evidence resolution", () => {
     assert.deepEqual(input?.fields.categories?.value, ["Single-player"]);
     assert.equal(input?.fields.platforms?.state, "unknown");
     assert.equal(input?.fields.platforms?.source, "steam_storefront");
-    assert.equal(input?.fields.tags?.state, "unknown");
-    assert.equal(input?.fields.tags?.source, "steam_pics");
+    assert.equal(input?.fields.tags?.state, "known");
+    assert.equal(input?.fields.tags?.source, "steam_storefront");
+    assert.deepEqual(input?.fields.tags?.value, [
+      "Action Roguelike",
+      "Strategy",
+    ]);
     assert.match(
       projectionQuery,
       /CASE evidence\.evidence_state WHEN 'known' THEN 0 ELSE 1 END/,

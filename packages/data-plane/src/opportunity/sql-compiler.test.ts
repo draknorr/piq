@@ -93,7 +93,7 @@ describe("opportunity SQL compiler", () => {
     assert.match(compiled.matchSql, / OR /);
   });
 
-  it("allows Storefront evidence only for supported fallback fields", () => {
+  it("allows Storefront evidence for source-aware fallback fields", () => {
     const rules: OpportunityRuleSet = {
       excluded: [],
       preferred: [],
@@ -130,8 +130,9 @@ describe("opportunity SQL compiler", () => {
     )!;
 
     assert.match(genreCoverage.knownSql, /'pics', 'storefront'/);
-    assert.match(tagCoverage.knownSql, /source IN \('pics'\)/);
-    assert.doesNotMatch(tagCoverage.knownSql, /storefront/);
+    assert.match(tagCoverage.knownSql, /'pics', 'storefront'/);
+    assert.match(compiled.matchSql, /field_value\.field_name = 'tags'/);
+    assert.match(compiled.matchSql, /jsonb_array_elements_text/);
     assert.match(genreCoverage.knownSql, /field_evidence_any\.source = 'pics'/);
 
     const emptyPlatform = compileOpportunityPreview({
