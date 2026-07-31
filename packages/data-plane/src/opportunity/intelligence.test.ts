@@ -195,6 +195,67 @@ describe("opportunity presentation", () => {
     );
   });
 
+  it("keeps grouped price and discount values in their correct units", () => {
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["price_cents", "is_free", "discount_percent"],
+          after: [3249, 35],
+          before: [4999, 0],
+        }),
+      ),
+      "Price lowered from $49.99 to $32.49 (35% off).",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: [
+            "price_cents",
+            "is_free",
+            "discount_percent",
+            "has_purchase_packages",
+          ],
+          after: [3249, 35, ["package:123"]],
+          before: [4999, 0, ["package:123"]],
+        }),
+      ),
+      "Price lowered from $49.99 to $32.49 (35% off).",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["price_cents", "discount_percent"],
+          after: [{ discount_percent: 35, price_cents: 3249 }],
+          before: [{ discount_percent: 0, price_cents: 4999 }],
+        }),
+      ),
+      "Price lowered from $49.99 to $32.49 (35% off).",
+    );
+  });
+
+  it("describes discount-only changes as percentages instead of prices", () => {
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["discount_percent"],
+          after: [35],
+          before: [0],
+        }),
+      ),
+      "A Steam discount started at 35% off.",
+    );
+    assert.equal(
+      describeOpportunityChange(
+        change({
+          affectedRuleFields: ["discount_percent"],
+          after: [0],
+          before: [35],
+        }),
+      ),
+      "The 35% Steam discount ended.",
+    );
+  });
+
   it("describes free-to-play and paid transitions", () => {
     assert.equal(
       describeOpportunityChange(

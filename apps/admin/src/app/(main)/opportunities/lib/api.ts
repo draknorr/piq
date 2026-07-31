@@ -305,7 +305,12 @@ export function formatOpportunityMetricValue(
   if (token.includes("price") && token.includes("cent")) {
     return formatCurrency(value) ?? String(value);
   }
-  if (token.includes("percentage") || token.includes("rate")) {
+  if (
+    token.includes("percentage") ||
+    token.includes("percent") ||
+    token.includes("discount") ||
+    token.includes("rate")
+  ) {
     const number = Number(value);
     return Number.isFinite(number)
       ? `${number.toLocaleString()}%`

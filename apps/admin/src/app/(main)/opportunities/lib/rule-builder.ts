@@ -1,6 +1,21 @@
-import type { OpportunityRuleGroup, OpportunityRuleSet } from "./types";
+import type {
+  OpportunityRuleField,
+  OpportunityRuleGroup,
+  OpportunityRuleSet,
+} from "./types";
 
 export type OpportunityRuleShortcut = "demo_only" | "undated_unreleased";
+
+export function parseOpportunityNumericRuleValue(
+  raw: string,
+  field: OpportunityRuleField,
+): number | null {
+  const number = Number(raw);
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+  return field === "price_cents" ? Math.round(number * 100) : number;
+}
 
 export function upgradeOpportunityRules(
   rules: OpportunityRuleSet,

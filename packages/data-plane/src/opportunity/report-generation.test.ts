@@ -75,7 +75,7 @@ function materialEvent(
 }
 
 describe("opportunity option-enabled report generation", () => {
-  it("evaluates and renders date, demo-only, and undated-unreleased reports", async () => {
+  it("evaluates and renders date, demo-only, undated, and discount reports", async () => {
     const cases: Array<{
       evidenceLabel: string;
       input: OpportunityEvaluationInput;
@@ -178,6 +178,36 @@ describe("opportunity option-enabled report generation", () => {
           schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
         }),
       },
+      {
+        evidenceLabel: "At least 35% off",
+        input: {
+          appid: 104,
+          fields: {
+            discount_percent: known(35),
+          },
+          name: "Discount Signal",
+        },
+        profile: profile("discount", "Current Steam Discount", {
+          excluded: [],
+          preferred: [],
+          required: [
+            {
+              clauses: [
+                {
+                  field: "discount_percent",
+                  id: "discount",
+                  operator: "greater_than_or_equal",
+                  value: 35,
+                },
+              ],
+              id: "discount-group",
+              label: "At least 35% off",
+              operator: "all",
+            },
+          ],
+          schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+        }),
+      },
     ];
     const repository = {
       async getReleasedCohort() {
@@ -259,6 +289,6 @@ describe("opportunity option-enabled report generation", () => {
       assert.match(slack, new RegExp(testCase.evidenceLabel));
       assert.match(rendered.text, new RegExp(testCase.input.name));
     }
-    assert.match(rendered.subject, /3 games/);
+    assert.match(rendered.subject, /4 games/);
   });
 });

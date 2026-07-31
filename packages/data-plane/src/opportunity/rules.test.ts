@@ -217,6 +217,47 @@ describe("opportunity rule engine", () => {
     assert.equal(outcome.state, "unknown");
   });
 
+  it("evaluates discount percentages on a 0-to-100 scale", () => {
+    const discountInput = input({ discount_percent: known(35) });
+
+    assert.equal(
+      evaluateOpportunityClause(
+        {
+          field: "discount_percent",
+          id: "at-least-35",
+          operator: "greater_than_or_equal",
+          value: 35,
+        },
+        discountInput,
+      ).state,
+      "true",
+    );
+    assert.equal(
+      evaluateOpportunityClause(
+        {
+          field: "discount_percent",
+          id: "more-than-35",
+          operator: "greater_than",
+          value: 35,
+        },
+        discountInput,
+      ).state,
+      "false",
+    );
+    assert.equal(
+      evaluateOpportunityClause(
+        {
+          field: "discount_percent",
+          id: "at-least-36",
+          operator: "greater_than_or_equal",
+          value: 36,
+        },
+        discountInput,
+      ).state,
+      "false",
+    );
+  });
+
   it("continues to read v1 rules while reserving v2 fields for v2", () => {
     const v1Rules: OpportunityRuleSet = {
       excluded: [],
