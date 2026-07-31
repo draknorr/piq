@@ -37,6 +37,31 @@ test('parseStorefrontResponse captures parent demo references', () => {
   assert.deepEqual(parsed?.demoAppids, [4707330]);
 });
 
+test('parseStorefrontResponse records source field presence before applying defaults', () => {
+  const absentResponse = buildResponse();
+  delete (
+    absentResponse.data as Partial<NonNullable<StorefrontAppDetails['data']>>
+  ).platforms;
+  const absent = parseStorefrontResponse(10, absentResponse);
+  const empty = parseStorefrontResponse(
+    10,
+    buildResponse({ categories: [], genres: [], supported_languages: '' })
+  );
+
+  assert.deepEqual(absent?.fieldPresence, {
+    categories: false,
+    genres: false,
+    languages: false,
+    platforms: false,
+  });
+  assert.deepEqual(empty?.fieldPresence, {
+    categories: true,
+    genres: true,
+    languages: true,
+    platforms: true,
+  });
+});
+
 test('parseStorefrontResponse captures demo parent from fullgame', () => {
   const parsed = parseStorefrontResponse(
     4707330,

@@ -33,6 +33,44 @@ export interface StorefrontUpsertArgs {
   p_release_date: string | null;
   p_release_date_raw: string;
   p_type: string;
+  p_categories: Array<{ id: number; name: string }> | null;
+  p_evidence_observed_at: string | null;
+  p_genres: Array<{ id: string; name: string }> | null;
+  p_languages: string[] | null;
+  p_platforms: string[] | null;
+}
+
+export function parseStorefrontLanguages(value: string | null): string[] {
+  if (value === null) {
+    return [];
+  }
+
+  // Steam appends this HTML footnote after the final language rather than as
+  // another comma-delimited value. Remove it before stripping markup so the
+  // final language cannot be concatenated with the explanatory sentence.
+  const withoutFullAudioFootnote = value.replace(
+    /<br\s*\/?\s*>\s*(?:<strong>\s*\*\s*<\/strong>|\*)\s*languages\s+with\s+full\s+audio\s+support\s*$/i,
+    ''
+  );
+
+  return Array.from(
+    new Set(
+      withoutFullAudioFootnote
+        .replace(/<br\s*\/?\s*>/gi, ',')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&amp;/gi, '&')
+        .replace(/&quot;/gi, '"')
+        .split(',')
+        .map((language) => language.replace(/\*/g, '').trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function enabledStorefrontPlatforms(
+  platforms: ParsedStorefrontApp['platforms']
+): string[] {
+  return (['windows', 'mac', 'linux'] as const).filter((platform) => platforms[platform]);
 }
 
 export function normalizeAppType(type: string | undefined): AppType {
@@ -82,6 +120,11 @@ function buildSupabaseStorefrontUpsertArgs(
   const supabaseArgs: Partial<StorefrontUpsertArgs> = { ...args };
   delete supabaseArgs.p_demo_appids;
   delete supabaseArgs.p_has_purchase_packages;
+  delete supabaseArgs.p_genres;
+  delete supabaseArgs.p_categories;
+  delete supabaseArgs.p_platforms;
+  delete supabaseArgs.p_languages;
+  delete supabaseArgs.p_evidence_observed_at;
 
   return supabaseArgs as unknown as Database['public']['Functions']['upsert_storefront_app']['Args'];
 }
@@ -108,8 +151,10 @@ async function executeStorefrontUpsert(
 
 export function buildStorefrontUpsertArgs(
   appid: number,
-  details: ParsedStorefrontApp
+  details: ParsedStorefrontApp,
+  observedAt = new Date().toISOString()
 ): StorefrontUpsertArgs {
+  const fieldPresence = details.fieldPresence;
   return {
     p_appid: appid,
     p_name: details.name,
@@ -128,6 +173,22 @@ export function buildStorefrontUpsertArgs(
     ...(details.dlcAppids.length > 0 ? { p_dlc_appids: details.dlcAppids } : {}),
     ...(details.demoAppids.length > 0 ? { p_demo_appids: details.demoAppids } : {}),
     ...(details.parentAppid !== null ? { p_parent_appid: details.parentAppid } : {}),
+    p_genres: fieldPresence?.genres === false
+      ? null
+      : details.genres.map((genre) => ({ id: genre.id, name: genre.description })),
+    p_categories: fieldPresence?.categories === false
+      ? null
+      : details.categories.map((category) => ({
+        id: category.id,
+        name: category.description,
+      })),
+    p_platforms: fieldPresence?.platforms === false
+      ? null
+      : enabledStorefrontPlatforms(details.platforms),
+    p_languages: fieldPresence?.languages === false
+      ? null
+      : parseStorefrontLanguages(details.supportedLanguages),
+    p_evidence_observed_at: observedAt,
   };
 }
 
@@ -154,6 +215,13 @@ export function buildNormalizedStorefrontSnapshotUpsertArgs(
     p_publishers: snapshot.publishers,
     ...(snapshot.dlcAppids.length > 0 ? { p_dlc_appids: snapshot.dlcAppids } : {}),
     ...((snapshot.demoAppids ?? []).length > 0 ? { p_demo_appids: snapshot.demoAppids } : {}),
+    // Historical normalized snapshots predate field-presence evidence. Do not
+    // collapse an omitted source field into a known empty value during replay.
+    p_genres: null,
+    p_categories: null,
+    p_platforms: null,
+    p_languages: null,
+    p_evidence_observed_at: null,
   };
 }
 
@@ -161,9 +229,14 @@ export async function upsertLatestStorefrontState(
   supabase: TypedSupabaseClient,
   appid: number,
   details: ParsedStorefrontApp,
-  tiger?: StorefrontTigerWriter
+  tiger?: StorefrontTigerWriter,
+  observedAt?: string
 ): Promise<void> {
-  await executeStorefrontUpsert(supabase, buildStorefrontUpsertArgs(appid, details), tiger);
+  await executeStorefrontUpsert(
+    supabase,
+    buildStorefrontUpsertArgs(appid, details, observedAt),
+    tiger
+  );
 }
 
 export async function upsertNormalizedStorefrontSnapshotState(

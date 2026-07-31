@@ -28,6 +28,7 @@ class PICSWorkClaim:
     max_attempts: int
     claim_expires_at: datetime
     worker_id: str
+    needs_token: bool = False
     reconciliation_run_id: Optional[UUID] = None
 
 
@@ -56,6 +57,23 @@ class PICSQueueMetrics:
     catchup_settled_last_hour: int
     catchup_settlements_per_minute: float
     catchup_eta_hours: Optional[float]
+
+
+@dataclass(frozen=True)
+class PICSTokenReplayCandidate:
+    """Read-only recovery report for one token-blocked app."""
+
+    work_id: int
+    appid: int
+    stream_key: str
+    lane: str
+    latest_change_number: int
+    needs_token: bool
+    blocked_at: datetime
+    storefront_status: Optional[str]
+    storefront_source_at: Optional[datetime]
+    storefront_field_coverage: Dict[str, str]
+    storefront_snapshot_summary: Dict[str, Any]
 
 
 class TigerPICSDurableWorkStore:
@@ -191,6 +209,7 @@ class TigerPICSDurableWorkStore:
                         UPDATE ops.pics_work_state work
                         SET state = 'claimed',
                             claimed_through_change_number = work.latest_change_number,
+                            claimed_needs_token = work.needs_token,
                             claimed_at = clock_timestamp(),
                             claim_expires_at = clock_timestamp()
                               + make_interval(secs => %s),
@@ -215,6 +234,7 @@ class TigerPICSDurableWorkStore:
                           work.max_attempts,
                           work.claim_expires_at,
                           work.worker_id,
+                          work.claimed_needs_token,
                           work.reconciliation_run_id
                         """,
                         (
@@ -300,6 +320,7 @@ class TigerPICSDurableWorkStore:
                         UPDATE ops.pics_work_state
                         SET state = %s,
                             claimed_through_change_number = NULL,
+                            claimed_needs_token = NULL,
                             claimed_at = NULL,
                             claim_expires_at = NULL,
                             heartbeat_at = NULL,
@@ -381,6 +402,7 @@ class TigerPICSDurableWorkStore:
                         UPDATE ops.pics_work_state
                         SET state = 'source_blocked',
                             claimed_through_change_number = NULL,
+                            claimed_needs_token = NULL,
                             claimed_at = NULL,
                             claim_expires_at = NULL,
                             heartbeat_at = NULL,
@@ -562,6 +584,224 @@ class TigerPICSDurableWorkStore:
             catchup_eta_hours=eta_hours,
         )
 
+    def preview_missing_access_token_replay(
+        self,
+        *,
+        appids: Sequence[int] = (),
+        limit: int = 100,
+    ) -> List[PICSTokenReplayCandidate]:
+        """Report bounded token blocks and Storefront fallback coverage."""
+
+        normalized_appids = sorted({int(appid) for appid in appids if int(appid) > 0})
+        if len(normalized_appids) > 100:
+            raise ValueError("At most 100 exact appids may be previewed")
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET TRANSACTION READ ONLY")
+                    self._configure_transaction(cursor)
+                    cursor.execute(
+                        """
+                        SELECT
+                          work.id,
+                          work.appid,
+                          work.stream_key,
+                          work.lane,
+                          work.latest_change_number,
+                          work.needs_token,
+                          work.updated_at,
+                          readiness.status,
+                          readiness.source_at,
+                          COALESCE(fields.coverage, '{}'::jsonb),
+                          COALESCE(snapshot.snapshot_summary, '{}'::jsonb)
+                        FROM ops.pics_work_state work
+                        LEFT JOIN ops.app_data_readiness readiness
+                          ON readiness.appid = work.appid
+                         AND readiness.source = 'storefront'
+                        LEFT JOIN LATERAL (
+                          SELECT jsonb_object_agg(
+                            evidence.field_name,
+                            evidence.evidence_state
+                            ORDER BY evidence.field_name
+                          ) AS coverage
+                          FROM ops.app_field_evidence evidence
+                          WHERE evidence.appid = work.appid
+                            AND evidence.source = 'storefront'
+                            AND evidence.field_name = ANY(
+                              ARRAY['genres','categories','platforms','languages']::text[]
+                            )
+                        ) fields ON true
+                        LEFT JOIN LATERAL (
+                          SELECT source_snapshot.snapshot_summary
+                          FROM docs.app_source_snapshots source_snapshot
+                          WHERE source_snapshot.appid = work.appid
+                            AND source_snapshot.source = 'storefront'
+                          ORDER BY source_snapshot.observed_at DESC, source_snapshot.id DESC
+                          LIMIT 1
+                        ) snapshot ON true
+                        WHERE work.state = 'source_blocked'
+                          AND work.work_mode = 'durable'
+                          AND work.stream_key = 'primary'
+                          AND work.last_error_code = 'missing_access_token'
+                          AND work.needs_token = true
+                          AND (
+                            cardinality(%s::integer[]) = 0
+                            OR work.appid = ANY(%s::integer[])
+                          )
+                        ORDER BY work.updated_at ASC, work.appid ASC
+                        LIMIT %s
+                        """,
+                        (normalized_appids, normalized_appids, bounded_limit),
+                    )
+                    rows = cursor.fetchall()
+        return [
+            PICSTokenReplayCandidate(
+                work_id=int(row[0]),
+                appid=int(row[1]),
+                stream_key=str(row[2]),
+                lane=str(row[3]),
+                latest_change_number=int(row[4]),
+                needs_token=bool(row[5]),
+                blocked_at=row[6],
+                storefront_status=str(row[7]) if row[7] is not None else None,
+                storefront_source_at=row[8],
+                storefront_field_coverage=dict(row[9] or {}),
+                storefront_snapshot_summary=dict(row[10] or {}),
+            )
+            for row in rows
+        ]
+
+    def requeue_missing_access_token(
+        self,
+        *,
+        appids: Sequence[int],
+        requested_by: str,
+        reason: str,
+        archive: Dict[str, str],
+    ) -> int:
+        """Reopen exact audited token blocks after an operator-approved replay."""
+
+        normalized_appids = sorted({int(appid) for appid in appids if int(appid) > 0})
+        if not normalized_appids or len(normalized_appids) > 100:
+            raise ValueError("Replay requires between 1 and 100 exact appids")
+        normalized_requested_by = self._bounded_text(requested_by, 200, "unknown_operator")
+        normalized_reason = self._bounded_text(reason, 500, "token_replay")
+        required_archive = ("bucket", "key", "content_hash")
+        if any(not str(archive.get(key, "")).strip() for key in required_archive):
+            raise ValueError("Replay requires an immutable archive pointer")
+
+        with self._connect() as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    self._configure_transaction(cursor)
+                    cursor.execute(
+                        """
+                        SELECT id, appid, state, last_error_code
+                        FROM ops.pics_work_state
+                        WHERE appid = ANY(%s::integer[])
+                          AND work_mode = 'durable'
+                          AND stream_key = 'primary'
+                          AND state = 'source_blocked'
+                          AND last_error_code = 'missing_access_token'
+                          AND needs_token = true
+                        ORDER BY appid
+                        FOR UPDATE
+                        """,
+                        (normalized_appids,),
+                    )
+                    rows = cursor.fetchall()
+                    found = {int(row[1]) for row in rows}
+                    if found != set(normalized_appids):
+                        missing = sorted(set(normalized_appids) - found)
+                        raise PICSWorkStateError(
+                            f"Token replay targets are no longer eligible: {missing}"
+                        )
+                    for row in rows:
+                        cursor.execute(
+                            """
+                            INSERT INTO ops.pics_token_replay_audit (
+                              appid,
+                              work_id,
+                              prior_state,
+                              prior_error_code,
+                              requested_by,
+                              reason,
+                              archive_bucket,
+                              archive_key,
+                              archive_content_hash
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                int(row[1]),
+                                int(row[0]),
+                                str(row[2]),
+                                str(row[3]),
+                                normalized_requested_by,
+                                normalized_reason,
+                                archive["bucket"],
+                                archive["key"],
+                                archive["content_hash"],
+                            ),
+                        )
+                    cursor.execute(
+                        """
+                        UPDATE ops.pics_work_state
+                        SET state = 'pending',
+                            attempts = 0,
+                            next_attempt_at = clock_timestamp(),
+                            claimed_through_change_number = NULL,
+                            claimed_needs_token = NULL,
+                            claimed_at = NULL,
+                            claim_expires_at = NULL,
+                            heartbeat_at = NULL,
+                            worker_id = NULL,
+                            last_error_code = NULL,
+                            last_error_message = NULL,
+                            dead_lettered_at = NULL,
+                            updated_at = clock_timestamp()
+                        WHERE appid = ANY(%s::integer[])
+                          AND work_mode = 'durable'
+                          AND stream_key = 'primary'
+                          AND state = 'source_blocked'
+                          AND last_error_code = 'missing_access_token'
+                          AND needs_token = true
+                        """,
+                        (normalized_appids,),
+                    )
+                    requeued = int(cursor.rowcount)
+                    cursor.execute(
+                        """
+                        UPDATE ops.app_data_readiness
+                        SET status = 'pending',
+                            processed_at = NULL,
+                            blocking_reason = 'awaiting_token_replay',
+                            retryable = true,
+                            provenance = jsonb_build_object(
+                              'requestedBy', %s::text,
+                              'reason', %s::text,
+                              'archive', jsonb_build_object(
+                                'bucket', %s::text,
+                                'key', %s::text,
+                                'contentHash', %s::text
+                              )
+                            ),
+                            updated_at = clock_timestamp()
+                        WHERE appid = ANY(%s::integer[])
+                          AND source = 'pics'
+                        """,
+                        (
+                            normalized_requested_by,
+                            normalized_reason,
+                            archive["bucket"],
+                            archive["key"],
+                            archive["content_hash"],
+                            normalized_appids,
+                        ),
+                    )
+        return requeued
+
     @classmethod
     def complete_locked_claim(
         cls,
@@ -590,6 +830,7 @@ class TigerPICSDurableWorkStore:
                   ELSE dirty_since
                 END,
                 claimed_through_change_number = NULL,
+                claimed_needs_token = NULL,
                 claimed_at = NULL,
                 claim_expires_at = NULL,
                 heartbeat_at = NULL,
@@ -676,6 +917,7 @@ class TigerPICSDurableWorkStore:
                   ELSE 'retrying'
                 END,
                 claimed_through_change_number = NULL,
+                claimed_needs_token = NULL,
                 claimed_at = NULL,
                 claim_expires_at = NULL,
                 heartbeat_at = NULL,
@@ -887,6 +1129,7 @@ class TigerPICSDurableWorkStore:
               AND state = 'claimed'
               AND worker_id = %s
               AND claimed_through_change_number = %s
+              AND claimed_needs_token = %s
               AND claim_expires_at > clock_timestamp()
             FOR UPDATE
             """,
@@ -897,6 +1140,7 @@ class TigerPICSDurableWorkStore:
                 claim.work_mode,
                 worker_id,
                 claim.claimed_through_change_number,
+                claim.needs_token,
             ),
         )
         row = cursor.fetchone()
@@ -994,6 +1238,7 @@ class TigerPICSDurableWorkStore:
                 "max_attempts",
                 "claim_expires_at",
                 "worker_id",
+                "claimed_needs_token",
                 "reconciliation_run_id",
             )
             values = dict(zip(keys, row))
@@ -1009,6 +1254,7 @@ class TigerPICSDurableWorkStore:
             max_attempts=int(values["max_attempts"]),
             claim_expires_at=values["claim_expires_at"],
             worker_id=str(values["worker_id"]),
+            needs_token=bool(values["claimed_needs_token"]),
             reconciliation_run_id=(
                 UUID(str(values["reconciliation_run_id"]))
                 if values.get("reconciliation_run_id") is not None

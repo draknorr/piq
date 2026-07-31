@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import time
 from dataclasses import asdict, dataclass, field
@@ -192,71 +193,100 @@ class DurablePICSProcessor:
         phase_seconds["lease_heartbeat"] = time.perf_counter() - phase_started
         heartbeat_transactions += 1
         tiger_transactions += 1
-        try:
-            phase_started = time.perf_counter()
-            raw_by_appid = fetcher.fetch_apps_batch([claim.appid for claim in claims])
-            phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
-        except Exception as error:
-            phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
-            logger.exception("Durable PICS batch fetch failed for %s claims", len(claims))
-            retried = 0
-            dead_lettered = 0
-            for claim in claims:
-                settlement_started = time.perf_counter()
-                state = self._fail_claim(
-                    claim,
-                    "product_fetch_failed",
-                    str(error),
-                    True,
+        phase_started = time.perf_counter()
+        raw_by_appid: Dict[int, Dict[str, Any]] = {}
+        outcomes: List[PICSClaimOutcome] = []
+        failed_claim_ids = set()
+        anonymous_claims = [claim for claim in claims if not claim.needs_token]
+        token_claims = [claim for claim in claims if claim.needs_token]
+        fetch_groups = [
+            (
+                anonymous_claims,
+                lambda: fetcher.fetch_apps_batch([claim.appid for claim in anonymous_claims]),
+            ),
+            (
+                token_claims,
+                lambda: fetcher.fetch_token_required_apps([claim.appid for claim in token_claims]),
+            ),
+        ]
+        for group, fetch_group in fetch_groups:
+            if not group:
+                continue
+            try:
+                raw_by_appid.update(fetch_group())
+            except Exception as error:
+                logger.exception(
+                    "Durable PICS %s batch fetch failed for %s claims",
+                    "token-required" if group[0].needs_token else "anonymous",
+                    len(group),
                 )
-                phase_samples.setdefault("tiger_failure_settlement", []).append(
-                    time.perf_counter() - settlement_started
-                )
-                tiger_transactions += 1
-                retried += int(state == "retrying")
-                dead_lettered += int(state == "dead_letter")
-            queue_metrics, queue_duration, queue_transactions = self._queue_metrics()
-            phase_seconds["queue_metrics"] = queue_duration
-            tiger_transactions += queue_transactions
-            phase_seconds["total"] = time.perf_counter() - pass_started
-            stats = PICSProcessingStats(
-                claimed=len(claims),
-                completed=0,
-                retried=retried,
-                dead_lettered=dead_lettered,
-                source_blocked=0,
-                snapshots_changed=0,
-                events_created=0,
-                live_claimed=len(live_claims),
-                catchup_claimed=len(catchup_claims),
-                duration_seconds=phase_seconds["total"],
-                product_info_requests=int(getattr(fetcher, "last_product_info_attempts", 1)),
-                heartbeat_transactions=heartbeat_transactions,
-                tiger_transactions=tiger_transactions,
-                tiger_transactions_per_settlement=self._transactions_per_settlement(
-                    tiger_transactions,
-                    retried + dead_lettered,
-                ),
-                phase_seconds=self._rounded_phases(phase_seconds),
-                phase_latency_seconds=self._summarize_phase_samples(phase_samples),
-                queue_metrics=queue_metrics,
-            )
-            self._log_processing_metrics(stats)
-            return stats
+                for claim in group:
+                    failure_message = self._redact_error_message(str(error))
+                    archive_written = 0
+                    archive_started = time.perf_counter()
+                    try:
+                        failure_archive = self._archive_request_failure(
+                            claim=claim,
+                            error=error,
+                            request_kind=("token_required" if claim.needs_token else "anonymous"),
+                        )
+                        failure_message = (
+                            f"{failure_message}; evidence="
+                            f"{failure_archive.bucket}/{failure_archive.key} "
+                            f"sha256={failure_archive.content_hash}"
+                        )
+                        archive_written = 1
+                    except Exception as archive_error:
+                        logger.exception(
+                            "Unable to archive PICS request failure for work %s",
+                            claim.id,
+                        )
+                        failure_message = (
+                            f"{failure_message}; evidence_archive_failed="
+                            f"{type(archive_error).__name__}"
+                        )
+                    settlement_started = time.perf_counter()
+                    state = self._fail_claim(
+                        claim,
+                        "product_fetch_failed",
+                        failure_message,
+                        True,
+                    )
+                    outcomes.append(
+                        PICSClaimOutcome(
+                            retried=int(state == "retrying"),
+                            dead_lettered=int(state == "dead_letter"),
+                            tiger_transactions=1,
+                            r2_writes=archive_written,
+                            phase_seconds={
+                                "r2_request_failure_write": (time.perf_counter() - archive_started),
+                                "tiger_failure_settlement": (
+                                    time.perf_counter() - settlement_started
+                                ),
+                            },
+                        )
+                    )
+                    failed_claim_ids.add(claim.id)
+        phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
+        process_claims = [claim for claim in claims if claim.id not in failed_claim_ids]
 
         phase_started = time.perf_counter()
-        latest_by_appid = self._work_store.get_latest_snapshots([claim.appid for claim in claims])
+        latest_by_appid = (
+            self._work_store.get_latest_snapshots([claim.appid for claim in process_claims])
+            if process_claims
+            else {}
+        )
         phase_seconds["latest_snapshot_lookup"] = time.perf_counter() - phase_started
-        tiger_transactions += 1
+        tiger_transactions += int(bool(process_claims))
 
         phase_started = time.perf_counter()
-        self._heartbeat_all(claims)
+        if process_claims:
+            self._heartbeat_all(process_claims)
+            heartbeat_transactions += 1
+            tiger_transactions += 1
         phase_seconds["lease_heartbeat"] += time.perf_counter() - phase_started
-        heartbeat_transactions += 1
-        tiger_transactions += 1
         last_heartbeat_at = time.monotonic()
 
-        outcomes: List[PICSClaimOutcome] = []
         concurrency = max(1, min(int(settings.pics_consumer_concurrency), 8))
         heartbeat_interval = max(
             10,
@@ -267,8 +297,8 @@ class DurablePICSProcessor:
         )
         downstream_started = time.perf_counter()
         thread_pool = gevent.get_hub().threadpool
-        for wave_start in range(0, len(claims), concurrency):
-            remaining_claims = claims[wave_start:]
+        for wave_start in range(0, len(process_claims), concurrency):
+            remaining_claims = process_claims[wave_start:]
             if time.monotonic() - last_heartbeat_at >= heartbeat_interval:
                 phase_started = time.perf_counter()
                 self._heartbeat_all(remaining_claims)
@@ -277,7 +307,7 @@ class DurablePICSProcessor:
                 tiger_transactions += 1
                 last_heartbeat_at = time.monotonic()
 
-            wave = claims[wave_start : wave_start + concurrency]
+            wave = process_claims[wave_start : wave_start + concurrency]
             jobs = [
                 thread_pool.spawn(
                     self._process_and_settle_claim,
@@ -401,7 +431,7 @@ class DurablePICSProcessor:
                 source_blocked=1,
                 tiger_transactions=1,
                 r2_reads=int(previous_pointer is not None),
-                r2_writes=1,
+                r2_writes=(1 + int(self._has_token_evidence_archive(raw_payload))),
                 phase_seconds=phase_seconds,
             )
         except Exception as error:
@@ -426,7 +456,12 @@ class DurablePICSProcessor:
                 dead_lettered=int(state == "dead_letter"),
                 tiger_transactions=1 + prior_tiger_attempts,
                 r2_reads=int(previous_pointer is not None),
-                r2_writes=int("r2_write" in phase_seconds),
+                r2_writes=sum(
+                    (
+                        int(self._has_token_evidence_archive(raw_payload)),
+                        int("r2_write" in phase_seconds),
+                    )
+                ),
                 phase_seconds=phase_seconds,
             )
 
@@ -438,6 +473,27 @@ class DurablePICSProcessor:
         previous_pointer: Optional[PICSLatestSnapshot],
         phase_seconds: Dict[str, float],
     ) -> Dict[str, int | bool]:
+        if claim.needs_token:
+            phase_started = time.perf_counter()
+            try:
+                if not isinstance(raw_payload, dict):
+                    raise RuntimeError("Token-required PICS work returned no auditable payload")
+                raw_payload["_token_request"] = self._redact_token_request_evidence(
+                    raw_payload.get("_token_request")
+                )
+                token_archive = self._archive_token_request_evidence(
+                    claim=claim,
+                    raw_payload=raw_payload,
+                )
+                raw_payload["_token_evidence_archive"] = {
+                    "bucket": token_archive.bucket,
+                    "key": token_archive.key,
+                    "contentHash": token_archive.content_hash,
+                    "byteSize": token_archive.byte_size,
+                    "contentType": token_archive.content_type,
+                }
+            finally:
+                phase_seconds["r2_token_evidence_write"] = time.perf_counter() - phase_started
         phase_started = time.perf_counter()
         try:
             previous_snapshot = self._read_previous_snapshot(previous_pointer)
@@ -484,7 +540,8 @@ class DurablePICSProcessor:
             return {
                 "snapshot_changed": snapshot_changed,
                 "event_count": 0,
-                "archive_written": archive is not None,
+                "archive_written": int(archive is not None)
+                + int(self._has_token_evidence_archive(raw_payload)),
             }
 
         if self._promoter is None:
@@ -515,8 +572,103 @@ class DurablePICSProcessor:
         return {
             "snapshot_changed": result.snapshot_changed,
             "event_count": result.event_count,
-            "archive_written": archive is not None,
+            "archive_written": int(archive is not None)
+            + int(self._has_token_evidence_archive(raw_payload)),
         }
+
+    def _archive_token_request_evidence(
+        self,
+        *,
+        claim: PICSWorkClaim,
+        raw_payload: Dict[str, Any],
+    ) -> ArchivePointer:
+        evidence = raw_payload.get(
+            "_token_request",
+            {"needsToken": True, "status": "unknown"},
+        )
+        document = {
+            "_archive_schema_version": "pics-token-request-evidence/v1",
+            "appid": claim.appid,
+            "stream_key": claim.stream_key,
+            "work_mode": claim.work_mode,
+            "work_id": claim.id,
+            "claimed_through_change_number": claim.claimed_through_change_number,
+            "token_request": evidence,
+        }
+        return self._archive_store.write_json(
+            content_hash=None,
+            key_parts=[
+                claim.stream_key,
+                str(claim.appid),
+                str(claim.claimed_through_change_number),
+                str(evidence.get("status", "unknown")) if isinstance(evidence, dict) else "unknown",
+            ],
+            kind="pics-token-request-evidence",
+            payload=document,
+        )
+
+    def _archive_request_failure(
+        self,
+        *,
+        claim: PICSWorkClaim,
+        error: Exception,
+        request_kind: str,
+    ) -> ArchivePointer:
+        return self._archive_store.write_json(
+            content_hash=None,
+            key_parts=[
+                claim.stream_key,
+                str(claim.appid),
+                str(claim.claimed_through_change_number),
+                request_kind,
+            ],
+            kind="pics-product-request-failure",
+            payload={
+                "_archive_schema_version": "pics-product-request-failure/v1",
+                "appid": claim.appid,
+                "stream_key": claim.stream_key,
+                "work_mode": claim.work_mode,
+                "work_id": claim.id,
+                "claimed_through_change_number": (claim.claimed_through_change_number),
+                "needs_token": claim.needs_token,
+                "request_kind": request_kind,
+                "error_class": type(error).__name__,
+                "error": self._redact_error_message(str(error)),
+            },
+        )
+
+    @staticmethod
+    def _redact_token_request_evidence(value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {"needsToken": True, "status": "unknown"}
+        allowed = {
+            "needsToken",
+            "status",
+            "expiresAt",
+            "expiresInSeconds",
+            "errorClass",
+            "refreshReason",
+        }
+        return {
+            key: item
+            for key, item in value.items()
+            if key in allowed and isinstance(item, (bool, float, int, str))
+        } or {"needsToken": True, "status": "unknown"}
+
+    @staticmethod
+    def _has_token_evidence_archive(raw_payload: Any) -> bool:
+        return isinstance(raw_payload, dict) and isinstance(
+            raw_payload.get("_token_evidence_archive"),
+            dict,
+        )
+
+    @staticmethod
+    def _redact_error_message(value: str) -> str:
+        return re.sub(
+            r"(?i)(access[_-]?token\s*[:=]\s*)[^\s,;]+",
+            r"\1[REDACTED]",
+            value,
+        )[:2_000]
 
     def _read_previous_snapshot(
         self,
@@ -569,6 +721,7 @@ class DurablePICSProcessor:
             "claimed_through_change_number": (claim.claimed_through_change_number),
             "attempts": claim.attempts,
             "max_attempts": claim.max_attempts,
+            "needs_token": claim.needs_token,
             "error_code": error.error_code,
             "error": str(error),
             "raw_payload": raw_payload,

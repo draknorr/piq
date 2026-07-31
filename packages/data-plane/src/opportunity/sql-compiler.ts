@@ -60,6 +60,63 @@ interface FieldSql {
 const STOREFRONT_READY = "readiness_storefront.status = 'ready'";
 const PICS_READY = "readiness_pics.status = 'ready'";
 
+function fieldEvidenceKnownSql(
+  field: OpportunityRuleField,
+  sources: readonly ("pics" | "storefront")[],
+  legacyKnownSql = "TRUE",
+): string {
+  const sourceList = sources.map((source) => `'${source}'`).join(", ");
+  return `(EXISTS (
+    SELECT 1
+    FROM ops.app_field_evidence field_evidence
+    WHERE field_evidence.appid = a.appid
+      AND field_evidence.field_name = '${field}'
+      AND field_evidence.source IN (${sourceList})
+      AND field_evidence.evidence_state = 'known'
+  ) OR (
+    NOT EXISTS (
+      SELECT 1
+      FROM ops.app_field_evidence field_evidence_any
+      WHERE field_evidence_any.appid = a.appid
+        AND field_evidence_any.field_name = '${field}'
+        AND field_evidence_any.source = 'pics'
+    )
+    AND ${PICS_READY}
+    AND ${legacyKnownSql}
+  ))`;
+}
+
+function resolvedFieldEvidenceValueSql(
+  field: "genres" | "categories" | "platforms" | "languages",
+  legacyValueSql: string,
+): string {
+  return `COALESCE((
+    SELECT field_value.value
+    FROM ops.app_field_evidence field_value
+    WHERE field_value.appid = a.appid
+      AND field_value.field_name = '${field}'
+      AND field_value.source IN ('pics', 'storefront')
+      AND field_value.evidence_state = 'known'
+    ORDER BY
+      CASE field_value.source WHEN 'pics' THEN 0 ELSE 1 END,
+      field_value.source_at DESC
+    LIMIT 1
+  ), (${legacyValueSql}))`;
+}
+
+function resolvedTextCollection(
+  field: "genres" | "categories" | "platforms" | "languages",
+  legacyValueSql: string,
+): FieldSql["collection"] {
+  return {
+    appidExpression: "a.appid",
+    nameExpression: "resolved_value.name",
+    relationSql: `jsonb_array_elements_text(
+      ${resolvedFieldEvidenceValueSql(field, legacyValueSql)}
+    ) AS resolved_value(name)`,
+  };
+}
+
 const METRIC_FIELDS = new Set<OpportunityRuleField>([
   "price_cents",
   "discount_percent",
@@ -167,15 +224,23 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "controller_support":
       return {
-        knownSql: `${PICS_READY} AND a.controller_support IS NOT NULL`,
+        knownSql: fieldEvidenceKnownSql(
+          "controller_support",
+          ["pics"],
+          "a.controller_support IS NOT NULL",
+        ),
         scalarSql: "a.controller_support",
       };
     case "steam_deck":
       return {
-        knownSql: `${PICS_READY} AND EXISTS (
-          SELECT 1 FROM legacy.app_steam_deck deck_known
-          WHERE deck_known.appid = a.appid
-        )`,
+        knownSql: fieldEvidenceKnownSql(
+          "steam_deck",
+          ["pics"],
+          `EXISTS (
+            SELECT 1 FROM legacy.app_steam_deck deck_known
+            WHERE deck_known.appid = a.appid
+          )`,
+        ),
         scalarSql: `(
           SELECT deck.category
           FROM legacy.app_steam_deck deck
@@ -249,28 +314,36 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
           relationSql: `legacy.app_steam_tags app_tag
             JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id`,
         },
-        knownSql: PICS_READY,
+        knownSql: fieldEvidenceKnownSql("tags", ["pics"]),
       };
     case "genres":
       return {
-        collection: {
-          appidExpression: "app_genre.appid",
-          nameExpression: "genre.name",
-          relationSql: `legacy.app_genres app_genre
-            JOIN legacy.steam_genres genre ON genre.genre_id = app_genre.genre_id`,
-        },
-        knownSql: PICS_READY,
+        collection: resolvedTextCollection(
+          "genres",
+          `SELECT COALESCE(
+            jsonb_agg(genre.name ORDER BY app_genre.is_primary DESC, genre.name),
+            '[]'::jsonb
+          )
+          FROM legacy.app_genres app_genre
+          JOIN legacy.steam_genres genre ON genre.genre_id = app_genre.genre_id
+          WHERE app_genre.appid = a.appid`,
+        ),
+        knownSql: fieldEvidenceKnownSql("genres", ["pics", "storefront"]),
       };
     case "categories":
       return {
-        collection: {
-          appidExpression: "app_category.appid",
-          nameExpression: "category.name",
-          relationSql: `legacy.app_categories app_category
-            JOIN legacy.steam_categories category
-              ON category.category_id = app_category.category_id`,
-        },
-        knownSql: PICS_READY,
+        collection: resolvedTextCollection(
+          "categories",
+          `SELECT COALESCE(
+            jsonb_agg(category.name ORDER BY category.name),
+            '[]'::jsonb
+          )
+          FROM legacy.app_categories app_category
+          JOIN legacy.steam_categories category
+            ON category.category_id = app_category.category_id
+          WHERE app_category.appid = a.appid`,
+        ),
+        knownSql: fieldEvidenceKnownSql("categories", ["pics", "storefront"]),
       };
     case "developer":
       return {
@@ -296,17 +369,42 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "platforms":
       return {
-        knownSql: `${PICS_READY} AND a.platforms IS NOT NULL`,
-        textCollectionSql: "a.platforms",
+        collection: resolvedTextCollection(
+          "platforms",
+          "SELECT to_jsonb(string_to_array(a.platforms, ','))",
+        ),
+        knownSql: fieldEvidenceKnownSql(
+          "platforms",
+          ["pics", "storefront"],
+          "a.platforms IS NOT NULL",
+        ),
       };
     case "languages":
       return {
-        knownSql: `${PICS_READY} AND a.languages IS NOT NULL`,
-        textCollectionSql: "a.languages::text",
+        collection: resolvedTextCollection(
+          "languages",
+          `SELECT CASE jsonb_typeof(a.languages)
+            WHEN 'array' THEN a.languages
+            WHEN 'object' THEN COALESCE((
+              SELECT jsonb_agg(language.value ORDER BY language.value)
+              FROM jsonb_object_keys(a.languages) AS language(value)
+            ), '[]'::jsonb)
+            ELSE '[]'::jsonb
+          END`,
+        ),
+        knownSql: fieldEvidenceKnownSql(
+          "languages",
+          ["pics", "storefront"],
+          "a.languages IS NOT NULL",
+        ),
       };
     case "content_descriptors":
       return {
-        knownSql: `${PICS_READY} AND a.content_descriptors IS NOT NULL`,
+        knownSql: fieldEvidenceKnownSql(
+          "content_descriptors",
+          ["pics"],
+          "a.content_descriptors IS NOT NULL",
+        ),
         textCollectionSql: "a.content_descriptors::text",
       };
     case "has_demo":

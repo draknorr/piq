@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildNormalizedStorefrontSnapshotUpsertArgs,
   normalizeAppType,
+  parseStorefrontLanguages,
   sanitizeStorefrontPriceCents,
   upsertLatestStorefrontState,
 } from './storefront-latest-state.js';
@@ -108,6 +109,15 @@ test('sanitizeStorefrontPriceCents drops unreasonable storefront prices', () => 
   assert.equal(sanitizeStorefrontPriceCents(1999), 1999);
 });
 
+test('parseStorefrontLanguages removes Steam full-audio footnote without joining it to the final language', () => {
+  assert.deepEqual(
+    parseStorefrontLanguages(
+      'English<strong>*</strong>, Simplified Chinese, Russian, Japanese<strong>*</strong><br><strong>*</strong>languages with full audio support'
+    ),
+    ['English', 'Simplified Chinese', 'Russian', 'Japanese']
+  );
+});
+
 test('upsertLatestStorefrontState sends null release_date to Tiger when parsing failed', async () => {
   let upsertArgs: Record<string, unknown> | null = null;
   const supabase = {} as TypedSupabaseClient;
@@ -123,7 +133,7 @@ test('upsertLatestStorefrontState sends null release_date to Tiger when parsing 
   await upsertLatestStorefrontState(supabase, 36150, buildStorefrontApp({
     releaseDate: null,
     releaseDateRaw: '',
-  }), tiger);
+  }), tiger, '2026-07-31T12:00:00.000Z');
 
   assert.deepEqual(upsertArgs, {
     p_appid: 36150,
@@ -140,6 +150,11 @@ test('upsertLatestStorefrontState sends null release_date to Tiger when parsing 
     p_is_released: true,
     p_developers: ['Studio'],
     p_publishers: ['Publisher'],
+    p_genres: [],
+    p_categories: [],
+    p_platforms: ['windows'],
+    p_languages: [],
+    p_evidence_observed_at: '2026-07-31T12:00:00.000Z',
   });
 });
 
@@ -203,5 +218,49 @@ test('buildNormalizedStorefrontSnapshotUpsertArgs replays stored storefront snap
     p_publishers: ['Snapshot Publisher'],
     p_dlc_appids: [111, 222],
     p_demo_appids: [333],
+    p_genres: null,
+    p_categories: null,
+    p_platforms: null,
+    p_languages: null,
+    p_evidence_observed_at: null,
   });
+});
+
+test('Storefront evidence preserves absent fields separately from known empty fields', async () => {
+  let upsertArgs: Record<string, unknown> | null = null;
+  const tiger: StorefrontWriterArg = {
+    catalog: {
+      upsertStorefrontApp(args: StorefrontAppUpsertArgs) {
+        upsertArgs = args as unknown as Record<string, unknown>;
+        return Promise.resolve();
+      },
+    },
+  };
+
+  await upsertLatestStorefrontState(
+    {} as TypedSupabaseClient,
+    36150,
+    buildStorefrontApp({
+      categories: [],
+      genres: [],
+      fieldPresence: {
+        categories: true,
+        genres: false,
+        languages: true,
+        platforms: false,
+      },
+      supportedLanguages: 'English<strong>*</strong>, French, English',
+    }),
+    tiger,
+    '2026-07-31T12:00:00.000Z'
+  );
+
+  if (!upsertArgs) {
+    throw new Error('Expected Tiger storefront upsert to be called');
+  }
+  const capturedArgs = upsertArgs as Record<string, unknown>;
+  assert.deepEqual(capturedArgs.p_categories, []);
+  assert.equal(capturedArgs.p_genres, null);
+  assert.deepEqual(capturedArgs.p_languages, ['English', 'French']);
+  assert.equal(capturedArgs.p_platforms, null);
 });

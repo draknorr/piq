@@ -52,15 +52,25 @@ class FakeFetcher:
     def __init__(self, payload):
         self.payload = payload
         self.requested = []
+        self.token_requested = []
 
     def fetch_apps_batch(self, appids):
         self.requested.append(appids)
+        return {appids[0]: self.payload}
+
+    def fetch_token_required_apps(self, appids):
+        self.token_requested.append(appids)
         return {appids[0]: self.payload}
 
 
 class FailingFetcher:
     def fetch_apps_batch(self, _appids):
         raise RuntimeError("Steam unavailable")
+
+
+class FailingTokenFetcher:
+    def fetch_token_required_apps(self, _appids):
+        raise RuntimeError("access_token=must-not-be-archived Steam token acquisition unavailable")
 
 
 class FakeArchiveStore:
@@ -199,6 +209,69 @@ def test_missing_access_token_is_archived_and_source_blocked():
     assert len(work_store.blocked) == 1
     assert work_store.blocked[0]["blocking_reason"] == "missing_access_token"
     assert archive_store.writes[0]["kind"] == "pics-product-payload-blocked"
+
+
+def test_token_required_claim_never_uses_anonymous_product_info():
+    claim = replace(make_claim(), needs_token=True)
+    work_store = FakeWorkStore(claim)
+    fetcher = FakeFetcher(make_payload())
+    archive_store = FakeArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(fetcher)
+
+    assert stats.completed == 1
+    assert stats.r2_writes == 2
+    assert fetcher.requested == []
+    assert fetcher.token_requested == [[7]]
+    assert [write["kind"] for write in archive_store.writes] == [
+        "pics-token-request-evidence",
+        "pics-product-payload",
+    ]
+
+
+def test_token_required_block_archives_redacted_acquisition_and_payload_evidence():
+    claim = replace(make_claim(), needs_token=True)
+    work_store = FakeWorkStore(claim)
+    archive_store = FakeArchiveStore()
+    payload = make_payload(missing_token=True)
+    payload["_token_request"] = {
+        "needsToken": True,
+        "status": "unavailable",
+        "errorClass": "MissingAccessToken",
+        "accessToken": "must-not-be-archived",
+    }
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FakeFetcher(payload))
+
+    assert stats.source_blocked == 1
+    assert stats.r2_writes == 2
+    assert [write["kind"] for write in archive_store.writes] == [
+        "pics-token-request-evidence",
+        "pics-product-payload-blocked",
+    ]
+    token_document = archive_store.writes[0]["payload"]
+    assert token_document["token_request"] == {
+        "needsToken": True,
+        "status": "unavailable",
+        "errorClass": "MissingAccessToken",
+    }
+    blocked_payload = archive_store.writes[1]["payload"]["raw_payload"]
+    assert "accessToken" not in blocked_payload["_token_request"]
+    assert blocked_payload["_token_evidence_archive"]["key"] == "test/1.json"
 
 
 def test_missing_product_response_is_retried():
@@ -344,11 +417,12 @@ def test_tiger_settlement_failure_releases_claim_and_retains_archive():
 def test_batch_fetch_failure_releases_claim_for_bounded_retry():
     claim = make_claim()
     work_store = FakeWorkStore(claim)
+    archive_store = FakeArchiveStore()
     processor = DurablePICSProcessor(
         work_mode="shadow",
         stream_key="shadow-test",
         work_store=work_store,
-        archive_store=FakeArchiveStore(),
+        archive_store=archive_store,
         worker_id="test-worker",
     )
 
@@ -357,8 +431,38 @@ def test_batch_fetch_failure_releases_claim_for_bounded_retry():
     assert stats.claimed == 1
     assert stats.retried == 1
     assert stats.completed == 0
+    assert stats.r2_writes == 1
     assert len(work_store.failed) == 1
     assert work_store.failed[0]["error_code"] == "product_fetch_failed"
+    assert "evidence=test-bucket/test/1.json" in work_store.failed[0]["error_message"]
+    assert archive_store.writes[0]["kind"] == "pics-product-request-failure"
+    assert archive_store.writes[0]["payload"]["request_kind"] == "anonymous"
+
+
+def test_token_acquisition_failure_is_archived_before_bounded_retry():
+    claim = replace(make_claim(), needs_token=True)
+    work_store = FakeWorkStore(claim)
+    archive_store = FakeArchiveStore()
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=work_store,
+        archive_store=archive_store,
+        worker_id="test-worker",
+    )
+
+    stats = processor.process_once(FailingTokenFetcher())
+
+    assert stats.retried == 1
+    assert stats.r2_writes == 1
+    assert archive_store.writes[0]["kind"] == "pics-product-request-failure"
+    failure = archive_store.writes[0]["payload"]
+    assert failure["needs_token"] is True
+    assert failure["request_kind"] == "token_required"
+    assert failure["error_class"] == "RuntimeError"
+    assert "must-not-be-archived" not in failure["error"]
+    assert "[REDACTED]" in failure["error"]
+    assert "must-not-be-archived" not in work_store.failed[0]["error_message"]
 
 
 def test_unprocessed_leases_use_batched_barrier_heartbeats():

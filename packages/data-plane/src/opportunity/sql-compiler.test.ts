@@ -93,6 +93,77 @@ describe("opportunity SQL compiler", () => {
     assert.match(compiled.matchSql, / OR /);
   });
 
+  it("allows Storefront evidence only for supported fallback fields", () => {
+    const rules: OpportunityRuleSet = {
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "genres",
+              id: "genre",
+              operator: "contains",
+              value: "Strategy",
+            },
+            {
+              field: "tags",
+              id: "tag",
+              operator: "contains",
+              value: "Tactical",
+            },
+          ],
+          id: "taxonomy",
+          label: "Taxonomy",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    };
+
+    const compiled = compileOpportunityPreview(rules);
+    const genreCoverage = compiled.coverageFields.find(
+      ({ field }) => field === "genres",
+    )!;
+    const tagCoverage = compiled.coverageFields.find(
+      ({ field }) => field === "tags",
+    )!;
+
+    assert.match(genreCoverage.knownSql, /'pics', 'storefront'/);
+    assert.match(tagCoverage.knownSql, /source IN \('pics'\)/);
+    assert.doesNotMatch(tagCoverage.knownSql, /storefront/);
+    assert.match(genreCoverage.knownSql, /field_evidence_any\.source = 'pics'/);
+
+    const emptyPlatform = compileOpportunityPreview({
+      excluded: [],
+      preferred: [],
+      required: [
+        {
+          clauses: [
+            {
+              field: "platforms",
+              id: "none",
+              operator: "not_exists",
+            },
+          ],
+          id: "platform",
+          label: "No listed platform",
+          operator: "all",
+        },
+      ],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    });
+    assert.match(
+      emptyPlatform.coverageFields[0]!.knownSql,
+      /a\.platforms IS NOT NULL/,
+    );
+    assert.match(emptyPlatform.matchSql, /jsonb_array_elements_text/);
+    assert.match(
+      emptyPlatform.matchSql,
+      /CASE field_value\.source WHEN 'pics' THEN 0 ELSE 1 END/,
+    );
+  });
+
   it("uses relative CCU growth consistently in preview rules", () => {
     const compiled = compileOpportunityPreview({
       excluded: [],

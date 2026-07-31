@@ -1,4 +1,6 @@
+import json
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID
@@ -53,6 +55,32 @@ def make_payload_with_absent_tags():
             "type": "game",
             "category": {},
             "genres": {},
+            "associations": {},
+        },
+        "extended": {"listofdlc": ""},
+        "config": {},
+        "depots": {},
+    }
+    return validate_pics_product_payload(
+        appid=7,
+        claimed_through_change_number=20,
+        raw_payload=raw,
+    )
+
+
+def make_payload_with_tag():
+    raw = {
+        "appid": 7,
+        "_change_number": 20,
+        "_missing_token": False,
+        "_sha": "a" * 40,
+        "_size": 100,
+        "common": {
+            "name": "Test app",
+            "type": "game",
+            "category": {},
+            "genres": {},
+            "store_tags": {"0": "123"},
             "associations": {},
         },
         "extended": {"listofdlc": ""},
@@ -165,6 +193,7 @@ class FakeCursor(AbstractContextManager):
         franchise_normalized_id=None,
         franchise_insert_id=None,
         franchise_post_conflict_id=None,
+        tag_names=(),
     ):
         self.fail_on = fail_on
         self.franchise_exact_id = franchise_exact_id
@@ -172,6 +201,7 @@ class FakeCursor(AbstractContextManager):
         self.franchise_insert_id = franchise_insert_id
         self.franchise_post_conflict_id = franchise_post_conflict_id
         self.franchise_insert_attempted = False
+        self.tag_names = tuple(tag_names)
         self.events = []
         self.rowcount = 0
         self._row = None
@@ -219,6 +249,8 @@ class FakeCursor(AbstractContextManager):
             if self.franchise_insert_id is not None:
                 self._row = (self.franchise_insert_id,)
                 self.rowcount = 1
+        elif normalized.startswith("SELECT COALESCE( array_agg(tag.name"):
+            self._row = (list(self.tag_names),)
 
     def fetchone(self):
         return self._row
@@ -309,7 +341,13 @@ def test_promotion_commits_snapshot_latest_state_readiness_and_ack_together():
     acknowledgement_index = next(
         i for i, statement in enumerate(statements) if "RETURNING state" in statement
     )
-    assert snapshot_index < latest_index < readiness_index < acknowledgement_index
+    evidence_index = next(
+        i
+        for i, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO ops.app_field_evidence")
+    )
+    assert "COALESCE(input.value, 'null'::jsonb)" in statements[evidence_index]
+    assert snapshot_index < latest_index < evidence_index < readiness_index < acknowledgement_index
     assert result.snapshot_id == 100
     assert result.snapshot_changed is True
     assert result.next_work_state == "completed"
@@ -334,6 +372,73 @@ def test_absent_relationship_family_never_deletes_existing_edges():
     assert not any(
         statement.startswith("DELETE FROM legacy.app_steam_tags") for statement in statements
     )
+    evidence_payload = next(
+        params[2]
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO ops.app_field_evidence")
+    )
+    evidence_by_field = {item["field_name"]: item for item in json.loads(evidence_payload)}
+    assert evidence_by_field["tags"]["evidence_state"] == "missing"
+    assert evidence_by_field["tags"]["value"] is None
+    assert connection.committed is True
+
+
+def test_pics_field_evidence_uses_promoted_tag_names_not_raw_ids():
+    cursor = FakeCursor(tag_names=("Tactical",))
+    promoter, connection = make_promoter(cursor)
+
+    promoter.promote(
+        claim=make_claim(),
+        worker_id="worker-1",
+        payload=make_payload_with_tag(),
+        previous_pointer=None,
+        previous_snapshot=None,
+        archive=archive_pointer(),
+    )
+
+    evidence_payload = next(
+        params[2]
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO ops.app_field_evidence")
+    )
+    evidence_by_field = {item["field_name"]: item for item in json.loads(evidence_payload)}
+    assert evidence_by_field["tags"]["evidence_state"] == "known"
+    assert evidence_by_field["tags"]["value"] == ["Tactical"]
+    assert connection.committed is True
+
+
+def test_token_request_archive_is_carried_into_ready_provenance():
+    cursor = FakeCursor()
+    promoter, connection = make_promoter(cursor)
+    payload = make_payload()
+    payload.raw_payload["_token_request"] = {
+        "needsToken": True,
+        "status": "refreshed",
+        "refreshReason": "steam_rejected",
+    }
+    payload.raw_payload["_token_evidence_archive"] = {
+        "bucket": "test-bucket",
+        "key": "test/token-evidence.json",
+        "contentHash": "c" * 64,
+    }
+
+    promoter.promote(
+        claim=replace(make_claim(), needs_token=True),
+        worker_id="worker-1",
+        payload=payload,
+        previous_pointer=None,
+        previous_snapshot=None,
+        archive=archive_pointer(),
+    )
+
+    readiness_params = next(
+        params
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO ops.app_data_readiness")
+    )
+    provenance = json.loads(readiness_params[6])
+    assert provenance["tokenRequestEvidence"]["status"] == "refreshed"
+    assert provenance["tokenEvidenceArchive"]["key"] == "test/token-evidence.json"
     assert connection.committed is True
 
 

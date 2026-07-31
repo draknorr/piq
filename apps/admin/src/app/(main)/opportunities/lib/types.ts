@@ -331,6 +331,16 @@ export interface OpportunityGameRecord {
     sourceAt: string | null;
     value: unknown;
   }>;
+  evidenceResolution: {
+    currentResolvedAt: string;
+    evaluatedAt: string;
+    previouslyMissingNowAvailable: Array<{
+      field: OpportunityRuleField;
+      source: string;
+      sourceAt: string | null;
+      value: unknown;
+    }>;
+  };
   marketContext: null | {
     concentration: { topOneShare: number | null; warning: string | null };
     confidence: "high" | "directional";

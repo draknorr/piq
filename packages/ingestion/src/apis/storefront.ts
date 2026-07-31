@@ -187,6 +187,12 @@ export interface ParsedStorefrontApp {
     webmUrl: string | null;
     highlight: boolean;
   }>;
+  fieldPresence?: {
+    categories: boolean;
+    genres: boolean;
+    languages: boolean;
+    platforms: boolean;
+  };
 }
 
 /**
@@ -319,6 +325,12 @@ export function parseStorefrontResponse(
       webmUrl: movie.webm?.max ?? movie.webm?.['480'] ?? null,
       highlight: Boolean(movie.highlight),
     })),
+    fieldPresence: {
+      categories: Object.prototype.hasOwnProperty.call(data, 'categories'),
+      genres: Object.prototype.hasOwnProperty.call(data, 'genres'),
+      languages: Object.prototype.hasOwnProperty.call(data, 'supported_languages'),
+      platforms: Object.prototype.hasOwnProperty.call(data, 'platforms'),
+    },
   };
 }
 

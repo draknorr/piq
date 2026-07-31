@@ -263,7 +263,37 @@ describe("opportunity customer response contracts", () => {
       };
       const pool = {
         query: async (text: string): Promise<{ rows: unknown[] }> => {
-          gameRecordQuery = text;
+          if (text.includes("WITH input_appids AS MATERIALIZED")) {
+            return {
+              rows: [
+                {
+                  appid: 424242,
+                  app_type: "game",
+                  categories: [],
+                  developers: [],
+                  field_evidence: {
+                    genres: {
+                      picsRecorded: false,
+                      source: "storefront",
+                      sourceAt: "2026-07-28T09:00:00.000Z",
+                      state: "known",
+                      value: ["Strategy"],
+                    },
+                  },
+                  genres: ["Strategy"],
+                  has_demo: false,
+                  name: "Lanterns at Low Tide",
+                  pics_status: "source_blocked",
+                  publishers: [],
+                  storefront_status: "ready",
+                  tags: [],
+                },
+              ],
+            };
+          }
+          if (text.includes("FROM opportunity.results canonical")) {
+            gameRecordQuery = text;
+          }
           return {
             rows: [
               {
@@ -273,10 +303,13 @@ describe("opportunity customer response contracts", () => {
                 evidence: [],
                 market_context: null,
                 matched_profiles: [],
-                missing_evidence: [],
+                missing_evidence: ["genres"],
                 official_news: [],
                 previous_appearances: [],
-                provenance: {},
+                provenance: {
+                  run: { windowEnd: "2026-07-27T08:00:00.000Z" },
+                  sourceTimestamps: {},
+                },
                 rank: {},
                 recent_changes: [recentChange],
                 result_summary: {
@@ -332,10 +365,160 @@ describe("opportunity customer response contracts", () => {
       });
       assert.deepEqual(record.result.change, observedChange);
       assert.deepEqual(record.recentChanges, [recentChange]);
+      assert.equal(
+        record.evidenceResolution.evaluatedAt,
+        "2026-07-27T08:00:00.000Z",
+      );
+      assert.deepEqual(record.missingEvidence, ["genres"]);
+      assert.deepEqual(
+        record.evidenceResolution.previouslyMissingNowAvailable,
+        [
+          {
+            field: "genres",
+            source: "steam_storefront",
+            sourceAt: "2026-07-28T09:00:00.000Z",
+            value: ["Strategy"],
+          },
+        ],
+      );
       assert.match(gameRecordQuery, /'change', CASE/);
       assert.match(gameRecordQuery, /'affectedRuleFields'/);
     });
   }
+});
+
+describe("opportunity field-level Steam evidence resolution", () => {
+  it("uses known Storefront fallback while PICS remains source-blocked", async () => {
+    let projectionQuery = "";
+    const pool = {
+      query: async (text: string): Promise<{ rows: unknown[] }> => {
+        projectionQuery = text;
+        return {
+          rows: [
+            {
+              appid: 5005180,
+              app_type: "game",
+              catalog_first_observation_kind: "new",
+              catalog_first_observed_at: "2026-07-31T08:00:00.000Z",
+              catalog_source_at: "2026-07-31T08:00:00.000Z",
+              categories: [],
+              ccu_change_30d: null,
+              ccu_change_7d: null,
+              ccu_peak: null,
+              content_descriptors: null,
+              controller_support: null,
+              developer_game_count: null,
+              developers: [],
+              discount_percent: 0,
+              field_evidence: {
+                categories: {
+                  picsRecorded: false,
+                  source: "storefront",
+                  sourceAt: "2026-07-31T08:09:12.000Z",
+                  state: "known",
+                  value: ["Single-player"],
+                },
+                genres: {
+                  picsRecorded: false,
+                  source: "storefront",
+                  sourceAt: "2026-07-31T08:09:12.000Z",
+                  state: "known",
+                  value: [],
+                },
+                platforms: {
+                  picsRecorded: false,
+                  source: "storefront",
+                  sourceAt: "2026-07-31T08:09:12.000Z",
+                  state: "missing",
+                  value: null,
+                },
+              },
+              genres: [],
+              has_demo: false,
+              has_purchase_packages: true,
+              is_free: false,
+              is_released: false,
+              languages: null,
+              market_status: "pending",
+              name: "Checkmate in 3",
+              pics_source_at: "2026-07-31T08:09:30.000Z",
+              pics_status: "source_blocked",
+              platforms: null,
+              positive_percentage: null,
+              price_cents: null,
+              publisher_game_count: null,
+              publishers: [],
+              release_date: null,
+              release_state: "prerelease",
+              reviews_added_30d: null,
+              reviews_added_7d: null,
+              source_max_metric_date: null,
+              steam_deck: null,
+              storefront_source_at: "2026-07-31T08:09:12.000Z",
+              storefront_status: "ready",
+              tags: [],
+              total_reviews: null,
+            },
+          ],
+        };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    const [input] = await repository.getRuleInputsShadow([5005180]);
+
+    assert.equal(input?.fields.genres?.state, "known");
+    assert.equal(input?.fields.genres?.source, "steam_storefront");
+    assert.deepEqual(input?.fields.genres?.value, []);
+    assert.deepEqual(input?.fields.categories?.value, ["Single-player"]);
+    assert.equal(input?.fields.platforms?.state, "unknown");
+    assert.equal(input?.fields.platforms?.source, "steam_storefront");
+    assert.equal(input?.fields.tags?.state, "unknown");
+    assert.equal(input?.fields.tags?.source, "steam_pics");
+    assert.match(
+      projectionQuery,
+      /CASE evidence\.evidence_state WHEN 'known' THEN 0 ELSE 1 END/,
+    );
+    assert.match(projectionQuery, /bool_or\(evidence\.source = 'pics'\)/);
+  });
+
+  it("retains legacy PICS-ready compatibility until a PICS field row is recorded", async () => {
+    const pool = {
+      query: async (): Promise<{ rows: unknown[] }> => ({
+        rows: [
+          {
+            appid: 7,
+            app_type: "game",
+            categories: ["Single-player"],
+            developers: [],
+            field_evidence: {
+              categories: {
+                picsRecorded: false,
+                source: "storefront",
+                state: "missing",
+                value: null,
+              },
+            },
+            genres: [],
+            has_demo: false,
+            name: "Legacy PICS app",
+            pics_status: "ready",
+            publishers: [],
+            storefront_status: "ready",
+            tags: [],
+          },
+        ],
+      }),
+    } as unknown as Pool;
+
+    const [input] = await new OpportunityRepository(pool).getRuleInputsShadow([
+      7,
+    ]);
+
+    assert.equal(input?.fields.categories?.state, "known");
+    assert.equal(input?.fields.categories?.source, "steam_pics");
+    assert.deepEqual(input?.fields.categories?.value, ["Single-player"]);
+  });
 });
 
 describe("opportunity workspace provisioning", () => {

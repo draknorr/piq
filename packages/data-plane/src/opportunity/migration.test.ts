@@ -30,6 +30,15 @@ const performanceMigration = readFileSync(
   ),
   "utf8",
 );
+const evidenceMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../sql/tiger-bootstrap/0100_opportunity_field_sources_token_pics.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const workerRepository = readFileSync(
   fileURLToPath(new URL("./worker-repository.ts", import.meta.url)),
   "utf8",
@@ -222,5 +231,42 @@ describe("opportunity evaluation performance migration", () => {
       workerRepository,
       /INSERT INTO opportunity\.released_cohort_cache_v1/,
     );
+  });
+});
+
+describe("opportunity field evidence migration", () => {
+  it("adds source-specific evidence without mutating opportunity result history", () => {
+    assert.match(
+      evidenceMigration,
+      /CREATE TABLE IF NOT EXISTS ops\.app_field_evidence/,
+    );
+    assert.match(evidenceMigration, /missingVersusEmptyPreserved/);
+    assert.match(evidenceMigration, /upsert_storefront_app_evidence_v1/);
+    assert.match(evidenceMigration, /IF p_observed_at IS NULL THEN\s+RETURN/s);
+    assert.doesNotMatch(evidenceMigration, /ops\.app_data_readiness/);
+    assert.doesNotMatch(evidenceMigration, /source_name\s*=\s*'pics'/);
+    assert.doesNotMatch(evidenceMigration, /UPDATE opportunity\.results/);
+    assert.doesNotMatch(evidenceMigration, /DELETE FROM opportunity\.results/);
+    assert.doesNotMatch(
+      evidenceMigration,
+      /jsonb_to_recordset\([^\n]+\) WITH ORDINALITY/,
+    );
+  });
+
+  it("makes token replays explicit and audited", () => {
+    assert.match(
+      evidenceMigration,
+      /ADD COLUMN IF NOT EXISTS needs_token boolean/,
+    );
+    assert.match(
+      evidenceMigration,
+      /batch\.stream_key = work\.stream_key[\s\S]*batch\.work_mode = work\.work_mode/,
+    );
+    assert.match(
+      evidenceMigration,
+      /CREATE TABLE IF NOT EXISTS ops\.pics_token_replay_audit/,
+    );
+    assert.match(evidenceMigration, /archive_content_hash/);
+    assert.match(evidenceMigration, /requested_by/);
   });
 });
