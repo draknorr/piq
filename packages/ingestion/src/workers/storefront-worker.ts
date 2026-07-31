@@ -149,7 +149,13 @@ export async function processTigerStorefrontApp(params: {
       triggerReason: 'storefront_safety_sweep',
       triggerCursor: null,
     });
-    await upsertLatestStorefrontState(supabasePlaceholder, appid, result.data, tiger);
+    await upsertLatestStorefrontState(
+      supabasePlaceholder,
+      appid,
+      result.data,
+      tiger,
+      observedAt
+    );
 
     if (neverSyncedSet.has(appid)) {
       stats.appsCreated++;

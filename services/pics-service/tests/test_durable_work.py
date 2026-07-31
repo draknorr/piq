@@ -13,13 +13,22 @@ from src.database.durable_work import (
 
 
 class FakeCursor(AbstractContextManager):
-    def __init__(self, *, fail_on=None, reconciliation_item_rowcount=1):
+    def __init__(
+        self,
+        *,
+        fail_on=None,
+        reconciliation_item_rowcount=1,
+        token_preview_rows=None,
+        token_replay_rows=None,
+    ):
         self.fail_on = fail_on
         self.reconciliation_item_rowcount = reconciliation_item_rowcount
         self.events = []
         self.rowcount = 0
         self._rows = []
         self._row = None
+        self.token_preview_rows = list(token_preview_rows or [])
+        self.token_replay_rows = list(token_replay_rows or [])
 
     def __enter__(self):
         return self
@@ -49,6 +58,7 @@ class FakeCursor(AbstractContextManager):
                     "max_attempts": 8,
                     "claim_expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
                     "worker_id": "worker-1",
+                    "claimed_needs_token": True,
                     "reconciliation_run_id": None,
                 }
             ]
@@ -75,6 +85,17 @@ class FakeCursor(AbstractContextManager):
                 10,
                 60,
             )
+        elif normalized.startswith("SELECT work.id, work.appid"):
+            self._rows = self.token_preview_rows
+        elif normalized.startswith("SELECT id, appid, state, last_error_code"):
+            self._rows = self.token_replay_rows
+        elif normalized.startswith("INSERT INTO ops.pics_token_replay_audit"):
+            self.rowcount = 1
+        elif (
+            normalized.startswith("UPDATE ops.pics_work_state SET state = 'pending'")
+            and "missing_access_token" in normalized
+        ):
+            self.rowcount = len(self.token_replay_rows)
         elif "RETURNING state" in normalized:
             self._row = ("completed",)
             self.rowcount = 1
@@ -198,6 +219,7 @@ def test_claim_recovers_expired_leases_before_skip_locked_claim():
     assert "FOR UPDATE OF work SKIP LOCKED" in statements[claim_index]
     assert claims[0].claimed_through_change_number == 20
     assert claims[0].attempts == 2
+    assert claims[0].needs_token is True
     assert connection.committed is True
 
 
@@ -511,3 +533,104 @@ def test_queue_metrics_reports_catchup_rate_and_eta():
     assert metrics.catchup_eta_hours == 2.0
     assert metrics.missing_access_token == 10
     assert connection.committed is True
+
+
+def test_token_replay_preview_is_read_only_bounded_and_primary_only():
+    blocked_at = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    cursor = FakeCursor(
+        token_preview_rows=[
+            (
+                41,
+                5005180,
+                "primary",
+                "live",
+                37667191,
+                True,
+                blocked_at,
+                "ready",
+                blocked_at,
+                {"categories": "known", "genres": "known"},
+                {"categoryCount": 13, "genreCount": 3},
+            )
+        ]
+    )
+    store, connection = make_store(cursor)
+
+    candidates = store.preview_missing_access_token_replay(
+        appids=[5005180],
+        limit=10,
+    )
+
+    statements = [statement for statement, _ in cursor.events]
+    assert statements[0] == "SET TRANSACTION READ ONLY"
+    preview_query = next(
+        statement for statement in statements if statement.startswith("SELECT work.id")
+    )
+    assert "work.work_mode = 'durable'" in preview_query
+    assert "work.stream_key = 'primary'" in preview_query
+    assert candidates[0].appid == 5005180
+    assert candidates[0].storefront_field_coverage["genres"] == "known"
+    assert connection.committed is True
+
+
+def test_token_replay_reopens_only_exact_audited_primary_work():
+    cursor = FakeCursor(token_replay_rows=[(41, 5005180, "source_blocked", "missing_access_token")])
+    store, connection = make_store(cursor)
+
+    requeued = store.requeue_missing_access_token(
+        appids=[5005180],
+        requested_by="operator@example.com",
+        reason="approved incident replay",
+        archive={
+            "bucket": "pics-archive",
+            "key": "replays/5005180.json",
+            "content_hash": "a" * 64,
+        },
+    )
+
+    replay_select = next(
+        statement
+        for statement, _ in cursor.events
+        if statement.startswith("SELECT id, appid, state, last_error_code")
+    )
+    audit_statement, audit = next(
+        (statement, params)
+        for statement, params in cursor.events
+        if statement.startswith("INSERT INTO ops.pics_token_replay_audit")
+    )
+    assert "work_mode = 'durable'" in replay_select
+    assert "stream_key = 'primary'" in replay_select
+    assert "ON CONFLICT" not in audit_statement
+    assert audit[0:6] == (
+        5005180,
+        41,
+        "source_blocked",
+        "missing_access_token",
+        "operator@example.com",
+        "approved incident replay",
+    )
+    assert requeued == 1
+    assert connection.committed is True
+
+
+def test_token_replay_fails_closed_when_any_exact_target_is_ineligible():
+    cursor = FakeCursor(token_replay_rows=[(41, 5005180, "source_blocked", "missing_access_token")])
+    store, connection = make_store(cursor)
+
+    with pytest.raises(PICSWorkStateError, match="no longer eligible"):
+        store.requeue_missing_access_token(
+            appids=[5005180, 5005181],
+            requested_by="operator@example.com",
+            reason="approved incident replay",
+            archive={
+                "bucket": "pics-archive",
+                "key": "replays/5005180.json",
+                "content_hash": "a" * 64,
+            },
+        )
+
+    assert not any(
+        statement.startswith("INSERT INTO ops.pics_token_replay_audit")
+        for statement, _ in cursor.events
+    )
+    assert connection.rolled_back is True

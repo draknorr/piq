@@ -1428,6 +1428,7 @@ class TigerPICSDurableIntakeStore:
                 staged.appid,
                 staged.first_change_number,
                 staged.latest_change_number,
+                staged.needs_token,
                 CASE
                   WHEN catalog.first_observation_kind = 'new'
                     AND sync.last_pics_sync IS NULL THEN 'new'
@@ -1443,7 +1444,11 @@ class TigerPICSDurableIntakeStore:
                 SELECT
                   appid,
                   min(source_change_number) AS first_change_number,
-                  max(source_change_number) AS latest_change_number
+                  max(source_change_number) AS latest_change_number,
+                  (array_agg(
+                    needs_token
+                    ORDER BY source_change_number DESC, source_index DESC
+                  ))[1] AS needs_token
                 FROM pics_batch_stage
                 GROUP BY appid
               ) staged
@@ -1461,6 +1466,7 @@ class TigerPICSDurableIntakeStore:
               latest_batch_id,
               first_change_number,
               latest_change_number,
+              needs_token,
               dirty_since,
               last_dirty_at,
               attempts,
@@ -1480,6 +1486,7 @@ class TigerPICSDurableIntakeStore:
               %s,
               incoming.first_change_number,
               incoming.latest_change_number,
+              incoming.needs_token,
               %s,
               %s,
               0,
@@ -1529,6 +1536,12 @@ class TigerPICSDurableIntakeStore:
                 ops.pics_work_state.latest_change_number,
                 EXCLUDED.latest_change_number
               ),
+              needs_token = CASE
+                WHEN EXCLUDED.latest_change_number
+                  >= ops.pics_work_state.latest_change_number
+                  THEN EXCLUDED.needs_token
+                ELSE ops.pics_work_state.needs_token
+              END,
               dirty_since = least(ops.pics_work_state.dirty_since, EXCLUDED.dirty_since),
               last_dirty_at = greatest(
                 ops.pics_work_state.last_dirty_at,
@@ -1541,6 +1554,11 @@ class TigerPICSDurableIntakeStore:
               claimed_through_change_number = CASE
                 WHEN ops.pics_work_state.state = 'claimed'
                   THEN ops.pics_work_state.claimed_through_change_number
+                ELSE NULL
+              END,
+              claimed_needs_token = CASE
+                WHEN ops.pics_work_state.state = 'claimed'
+                  THEN ops.pics_work_state.claimed_needs_token
                 ELSE NULL
               END,
               claimed_at = CASE

@@ -593,6 +593,11 @@ export interface StorefrontAppUpsertArgs {
   p_release_date: string | null;
   p_release_date_raw: string;
   p_type: string;
+  p_categories: Array<{ id: number; name: string }> | null;
+  p_evidence_observed_at: string | null;
+  p_genres: Array<{ id: string; name: string }> | null;
+  p_languages: string[] | null;
+  p_platforms: string[] | null;
 }
 
 export interface DailyMetricUpsert {
@@ -2358,7 +2363,7 @@ export class TigerCatalogRepository {
       this.pool,
       'catalog.upsertStorefrontApp',
       `
-        SELECT legacy.upsert_storefront_app(
+        SELECT legacy.upsert_storefront_app_evidence_v1(
           $1::integer,
           $2::text,
           $3::text,
@@ -2375,7 +2380,12 @@ export class TigerCatalogRepository {
           $14::integer[],
           $15::integer,
           $16::integer[],
-          $17::boolean
+          $17::boolean,
+          $18::jsonb,
+          $19::jsonb,
+          $20::jsonb,
+          $21::jsonb,
+          $22::timestamptz
         )
       `,
       [
@@ -2396,6 +2406,11 @@ export class TigerCatalogRepository {
         args.p_parent_appid ?? null,
         args.p_demo_appids ?? [],
         args.p_has_purchase_packages ?? null,
+        args.p_genres === null ? null : JSON.stringify(args.p_genres),
+        args.p_categories === null ? null : JSON.stringify(args.p_categories),
+        args.p_platforms === null ? null : JSON.stringify(args.p_platforms),
+        args.p_languages === null ? null : JSON.stringify(args.p_languages),
+        args.p_evidence_observed_at,
       ]
     );
   }

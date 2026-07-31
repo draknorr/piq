@@ -70,15 +70,24 @@ class Settings(BaseSettings):
     pics_consumer_lease_seconds: int = 300
     pics_consumer_concurrency: int = 4
     pics_consumer_heartbeat_interval_seconds: int = 60
-    # Keep scheduled product-info pass starts within the requested approximate
-    # 17/hour canary ceiling until a separately reviewed global Steam governor.
+    # Keep product-info passes within the initial approximate 17/hour canary;
+    # the per-request scheduler below is an independent safety boundary.
     pics_product_info_min_interval_seconds: int = 215
     pics_consumer_retry_base_seconds: int = 30
     pics_consumer_retry_max_seconds: int = 3600
 
     # Steam connection settings
-    steam_heartbeat_interval: int = 300  # Existing cadence; changes require a global governor
+    steam_heartbeat_interval: int = 300  # Existing cadence; calls use the shared scheduler
     steam_auto_reconnect: bool = True  # Auto-reconnect on disconnect
+    steam_request_min_interval_seconds: float = 0.5
+    steam_request_queue_capacity: int = 500
+    steam_request_max_attempts: int = 5
+    steam_request_backoff_base_seconds: float = 1.0
+    steam_request_backoff_max_seconds: float = 30.0
+    steam_request_backoff_jitter_ratio: float = 0.25
+    steam_request_circuit_failure_threshold: int = 5
+    steam_request_circuit_cooldown_seconds: float = 60.0
+    steam_access_token_ttl_seconds: int = 3600
 
     # Logging
     log_level: str = "INFO"

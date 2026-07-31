@@ -67,6 +67,7 @@ class PICSFetcher:
         self.change_poll_timeout = change_poll_timeout or self.timeout
         self.last_product_info_attempts = 0
         self.last_change_poll_attempts = 0
+        self.last_token_evidence_by_appid: Dict[int, Dict[str, Any]] = {}
 
     def _ensure_connection(self, wait_timeout: float = AUTO_RECONNECT_WAIT_TIMEOUT) -> None:
         """Recover a disconnected Steam client before issuing a request."""
@@ -89,12 +90,21 @@ class PICSFetcher:
             Dict mapping appid to PICS data
         """
         self.last_product_info_attempts = 0
-        for attempt in range(self.max_retries):
+        governed_request = getattr(self._client, "request_product_info", None)
+        request_attempts = 1 if callable(governed_request) else self.max_retries
+        for attempt in range(request_attempts):
             self.last_product_info_attempts = attempt + 1
             self._ensure_connection(wait_timeout=120)
 
             try:
-                response = self._client.client.get_product_info(apps=appids, timeout=self.timeout)
+                response = (
+                    governed_request(appids, timeout=self.timeout)
+                    if callable(governed_request)
+                    else self._client.client.get_product_info(
+                        apps=appids,
+                        timeout=self.timeout,
+                    )
+                )
 
                 if response is None:
                     logger.warning(
@@ -108,19 +118,133 @@ class PICSFetcher:
                 age = self._client.connection_age_seconds
                 age_str = f"{age:.1f}s" if age is not None else "N/A"
 
-                if attempt < self.max_retries - 1:
+                if attempt < request_attempts - 1:
                     delay = 2 ** (attempt + 1)  # 2, 4, 8 seconds
                     logger.warning(
-                        f"Batch attempt {attempt + 1}/{self.max_retries} failed "
+                        f"Batch attempt {attempt + 1}/{request_attempts} failed "
                         f"(connection age: {age_str}), retrying in {delay}s: {e}"
                     )
                     _cooperative_sleep(delay)
                 else:
                     logger.error(
-                        f"Error fetching PICS data after {self.max_retries} attempts "
+                        f"Error fetching PICS data after {request_attempts} attempts "
                         f"(connection age: {age_str}): {e}"
                     )
                     raise
+
+    def fetch_token_required_apps(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Fetch only needs_token apps with explicit, cached access tokens."""
+
+        bounded = sorted({int(appid) for appid in appids if int(appid) > 0})
+        if len(bounded) > self.batch_size:
+            raise ValueError(
+                f"At most {self.batch_size} token-required apps may be fetched per batch"
+            )
+        self.last_token_evidence_by_appid = {}
+        self.last_product_info_attempts = 0
+        if not bounded:
+            return {}
+        self._ensure_connection(wait_timeout=120)
+
+        tokens, evidence = self._client.acquire_access_tokens(bounded)
+
+        self.last_token_evidence_by_appid.update(evidence)
+        payloads: Dict[int, Dict[str, Any]] = {}
+        request_appids = [appid for appid in bounded if appid in tokens]
+        if request_appids:
+            payloads.update(self._request_token_product_info(request_appids, tokens, evidence))
+
+        rejected = [
+            appid for appid in request_appids if bool(payloads.get(appid, {}).get("_missing_token"))
+        ]
+        if rejected:
+            for appid in rejected:
+                self._client.expire_access_token(appid)
+            refreshed_tokens, refreshed_evidence = self._client.acquire_access_tokens(
+                rejected,
+                force_refresh=True,
+            )
+            self.last_token_evidence_by_appid.update(refreshed_evidence)
+            refreshable = [appid for appid in rejected if appid in refreshed_tokens]
+            payloads.update(
+                self._request_token_product_info(
+                    refreshable,
+                    refreshed_tokens,
+                    refreshed_evidence,
+                )
+            )
+            for appid in rejected:
+                if bool(payloads.get(appid, {}).get("_missing_token")):
+                    payloads[appid] = self._missing_token_payload(
+                        appid,
+                        refreshed_evidence.get(
+                            appid,
+                            {"needsToken": True, "status": "unavailable"},
+                        ),
+                    )
+
+        for appid in bounded:
+            if appid in payloads:
+                continue
+            evidence_for_app = self.last_token_evidence_by_appid.get(
+                appid,
+                {"needsToken": True, "status": "unavailable"},
+            )
+            payloads[appid] = self._missing_token_payload(appid, evidence_for_app)
+        return payloads
+
+    def _request_token_product_info(
+        self,
+        appids: List[int],
+        tokens: Dict[int, int],
+        evidence: Dict[int, Dict[str, Any]],
+    ) -> Dict[int, Dict[str, Any]]:
+        if not appids:
+            return {}
+        self.last_product_info_attempts += 1
+        response = self._client.request_product_info(
+            [{"appid": appid, "access_token": tokens[appid]} for appid in appids],
+            timeout=self.timeout,
+        )
+        raw_apps = response.get("apps", {}) if isinstance(response, dict) else {}
+        result: Dict[int, Dict[str, Any]] = {}
+        for appid in appids:
+            raw_payload = raw_apps.get(appid)
+            if not isinstance(raw_payload, dict):
+                continue
+            safe_payload = self._redact_access_tokens(raw_payload)
+            safe_payload["_token_request"] = evidence.get(
+                appid,
+                {"needsToken": True, "status": "unknown"},
+            )
+            result[appid] = safe_payload
+        return result
+
+    @classmethod
+    def _redact_access_tokens(cls, value: Any) -> Any:
+        """Remove access-token keys before payloads can reach logs or archives."""
+
+        if isinstance(value, dict):
+            return {
+                key: cls._redact_access_tokens(item)
+                for key, item in value.items()
+                if str(key).lower().replace("-", "_") not in {"access_token", "accesstoken"}
+            }
+        if isinstance(value, list):
+            return [cls._redact_access_tokens(item) for item in value]
+        return value
+
+    def _missing_token_payload(
+        self,
+        appid: int,
+        evidence: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        self.last_token_evidence_by_appid[appid] = evidence
+        return {
+            "appid": appid,
+            "_missing_token": True,
+            "_token_request": evidence,
+        }
 
     def fetch_all_apps(
         self,
@@ -191,7 +315,9 @@ class PICSFetcher:
             PICSChange with new change_number and list of changed app IDs
         """
         self.last_change_poll_attempts = 0
-        for attempt in range(self.max_retries):
+        governed_request = getattr(self._client, "request_changes_since", None)
+        request_attempts = 1 if callable(governed_request) else self.max_retries
+        for attempt in range(request_attempts):
             self.last_change_poll_attempts = attempt + 1
             try:
                 self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
@@ -199,10 +325,18 @@ class PICSFetcher:
                     f"PICS change poll timed out after {self.change_poll_timeout}s"
                 )
                 with gevent.Timeout(self.change_poll_timeout, timeout_error):
-                    response = self._client.client.get_changes_since(
-                        change_number,
-                        app_changes=True,
-                        package_changes=False,  # We only care about apps
+                    response = (
+                        governed_request(
+                            change_number,
+                            app_changes=True,
+                            package_changes=False,
+                        )
+                        if callable(governed_request)
+                        else self._client.client.get_changes_since(
+                            change_number,
+                            app_changes=True,
+                            package_changes=False,
+                        )
                     )
 
                 if response is None:
@@ -229,12 +363,12 @@ class PICSFetcher:
                     force_full_package_update=bool(response.force_full_package_update),
                 )
             except BaseException as e:
-                if attempt < self.max_retries - 1:
+                if attempt < request_attempts - 1:
                     delay = min(2**attempt, 30)
                     logger.warning(
                         "Change poll attempt %s/%s failed, retrying in %ss: %s",
                         attempt + 1,
-                        self.max_retries,
+                        request_attempts,
                         delay,
                         e,
                     )
@@ -243,7 +377,7 @@ class PICSFetcher:
 
                 logger.error(
                     "Failed to fetch PICS changes after %s attempts: %s",
-                    self.max_retries,
+                    request_attempts,
                     e,
                 )
                 raise RuntimeError(f"Failed to get PICS changes: {e}") from e

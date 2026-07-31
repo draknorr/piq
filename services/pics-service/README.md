@@ -73,6 +73,14 @@ reconciliation work through the additive Tiger records.
 - leased consumers use `FOR UPDATE SKIP LOCKED`, heartbeats, stale-claim
   recovery, capped retries, explicit dead letters, and separate live/catch-up
   quotas
+- PICS change polls, heartbeats, product-info requests, and access-token
+  acquisition share one bounded serialized request scheduler with rate
+  spacing, jittered capped backoff, and a circuit breaker
+- `needs_token` remains durable from the source change through claim routing;
+  token-required work uses explicit cached tokens, refreshes once after
+  rejection, and never falls through to an anonymous product-info request
+- redacted token-request evidence and successful, blocked, or failed request
+  evidence are archived separately to R2; access-token values are never stored
 - raw source presence is retained before normalization; only explicitly
   complete relationship families may replace or clear Tiger edges
 - changed payloads are archived to R2 before one Tiger transaction updates
@@ -126,6 +134,38 @@ select a bounded comparison interval. Do not treat a forced-full response,
 echoed-cursor mismatch, or retention-limited empty response as proof that an
 old gap was reconstructed.
 
+## Exact Missing-Token Replay
+
+Migration `0100_opportunity_field_sources_token_pics.sql` must be separately
+approved and applied before this command is available in production. Its
+default mode is a bounded, read-only preview:
+
+```bash
+python -m src.replay_missing_access_tokens \
+  --appid 5005180 \
+  --limit 1 \
+  --requested-by APPROVED_OPERATOR \
+  --reason APPROVED_INCIDENT_REASON
+```
+
+The preview must show the same exact eligible app set and reviewed
+`planSha256` immediately before a write. `--apply` archives the plan to R2 and requeues only an exact
+durable-primary `source_blocked/missing_access_token` row; it is a production
+write and requires separate approval, an operator identity, and a reason:
+
+```bash
+python -m src.replay_missing_access_tokens \
+  --appid 5005180 \
+  --limit 1 \
+  --requested-by APPROVED_OPERATOR \
+  --reason APPROVED_INCIDENT_REASON \
+  --apply \
+  --execute-plan-sha256 REVIEWED_PLAN_SHA256
+```
+
+Neither this documentation nor a successful preview authorizes a schema
+change, deployment, Storefront refresh, requeue, or backfill.
+
 ## Reviewed Shadow-Gap Replay
 
 `src.shadow_gap_replay` is an operator command, not an automatic service
@@ -171,55 +211,64 @@ stored provenance is the exact completed prefix of the same plan.
 
 ## Key Configuration
 
-| Variable                                 | Default                       | Description                                                                                       |
-| ---------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------- |
-| `SUPABASE_URL`                           | required for Supabase targets | Supabase project URL                                                                              |
-| `SUPABASE_SERVICE_KEY`                   | required for Supabase targets | Supabase service role key                                                                         |
-| `PICS_CHANGE_HISTORY_TARGET`             | `tiger`                       | `tiger` or legacy `supabase`; controls PICS `app_source_snapshots` and `app_change_events` writes |
-| `PICS_CHANGE_HISTORY_TIGER_URL`          | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS change-history writes                                                 |
-| `PICS_LATEST_STATE_TARGET`               | `tiger`                       | `tiger` or legacy `supabase`; controls PICS app, relationship, sync-status, and cursor writes     |
-| `PICS_LATEST_STATE_TIGER_URL`            | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS latest-state writes                                                   |
-| `PICS_WORK_MODE`                         | required for `change_monitor` | `legacy`, `shadow`, or `durable`; missing and unknown values fail closed                          |
-| `PICS_INTAKE_TIGER_URL`                  | `TIGER_PRIMARY_URL`           | Tiger URL used only by durable batch intake                                                       |
-| `PICS_INTAKE_STREAM_KEY`                 | `shadow-default`              | Non-primary durable cursor namespace for a shadow replay                                          |
-| `PICS_INTAKE_LANE`                       | `live`                        | `live` or `catchup`; newly catalog-observed unsynced apps use the protected `new` lane            |
-| `PICS_SHADOW_START_CHANGE_NUMBER`        | unset                         | Required when a shadow stream has no committed batch                                              |
-| `PICS_INTAKE_STATEMENT_TIMEOUT_SECONDS`  | `60`                          | Upper bound for one intake transaction                                                            |
-| `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`       | `10`                          | Upper bound for the stream/cursor lock                                                            |
-| `PICS_PROCESSING_ENABLED`                | `false`                       | Independent fail-closed gate for leased payload processing                                        |
-| `PICS_CONSUMER_WORKER_ID`                | generated                     | Optional stable worker identity; generated from host/process when unset                           |
-| `PICS_CONSUMER_LIVE_BATCH_SIZE`          | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
-| `PICS_CONSUMER_CATCHUP_BATCH_SIZE`       | `10`                          | Separate per-pass historical catch-up quota                                                       |
-| `PICS_CONSUMER_LEASE_SECONDS`            | `300`                         | Claim lease and heartbeat extension                                                               |
-| `PICS_CONSUMER_CONCURRENCY`              | `4`                           | Bounded native threads for independent post-Steam R2/Tiger work; hard-capped at `8`               |
-| `PICS_CONSUMER_HEARTBEAT_INTERVAL_SECONDS` | `60`                        | Maximum interval between batched remaining-claim lease barriers                                   |
-| `PICS_PRODUCT_INFO_MIN_INTERVAL_SECONDS` | `215`                         | Minimum scheduled product-info pass spacing; values below `212` fail closed without a governor    |
-| `PICS_CONSUMER_RETRY_BASE_SECONDS`       | `30`                          | Initial retry delay                                                                               |
-| `PICS_CONSUMER_RETRY_MAX_SECONDS`        | `3600`                        | Maximum capped retry delay                                                                        |
-| `CHANGE_INTEL_ARCHIVE_TARGET`            | `disabled`                    | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger`                                  |
-| `CHANGE_INTEL_ARCHIVE_BUCKET`            | required for Tiger            | S3-compatible bucket for archived normalized PICS snapshots                                       |
-| `CHANGE_INTEL_ARCHIVE_PREFIX`            | `change-intel`                | Object key prefix, e.g. `production/change-intel`                                                 |
-| `CHANGE_INTEL_ARCHIVE_ENDPOINT`          | optional                      | S3-compatible endpoint, e.g. Cloudflare R2 account endpoint                                       |
-| `CHANGE_INTEL_ARCHIVE_REGION`            | `us-east-1`                   | S3 region; R2 commonly uses `auto`                                                                |
-| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`     | optional                      | S3-compatible access key                                                                          |
-| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY` | optional                      | S3-compatible secret key                                                                          |
-| `MODE`                                   | `change_monitor`              | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history`                         |
-| `PORT`                                   | `8080`                        | Health-check port                                                                                 |
-| `BULK_BATCH_SIZE`                        | `200`                         | Apps per PICS request                                                                             |
-| `BULK_REQUEST_DELAY`                     | `0.5`                         | Seconds between bulk requests                                                                     |
-| `BULK_TIMEOUT`                           | `60`                          | Timeout per bulk batch fetch                                                                      |
-| `BULK_MAX_RETRIES`                       | `5`                           | Retry attempts per bulk batch                                                                     |
-| `FIRST_PASS_BATCH_LIMIT`                 | `500`                         | Max apps processed in a first-pass run                                                            |
-| `FIRST_PASS_CANDIDATE_POOL_SIZE`         | `1000`                        | Unsynced candidate pool size for first-pass ranking                                               |
-| `FIRST_PASS_RECENT_RELEASE_DAYS`         | `30`                          | Prefer recent releases within this window                                                         |
-| `FIRST_PASS_NEAR_RELEASE_DAYS`           | `14`                          | Prefer upcoming / near-release apps within this window                                            |
-| `POLL_INTERVAL`                          | `30`                          | Seconds between PICS change polls                                                                 |
-| `PROCESS_BATCH_SIZE`                     | `100`                         | Apps per queue processing batch                                                                   |
-| `MAX_QUEUE_SIZE`                         | `10000`                       | Maximum queued apps                                                                               |
-| `STEAM_HEARTBEAT_INTERVAL`               | `300`                         | Existing heartbeat cadence; changes require a global Steam-session governor                       |
-| `STEAM_AUTO_RECONNECT`                   | `true`                        | Automatically reconnect after a disconnect                                                        |
-| `LOG_LEVEL`                              | `INFO`                        | Logging level                                                                                     |
-| `LOG_JSON`                               | `true`                        | JSON log formatting                                                                               |
+| Variable                                   | Default                       | Description                                                                                       |
+| ------------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`                             | required for Supabase targets | Supabase project URL                                                                              |
+| `SUPABASE_SERVICE_KEY`                     | required for Supabase targets | Supabase service role key                                                                         |
+| `PICS_CHANGE_HISTORY_TARGET`               | `tiger`                       | `tiger` or legacy `supabase`; controls PICS `app_source_snapshots` and `app_change_events` writes |
+| `PICS_CHANGE_HISTORY_TIGER_URL`            | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS change-history writes                                                 |
+| `PICS_LATEST_STATE_TARGET`                 | `tiger`                       | `tiger` or legacy `supabase`; controls PICS app, relationship, sync-status, and cursor writes     |
+| `PICS_LATEST_STATE_TIGER_URL`              | `TIGER_PRIMARY_URL`           | Tiger Postgres URL for PICS latest-state writes                                                   |
+| `PICS_WORK_MODE`                           | required for `change_monitor` | `legacy`, `shadow`, or `durable`; missing and unknown values fail closed                          |
+| `PICS_INTAKE_TIGER_URL`                    | `TIGER_PRIMARY_URL`           | Tiger URL used only by durable batch intake                                                       |
+| `PICS_INTAKE_STREAM_KEY`                   | `shadow-default`              | Non-primary durable cursor namespace for a shadow replay                                          |
+| `PICS_INTAKE_LANE`                         | `live`                        | `live` or `catchup`; newly catalog-observed unsynced apps use the protected `new` lane            |
+| `PICS_SHADOW_START_CHANGE_NUMBER`          | unset                         | Required when a shadow stream has no committed batch                                              |
+| `PICS_INTAKE_STATEMENT_TIMEOUT_SECONDS`    | `60`                          | Upper bound for one intake transaction                                                            |
+| `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`         | `10`                          | Upper bound for the stream/cursor lock                                                            |
+| `PICS_PROCESSING_ENABLED`                  | `false`                       | Independent fail-closed gate for leased payload processing                                        |
+| `PICS_CONSUMER_WORKER_ID`                  | generated                     | Optional stable worker identity; generated from host/process when unset                           |
+| `PICS_CONSUMER_LIVE_BATCH_SIZE`            | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
+| `PICS_CONSUMER_CATCHUP_BATCH_SIZE`         | `10`                          | Separate per-pass historical catch-up quota                                                       |
+| `PICS_CONSUMER_LEASE_SECONDS`              | `300`                         | Claim lease and heartbeat extension                                                               |
+| `PICS_CONSUMER_CONCURRENCY`                | `4`                           | Bounded native threads for independent post-Steam R2/Tiger work; hard-capped at `8`               |
+| `PICS_CONSUMER_HEARTBEAT_INTERVAL_SECONDS` | `60`                          | Maximum interval between batched remaining-claim lease barriers                                   |
+| `PICS_PRODUCT_INFO_MIN_INTERVAL_SECONDS`   | `215`                         | Conservative pass spacing; values below `212` fail closed during the bounded canary               |
+| `PICS_CONSUMER_RETRY_BASE_SECONDS`         | `30`                          | Initial retry delay                                                                               |
+| `PICS_CONSUMER_RETRY_MAX_SECONDS`          | `3600`                        | Maximum capped retry delay                                                                        |
+| `CHANGE_INTEL_ARCHIVE_TARGET`              | `disabled`                    | Must be `object_storage` when `PICS_CHANGE_HISTORY_TARGET=tiger`                                  |
+| `CHANGE_INTEL_ARCHIVE_BUCKET`              | required for Tiger            | S3-compatible bucket for archived normalized PICS snapshots                                       |
+| `CHANGE_INTEL_ARCHIVE_PREFIX`              | `change-intel`                | Object key prefix, e.g. `production/change-intel`                                                 |
+| `CHANGE_INTEL_ARCHIVE_ENDPOINT`            | optional                      | S3-compatible endpoint, e.g. Cloudflare R2 account endpoint                                       |
+| `CHANGE_INTEL_ARCHIVE_REGION`              | `us-east-1`                   | S3 region; R2 commonly uses `auto`                                                                |
+| `CHANGE_INTEL_ARCHIVE_ACCESS_KEY_ID`       | optional                      | S3-compatible access key                                                                          |
+| `CHANGE_INTEL_ARCHIVE_SECRET_ACCESS_KEY`   | optional                      | S3-compatible secret key                                                                          |
+| `MODE`                                     | `change_monitor`              | `bulk_sync`, `first_pass`, `change_monitor`, or `backfill_change_history`                         |
+| `PORT`                                     | `8080`                        | Health-check port                                                                                 |
+| `BULK_BATCH_SIZE`                          | `200`                         | Apps per PICS request                                                                             |
+| `BULK_REQUEST_DELAY`                       | `0.5`                         | Seconds between bulk requests                                                                     |
+| `BULK_TIMEOUT`                             | `60`                          | Timeout per bulk batch fetch                                                                      |
+| `BULK_MAX_RETRIES`                         | `5`                           | Retry attempts per bulk batch                                                                     |
+| `FIRST_PASS_BATCH_LIMIT`                   | `500`                         | Max apps processed in a first-pass run                                                            |
+| `FIRST_PASS_CANDIDATE_POOL_SIZE`           | `1000`                        | Unsynced candidate pool size for first-pass ranking                                               |
+| `FIRST_PASS_RECENT_RELEASE_DAYS`           | `30`                          | Prefer recent releases within this window                                                         |
+| `FIRST_PASS_NEAR_RELEASE_DAYS`             | `14`                          | Prefer upcoming / near-release apps within this window                                            |
+| `POLL_INTERVAL`                            | `30`                          | Seconds between PICS change polls                                                                 |
+| `PROCESS_BATCH_SIZE`                       | `100`                         | Apps per queue processing batch                                                                   |
+| `MAX_QUEUE_SIZE`                           | `10000`                       | Maximum queued apps                                                                               |
+| `STEAM_HEARTBEAT_INTERVAL`                 | `300`                         | Existing heartbeat cadence; heartbeat requests use the shared Steam scheduler                     |
+| `STEAM_REQUEST_MIN_INTERVAL_SECONDS`       | `0.5`                         | Minimum start spacing across requests owned by the one Steam session                              |
+| `STEAM_REQUEST_QUEUE_CAPACITY`             | `500`                         | Maximum accepted in-process Steam request queue depth                                             |
+| `STEAM_REQUEST_MAX_ATTEMPTS`               | `5`                           | Total attempts for a governed Steam request                                                       |
+| `STEAM_REQUEST_BACKOFF_BASE_SECONDS`       | `1`                           | Initial exponential request retry delay                                                           |
+| `STEAM_REQUEST_BACKOFF_MAX_SECONDS`        | `30`                          | Maximum request retry delay before jitter                                                         |
+| `STEAM_REQUEST_BACKOFF_JITTER_RATIO`       | `0.25`                        | Symmetric retry-delay jitter ratio                                                                |
+| `STEAM_REQUEST_CIRCUIT_FAILURE_THRESHOLD`  | `5`                           | Consecutive failures that open the per-session circuit                                            |
+| `STEAM_REQUEST_CIRCUIT_COOLDOWN_SECONDS`   | `60`                          | Circuit-open cooldown before requests may resume                                                  |
+| `STEAM_ACCESS_TOKEN_TTL_SECONDS`           | `3600`                        | In-memory app access-token cache lifetime; token values are never archived                        |
+| `STEAM_AUTO_RECONNECT`                     | `true`                        | Automatically reconnect after a disconnect                                                        |
+| `LOG_LEVEL`                                | `INFO`                        | Logging level                                                                                     |
+| `LOG_JSON`                                 | `true`                        | JSON log formatting                                                                               |
 
 The live plus catch-up consumer quotas must not exceed the existing
 200-app product-info batch cap.

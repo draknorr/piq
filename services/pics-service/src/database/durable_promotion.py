@@ -135,6 +135,12 @@ class TigerPICSDurablePromoter:
                     )
                     self._apply_app_fields(cursor, payload.extracted)
                     self._apply_relationships(cursor, payload.extracted)
+                    self._record_field_evidence(
+                        cursor,
+                        app=payload.extracted,
+                        source_change_number=payload.source_change_number,
+                        source_at=observed_at,
+                    )
                     self._update_sync_status(
                         cursor,
                         appid=claim.appid,
@@ -163,6 +169,14 @@ class TigerPICSDurablePromoter:
                             payload.extracted.source_evidence
                         ),
                     }
+                    if claim.needs_token:
+                        provenance["tokenRequestEvidence"] = payload.raw_payload.get(
+                            "_token_request",
+                            {"needsToken": True, "status": "unknown"},
+                        )
+                        token_archive = payload.raw_payload.get("_token_evidence_archive")
+                        if isinstance(token_archive, dict):
+                            provenance["tokenEvidenceArchive"] = token_archive
                     if claim.reconciliation_run_id is not None:
                         provenance["reconciliationRunId"] = str(claim.reconciliation_run_id)
                     if archive is not None:
@@ -734,6 +748,139 @@ class TigerPICSDurablePromoter:
                     """,
                     (app.appid, dlc_ids),
                 )
+
+    @staticmethod
+    def _record_field_evidence(
+        cursor: Any,
+        *,
+        app: ExtractedPICSData,
+        source_change_number: int,
+        source_at: datetime,
+    ) -> None:
+        """Retain source-specific values without promoting overall PICS readiness."""
+
+        evidence = app.source_evidence
+        if evidence is None:
+            raise ValueError("Field evidence promotion requires PICS source evidence")
+
+        category_values = [
+            CATEGORY_NAMES.get(category_id, f"Category {category_id}")
+            for category_id, enabled in sorted(app.categories.items())
+            if enabled
+        ]
+        genre_values = [
+            GENRE_NAMES.get(genre_id, f"Genre {genre_id}") for genre_id in dict.fromkeys(app.genres)
+        ]
+        tag_values: list[str] = []
+        if evidence.family_is_complete("store_tags"):
+            cursor.execute(
+                """
+                SELECT COALESCE(
+                  array_agg(tag.name ORDER BY app_tag.rank),
+                  ARRAY[]::text[]
+                )
+                FROM legacy.app_steam_tags app_tag
+                JOIN legacy.steam_tags tag ON tag.tag_id = app_tag.tag_id
+                WHERE app_tag.appid = %s
+                """,
+                (app.appid,),
+            )
+            tag_row = cursor.fetchone()
+            tag_values = list(tag_row[0]) if tag_row and tag_row[0] else []
+        language_values = (
+            sorted(str(language) for language in app.languages)
+            if isinstance(app.languages, dict)
+            else []
+        )
+        deck_category = None
+        if app.steam_deck is not None:
+            deck_category = {
+                0: "unknown",
+                1: "unsupported",
+                2: "playable",
+                3: "verified",
+            }.get(app.steam_deck.category, "unknown")
+
+        records = []
+        field_specs = (
+            ("genres", evidence.family_is_complete("genres"), genre_values),
+            ("categories", evidence.family_is_complete("categories"), category_values),
+            ("tags", evidence.family_is_complete("store_tags"), tag_values),
+            ("platforms", evidence.field_is_present("platforms"), list(app.platforms)),
+            ("languages", evidence.field_is_present("languages"), language_values),
+            (
+                "controller_support",
+                evidence.field_is_present("controller_support"),
+                app.controller_support,
+            ),
+            ("steam_deck", evidence.field_is_present("steam_deck"), deck_category),
+            (
+                "content_descriptors",
+                evidence.field_is_present("content_descriptors"),
+                app.content_descriptors,
+            ),
+        )
+        for field_name, present, value in field_specs:
+            records.append(
+                {
+                    "field_name": field_name,
+                    "evidence_state": "known" if present else "missing",
+                    "value": value if present else None,
+                    "provenance": {
+                        "authority": "steam_pics",
+                        "sourceChangeNumber": source_change_number,
+                        "missingVersusEmptyPreserved": True,
+                    },
+                }
+            )
+
+        cursor.execute(
+            """
+            INSERT INTO ops.app_field_evidence (
+              appid,
+              field_name,
+              source,
+              evidence_state,
+              value,
+              source_at,
+              version,
+              provenance,
+              created_at,
+              updated_at
+            )
+            SELECT
+              %s,
+              input.field_name,
+              'pics',
+              input.evidence_state,
+              CASE
+                WHEN input.evidence_state = 'known'
+                  THEN COALESCE(input.value, 'null'::jsonb)
+                ELSE NULL
+              END,
+              %s,
+              'steam-field-evidence/v1',
+              input.provenance,
+              clock_timestamp(),
+              clock_timestamp()
+            FROM jsonb_to_recordset(%s::jsonb) AS input(
+              field_name text,
+              evidence_state text,
+              value jsonb,
+              provenance jsonb
+            )
+            ON CONFLICT (appid, field_name, source)
+            DO UPDATE SET
+              evidence_state = EXCLUDED.evidence_state,
+              value = EXCLUDED.value,
+              source_at = EXCLUDED.source_at,
+              version = EXCLUDED.version,
+              provenance = EXCLUDED.provenance,
+              updated_at = clock_timestamp()
+            WHERE EXCLUDED.source_at >= ops.app_field_evidence.source_at
+            """,
+            (app.appid, source_at, json.dumps(records, sort_keys=True, default=str)),
+        )
 
     @staticmethod
     def _update_sync_status(

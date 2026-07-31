@@ -66,6 +66,33 @@ class FakeClient:
         return self.reconnect(max_attempts=reconnect_attempts, force=True)
 
 
+class FakeTokenClient(FakeClient):
+    def __init__(self, *, token_responses, product_responses):
+        super().__init__(connected=True)
+        self.token_responses = list(token_responses)
+        self.product_responses = list(product_responses)
+        self.token_calls = []
+        self.product_calls = []
+        self.expired = []
+
+    def acquire_access_tokens(self, appids, force_refresh=False):
+        self.token_calls.append((list(appids), force_refresh))
+        response = self.token_responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def request_product_info(self, apps, timeout):
+        self.product_calls.append((apps, timeout))
+        response = self.product_responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def expire_access_token(self, appid):
+        self.expired.append(appid)
+
+
 def build_response(
     change_number,
     appids,
@@ -182,3 +209,86 @@ def test_get_changes_since_retries_after_hanging_poll_timeout(monkeypatch):
     assert result.change_number == 902
     assert result.app_changes == [42]
     assert client.client.calls == 2
+
+
+def test_token_required_fetch_acquires_and_attaches_redacted_provenance():
+    client = FakeTokenClient(
+        token_responses=[
+            (
+                {5005180: 987654321},
+                {5005180: {"needsToken": True, "status": "acquired"}},
+            )
+        ],
+        product_responses=[
+            {
+                "apps": {
+                    5005180: {
+                        "appid": 5005180,
+                        "_missing_token": False,
+                        "access_token": 987654321,
+                        "common": {
+                            "name": "Checkmate in 3",
+                            "accessToken": "987654321",
+                        },
+                    }
+                }
+            }
+        ],
+    )
+
+    payload = PICSFetcher(client).fetch_token_required_apps([5005180])[5005180]
+
+    assert client.product_calls[0][0] == [{"appid": 5005180, "access_token": 987654321}]
+    assert payload["_missing_token"] is False
+    assert payload["_token_request"] == {
+        "needsToken": True,
+        "status": "acquired",
+    }
+    assert "access_token" not in payload
+    assert "accessToken" not in payload["common"]
+    assert "987654321" not in str(payload)
+
+
+def test_token_required_fetch_refreshes_once_after_rejection():
+    client = FakeTokenClient(
+        token_responses=[
+            ({7: 111}, {7: {"needsToken": True, "status": "cached"}}),
+            ({7: 222}, {7: {"needsToken": True, "status": "acquired"}}),
+        ],
+        product_responses=[
+            {"apps": {7: {"appid": 7, "_missing_token": True}}},
+            {"apps": {7: {"appid": 7, "_missing_token": False}}},
+        ],
+    )
+
+    payload = PICSFetcher(client).fetch_token_required_apps([7])[7]
+
+    assert client.token_calls == [([7], False), ([7], True)]
+    assert client.expired == [7]
+    assert client.product_calls[1][0] == [{"appid": 7, "access_token": 222}]
+    assert payload["_missing_token"] is False
+
+
+def test_token_acquisition_failure_is_retryable_not_source_blocked():
+    client = FakeTokenClient(
+        token_responses=[RuntimeError("Steam unavailable")],
+        product_responses=[],
+    )
+
+    with pytest.raises(RuntimeError, match="Steam unavailable"):
+        PICSFetcher(client).fetch_token_required_apps([7])
+
+
+def test_token_unavailable_is_explicit_source_block_evidence():
+    client = FakeTokenClient(
+        token_responses=[({}, {7: {"needsToken": True, "status": "unavailable"}})],
+        product_responses=[],
+    )
+
+    payload = PICSFetcher(client).fetch_token_required_apps([7])[7]
+
+    assert payload == {
+        "appid": 7,
+        "_missing_token": True,
+        "_token_request": {"needsToken": True, "status": "unavailable"},
+    }

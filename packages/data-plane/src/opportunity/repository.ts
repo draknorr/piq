@@ -115,15 +115,16 @@ interface RuleInputRow extends QueryResultRow {
   storefront_status: string | null;
   tags: string[] | null;
   total_reviews: number | null;
+  field_evidence: Record<string, unknown> | null;
 }
 
 export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   OpportunityRuleField,
-  "catalog" | "market_metrics" | "pics" | "storefront"
+  "catalog" | "market_metrics" | "pics" | "resolved" | "storefront"
 > = {
   app_type: "catalog",
   appid: "catalog",
-  categories: "pics",
+  categories: "resolved",
   ccu_change_30d: "market_metrics",
   ccu_change_7d: "market_metrics",
   ccu_peak: "market_metrics",
@@ -134,15 +135,15 @@ export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   developer: "storefront",
   developer_game_count: "storefront",
   discount_percent: "storefront",
-  genres: "pics",
+  genres: "resolved",
   has_demo: "storefront",
   has_purchase_packages: "storefront",
   is_free: "storefront",
   is_released: "storefront",
-  languages: "pics",
+  languages: "resolved",
   name: "catalog",
   no_publisher_listed: "storefront",
-  platforms: "pics",
+  platforms: "resolved",
   positive_percentage: "market_metrics",
   price_cents: "storefront",
   publisher: "storefront",
@@ -444,6 +445,39 @@ function normalizeStringArray(value: unknown): string[] {
   return [];
 }
 
+function resolvedFieldEvidence(
+  row: RuleInputRow,
+  field: OpportunityRuleField,
+): OpportunityFieldValue | null {
+  const evidence = row.field_evidence?.[field];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return null;
+  }
+  const record = evidence as Record<string, unknown>;
+  const source =
+    record.source === "storefront" ? "steam_storefront" : "steam_pics";
+  const sourceAt =
+    typeof record.sourceAt === "string" ? iso(record.sourceAt) : null;
+  if (record.state === "known") {
+    return knownField(record.value, source, sourceAt);
+  }
+  if (record.state === "missing") {
+    if (
+      source === "steam_storefront" &&
+      row.pics_status === "ready" &&
+      record.picsRecorded !== true
+    ) {
+      return null;
+    }
+    return unknownField(
+      source,
+      `${source === "steam_storefront" ? "Storefront" : "PICS"} did not include this field.`,
+      sourceAt,
+    );
+  }
+  return null;
+}
+
 function dateOnly(value: Date | string | null): string | null {
   if (!value) {
     return null;
@@ -503,6 +537,17 @@ function buildOpportunityRuleInput(
           `PICS readiness is ${row.pics_status ?? "unknown"}.`,
           picsSourceAt,
         );
+  };
+  const setResolved = (
+    field: OpportunityRuleField,
+    legacyValue: unknown,
+  ): void => {
+    const resolved = resolvedFieldEvidence(row, field);
+    if (resolved) {
+      fields[field] = resolved;
+    } else {
+      setPics(field, legacyValue);
+    }
   };
   const setMetric = (
     field: OpportunityRuleField,
@@ -568,12 +613,12 @@ function buildOpportunityRuleInput(
         );
 
   setPics("tags", row.tags ?? []);
-  setPics("genres", row.genres ?? []);
-  setPics("categories", row.categories ?? []);
-  setPics("platforms", normalizeStringArray(row.platforms));
+  setResolved("genres", row.genres ?? []);
+  setResolved("categories", row.categories ?? []);
+  setResolved("platforms", normalizeStringArray(row.platforms));
   setPics("controller_support", row.controller_support);
   setPics("steam_deck", row.steam_deck);
-  setPics("languages", normalizeStringArray(row.languages));
+  setResolved("languages", normalizeStringArray(row.languages));
   setPics("content_descriptors", normalizeStringArray(row.content_descriptors));
   setStorefront("has_demo", row.has_demo);
   fields.demo_only =
@@ -674,6 +719,7 @@ const RULE_INPUT_SELECT = `
     readiness_pics.status AS pics_status,
     readiness_pics.source_at AS pics_source_at,
     readiness_market.status AS market_status,
+    field_resolution.fields AS field_evidence,
     COALESCE((
       SELECT array_agg(tag.name ORDER BY app_tag.rank NULLS LAST, tag.name)
       FROM legacy.app_steam_tags app_tag
@@ -743,6 +789,38 @@ const RULE_INPUT_SELECT = `
     AND readiness_market.source = 'market_metrics'
   LEFT JOIN ops.app_catalog_state catalog_state
     ON catalog_state.appid = a.appid
+  LEFT JOIN LATERAL (
+    SELECT jsonb_object_agg(
+      resolved.field_name,
+      jsonb_build_object(
+        'source', resolved.source,
+        'state', resolved.evidence_state,
+        'value', resolved.value,
+        'sourceAt', resolved.source_at,
+        'version', resolved.version,
+        'picsRecorded', resolved.pics_recorded
+      )
+    ) AS fields
+    FROM (
+      SELECT DISTINCT ON (evidence.field_name)
+        evidence.field_name,
+        evidence.source,
+        evidence.evidence_state,
+        evidence.value,
+        evidence.source_at,
+        evidence.version,
+        bool_or(evidence.source = 'pics') OVER (
+          PARTITION BY evidence.field_name
+        ) AS pics_recorded
+      FROM ops.app_field_evidence evidence
+      WHERE evidence.appid = a.appid
+      ORDER BY
+        evidence.field_name,
+        CASE evidence.evidence_state WHEN 'known' THEN 0 ELSE 1 END,
+        CASE evidence.source WHEN 'pics' THEN 0 ELSE 1 END,
+        evidence.source_at DESC
+    ) resolved
+  ) field_resolution ON true
 `;
 
 const RULE_INPUT_BATCH_SELECT = `
@@ -862,6 +940,7 @@ const RULE_INPUT_BATCH_SELECT = `
     readiness_pics.status AS pics_status,
     readiness_pics.source_at AS pics_source_at,
     readiness_market.status AS market_status,
+    field_resolution.fields AS field_evidence,
     COALESCE(tag_values.tags, '{}'::text[]) AS tags,
     COALESCE(genre_values.genres, '{}'::text[]) AS genres,
     COALESCE(category_values.categories, '{}'::text[]) AS categories,
@@ -896,6 +975,38 @@ const RULE_INPUT_BATCH_SELECT = `
   LEFT JOIN developer_values ON developer_values.appid = a.appid
   LEFT JOIN demo_values ON demo_values.appid = a.appid
   LEFT JOIN legacy.app_steam_deck deck ON deck.appid = a.appid
+  LEFT JOIN LATERAL (
+    SELECT jsonb_object_agg(
+      resolved.field_name,
+      jsonb_build_object(
+        'source', resolved.source,
+        'state', resolved.evidence_state,
+        'value', resolved.value,
+        'sourceAt', resolved.source_at,
+        'version', resolved.version,
+        'picsRecorded', resolved.pics_recorded
+      )
+    ) AS fields
+    FROM (
+      SELECT DISTINCT ON (evidence.field_name)
+        evidence.field_name,
+        evidence.source,
+        evidence.evidence_state,
+        evidence.value,
+        evidence.source_at,
+        evidence.version,
+        bool_or(evidence.source = 'pics') OVER (
+          PARTITION BY evidence.field_name
+        ) AS pics_recorded
+      FROM ops.app_field_evidence evidence
+      WHERE evidence.appid = a.appid
+      ORDER BY
+        evidence.field_name,
+        CASE evidence.evidence_state WHEN 'known' THEN 0 ELSE 1 END,
+        CASE evidence.source WHEN 'pics' THEN 0 ELSE 1 END,
+        evidence.source_at DESC
+    ) resolved
+  ) field_resolution ON true
   WHERE a.type IN ('game', 'Game')
     AND COALESCE(a.is_delisted, false) = false
   ORDER BY a.appid
@@ -3139,6 +3250,32 @@ export class OpportunityRepository {
         summary: opportunityChangeSummary(null, "materially_changed"),
       }),
     }));
+    const currentInput = (await this.getRuleInputsShadow([params.appid]))[0];
+    const previouslyMissingNowAvailable = (row.missing_evidence ?? []).flatMap(
+      (fieldName) => {
+        if (
+          !OPPORTUNITY_RULE_FIELDS.includes(fieldName as OpportunityRuleField)
+        ) {
+          return [];
+        }
+        const field = fieldName as OpportunityRuleField;
+        const evidence = currentInput?.fields[field];
+        return evidence?.state === "known"
+          ? [
+              {
+                field,
+                source: evidence.source,
+                sourceAt: evidence.sourceAt,
+                value: evidence.value,
+              },
+            ]
+          : [];
+      },
+    );
+    const evaluatedAt =
+      row.provenance?.run?.windowEnd ??
+      row.provenance?.sourceTimestamps?.profileEvaluationAt ??
+      row.result_summary.createdAt;
     await this.recordTeamActivity({
       activityType: "viewed",
       appid: params.appid,
@@ -3150,6 +3287,11 @@ export class OpportunityRepository {
       cohort: decodeOpportunityValue(row.cohort),
       currentMetrics: decodeOpportunityValue(row.current_metrics ?? {}),
       evidence: decodeOpportunityValue(row.evidence ?? []),
+      evidenceResolution: {
+        currentResolvedAt: new Date().toISOString(),
+        evaluatedAt,
+        previouslyMissingNowAvailable,
+      },
       marketContext: decodeOpportunityValue(row.market_context),
       matchedProfiles: decodeOpportunityValue(row.matched_profiles).map(
         (profile) => ({

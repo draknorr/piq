@@ -720,7 +720,7 @@ test('catalog.markStorefrontInaccessible updates apps and sync_status transactio
   assert.deepEqual(pool.client?.calls[2]?.values, [123, '2026-04-29T00:00:00.000Z']);
 });
 
-test('catalog.upsertStorefrontApp passes demo and purchase-package args to Tiger function', async () => {
+test('catalog.upsertStorefrontApp passes source-specific evidence to the Tiger function', async () => {
   const pool = new CapturingPool([result()]);
   const writer = createTigerWriterForPool(pool);
 
@@ -742,10 +742,17 @@ test('catalog.upsertStorefrontApp passes demo and purchase-package args to Tiger
     p_parent_appid: null,
     p_demo_appids: [4707330],
     p_has_purchase_packages: false,
+    p_categories: [{ id: 2, name: 'Single-player' }],
+    p_evidence_observed_at: '2026-07-31T12:00:00.000Z',
+    p_genres: [{ id: '1', name: 'Action' }],
+    p_languages: ['English'],
+    p_platforms: ['windows'],
   });
 
   assert.match(pool.calls[0]?.sql ?? '', /\$16::integer\[\]/);
   assert.match(pool.calls[0]?.sql ?? '', /\$17::boolean/);
+  assert.match(pool.calls[0]?.sql ?? '', /upsert_storefront_app_evidence_v1/);
+  assert.match(pool.calls[0]?.sql ?? '', /\$22::timestamptz/);
   assert.deepEqual(pool.calls[0]?.values, [
     4615010,
     'Kibble Cats',
@@ -764,6 +771,11 @@ test('catalog.upsertStorefrontApp passes demo and purchase-package args to Tiger
     null,
     [4707330],
     false,
+    JSON.stringify([{ id: '1', name: 'Action' }]),
+    JSON.stringify([{ id: 2, name: 'Single-player' }]),
+    JSON.stringify(['windows']),
+    JSON.stringify(['English']),
+    '2026-07-31T12:00:00.000Z',
   ]);
 });
 

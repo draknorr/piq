@@ -446,6 +446,11 @@ def test_work_upsert_uses_each_apps_staged_change_numbers():
 
     assert "min(source_change_number) AS first_change_number" in work_query
     assert "max(source_change_number) AS latest_change_number" in work_query
+    assert "ORDER BY source_change_number DESC, source_index DESC" in work_query
+    assert "staged.needs_token" in work_query
+    assert "needs_token = CASE" in work_query
+    assert "THEN EXCLUDED.needs_token" in work_query
+    assert "claimed_needs_token = CASE" in work_query
     assert "incoming.first_change_number, incoming.latest_change_number" in work_query
     assert "first_batch_id = coalesce(" in work_query
     assert "ops.pics_work_state.first_batch_id" in work_query

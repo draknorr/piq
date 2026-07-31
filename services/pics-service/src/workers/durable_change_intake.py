@@ -80,8 +80,8 @@ class DurableChangeIntakeWorker:
         ):
             raise ValueError(
                 "PICS_PRODUCT_INFO_MIN_INTERVAL_SECONDS cannot be below "
-                f"{self.MIN_SAFE_PRODUCT_INFO_INTERVAL_SECONDS} until one global "
-                "Steam request governor is implemented"
+                f"{self.MIN_SAFE_PRODUCT_INFO_INTERVAL_SECONDS} during the "
+                "bounded product-info canary"
             )
         self._last_processing_stats: Optional[PICSProcessingStats] = None
         self._last_processing_started_at: Optional[str] = None

@@ -1,12 +1,16 @@
 """Steam client wrapper with automatic reconnection and heartbeat."""
 
 import logging
-from datetime import datetime
-from typing import Optional
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import gevent
 from steam.client import SteamClient
 from steam.enums import EResult
+
+from ..config.settings import settings
+from .request_scheduler import SteamRequestPolicy, SteamRequestScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +18,7 @@ logger = logging.getLogger(__name__)
 class PICSSteamClient:
     """Wrapper around SteamClient with automatic reconnection, heartbeat, and health tracking."""
 
-    def __init__(self):
+    def __init__(self, *, request_scheduler: Optional[SteamRequestScheduler] = None):
         self._client: Optional[SteamClient] = None
         self._connected = False
         self._last_change_number: int = 0
@@ -36,6 +40,24 @@ class PICSSteamClient:
         # Auto-reconnect settings
         self._auto_reconnect: bool = True
         self._reconnecting: bool = False  # Prevent concurrent reconnection attempts
+        self._request_scheduler = request_scheduler or SteamRequestScheduler(
+            SteamRequestPolicy(
+                min_interval_seconds=settings.steam_request_min_interval_seconds,
+                queue_capacity=settings.steam_request_queue_capacity,
+                max_attempts=settings.steam_request_max_attempts,
+                backoff_base_seconds=settings.steam_request_backoff_base_seconds,
+                backoff_max_seconds=settings.steam_request_backoff_max_seconds,
+                backoff_jitter_ratio=settings.steam_request_backoff_jitter_ratio,
+                circuit_failure_threshold=(settings.steam_request_circuit_failure_threshold),
+                circuit_cooldown_seconds=(settings.steam_request_circuit_cooldown_seconds),
+            )
+        )
+        self._access_token_ttl_seconds = min(
+            86_400,
+            max(60, int(settings.steam_access_token_ttl_seconds)),
+        )
+        self._access_tokens: Dict[int, Tuple[int, float]] = {}
+        self._expired_access_token_reasons: Dict[int, str] = {}
 
     def connect(self) -> bool:
         """Establish anonymous connection to Steam with heartbeat."""
@@ -202,7 +224,11 @@ class PICSSteamClient:
             if self._connected and self._client:
                 try:
                     # Use get_changes_since(0) as a lightweight heartbeat
-                    self._client.get_changes_since(0, app_changes=False, package_changes=False)
+                    self.request_changes_since(
+                        0,
+                        app_changes=False,
+                        package_changes=False,
+                    )
                     self._last_activity = datetime.utcnow()
                     logger.debug(f"Heartbeat successful at {self._last_activity.isoformat()}")
                 except Exception as e:
@@ -224,8 +250,9 @@ class PICSSteamClient:
         logger.warning(
             f"Disconnected from Steam "
             f"(was connected: {was_connected}, "
-            f"duration: {duration:.1f}s)" if duration else
-            f"Disconnected from Steam (was connected: {was_connected})"
+            f"duration: {duration:.1f}s)"
+            if duration
+            else f"Disconnected from Steam (was connected: {was_connected})"
         )
 
         # Trigger auto-reconnection in a new greenlet (non-blocking)
@@ -257,6 +284,7 @@ class PICSSteamClient:
             True if connected within timeout
         """
         import time
+
         start = time.time()
         while time.time() - start < timeout:
             if self._connected:
@@ -273,6 +301,114 @@ class PICSSteamClient:
     def set_auto_reconnect(self, enabled: bool):
         """Enable or disable automatic reconnection on disconnect."""
         self._auto_reconnect = enabled
+
+    def request_changes_since(
+        self,
+        change_number: int,
+        *,
+        app_changes: bool,
+        package_changes: bool,
+    ) -> Any:
+        """Route a changes-since call through the one owned Steam governor."""
+
+        return self._request_scheduler.execute(
+            "pics_changes_since",
+            lambda: self.client.get_changes_since(
+                change_number,
+                app_changes=app_changes,
+                package_changes=package_changes,
+            ),
+        )
+
+    def request_product_info(self, apps: list[Any], *, timeout: int) -> Any:
+        """Route product-info through the governor with explicit tokens only."""
+
+        return self._request_scheduler.execute(
+            "pics_product_info",
+            lambda: self.client.get_product_info(
+                apps=apps,
+                timeout=timeout,
+                auto_access_tokens=False,
+            ),
+        )
+
+    def acquire_access_tokens(
+        self,
+        appids: Iterable[int],
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[Dict[int, int], Dict[int, Dict[str, Any]]]:
+        """Acquire/cache bounded app tokens without exposing token values in evidence."""
+
+        bounded = sorted({int(appid) for appid in appids if int(appid) > 0})
+        if len(bounded) > 200:
+            raise ValueError("At most 200 PICS access tokens may be requested at once")
+        now = time.monotonic()
+        tokens: Dict[int, int] = {}
+        evidence: Dict[int, Dict[str, Any]] = {}
+        refresh_reasons: Dict[int, str] = {}
+        missing = []
+        for appid in bounded:
+            cached = self._access_tokens.get(appid)
+            if not force_refresh and cached is not None and cached[1] > now:
+                tokens[appid] = cached[0]
+                evidence[appid] = {
+                    "needsToken": True,
+                    "status": "cached",
+                    "expiresInSeconds": round(cached[1] - now, 3),
+                }
+            else:
+                refresh_reason = self._expired_access_token_reasons.pop(appid, None)
+                if refresh_reason is None and cached is not None and cached[1] <= now:
+                    refresh_reason = "ttl_expired"
+                if refresh_reason is None and force_refresh:
+                    refresh_reason = "forced"
+                if refresh_reason is not None:
+                    refresh_reasons[appid] = refresh_reason
+                self._access_tokens.pop(appid, None)
+                missing.append(appid)
+
+        if missing:
+            response = self._request_scheduler.execute(
+                "pics_access_tokens",
+                lambda: self.client.get_access_tokens(
+                    app_ids=missing,
+                    package_ids=[],
+                ),
+            )
+            received = response.get("apps", {}) if isinstance(response, dict) else {}
+            expires_at = time.monotonic() + self._access_token_ttl_seconds
+            expires_iso = (
+                datetime.now(timezone.utc) + timedelta(seconds=self._access_token_ttl_seconds)
+            ).isoformat()
+            for appid in missing:
+                token = received.get(appid)
+                if token is None:
+                    evidence[appid] = {
+                        "needsToken": True,
+                        "status": "unavailable",
+                    }
+                    if appid in refresh_reasons:
+                        evidence[appid]["refreshReason"] = refresh_reasons[appid]
+                    continue
+                normalized_token = int(token)
+                self._access_tokens[appid] = (normalized_token, expires_at)
+                tokens[appid] = normalized_token
+                evidence[appid] = {
+                    "needsToken": True,
+                    "status": ("refreshed" if appid in refresh_reasons else "acquired"),
+                    "expiresAt": expires_iso,
+                }
+                if appid in refresh_reasons:
+                    evidence[appid]["refreshReason"] = refresh_reasons[appid]
+        return tokens, evidence
+
+    def expire_access_token(self, appid: int) -> None:
+        """Force refresh after Steam rejects or omits a cached token."""
+
+        normalized_appid = int(appid)
+        self._access_tokens.pop(normalized_appid, None)
+        self._expired_access_token_reasons[normalized_appid] = "steam_rejected"
 
     # Properties
     @property

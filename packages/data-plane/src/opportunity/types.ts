@@ -8,11 +8,11 @@ export const OPPORTUNITY_COHORT_VERSION = "opportunity-cohort/v1" as const;
 export const OPPORTUNITY_MARKET_VERSION = "opportunity-market/v1" as const;
 export const OPPORTUNITY_HEALTH_VERSION = "opportunity-health/v1" as const;
 export const OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION =
-  "opportunity-rule-input-projection/v2" as const;
+  "opportunity-rule-input-projection/v3" as const;
 export const OPPORTUNITY_COHORT_CACHE_VERSION =
-  "opportunity-cohort-cache/v1" as const;
+  "opportunity-cohort-cache/v2" as const;
 export const OPPORTUNITY_COHORT_RESOLVER_VERSION =
-  "opportunity-cohort-resolver/v2" as const;
+  "opportunity-cohort-resolver/v3" as const;
 export const OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION =
   "opportunity-cohort-feature-projection/v2" as const;
 export const OPPORTUNITY_BULK_PERSISTENCE_VERSION =
@@ -544,6 +544,16 @@ export interface OpportunityGameRecord {
     sourceAt: string | null;
     value: unknown;
   }>;
+  evidenceResolution: {
+    currentResolvedAt: string;
+    evaluatedAt: string;
+    previouslyMissingNowAvailable: Array<{
+      field: OpportunityRuleField;
+      source: string;
+      sourceAt: string | null;
+      value: unknown;
+    }>;
+  };
   marketContext: OpportunityMarketContext | null;
   matchedProfiles: Array<{
     id: string;

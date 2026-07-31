@@ -762,16 +762,38 @@ export function OpportunityGameRecordClient({
           {record.missingEvidence.length > 0 && (
             <section className="mt-9 border-t border-border-muted pt-7">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                What we are still learning
+                Missing when this brief was evaluated
               </p>
               <p className="mt-2 text-xs leading-5 text-text-secondary">
-                More data is needed for{" "}
+                At{" "}
+                {formatOpportunityDate(record.evidenceResolution.evaluatedAt)},
+                this saved brief did not have{" "}
                 {record.missingEvidence
                   .map(opportunityFieldLabel)
                   .join(", ")
                   .toLocaleLowerCase()}
                 .
               </p>
+              {record.evidenceResolution.previouslyMissingNowAvailable.length >
+                0 && (
+                <div className="mt-4 rounded-lg border border-semantic-success/20 bg-semantic-success-muted p-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+                    <Check className="h-3.5 w-3.5 text-semantic-success" />
+                    Available now
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-text-secondary">
+                    {record.evidenceResolution.previouslyMissingNowAvailable
+                      .map((item) => opportunityFieldLabel(item.field))
+                      .join(", ")}{" "}
+                    {record.evidenceResolution.previouslyMissingNowAvailable
+                      .length === 1
+                      ? "has"
+                      : "have"}{" "}
+                    since been resolved from current Steam evidence. The
+                    original brief remains unchanged.
+                  </p>
+                </div>
+              )}
             </section>
           )}
         </aside>

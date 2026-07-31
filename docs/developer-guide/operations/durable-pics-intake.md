@@ -24,6 +24,12 @@ orchestration remain disabled by default with
 `PICS_PROCESSING_ENABLED=false`. The explicit production shadow setting is
 validation evidence, not approval for primary mode.
 
+Migration `0100_opportunity_field_sources_token_pics.sql` is an unapplied,
+additive follow-up. It introduces field-level source evidence, durable
+`needs_token` routing, and an audited exact-app token replay surface. The code
+and migration do not authorize a production schema change, service rollout,
+Storefront refresh, PICS requeue, or backfill.
+
 Migration `0092_pics_cursor_checkpoint_reconciliation.sql` was applied on
 July 25, 2026 UTC. Its first separately approved checkpoint call failed before
 its first write because PL/pgSQL could not distinguish unqualified table
@@ -70,12 +76,14 @@ and advances past uncommitted source items.
 
 ## Records
 
-| Record                       | Contract                                                                                                                                                     |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ops.pics_change_batches`    | Immutable request/response cursor boundary, source counts, SHA-256, receipt time, force-full flags, completeness, mode/lane, and optional archive reference. |
-| `ops.pics_change_batch_apps` | Every source list position, app ID, item change number, and token requirement, including duplicate IDs.                                                      |
-| `ops.pics_work_state`        | Coalesced claimable state per app and stream; shadow streams cannot contaminate primary work.                                                                |
-| `ops.app_data_readiness`     | Normalized per-app/per-source readiness scaffold; durable intake marks only the PICS source pending.                                                         |
+| Record                        | Contract                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ops.pics_change_batches`     | Immutable request/response cursor boundary, source counts, SHA-256, receipt time, force-full flags, completeness, mode/lane, and optional archive reference. |
+| `ops.pics_change_batch_apps`  | Every source list position, app ID, item change number, and token requirement, including duplicate IDs.                                                      |
+| `ops.pics_work_state`         | Coalesced claimable state per app and stream; shadow streams cannot contaminate primary work.                                                                |
+| `ops.app_data_readiness`      | Normalized per-app/per-source readiness scaffold; durable intake marks only the PICS source pending.                                                         |
+| `ops.app_field_evidence`      | Source-specific known/missing evidence for each promoted field; a known empty value remains different from missing.                                          |
+| `ops.pics_token_replay_audit` | Immutable operator, reason, and R2-plan provenance for an exact-app `missing_access_token` replay.                                                           |
 
 The batch child table intentionally has no app foreign key. PICS may expose an
 ID before catalog reconciliation has created `legacy.apps`; durability cannot
@@ -166,18 +174,16 @@ If a newer PICS change arrives during processing, acknowledgement records the
 claimed cursor and returns the row to `pending` for the later cursor. It never
 marks unseen work complete.
 
-Product-info pass starts have an explicit 215-second minimum interval, keeping
-scheduled calls within the requested approximate 17/hour canary ceiling.
-Values below 212 seconds fail closed until one global Steam-session governor
-covers change polls, product-info calls, token work, reconnects, and backoff.
-Change polling continues on the normal poll loop between eligible processing
-passes.
-
-The Steam heartbeat remains at its existing 300-second cadence so this change
-does not add heartbeat traffic before a global Steam-session governor exists.
-All regular poll sleeps and retry delays yield through gevent, and blocking
-post-Steam I/O runs outside the hub thread. The post-Steam thread pool is
-hard-capped at eight and defaults to four.
+Product-info pass starts retain an explicit 215-second minimum interval,
+keeping the initial rollout within the requested approximate 17/hour canary
+ceiling. Values below 212 seconds still fail closed during that bounded canary.
+Inside the one Steam session, change polls (including heartbeats), product-info
+requests, and access-token requests share one serialized bounded scheduler.
+It enforces per-request spacing, capped exponential backoff with jitter, and a
+circuit breaker. Token-required work never falls through to an anonymous
+product-info call. The Steam heartbeat remains at its existing 300-second
+cadence. Blocking post-Steam I/O runs outside the hub thread; that thread pool
+is hard-capped at eight and defaults to four.
 
 `/status` and the structured `Durable PICS processing metrics` log expose:
 
@@ -207,6 +213,12 @@ before normalization:
 - a canonical SHA-256 of the raw payload plus a separate SHA-256 of the
   effective normalized state.
 
+Token-required requests archive redacted acquisition/cache/expiry evidence
+before validation. Successful payloads, source-blocked payloads, and request
+or acquisition failures have separate R2 evidence objects. Access-token values
+are never included. The resulting archive pointer is carried into field
+provenance when durable promotion succeeds.
+
 Only a present, well-typed family in a source-complete payload may replace its
 Tiger relationship set. A present empty family may clear existing edges.
 Absent or partial families preserve the prior normalized snapshot and latest
@@ -231,6 +243,86 @@ acknowledged work. Replaying the claim reuses deterministic evidence safely.
 Developer/publisher relationships remain Storefront-owned. PICS supplies
 `release_date`, `is_free`, and `is_released` only while the corresponding
 Storefront authority has not been established.
+
+## Field Evidence and Exact Token Replay
+
+Storefront may satisfy `genres`, `categories`, `platforms`, and `languages`
+when PICS is blocked. It may not satisfy user tags, controller support, Deck
+compatibility, or content descriptors. The Storefront writer records field
+presence explicitly, so an absent property is `missing` while an explicitly
+empty collection is `known` with an empty value. It does not mark the PICS
+source ready. Historical Storefront archive replay also cannot overwrite the
+current field-evidence row.
+
+After migration `0100` has been separately approved and applied, the replay
+command is read-only by default. This exact-app preview is the required first
+step for app `5005180`:
+
+```bash
+python -m src.replay_missing_access_tokens \
+  --appid 5005180 \
+  --limit 1 \
+  --requested-by APPROVED_OPERATOR \
+  --reason APPROVED_INCIDENT_REASON
+```
+
+The preview reports the locked-work eligibility inputs, current
+Storefront/PICS coverage, and a deterministic `planSha256` without changing a
+row. A production requeue is a separate write requiring fresh approval. Only
+after that approval, use the same exact app ID, named operator, reason, and
+reviewed hash:
+
+```bash
+python -m src.replay_missing_access_tokens \
+  --appid 5005180 \
+  --limit 1 \
+  --requested-by APPROVED_OPERATOR \
+  --reason APPROVED_INCIDENT_REASON \
+  --apply \
+  --execute-plan-sha256 REVIEWED_PLAN_SHA256
+```
+
+The write path refuses an empty, changed, or hash-mismatched candidate set,
+archives its exact plan to R2 first, inserts immutable audit provenance, and reopens only a
+durable-primary `source_blocked/missing_access_token` row. It marks only the
+PICS readiness row pending; successful leased processing remains responsible
+for field evidence, readiness, and final settlement.
+
+After an approved rollout/replay, use bounded read-only verification. The
+historical result must keep its original `missing_evidence` even when current
+field evidence is now known:
+
+```sql
+SELECT field_name, source, evidence_state, value, source_at, version, provenance
+FROM ops.app_field_evidence
+WHERE appid = 5005180
+ORDER BY field_name, source
+LIMIT 20;
+
+SELECT id, appid, state, needs_token, claimed_needs_token,
+       latest_change_number, last_error_code, updated_at
+FROM ops.pics_work_state
+WHERE appid = 5005180 AND stream_key = 'primary'
+LIMIT 1;
+
+SELECT appid, source, status, source_at, processed_at, blocking_reason, provenance
+FROM ops.app_data_readiness
+WHERE appid = 5005180
+ORDER BY source
+LIMIT 10;
+
+SELECT id, appid, missing_evidence, created_at
+FROM opportunity.results
+WHERE id = '295997b1-e728-4ede-b26c-a525c5ccd7b4'
+LIMIT 1;
+
+SELECT appid, work_id, requested_by, reason,
+       archive_bucket, archive_key, archive_content_hash, created_at
+FROM ops.pics_token_replay_audit
+WHERE appid = 5005180
+ORDER BY created_at DESC
+LIMIT 5;
+```
 
 ## Runtime Modes
 
@@ -262,6 +354,19 @@ Before any production action:
    a bounded comparison selected by item change number; and
 6. select the genuine PICS service by exact project and service ID; the
    source-disconnected duplicate must remain stopped.
+
+For migration `0100` and app `5005180`, the separate approval boundaries are:
+
+1. pause the genuine PICS service, verify no active leases, and capture the
+   current cursor/queue/readiness state;
+2. apply the additive migration, including its `needs_token` backfill, then
+   deploy the compatible PICS service before intake resumes;
+3. deploy the Storefront writer, then the query API, then the admin UI;
+4. perform an exact live Storefront refresh if current field evidence is not
+   yet present (an ingestion write); and
+5. execute the exact-app PICS requeue shown above.
+
+None of these boundaries is implied by code review or a successful dry run.
 
 `PICS_WORK_MODE=durable` remains prohibited until the audited checkpoint
 migration is merged and separately applied, fresh evidence identifies the
