@@ -779,12 +779,12 @@ class TigerPICSDurableWorkStore:
                             blocking_reason = 'awaiting_token_replay',
                             retryable = true,
                             provenance = jsonb_build_object(
-                              'requestedBy', %s,
-                              'reason', %s,
+                              'requestedBy', %s::text,
+                              'reason', %s::text,
                               'archive', jsonb_build_object(
-                                'bucket', %s,
-                                'key', %s,
-                                'contentHash', %s
+                                'bucket', %s::text,
+                                'key', %s::text,
+                                'contentHash', %s::text
                               )
                             ),
                             updated_at = clock_timestamp()

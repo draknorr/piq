@@ -609,6 +609,16 @@ def test_token_replay_reopens_only_exact_audited_primary_work():
         "operator@example.com",
         "approved incident replay",
     )
+    readiness_statement = next(
+        statement
+        for statement, _ in cursor.events
+        if statement.startswith("UPDATE ops.app_data_readiness")
+    )
+    assert "'requestedBy', %s::text" in readiness_statement
+    assert "'reason', %s::text" in readiness_statement
+    assert "'bucket', %s::text" in readiness_statement
+    assert "'key', %s::text" in readiness_statement
+    assert "'contentHash', %s::text" in readiness_statement
     assert requeued == 1
     assert connection.committed is True
 
