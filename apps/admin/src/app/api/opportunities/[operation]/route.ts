@@ -12,6 +12,7 @@ const ALLOWED_OPERATIONS = new Set([
   "save-profile",
   "set-profile-status",
   "game-record",
+  "resolve-trailer-streams",
   "game-state",
   "team-activity",
   "configure-channel",

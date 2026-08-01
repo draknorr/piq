@@ -1,4 +1,11 @@
-import { API_URLS, logger, ApiError, STEAM_CATEGORY_WORKSHOP } from '@publisheriq/shared';
+import {
+  API_URLS,
+  logger,
+  ApiError,
+  parseSteamTrailerManifests,
+  STEAM_CATEGORY_WORKSHOP,
+  type SteamTrailerManifest,
+} from '@publisheriq/shared';
 import { withRetry } from '../utils/retry.js';
 import { rateLimiters } from '../utils/rate-limiter.js';
 
@@ -194,6 +201,7 @@ export interface ParsedStorefrontApp {
     thumbnailUrl: string | null;
     mp4Url: string | null;
     webmUrl: string | null;
+    hlsUrl: string | null;
     highlight: boolean;
   }>;
   fieldPresence?: {
@@ -329,6 +337,7 @@ export function parseStorefrontResponse(
       thumbnailUrl: movie.thumbnail ?? null,
       mp4Url: movie.mp4?.max ?? movie.mp4?.['480'] ?? null,
       webmUrl: movie.webm?.max ?? movie.webm?.['480'] ?? null,
+      hlsUrl: null,
       highlight: Boolean(movie.highlight),
     })),
     fieldPresence: {
@@ -338,6 +347,49 @@ export function parseStorefrontResponse(
       platforms: Object.prototype.hasOwnProperty.call(data, 'platforms'),
     },
   };
+}
+
+export function applyStorefrontTrailerManifests(
+  details: ParsedStorefrontApp,
+  manifests: SteamTrailerManifest[]
+): ParsedStorefrontApp {
+  const byMediaId = new Map(manifests.map((manifest) => [manifest.mediaId, manifest]));
+  return {
+    ...details,
+    movies: details.movies.map((movie) => ({
+      ...movie,
+      hlsUrl: movie.id === null ? movie.hlsUrl : (byMediaId.get(movie.id)?.hlsUrl ?? movie.hlsUrl),
+    })),
+  };
+}
+
+export async function fetchStorefrontTrailerManifests(
+  appid: number
+): Promise<SteamTrailerManifest[]> {
+  await rateLimiters.storefront.acquire();
+  const url = `${API_URLS.STEAM_STORE}/app/${appid}/?l=english&cc=us`;
+  try {
+    const response = await withRetry(async () => {
+      const result = await fetch(url, {
+        headers: {
+          Accept: 'text/html',
+          Cookie: 'birthtime=0; mature_content=1',
+        },
+      });
+      if (!result.ok) {
+        throw new ApiError(
+          `Failed to fetch Storefront trailer data for ${appid}`,
+          result.status,
+          url
+        );
+      }
+      return result.text();
+    });
+    return parseSteamTrailerManifests(response);
+  } catch (error) {
+    log.warn('Failed to fetch Storefront trailer manifests', { appid, error });
+    return [];
+  }
 }
 
 /**

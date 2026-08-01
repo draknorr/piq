@@ -39,6 +39,9 @@ const service = {
   async previewProfile(received: OpportunityIdentity, request: unknown) {
     return { received, request };
   },
+  async resolveTrailerStreams(received: OpportunityIdentity, request: unknown) {
+    return { received, request };
+  },
 } as unknown as OpportunityService;
 
 const server = createServer(async (request, response) => {
@@ -142,6 +145,91 @@ describe("opportunity query-api routes", () => {
 
     assert.equal(response.status, 200);
     assert.deepEqual(payload.request, request);
+  });
+
+  it("authenticates and forwards bounded trailer stream requests", async () => {
+    const request = { appid: 4672300, trailerIds: [257381675] };
+    const response = await fetch(
+      `${baseUrl}/v1/opportunities/resolve-trailer-streams`,
+      {
+        body: JSON.stringify(request),
+        headers: {
+          "content-type": "application/json",
+          "x-supabase-access-token": "token",
+        },
+        method: "POST",
+      },
+    );
+    const payload = (await response.json()) as {
+      received: OpportunityIdentity;
+      request: typeof request;
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.received.userId, identity.userId);
+    assert.deepEqual(payload.request, request);
+  });
+
+  it("keeps trailer stream resolution authenticated", async () => {
+    const response = await fetch(
+      `${baseUrl}/v1/opportunities/resolve-trailer-streams`,
+      {
+        body: JSON.stringify({ appid: 4672300, trailerIds: [257381675] }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+
+    assert.equal(response.status, 401);
+  });
+
+  it("returns a bounded error response when Steam resolution fails", async () => {
+    const failingService = {
+      async resolveTrailerStreams() {
+        throw new Error("Steam trailer metadata returned HTTP 503.");
+      },
+    } as unknown as OpportunityService;
+    const failingServer = createServer(async (request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      await tryHandleOpportunityRequest({
+        identityVerifier: verifier,
+        opportunityService: failingService,
+        request,
+        response,
+        url,
+      });
+    });
+    await new Promise<void>((resolve) =>
+      failingServer.listen(0, "127.0.0.1", resolve),
+    );
+    const failingAddress = failingServer.address();
+    if (!failingAddress || typeof failingAddress === "string") {
+      throw new Error("Trailer failure test server did not bind.");
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${failingAddress.port}/v1/opportunities/resolve-trailer-streams`,
+        {
+          body: JSON.stringify({ appid: 4672300, trailerIds: [257381675] }),
+          headers: {
+            "content-type": "application/json",
+            "x-supabase-access-token": "token",
+          },
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as {
+        code: string;
+        error: string;
+      };
+
+      assert.equal(response.status, 400);
+      assert.equal(payload.code, "OPPORTUNITY_REQUEST_INVALID");
+      assert.match(payload.error, /Steam trailer metadata/);
+    } finally {
+      failingServer.close();
+      await once(failingServer, "close");
+    }
   });
 
   it("reports catalog statement timeouts as gateway timeouts", async () => {

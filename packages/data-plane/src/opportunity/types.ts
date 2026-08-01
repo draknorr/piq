@@ -458,6 +458,7 @@ export interface OpportunityResultSummary {
   eventLabel: OpportunityResultLabel;
   eventFingerprint: string;
   id: string;
+  headerImageUrl: string | null;
   marketPotential: OpportunityPotentialBand;
   matchedProfiles: Array<{ id: string; name: string }>;
   name: string;
@@ -465,7 +466,36 @@ export interface OpportunityResultSummary {
   rankComponents: OpportunityRankComponents;
   score: number | null;
   strongestEvidence: string[];
+  triggeredByMediaAddition: boolean;
   whyNow: string;
+}
+
+export interface OpportunityMedia {
+  capturedAt: string | null;
+  headerImageUrl: string | null;
+  screenshots: Array<{
+    fullUrl: string;
+    id: number | null;
+    order: number;
+    thumbnailUrl: string | null;
+  }>;
+  trailers: Array<{
+    highlight: boolean;
+    hlsUrl: string | null;
+    id: number | null;
+    mp4Url: string | null;
+    name: string | null;
+    order: number;
+    thumbnailUrl: string | null;
+    webmUrl: string | null;
+  }>;
+}
+
+export interface OpportunityTrailerStreamsResponse {
+  streams: Array<{
+    hlsUrl: string | null;
+    id: number;
+  }>;
 }
 
 export interface OpportunityDailyOverview {
@@ -555,6 +585,7 @@ export interface OpportunityGameRecord {
     }>;
   };
   marketContext: OpportunityMarketContext | null;
+  media: OpportunityMedia;
   matchedProfiles: Array<{
     id: string;
     name: string;

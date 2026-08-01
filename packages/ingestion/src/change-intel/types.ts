@@ -66,6 +66,7 @@ export interface StorefrontMovie {
   thumbnailUrl: string | null;
   mp4Url: string | null;
   webmUrl: string | null;
+  hlsUrl: string | null;
   order: number;
 }
 

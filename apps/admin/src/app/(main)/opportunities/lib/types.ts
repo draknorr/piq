@@ -120,6 +120,7 @@ export interface OpportunityResultSummary {
     | "materially_changed"
     | "tracked_update";
   id: string;
+  headerImageUrl: string | null;
   marketPotential:
     | "insufficient_data"
     | "limited"
@@ -132,7 +133,29 @@ export interface OpportunityResultSummary {
   rankComponents: Record<string, number>;
   score: number | null;
   strongestEvidence: string[];
+  triggeredByMediaAddition: boolean;
   whyNow: string;
+}
+
+export interface OpportunityMedia {
+  capturedAt: string | null;
+  headerImageUrl: string | null;
+  screenshots: Array<{
+    fullUrl: string;
+    id: number | null;
+    order: number;
+    thumbnailUrl: string | null;
+  }>;
+  trailers: Array<{
+    highlight: boolean;
+    hlsUrl: string | null;
+    id: number | null;
+    mp4Url: string | null;
+    name: string | null;
+    order: number;
+    thumbnailUrl: string | null;
+    webmUrl: string | null;
+  }>;
 }
 
 export interface OpportunityObservedChange {
@@ -359,6 +382,7 @@ export interface OpportunityGameRecord {
     potentialBand: string;
     supply: { measuredGames: number; releasedGames: number };
   };
+  media: OpportunityMedia;
   matchedProfiles: Array<{
     id: string;
     name: string;

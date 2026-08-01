@@ -250,6 +250,11 @@ describe("opportunity customer response contracts", () => {
     assert.match(resultQuery, /'affectedRuleFields'/);
     assert.match(resultQuery, /material\.before_summary/);
     assert.match(resultQuery, /material\.after_summary/);
+    assert.match(
+      resultQuery,
+      /raw\.change_type IN \('screenshot_added', 'trailer_added'\)/,
+    );
+    assert.match(resultQuery, /media\.id = trigger_media\.media_version_id/);
   });
 
   for (const role of ["owner", "admin", "member"] as const) {
@@ -302,6 +307,22 @@ describe("opportunity customer response contracts", () => {
                 current_metrics: {},
                 evidence: [],
                 market_context: null,
+                media: {
+                  capturedAt: "2026-07-27T08:00:00.000Z",
+                  headerImageUrl: "https://cdn.example.com/header.jpg",
+                  screenshots: [],
+                  trailers: [
+                    {
+                      highlight: true,
+                      id: 101,
+                      mp4Url: null,
+                      name: "Trailer",
+                      order: 0,
+                      thumbnailUrl: "https://cdn.example.com/poster.jpg",
+                      webmUrl: null,
+                    },
+                  ],
+                },
                 matched_profiles: [],
                 missing_evidence: ["genres"],
                 official_news: [],
@@ -381,8 +402,17 @@ describe("opportunity customer response contracts", () => {
           },
         ],
       );
+      assert.equal(record.media.trailers[0]?.hlsUrl, null);
       assert.match(gameRecordQuery, /'change', CASE/);
       assert.match(gameRecordQuery, /'affectedRuleFields'/);
+      assert.match(
+        gameRecordQuery,
+        /'capturedAt', selected_media\.first_seen_at/,
+      );
+      assert.match(
+        gameRecordQuery,
+        /media\.id = trigger_media\.media_version_id/,
+      );
     });
   }
 });

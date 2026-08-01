@@ -192,6 +192,7 @@ interface ResultRow extends QueryResultRow {
   created_at: Date | string;
   event_fingerprint: string;
   event_label: OpportunityResultSummary["eventLabel"];
+  header_image_url: string | null;
   id: string;
   market_potential: OpportunityResultSummary["marketPotential"];
   matched_profiles: Array<{ id: string; name: string }> | null;
@@ -200,6 +201,7 @@ interface ResultRow extends QueryResultRow {
   rank_components: OpportunityResultSummary["rankComponents"];
   score: string | number | null;
   strongest_evidence: string[] | null;
+  triggered_by_media_addition: boolean;
   why_now: string;
 }
 
@@ -1379,23 +1381,21 @@ export class OpportunityRepository {
           result.id,
           result.appid,
           app.name,
-          (
-            SELECT jsonb_build_object(
-              'eventType', material.event_type,
-              'signalFamily', material.signal_family,
-              'effectiveAt', material.effective_at,
-              'observedAt', material.observed_at,
-              'confidence', material.confidence,
-              'affectedRuleFields', material.affected_rule_fields,
-              'before', material.before_summary,
-              'after', material.after_summary
-            )
-            FROM opportunity.material_events material
-            WHERE material.id = result.material_event_id
-            LIMIT 1
-          ) AS change,
+          CASE WHEN material.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'eventType', material.event_type,
+            'signalFamily', material.signal_family,
+            'effectiveAt', material.effective_at,
+            'observedAt', material.observed_at,
+            'confidence', material.confidence,
+            'affectedRuleFields', material.affected_rule_fields,
+            'before', material.before_summary,
+            'after', material.after_summary
+          ) END AS change,
           result.event_label,
           result.event_fingerprint,
+          selected_media.hero_assets->>'header' AS header_image_url,
+          COALESCE(trigger_media.media_addition, false)
+            AS triggered_by_media_addition,
           row_number() OVER (
             ORDER BY result.score DESC NULLS LAST, result.appid, result.id
           )::integer AS rank,
@@ -1430,6 +1430,57 @@ export class OpportunityRepository {
           ) AS matched_profiles
         FROM opportunity.results result
         JOIN legacy.apps app ON app.appid = result.appid
+        LEFT JOIN opportunity.material_events material
+          ON material.id = result.material_event_id
+        LEFT JOIN LATERAL (
+          SELECT
+            (
+              array_agg(
+                raw.media_version_id
+                ORDER BY raw.occurred_at DESC, raw.id DESC
+              ) FILTER (WHERE raw.media_version_id IS NOT NULL)
+            )[1] AS media_version_id,
+            COALESCE(
+              bool_or(
+                raw.change_type IN ('screenshot_added', 'trailer_added')
+              ),
+              false
+            ) AS media_addition
+          FROM events.app_change_events raw
+          WHERE material.id IS NOT NULL
+            AND raw.appid = result.appid
+            AND raw.occurred_at >= material.grouped_window_start
+            AND raw.occurred_at <= material.grouped_window_end
+            AND ('raw:' || raw.id::text) IN (
+              SELECT jsonb_array_elements_text(
+                COALESCE(material.raw_event_refs, '[]'::jsonb)
+              )
+            )
+        ) trigger_media ON true
+        LEFT JOIN LATERAL (
+          SELECT media.hero_assets
+          FROM docs.app_media_versions media
+          WHERE media.appid = result.appid
+          ORDER BY
+            CASE
+              WHEN media.id = trigger_media.media_version_id THEN 0
+              WHEN media.first_seen_at <= result.created_at THEN 1
+              ELSE 2
+            END,
+            CASE
+              WHEN media.id = trigger_media.media_version_id
+                THEN media.first_seen_at
+              ELSE NULL
+            END DESC,
+            CASE
+              WHEN media.first_seen_at <= result.created_at
+                THEN media.first_seen_at
+              ELSE NULL
+            END DESC,
+            media.first_seen_at DESC,
+            media.id DESC
+          LIMIT 1
+        ) selected_media ON true
         LEFT JOIN opportunity.market_context_snapshots market
           ON market.id = result.market_context_snapshot_id
         LEFT JOIN opportunity.result_profile_matches match
@@ -1445,7 +1496,13 @@ export class OpportunityRepository {
               AND result.created_at < $4
             )
           )
-        GROUP BY result.id, app.name, market.potential_band
+        GROUP BY
+          result.id,
+          app.name,
+          market.potential_band,
+          material.id,
+          selected_media.hero_assets,
+          trigger_media.media_addition
         ORDER BY result.score DESC NULLS LAST, result.appid, result.id
         LIMIT 500
       `,
@@ -2906,6 +2963,7 @@ export class OpportunityRepository {
         current_metrics: OpportunityGameRecord["currentMetrics"];
         evidence: OpportunityGameRecord["evidence"];
         market_context: OpportunityGameRecord["marketContext"];
+        media: OpportunityGameRecord["media"];
         matched_profiles: OpportunityGameRecord["matchedProfiles"];
         missing_evidence: string[];
         official_news: OpportunityGameRecord["officialNews"];
@@ -2961,6 +3019,7 @@ export class OpportunityRepository {
             END,
             'eventLabel', canonical.event_label,
             'eventFingerprint', canonical.event_fingerprint,
+            'headerImageUrl', selected_media.hero_assets->>'header',
             'rank', canonical.rank,
             'score', canonical.score,
             'rankComponents', canonical.rank_components,
@@ -2974,6 +3033,7 @@ export class OpportunityRepository {
               WHERE match.result_id = canonical.id
             ), '[]'::jsonb),
             'strongestEvidence', COALESCE(canonical.evidence_summary->'strongest', '[]'::jsonb),
+            'triggeredByMediaAddition', COALESCE(trigger_media.media_addition, false),
             'whyNow', COALESCE(canonical.why_now->>'summary', canonical.event_label)
           ) AS result_summary,
           jsonb_build_object(
@@ -3023,6 +3083,12 @@ export class OpportunityRepository {
           canonical.evidence_summary->'items' AS evidence,
           canonical.missing_evidence AS missing_evidence,
           canonical.evidence_summary->'currentMetrics' AS current_metrics,
+          jsonb_build_object(
+            'capturedAt', selected_media.first_seen_at,
+            'headerImageUrl', selected_media.hero_assets->>'header',
+            'screenshots', COALESCE(selected_media.screenshots, '[]'::jsonb),
+            'trailers', COALESCE(selected_media.trailers, '[]'::jsonb)
+          ) AS media,
           COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
               'gid', news.gid,
@@ -3189,6 +3255,59 @@ export class OpportunityRepository {
         JOIN opportunity.runs canonical_run ON canonical_run.id = canonical.run_id
         LEFT JOIN opportunity.material_events triggering_event
           ON triggering_event.id = canonical.material_event_id
+        LEFT JOIN LATERAL (
+          SELECT
+            (
+              array_agg(
+                raw.media_version_id
+                ORDER BY raw.occurred_at DESC, raw.id DESC
+              ) FILTER (WHERE raw.media_version_id IS NOT NULL)
+            )[1] AS media_version_id,
+            COALESCE(
+              bool_or(
+                raw.change_type IN ('screenshot_added', 'trailer_added')
+              ),
+              false
+            ) AS media_addition
+          FROM events.app_change_events raw
+          WHERE triggering_event.id IS NOT NULL
+            AND raw.appid = canonical.appid
+            AND raw.occurred_at >= triggering_event.grouped_window_start
+            AND raw.occurred_at <= triggering_event.grouped_window_end
+            AND ('raw:' || raw.id::text) IN (
+              SELECT jsonb_array_elements_text(
+                COALESCE(triggering_event.raw_event_refs, '[]'::jsonb)
+              )
+            )
+        ) trigger_media ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            media.first_seen_at,
+            media.hero_assets,
+            media.screenshots,
+            media.trailers
+          FROM docs.app_media_versions media
+          WHERE media.appid = canonical.appid
+          ORDER BY
+            CASE
+              WHEN media.id = trigger_media.media_version_id THEN 0
+              WHEN media.first_seen_at <= canonical.created_at THEN 1
+              ELSE 2
+            END,
+            CASE
+              WHEN media.id = trigger_media.media_version_id
+                THEN media.first_seen_at
+              ELSE NULL
+            END DESC,
+            CASE
+              WHEN media.first_seen_at <= canonical.created_at
+                THEN media.first_seen_at
+              ELSE NULL
+            END DESC,
+            media.first_seen_at DESC,
+            media.id DESC
+          LIMIT 1
+        ) selected_media ON true
         LEFT JOIN opportunity.cohort_snapshots cohort
           ON cohort.id = canonical.cohort_snapshot_id
         LEFT JOIN opportunity.market_context_snapshots market
@@ -3276,6 +3395,14 @@ export class OpportunityRepository {
       row.provenance?.run?.windowEnd ??
       row.provenance?.sourceTimestamps?.profileEvaluationAt ??
       row.result_summary.createdAt;
+    const decodedMedia = decodeOpportunityValue(
+      row.media ?? {
+        capturedAt: null,
+        headerImageUrl: null,
+        screenshots: [],
+        trailers: [],
+      },
+    );
     await this.recordTeamActivity({
       activityType: "viewed",
       appid: params.appid,
@@ -3293,6 +3420,18 @@ export class OpportunityRepository {
         previouslyMissingNowAvailable,
       },
       marketContext: decodeOpportunityValue(row.market_context),
+      media: {
+        capturedAt: decodedMedia.capturedAt ?? null,
+        headerImageUrl: decodedMedia.headerImageUrl ?? null,
+        screenshots: decodedMedia.screenshots ?? [],
+        trailers: (decodedMedia.trailers ?? []).map((trailer) => ({
+          ...trailer,
+          hlsUrl: trailer.hlsUrl ?? null,
+          mp4Url: trailer.mp4Url ?? null,
+          thumbnailUrl: trailer.thumbnailUrl ?? null,
+          webmUrl: trailer.webmUrl ?? null,
+        })),
+      },
       matchedProfiles: decodeOpportunityValue(row.matched_profiles).map(
         (profile) => ({
           ...profile,
@@ -3497,6 +3636,7 @@ export class OpportunityRepository {
       createdAt: iso(row.created_at)!,
       eventLabel: row.event_label,
       eventFingerprint: row.event_fingerprint,
+      headerImageUrl: row.header_image_url ?? null,
       id: row.id,
       marketPotential: row.market_potential,
       matchedProfiles: (row.matched_profiles ?? []).map((profile) => ({
@@ -3511,6 +3651,7 @@ export class OpportunityRepository {
         row.strongest_evidence ?? [],
         changeSummary,
       ),
+      triggeredByMediaAddition: row.triggered_by_media_addition ?? false,
       whyNow: `${changeSummary} The game matches your sourcing criteria.`,
     };
   }

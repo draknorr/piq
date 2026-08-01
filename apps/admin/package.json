@@ -26,6 +26,7 @@
     "framer-motion": "^11.15.0",
     "geist": "^1.5.1",
     "html-react-parser": "^5.2.11",
+    "hls.js": "^1.6.16",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.562.0",
     "mermaid": "^11.12.2",
