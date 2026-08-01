@@ -149,6 +149,13 @@ function demandSummary(
   }[direction ?? "unknown"];
 }
 
+const EMPTY_OPPORTUNITY_MEDIA: OpportunityGameRecord["media"] = {
+  capturedAt: null,
+  headerImageUrl: null,
+  screenshots: [],
+  trailers: [],
+};
+
 export function OpportunityGameRecordClient({
   appid,
   resultId,
@@ -162,7 +169,10 @@ export function OpportunityGameRecordClient({
   const [acting, setActing] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const galleryItems = useMemo(
-    () => (record ? buildOpportunityGallery(record.media) : []),
+    () =>
+      record
+        ? buildOpportunityGallery(record.media ?? EMPTY_OPPORTUNITY_MEDIA)
+        : [],
     [record],
   );
 
@@ -262,6 +272,7 @@ export function OpportunityGameRecordClient({
   }
 
   const market = record.marketContext;
+  const media = record.media ?? EMPTY_OPPORTUNITY_MEDIA;
   const tracked = Boolean(record.userState.trackedAt);
   const researching = record.userState.researching;
   const canSeeCoverage =
@@ -286,14 +297,14 @@ export function OpportunityGameRecordClient({
             <OpportunityHeaderImage
               name={record.app.name}
               onClick={
-                record.media.headerImageUrl
+                media.headerImageUrl
                   ? () =>
                       setLightboxIndex(
                         opportunityGalleryIndex(galleryItems, "header"),
                       )
                   : undefined
               }
-              src={record.media.headerImageUrl}
+              src={media.headerImageUrl}
             />
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
