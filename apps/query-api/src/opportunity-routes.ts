@@ -249,6 +249,18 @@ export async function tryHandleOpportunityRequest(params: {
         );
         return true;
       }
+      case "/v1/opportunities/resolve-trailer-streams": {
+        const body = await readJsonBody<{
+          appid: number;
+          trailerIds: number[];
+        }>(params.request);
+        sendJson(
+          params.response,
+          200,
+          await params.opportunityService.resolveTrailerStreams(identity, body),
+        );
+        return true;
+      }
       case "/v1/opportunities/game-state": {
         const body = await readJsonBody<{
           action: "dismiss" | "ignore" | "restore" | "track" | "untrack";

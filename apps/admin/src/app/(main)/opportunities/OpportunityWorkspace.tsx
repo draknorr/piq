@@ -12,6 +12,7 @@ import {
   Copy,
   Filter,
   FlaskConical,
+  Image as ImageIcon,
   Mail,
   Plus,
   RefreshCw,
@@ -627,15 +628,24 @@ function ResultSection({
             key={result.id}
             href={`/opportunities/games/${result.appid}?result=${result.id}`}
             prefetch={false}
-            className="group grid gap-5 py-6 transition hover:bg-surface-elevated/45 md:grid-cols-[36px_minmax(0,1fr)_210px_24px] md:px-2"
+            className={`group my-px block rounded-lg px-2 py-4 transition sm:grid sm:grid-cols-[112px_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-3 xl:grid-cols-[132px_minmax(0,1fr)_150px_24px] xl:gap-5 ${
+              result.triggeredByMediaAddition
+                ? "bg-accent-primary-muted/35 ring-1 ring-inset ring-accent-primary/40 hover:bg-accent-primary-muted/50"
+                : "hover:bg-surface-elevated/45"
+            }`}
           >
-            <span className="text-sm tabular-nums text-text-muted">
-              {result.rank ? String(result.rank).padStart(2, "0") : "—"}
-            </span>
+            <OpportunityResultImage result={result} />
             <div className="min-w-0">
-              <h4 className="truncate text-base font-semibold text-text-primary">
-                {result.name}
-              </h4>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h4 className="min-w-0 truncate text-base font-semibold text-text-primary">
+                  {result.name}
+                </h4>
+                {result.triggeredByMediaAddition && (
+                  <span className="shrink-0 rounded-full border border-accent-primary/30 bg-accent-primary-muted px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-accent-primary">
+                    New media
+                  </span>
+                )}
+              </div>
               <p className="mt-2 max-w-3xl text-base font-medium leading-6 text-text-primary">
                 {result.changeSummary}
               </p>
@@ -653,7 +663,7 @@ function ResultSection({
                 </p>
               )}
             </div>
-            <div className="space-y-3 md:text-right">
+            <div className="clear-both flex flex-wrap gap-x-5 gap-y-2 pt-3 sm:col-start-2 sm:pt-0 xl:col-start-auto xl:block xl:space-y-3 xl:text-right">
               <div>
                 <p className="text-sm font-semibold text-text-primary">
                   {opportunityStrengthLabel(result.score)}
@@ -680,12 +690,41 @@ function ResultSection({
             </div>
             <ArrowRight
               aria-hidden="true"
-              className="mt-1 h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary"
+              className="mt-1 hidden h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary xl:block"
             />
           </Link>
         ))}
       </div>
     </section>
+  );
+}
+
+function OpportunityResultImage({
+  result,
+}: {
+  result: OpportunityResultSummary;
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="relative float-left mr-4 aspect-[460/215] w-24 self-start overflow-hidden rounded-md border border-border-subtle bg-surface-elevated sm:float-none sm:mr-0 sm:w-full">
+      {result.headerImageUrl && !failed ? (
+        <img
+          alt={`${result.name} Steam header art`}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => setFailed(true)}
+          src={result.headerImageUrl}
+        />
+      ) : (
+        <span className="grid h-full place-items-center text-text-muted">
+          <ImageIcon className="h-4 w-4" />
+          <span className="sr-only">Steam art unavailable</span>
+        </span>
+      )}
+      <span className="absolute left-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white shadow-sm">
+        {result.rank ? String(result.rank).padStart(2, "0") : "—"}
+      </span>
+    </div>
   );
 }
 

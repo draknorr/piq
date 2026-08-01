@@ -31,6 +31,83 @@ describe("opportunity profile delivery schedule", () => {
   });
 });
 
+describe("opportunity trailer stream resolution", () => {
+  const identity = {
+    accessToken: "token",
+    email: "user@example.com",
+    userId: "user-1",
+  };
+
+  it("returns matched HLS streams and caches one Steam lookup per app", async () => {
+    let calls = 0;
+    const service = new OpportunityService(
+      {} as OpportunityRepository,
+      null,
+      async () => {
+        calls += 1;
+        return [
+          {
+            hlsUrl: "https://video.fastly.steamstatic.com/video.m3u8",
+            mediaId: 101,
+            posterUrl: null,
+            title: "Trailer",
+          },
+        ];
+      },
+    );
+
+    const first = await service.resolveTrailerStreams(identity, {
+      appid: 10,
+      trailerIds: [101, 202],
+    });
+    const second = await service.resolveTrailerStreams(identity, {
+      appid: 10,
+      trailerIds: [101],
+    });
+
+    assert.deepEqual(first, {
+      streams: [
+        {
+          hlsUrl: "https://video.fastly.steamstatic.com/video.m3u8",
+          id: 101,
+        },
+        { hlsUrl: null, id: 202 },
+      ],
+    });
+    assert.equal(second.streams[0]?.id, 101);
+    assert.equal(calls, 1);
+  });
+
+  it("rejects invalid app and trailer identifiers before resolving Steam", async () => {
+    const service = new OpportunityService({} as OpportunityRepository);
+
+    await assert.rejects(
+      () =>
+        service.resolveTrailerStreams(identity, {
+          appid: 0,
+          trailerIds: [1],
+        }),
+      /positive integer appid/,
+    );
+    await assert.rejects(
+      () =>
+        service.resolveTrailerStreams(identity, {
+          appid: 10,
+          trailerIds: [-1],
+        }),
+      /positive integers/,
+    );
+    await assert.rejects(
+      () =>
+        service.resolveTrailerStreams(identity, {
+          appid: 10,
+          trailerIds: Array.from({ length: 21 }, (_, index) => index + 1),
+        }),
+      /No more than 20/,
+    );
+  });
+});
+
 describe("opportunity API presentation", () => {
   it("loads Tiger taxonomy names before returning change summaries", async () => {
     const queries: Array<{ text: string; values: unknown[] }> = [];

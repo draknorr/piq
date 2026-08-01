@@ -10,7 +10,11 @@
 import { randomUUID } from 'node:crypto';
 import { getServiceClient, getTigerWriter } from '@publisheriq/database';
 import { logger } from '@publisheriq/shared';
-import { fetchStorefrontAppDetails } from '../apis/storefront.js';
+import {
+  applyStorefrontTrailerManifests,
+  fetchStorefrontAppDetails,
+  fetchStorefrontTrailerManifests,
+} from '../apis/storefront.js';
 import { fetchStorefrontTags } from '../apis/storefront-tags.js';
 import {
   abandonStaleChangeIntelSyncJobs,
@@ -160,11 +164,18 @@ async function processStorefrontJob(
     throw new Error(result.error);
   }
 
-  await captureStorefrontState(supabase, appid, result.data, {
+  const needsTrailerStreams = result.data.movies.some(
+    (movie) => !movie.mp4Url && !movie.webmUrl && !movie.hlsUrl
+  );
+  const details = needsTrailerStreams
+    ? applyStorefrontTrailerManifests(result.data, await fetchStorefrontTrailerManifests(appid))
+    : result.data;
+
+  await captureStorefrontState(supabase, appid, details, {
     triggerReason: 'capture_queue_storefront',
     triggerCursor,
   });
-  await upsertLatestStorefrontState(supabase, appid, result.data);
+  await upsertLatestStorefrontState(supabase, appid, details);
 }
 
 async function processProjectionRefreshJob(

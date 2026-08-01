@@ -10,6 +10,10 @@ import {
 } from "./repository.js";
 import type { OpportunityCompiledPreview } from "./sql-compiler.js";
 import type { OpportunityDestinationCipher } from "./delivery-secrets.js";
+import {
+  resolveSteamTrailerManifests,
+  type OpportunityTrailerManifestResolver,
+} from "./steam-trailer-resolver.js";
 import type {
   OpportunityBootstrapResponse,
   OpportunityChannelPreferenceSummary,
@@ -22,6 +26,7 @@ import type {
   OpportunityRuleField,
   OpportunityRuleSet,
   OpportunitySignalFamily,
+  OpportunityTrailerStreamsResponse,
 } from "./types.js";
 
 const SIGNAL_FAMILIES = new Set<OpportunitySignalFamily>([
@@ -142,10 +147,18 @@ export class OpportunityService {
     string,
     Promise<OpportunityPreviewCatalog>
   >();
+  private readonly trailerManifestCache = new Map<
+    number,
+    {
+      expiresAt: number;
+      manifests: Awaited<ReturnType<OpportunityTrailerManifestResolver>>;
+    }
+  >();
 
   constructor(
     private readonly repository: OpportunityRepository,
     private readonly destinationCipher: OpportunityDestinationCipher | null = null,
+    private readonly trailerManifestResolver: OpportunityTrailerManifestResolver = resolveSteamTrailerManifests,
   ) {}
 
   private getPreviewCatalog(
@@ -399,6 +412,56 @@ export class OpportunityService {
       throw new Error("A positive integer appid is required.");
     }
     return this.repository.getGameRecord({ ...params, identity });
+  }
+
+  async resolveTrailerStreams(
+    identity: OpportunityIdentity,
+    params: { appid: number; trailerIds: number[] },
+  ): Promise<OpportunityTrailerStreamsResponse> {
+    if (!identity.userId) {
+      throw new Error("An authenticated user is required.");
+    }
+    if (!Number.isInteger(params.appid) || params.appid <= 0) {
+      throw new Error("A positive integer appid is required.");
+    }
+    if (!Array.isArray(params.trailerIds) || params.trailerIds.length > 20) {
+      throw new Error("No more than 20 trailer IDs may be resolved at once.");
+    }
+    const trailerIds = Array.from(new Set(params.trailerIds));
+    if (
+      trailerIds.some(
+        (trailerId) => !Number.isInteger(trailerId) || trailerId <= 0,
+      )
+    ) {
+      throw new Error("Trailer IDs must be positive integers.");
+    }
+    if (trailerIds.length === 0) {
+      return { streams: [] };
+    }
+
+    const cached = this.trailerManifestCache.get(params.appid);
+    const manifests =
+      cached && cached.expiresAt > Date.now()
+        ? cached.manifests
+        : await this.trailerManifestResolver(params.appid);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      if (this.trailerManifestCache.size >= 200) {
+        const oldestKey = this.trailerManifestCache.keys().next().value;
+        if (typeof oldestKey === "number") {
+          this.trailerManifestCache.delete(oldestKey);
+        }
+      }
+      this.trailerManifestCache.set(params.appid, {
+        expiresAt: Date.now() + 15 * 60 * 1000,
+        manifests,
+      });
+    }
+    const byId = new Map(
+      manifests.map((manifest) => [manifest.mediaId, manifest.hlsUrl]),
+    );
+    return {
+      streams: trailerIds.map((id) => ({ hlsUrl: byId.get(id) ?? null, id })),
+    };
   }
 
   setGameState(

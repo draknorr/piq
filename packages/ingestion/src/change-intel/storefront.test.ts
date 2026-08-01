@@ -45,7 +45,7 @@ const baseSnapshot = normalizeStorefrontSnapshot({
   packageIds: [1],
   packageGroupSubs: [10],
   screenshots: [{ id: 1, thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg', fullUrl: 'https://cdn.example.com/shot.jpg' }],
-  movies: [{ id: 1, name: 'Trailer', thumbnailUrl: 'https://cdn.example.com/trailer.jpg', mp4Url: 'https://cdn.example.com/trailer.mp4', webmUrl: null, highlight: true }],
+  movies: [{ id: 1, name: 'Trailer', thumbnailUrl: 'https://cdn.example.com/trailer.jpg', mp4Url: 'https://cdn.example.com/trailer.mp4', webmUrl: null, hlsUrl: null, highlight: true }],
 });
 
 test('storefront snapshot diff detects content changes', () => {

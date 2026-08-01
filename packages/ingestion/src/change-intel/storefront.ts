@@ -74,9 +74,10 @@ function normalizeMovies(values: ParsedStorefrontApp['movies']): StorefrontMovie
       thumbnailUrl: normalizeUrl(entry.thumbnailUrl),
       mp4Url: normalizeUrl(entry.mp4Url),
       webmUrl: normalizeUrl(entry.webmUrl),
+      hlsUrl: normalizeUrl(entry.hlsUrl),
       order: index,
     }))
-    .filter((entry) => entry.mp4Url || entry.webmUrl || entry.thumbnailUrl);
+    .filter((entry) => entry.mp4Url || entry.webmUrl || entry.hlsUrl || entry.thumbnailUrl);
 }
 
 function canonicalizeScreenshot(entry: StorefrontScreenshot): StorefrontScreenshot {
@@ -93,6 +94,7 @@ function canonicalizeMovie(entry: StorefrontMovie): StorefrontMovie {
     thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl),
     mp4Url: canonicalizeUrlForComparison(entry.mp4Url),
     webmUrl: canonicalizeUrlForComparison(entry.webmUrl),
+    hlsUrl: canonicalizeUrlForComparison(entry.hlsUrl),
   };
 }
 

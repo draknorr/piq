@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -10,8 +10,10 @@ import {
   Eye,
   Flag,
   History,
+  Image as ImageIcon,
   Minus,
   Newspaper,
+  Play,
   Radar,
   RotateCcw,
   Search,
@@ -36,11 +38,16 @@ import {
   opportunityStrengthLabel,
   opportunityWhyItMatters,
 } from "../../lib/api";
+import {
+  buildOpportunityGallery,
+  opportunityGalleryIndex,
+} from "../../lib/media";
 import type {
   OpportunityGameRecord,
   OpportunityRuleField,
   OpportunityRuleOperator,
 } from "../../lib/types";
+import { OpportunityMediaLightbox } from "./OpportunityMediaLightbox";
 
 function metricToken(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -153,6 +160,11 @@ export function OpportunityGameRecordClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const galleryItems = useMemo(
+    () => (record ? buildOpportunityGallery(record.media) : []),
+    [record],
+  );
 
   const load = async () => {
     if (!appid || !resultId) {
@@ -260,7 +272,7 @@ export function OpportunityGameRecordClient({
 
   return (
     <div className="-m-4 min-h-screen bg-surface md:-m-6 lg:-m-8">
-      <header className="border-b border-border-muted bg-surface-raised px-5 py-6 md:px-8 md:py-8">
+      <header className="border-b border-border-muted bg-surface-raised px-5 py-5 md:px-8 md:py-6">
         <div className="mx-auto max-w-[1500px]">
           <Link
             href="/opportunities"
@@ -270,16 +282,28 @@ export function OpportunityGameRecordClient({
             <ArrowLeft className="h-3.5 w-3.5" />
             Daily Intelligence Desk
           </Link>
-          <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <div>
+          <div className="mt-4 grid gap-5 md:grid-cols-[220px_minmax(0,1fr)] md:items-center xl:grid-cols-[250px_minmax(0,1fr)]">
+            <OpportunityHeaderImage
+              name={record.app.name}
+              onClick={
+                record.media.headerImageUrl
+                  ? () =>
+                      setLightboxIndex(
+                        opportunityGalleryIndex(galleryItems, "header"),
+                      )
+                  : undefined
+              }
+              src={record.media.headerImageUrl}
+            />
+            <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
                 Opportunity record · observed{" "}
                 {formatOpportunityDate(record.result.createdAt)}
               </p>
-              <h1 className="mt-3 max-w-4xl text-[clamp(2rem,5vw,4.2rem)] font-medium leading-[0.95] tracking-[-0.045em] text-text-primary">
+              <h1 className="mt-2 max-w-4xl text-[clamp(2rem,5vw,3.8rem)] font-medium leading-[0.95] tracking-[-0.045em] text-text-primary">
                 {record.app.name}
               </h1>
-              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-text-tertiary">
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-text-tertiary">
                 <span>
                   {record.app.developers.join(", ") || "Developer not listed"}
                 </span>
@@ -296,47 +320,55 @@ export function OpportunityGameRecordClient({
                   View on Steam <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <ActionButton
-                active={tracked}
-                disabled={acting !== null}
-                icon={Flag}
-                label={tracked ? "Tracked" : "Track"}
-                onClick={() => setPersonalState(tracked ? "untrack" : "track")}
-              />
-              <ActionButton
-                active={researching}
-                disabled={acting !== null}
-                icon={Search}
-                label={researching ? "Researching" : "Start research"}
-                onClick={() => setResearching(!researching)}
-              />
-              {record.userState.dismissedAt || record.userState.ignoredAt ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 <ActionButton
+                  active={tracked}
                   disabled={acting !== null}
-                  icon={RotateCcw}
-                  label="Restore"
-                  onClick={() => setPersonalState("restore")}
+                  icon={Flag}
+                  label={tracked ? "Tracked" : "Track"}
+                  onClick={() =>
+                    setPersonalState(tracked ? "untrack" : "track")
+                  }
                 />
-              ) : (
-                <>
+                <ActionButton
+                  active={researching}
+                  disabled={acting !== null}
+                  icon={Search}
+                  label={researching ? "Researching" : "Start research"}
+                  onClick={() => setResearching(!researching)}
+                />
+                {record.userState.dismissedAt || record.userState.ignoredAt ? (
                   <ActionButton
                     disabled={acting !== null}
-                    icon={Minus}
-                    label="Dismiss"
-                    onClick={() => setPersonalState("dismiss")}
+                    icon={RotateCcw}
+                    label="Restore"
+                    onClick={() => setPersonalState("restore")}
                   />
-                  <ActionButton
-                    disabled={acting !== null}
-                    icon={X}
-                    label="Ignore"
-                    onClick={() => setPersonalState("ignore")}
-                  />
-                </>
-              )}
+                ) : (
+                  <>
+                    <ActionButton
+                      disabled={acting !== null}
+                      icon={Minus}
+                      label="Dismiss"
+                      onClick={() => setPersonalState("dismiss")}
+                    />
+                    <ActionButton
+                      disabled={acting !== null}
+                      icon={X}
+                      label="Ignore"
+                      onClick={() => setPersonalState("ignore")}
+                    />
+                  </>
+                )}
+              </div>
             </div>
           </div>
+          <OpportunityMediaRail
+            items={galleryItems}
+            onOpen={(itemId) =>
+              setLightboxIndex(opportunityGalleryIndex(galleryItems, itemId))
+            }
+          />
           {error && (
             <p className="mt-4 rounded-lg bg-semantic-warning-muted px-3 py-2 text-xs text-semantic-warning">
               {error}
@@ -798,7 +830,141 @@ export function OpportunityGameRecordClient({
           )}
         </aside>
       </main>
+      {lightboxIndex !== null && galleryItems.length > 0 && (
+        <OpportunityMediaLightbox
+          appid={appid}
+          initialIndex={lightboxIndex}
+          items={galleryItems}
+          onClose={() => setLightboxIndex(null)}
+          steamUrl={record.app.steamUrl}
+        />
+      )}
     </div>
+  );
+}
+
+function OpportunityHeaderImage({
+  name,
+  onClick,
+  src,
+}: {
+  name: string;
+  onClick?: () => void;
+  src: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+  const className =
+    "relative aspect-[460/215] w-full max-w-[250px] overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated text-left";
+  if (!src || failed) {
+    return (
+      <div className={`${className} grid place-items-center`}>
+        <div className="text-center text-text-muted">
+          <ImageIcon className="mx-auto h-5 w-5" />
+          <span className="mt-1 block text-[10px] uppercase tracking-wide">
+            Steam art unavailable
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button
+      aria-label={`Open Steam header art for ${name}`}
+      className={`${className} group`}
+      onClick={onClick}
+      type="button"
+    >
+      <img
+        alt={`${name} Steam header art`}
+        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.015]"
+        fetchPriority="high"
+        onError={() => setFailed(true)}
+        src={src}
+      />
+      <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-7 text-[10px] font-semibold uppercase tracking-wide text-white/80 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+        Header art <ImageIcon className="h-3.5 w-3.5" />
+      </span>
+    </button>
+  );
+}
+
+function OpportunityMediaRail({
+  items,
+  onOpen,
+}: {
+  items: ReturnType<typeof buildOpportunityGallery>;
+  onOpen: (itemId: string) => void;
+}) {
+  const mediaItems = items.filter((item) => item.kind !== "header");
+  if (mediaItems.length === 0) return null;
+  return (
+    <section
+      aria-label="Steam media"
+      className="mt-5 border-t border-border-subtle pt-4"
+    >
+      <div className="mb-2.5 flex items-center justify-between gap-4">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+          Steam media
+        </p>
+        <p className="text-[10px] tabular-nums text-text-muted">
+          {mediaItems.length} {mediaItems.length === 1 ? "asset" : "assets"}
+        </p>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {mediaItems.map((item) => (
+          <button
+            aria-label={`Open ${item.label}`}
+            className="group relative aspect-video w-[132px] shrink-0 overflow-hidden rounded-md border border-border-subtle bg-surface-elevated text-left transition hover:border-border-prominent sm:w-[148px]"
+            key={item.id}
+            onClick={() => onOpen(item.id)}
+            type="button"
+          >
+            <OpportunityMediaPreview
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.025]"
+              src={item.previewUrl}
+            />
+            {item.kind === "trailer" && (
+              <span className="absolute inset-0 grid place-items-center bg-black/15">
+                <span className="grid h-7 w-7 place-items-center rounded-full border border-white/25 bg-black/55 text-white">
+                  <Play className="ml-0.5 h-3.5 w-3.5 fill-current" />
+                </span>
+              </span>
+            )}
+            <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/75 to-transparent px-2 pb-1.5 pt-5 text-[10px] font-medium text-white/85">
+              {item.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OpportunityMediaPreview({
+  className,
+  src,
+}: {
+  className: string;
+  src: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <span
+        className={`${className} grid place-items-center bg-surface-elevated`}
+      >
+        <ImageIcon className="h-4 w-4 text-text-muted" />
+      </span>
+    );
+  }
+  return (
+    <img
+      alt=""
+      className={className}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      src={src}
+    />
   );
 }
 

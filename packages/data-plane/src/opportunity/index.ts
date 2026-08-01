@@ -8,6 +8,7 @@ export * from "./repository.js";
 export * from "./rules.js";
 export * from "./service.js";
 export * from "./sql-compiler.js";
+export * from "./steam-trailer-resolver.js";
 export * from "./types.js";
 export * from "./worker-repository.js";
 export * from "./worker.js";
