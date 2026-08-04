@@ -59,6 +59,8 @@ interface FieldSql {
 
 const STOREFRONT_READY = "readiness_storefront.status = 'ready'";
 const PICS_READY = "readiness_pics.status = 'ready'";
+const CONTENT_DESCRIPTORS_EVIDENCE_ALIAS = "evidence_content_descriptors_pics";
+const SELF_PUBLISHED_ALIAS = "self_published_app";
 
 function fieldEvidenceKnownSql(
   field: OpportunityRuleField,
@@ -404,11 +406,14 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "content_descriptors":
       return {
-        knownSql: fieldEvidenceKnownSql(
-          "content_descriptors",
-          ["pics"],
-          "a.content_descriptors IS NOT NULL",
-        ),
+        knownSql: `(
+          ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.evidence_state = 'known'
+          OR (
+            ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.appid IS NULL
+            AND ${PICS_READY}
+            AND a.content_descriptors IS NOT NULL
+          )
+        )`,
         textCollectionSql: "a.content_descriptors::text",
       };
     case "has_demo":
@@ -444,19 +449,7 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
     case "self_published":
       return {
         knownSql: STOREFRONT_READY,
-        scalarSql: `EXISTS (
-          SELECT 1
-          FROM legacy.app_developers app_developer
-          JOIN legacy.developers developer
-            ON developer.id = app_developer.developer_id
-          JOIN legacy.app_publishers app_publisher
-            ON app_publisher.appid = app_developer.appid
-          JOIN legacy.publishers publisher
-            ON publisher.id = app_publisher.publisher_id
-          WHERE app_developer.appid = a.appid
-            AND developer.normalized_name IS NOT NULL
-            AND publisher.normalized_name = developer.normalized_name
-        )`,
+        scalarSql: `${SELF_PUBLISHED_ALIAS}.appid IS NOT NULL`,
       };
   }
 }
@@ -745,6 +738,27 @@ export function opportunityPreviewFromSql(
     fields.has("publisheriq_added_at")
       ? `LEFT JOIN ops.app_catalog_state catalog_state
     ON catalog_state.appid = a.appid`
+      : null,
+    fields.has("self_published")
+      ? `LEFT JOIN (
+      SELECT DISTINCT app_developer.appid
+      FROM legacy.app_developers app_developer
+      JOIN legacy.developers developer
+        ON developer.id = app_developer.developer_id
+      JOIN legacy.app_publishers app_publisher
+        ON app_publisher.appid = app_developer.appid
+      JOIN legacy.publishers publisher
+        ON publisher.id = app_publisher.publisher_id
+      WHERE developer.normalized_name IS NOT NULL
+        AND publisher.normalized_name = developer.normalized_name
+    ) ${SELF_PUBLISHED_ALIAS}
+    ON ${SELF_PUBLISHED_ALIAS}.appid = a.appid`
+      : null,
+    fields.has("content_descriptors")
+      ? `LEFT JOIN ops.app_field_evidence ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}
+    ON ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.appid = a.appid
+    AND ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.field_name = 'content_descriptors'
+    AND ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.source = 'pics'`
       : null,
     [...fields].some((field) => STOREFRONT_FIELDS.has(field))
       ? `LEFT JOIN ops.app_data_readiness readiness_storefront

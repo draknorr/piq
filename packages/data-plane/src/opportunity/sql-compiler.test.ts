@@ -62,6 +62,75 @@ describe("opportunity SQL compiler", () => {
     ]);
   });
 
+  it("uses set-based joins for self-published and descriptor evidence", () => {
+    const compiled = compileOpportunityPreview(
+      {
+        excluded: [
+          {
+            clauses: [
+              {
+                field: "content_descriptors",
+                id: "adult-content",
+                operator: "contains",
+                value: "adult",
+              },
+            ],
+            id: "excluded-content",
+            label: "Excluded content",
+            operator: "all",
+          },
+        ],
+        preferred: [],
+        required: [
+          {
+            clauses: [
+              {
+                field: "self_published",
+                id: "self-published",
+                operator: "equals",
+                value: true,
+              },
+              {
+                field: "publisheriq_added_at",
+                id: "added-today",
+                operator: "in_window",
+                value: { kind: "relative_window", window: "today" },
+              },
+            ],
+            id: "positioning",
+            label: "Core positioning",
+            operator: "all",
+          },
+        ],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      {
+        asOf: "2026-08-03T20:00:00.000Z",
+        timezone: "America/Los_Angeles",
+      },
+    );
+
+    assert.match(compiled.fromSql, /SELECT DISTINCT app_developer\.appid/);
+    assert.match(compiled.fromSql, /LEFT JOIN ops\.app_catalog_state/);
+    assert.match(
+      compiled.fromSql,
+      /LEFT JOIN ops\.app_field_evidence evidence_content_descriptors_pics/,
+    );
+    assert.match(compiled.matchSql, /self_published_app\.appid IS NOT NULL/);
+    assert.match(
+      compiled.matchSql,
+      /evidence_content_descriptors_pics\.evidence_state = 'known'/,
+    );
+    assert.doesNotMatch(
+      compiled.matchSql,
+      /FROM legacy\.app_developers app_developer/,
+    );
+    assert.doesNotMatch(
+      compiled.matchSql,
+      /FROM ops\.app_field_evidence field_evidence/,
+    );
+  });
+
   it("compiles ANY rule groups with OR", () => {
     const compiled = compileOpportunityPreview({
       excluded: [],
