@@ -5,6 +5,8 @@ import { createServerClient } from "@/lib/supabase/server";
 
 const ALLOWED_OPERATIONS = new Set([
   "bootstrap",
+  "daily-brief",
+  "list-results",
   "preview-profile",
   "create-profile",
   "clone-preset",

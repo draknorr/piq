@@ -1,5 +1,7 @@
 export * from "./delivery-secrets.js";
 export * from "./delivery.js";
+export * from "./brief.js";
+export * from "./errors.js";
 export * from "./date-rules.js";
 export * from "./intelligence.js";
 export * from "./material-events.js";

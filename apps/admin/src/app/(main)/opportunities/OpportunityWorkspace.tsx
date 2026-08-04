@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,11 +17,13 @@ import {
   Mail,
   Plus,
   RefreshCw,
+  Rows3,
   Slack,
   Target,
   Users,
 } from "lucide-react";
 
+import { EditorialDailyBrief } from "./EditorialDailyBrief";
 import { ProfileBuilder } from "./ProfileBuilder";
 import {
   formatOpportunityDate,
@@ -33,11 +36,18 @@ import {
 } from "./lib/api";
 import type {
   OpportunityBootstrap,
+  OpportunityDailyBriefIssue,
   OpportunityProfileDetail,
+  OpportunityResultLabel,
+  OpportunityResultPage,
   OpportunityResultSummary,
 } from "./lib/types";
+import {
+  parseOpportunityEventFilter,
+  parseOpportunityWorkspaceTab,
+  type OpportunityWorkspaceTab,
+} from "./lib/workspace-query";
 
-type WorkspaceTab = "brief" | "profiles" | "delivery";
 type ProfilesView = "catalog" | "loading" | "editor";
 
 const RESULT_SECTIONS: Array<{
@@ -127,15 +137,50 @@ function marketHealthLabel(status: string): string {
 }
 
 export function OpportunityWorkspace() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<OpportunityBootstrap | null>(null);
-  const [tab, setTab] = useState<WorkspaceTab>("brief");
+  const [tab, setTab] = useState<OpportunityWorkspaceTab>(() =>
+    parseOpportunityWorkspaceTab(searchParams.get("tab")),
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [brief, setBrief] = useState<OpportunityDailyBriefIssue | null>(null);
+  const [briefLoading, setBriefLoading] = useState(true);
+  const [briefError, setBriefError] = useState<string | null>(null);
+  const [listResults, setListResults] = useState<OpportunityResultSummary[]>(
+    [],
+  );
+  const [listCursor, setListCursor] = useState<string | null>(null);
+  const [listHasMore, setListHasMore] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
   const [profilesView, setProfilesView] = useState<ProfilesView>("catalog");
   const [profileDetail, setProfileDetail] =
     useState<OpportunityProfileDetail | null>(null);
   const profileRequestId = useRef(0);
+  const briefRequestId = useRef(0);
+  const listRequestId = useRef(0);
   const workspaceContentRef = useRef<HTMLElement>(null);
+  const requestedRunId = searchParams.get("run");
+  const selectedProfileId = searchParams.get("profile");
+  const selectedEvent = parseOpportunityEventFilter(searchParams.get("event"));
+
+  const replaceQuery = (updates: Record<string, string | null>) => {
+    const query = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value) {
+        query.set(key, value);
+      } else {
+        query.delete(key);
+      }
+    });
+    const suffix = query.toString();
+    router.replace(suffix ? `${pathname}?${suffix}` : pathname, {
+      scroll: false,
+    });
+  };
 
   const load = async () => {
     setLoading(true);
@@ -155,6 +200,101 @@ export function OpportunityWorkspace() {
     void load();
   }, []);
 
+  const loadBrief = async () => {
+    const requestId = briefRequestId.current + 1;
+    briefRequestId.current = requestId;
+    setBriefLoading(true);
+    setBriefError(null);
+    try {
+      const nextBrief = await opportunityPost<OpportunityDailyBriefIssue>(
+        "daily-brief",
+        {
+          runId: requestedRunId,
+        },
+      );
+      if (briefRequestId.current !== requestId) {
+        return;
+      }
+      setBrief(nextBrief);
+    } catch {
+      if (briefRequestId.current !== requestId) {
+        return;
+      }
+      setBriefError(
+        requestedRunId
+          ? "This Daily Brief is unavailable or no longer belongs to this workspace."
+          : "PublisherIQ could not prepare today’s Daily Brief. Please try again.",
+      );
+      setBrief(null);
+    } finally {
+      if (briefRequestId.current === requestId) {
+        setBriefLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    void loadBrief();
+  }, [requestedRunId]);
+
+  useEffect(() => {
+    setTab(parseOpportunityWorkspaceTab(searchParams.get("tab")));
+  }, [searchParams]);
+
+  const loadResultPage = async (append: boolean) => {
+    const runId = brief?.runId;
+    if (!runId) {
+      return;
+    }
+    const requestId = listRequestId.current + 1;
+    listRequestId.current = requestId;
+    setListLoading(true);
+    setListError(null);
+    try {
+      const page = await opportunityPost<OpportunityResultPage>(
+        "list-results",
+        {
+          cursor: append ? listCursor : null,
+          eventLabel: selectedEvent,
+          profileId: selectedProfileId,
+          runId,
+        },
+      );
+      if (listRequestId.current !== requestId) {
+        return;
+      }
+      setListResults((current) =>
+        append ? [...current, ...page.results] : page.results,
+      );
+      setListCursor(page.nextCursor);
+      setListHasMore(page.hasMore);
+    } catch {
+      if (listRequestId.current !== requestId) {
+        return;
+      }
+      setListError(
+        "PublisherIQ could not load this profile list. Please try again.",
+      );
+      if (!append) {
+        setListResults([]);
+      }
+    } finally {
+      if (listRequestId.current === requestId) {
+        setListLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (tab !== "profile-lists" || !brief?.runId) {
+      return;
+    }
+    setListResults([]);
+    setListCursor(null);
+    setListHasMore(false);
+    void loadResultPage(false);
+  }, [tab, brief?.runId, selectedProfileId, selectedEvent]);
+
   const closeProfileEditor = () => {
     profileRequestId.current += 1;
     setProfileDetail(null);
@@ -167,17 +307,18 @@ export function OpportunityWorkspace() {
     });
   };
 
-  const selectTab = (nextTab: WorkspaceTab) => {
+  const selectTab = (nextTab: OpportunityWorkspaceTab) => {
     if (nextTab !== "profiles") {
       closeProfileEditor();
     }
     setTab(nextTab);
+    replaceQuery({ tab: nextTab });
   };
 
   const openProfile = async (profileId: string) => {
     const requestId = profileRequestId.current + 1;
     profileRequestId.current = requestId;
-    setTab("profiles");
+    selectTab("profiles");
     setProfileDetail(null);
     setProfilesView("loading");
     setError(null);
@@ -203,7 +344,7 @@ export function OpportunityWorkspace() {
 
   const startProfile = () => {
     profileRequestId.current += 1;
-    setTab("profiles");
+    selectTab("profiles");
     setProfileDetail(null);
     setProfilesView("editor");
     setError(null);
@@ -214,7 +355,7 @@ export function OpportunityWorkspace() {
     const requestId = profileRequestId.current + 1;
     let cloned = false;
     profileRequestId.current = requestId;
-    setTab("profiles");
+    selectTab("profiles");
     setProfileDetail(null);
     setProfilesView("loading");
     setError(null);
@@ -314,16 +455,12 @@ export function OpportunityWorkspace() {
     }
   };
 
-  const resultCount = data?.dailyOverview.matchedCount ?? 0;
+  const resultCount =
+    brief?.availableResultCount ?? data?.dailyOverview.matchedCount ?? 0;
   const activeProfiles =
     data?.profiles.filter((profile) => profile.status === "enabled").length ??
     0;
-  const highConfidenceResults =
-    data === null
-      ? 0
-      : Object.values(data.dailyOverview.groups)
-          .flat()
-          .filter((result) => result.confidence === "high").length;
+  const highConfidenceResults = brief?.highConfidenceCount ?? 0;
 
   if (loading && !data) {
     return <OpportunityLoading />;
@@ -390,7 +527,8 @@ export function OpportunityWorkspace() {
             >
               {(
                 [
-                  ["brief", "Daily brief", BookOpen],
+                  ["daily-brief", "Daily Brief", BookOpen],
+                  ["profile-lists", "Profile Lists", Rows3],
                   ["profiles", "Profiles & presets", Filter],
                   ["delivery", "Delivery", Bell],
                 ] as const
@@ -436,7 +574,34 @@ export function OpportunityWorkspace() {
       )}
 
       <main ref={workspaceContentRef} className="mx-auto max-w-[1500px]">
-        {tab === "brief" && <DailyBrief data={data} />}
+        {tab === "daily-brief" && (
+          <EditorialDailyBrief
+            error={briefError}
+            issue={brief}
+            loading={briefLoading}
+            onRetry={() => void loadBrief()}
+          />
+        )}
+        {tab === "profile-lists" && (
+          <ProfileLists
+            data={data}
+            error={listError}
+            event={selectedEvent}
+            hasMore={listHasMore}
+            issue={brief}
+            loading={listLoading}
+            onEventChanged={(value) =>
+              replaceQuery({ event: value, tab: "profile-lists" })
+            }
+            onLoadMore={() => void loadResultPage(true)}
+            onProfileChanged={(value) =>
+              replaceQuery({ profile: value, tab: "profile-lists" })
+            }
+            onRetry={() => void loadResultPage(false)}
+            profileId={selectedProfileId}
+            results={listResults}
+          />
+        )}
         {tab === "profiles" && profilesView === "catalog" && (
           <ProfilesDesk
             data={data}
@@ -523,73 +688,201 @@ function ProfileWorkshopLoading({ onBack }: { onBack: () => void }) {
   );
 }
 
-function DailyBrief({ data }: { data: OpportunityBootstrap }) {
-  const overview = data.dailyOverview;
-  const hasResults = overview.matchedCount > 0;
+function ProfileLists({
+  data,
+  error,
+  event,
+  hasMore,
+  issue,
+  loading,
+  onEventChanged,
+  onLoadMore,
+  onProfileChanged,
+  onRetry,
+  profileId,
+  results,
+}: {
+  data: OpportunityBootstrap;
+  error: string | null;
+  event: OpportunityResultLabel | null;
+  hasMore: boolean;
+  issue: OpportunityDailyBriefIssue | null;
+  loading: boolean;
+  onEventChanged: (value: string | null) => void;
+  onLoadMore: () => void;
+  onProfileChanged: (value: string | null) => void;
+  onRetry: () => void;
+  profileId: string | null;
+  results: OpportunityResultSummary[];
+}) {
+  const groups: OpportunityBootstrap["dailyOverview"]["groups"] = {
+    materiallyChanged: results.filter(
+      (result) => result.eventLabel === "materially_changed",
+    ),
+    newlyDiscovered: results.filter(
+      (result) => result.eventLabel === "newly_discovered",
+    ),
+    newlyQualified: results.filter(
+      (result) => result.eventLabel === "newly_qualified",
+    ),
+    newlyReleased: results.filter(
+      (result) => result.eventLabel === "newly_released",
+    ),
+    trackedUpdates: results.filter(
+      (result) => result.eventLabel === "tracked_update",
+    ),
+  };
+  const selectedProfile = data.profiles.find(
+    (profile) => profile.id === profileId,
+  );
+  const hasResults = results.length > 0;
   return (
     <div className="grid lg:grid-cols-[minmax(0,1fr)_310px]">
       <div className="min-w-0 px-5 py-7 md:px-8 md:py-10">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-muted pb-6">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              Your latest sourcing brief
+              Complete sourcing record
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
-              {hasResults
-                ? `${overview.matchedCount} ${overview.matchedCount === 1 ? "game" : "games"} worth reviewing`
-                : overview.status === "not_run"
-                  ? "Your first brief is waiting"
-                  : "A quiet coverage window"}
+              {selectedProfile
+                ? `${selectedProfile.name} matches`
+                : "Profile Lists"}
             </h2>
             <p className="mt-2 text-sm text-text-tertiary">
-              {overview.windowStart && overview.windowEnd
-                ? `Changes observed from ${formatOpportunityDate(overview.windowStart)} through ${formatOpportunityDate(overview.windowEnd)}`
-                : "Enable a sourcing profile to receive your first brief."}
+              {issue?.windowStart && issue.windowEnd
+                ? `Changes observed from ${formatOpportunityDate(issue.windowStart)} through ${formatOpportunityDate(issue.windowEnd)}`
+                : "Review every game behind the latest Daily Brief."}
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border-muted px-3 py-1.5 text-xs text-text-secondary">
             <CircleDot
               className={`h-3.5 w-3.5 ${
-                overview.status === "failed"
+                issue?.status === "failed"
                   ? "text-semantic-error"
-                  : overview.status === "running"
+                  : issue?.status === "running"
                     ? "animate-pulse text-semantic-warning"
                     : "text-semantic-success"
               }`}
             />
-            {briefStatusLabel(overview.status)}
+            {briefStatusLabel(issue?.status ?? "not_run")}
           </div>
         </div>
 
-        {!hasResults ? (
+        <div className="grid gap-4 border-b border-border-subtle py-5 sm:grid-cols-2">
+          <label>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+              Profile
+            </span>
+            <select
+              className="mt-2 block min-h-11 w-full rounded-lg border border-border-muted bg-surface-raised px-3 text-sm text-text-primary outline-none focus:border-accent-primary"
+              onChange={(change) =>
+                onProfileChanged(change.target.value || null)
+              }
+              value={profileId ?? ""}
+            >
+              <option value="">All profiles</option>
+              {data.profiles
+                .filter((profile) => profile.status !== "archived")
+                .map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+              Event
+            </span>
+            <select
+              className="mt-2 block min-h-11 w-full rounded-lg border border-border-muted bg-surface-raised px-3 text-sm text-text-primary outline-none focus:border-accent-primary"
+              onChange={(change) => onEventChanged(change.target.value || null)}
+              value={event ?? ""}
+            >
+              <option value="">All events</option>
+              <option value="newly_discovered">New discoveries</option>
+              <option value="newly_released">Newly released</option>
+              <option value="newly_qualified">Newly qualified</option>
+              <option value="materially_changed">Material changes</option>
+              <option value="tracked_update">Tracked updates</option>
+            </select>
+          </label>
+        </div>
+
+        {error && !hasResults ? (
+          <div className="grid min-h-[360px] place-items-center">
+            <div className="max-w-md text-center">
+              <RefreshCw className="mx-auto h-6 w-6 text-semantic-warning" />
+              <h3 className="mt-4 text-lg font-semibold text-text-primary">
+                This list could not be loaded
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-text-tertiary">
+                {error}
+              </p>
+              <button
+                className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-primary px-4 py-2 text-sm font-semibold text-white"
+                onClick={onRetry}
+                type="button"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Reload Profile Lists
+              </button>
+            </div>
+          </div>
+        ) : loading && !hasResults ? (
+          <div className="grid min-h-[360px] place-items-center">
+            <div className="text-center">
+              <RefreshCw className="mx-auto h-5 w-5 animate-spin text-accent-primary" />
+              <p className="mt-3 text-sm font-medium text-text-secondary">
+                Loading profile matches
+              </p>
+            </div>
+          </div>
+        ) : !hasResults ? (
           <div className="grid min-h-[420px] place-items-center">
             <div className="max-w-md text-center">
               <FlaskConical className="mx-auto h-7 w-7 text-accent-primary" />
               <h3 className="mt-5 text-xl font-semibold text-text-primary">
-                {overview.status === "not_run"
+                {issue?.status === "not_run"
                   ? "Start with a maintained preset"
-                  : "No new games matched your criteria"}
+                  : "No games match these list filters"}
               </h3>
               <p className="mt-2 text-sm leading-6 text-text-tertiary">
-                No new game crossed your sourcing criteria in this brief. Your
-                enabled profiles will keep watching Steam for meaningful
-                changes.
+                Try another profile or event type. Enabled profiles will keep
+                watching Steam for meaningful changes.
               </p>
             </div>
           </div>
         ) : (
           <div className="mt-8 space-y-10">
             {RESULT_SECTIONS.map((section) => {
-              const results = overview.groups[section.key];
-              return results.length > 0 ? (
+              const sectionResults = groups[section.key];
+              return sectionResults.length > 0 ? (
                 <ResultSection
                   key={section.key}
                   kicker={section.kicker}
-                  results={results}
+                  results={sectionResults}
                   title={section.title}
                 />
               ) : null;
             })}
+            {hasMore && (
+              <button
+                className="flex min-h-11 w-full items-center justify-center gap-2 border-y border-border-muted py-3 text-sm font-semibold text-text-secondary transition hover:bg-surface-elevated/50 hover:text-accent-primary disabled:opacity-50"
+                disabled={loading}
+                onClick={onLoadMore}
+                type="button"
+              >
+                {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
+                {loading ? "Loading more matches" : "Load 25 more"}
+              </button>
+            )}
+            {error && (
+              <p className="text-center text-xs text-semantic-warning">
+                {error}
+              </p>
+            )}
           </div>
         )}
       </div>

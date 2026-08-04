@@ -3,9 +3,10 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { after, describe, it } from "node:test";
 
-import type {
-  OpportunityIdentity,
-  OpportunityService,
+import {
+  OpportunityNotFoundError,
+  type OpportunityIdentity,
+  type OpportunityService,
 } from "@publisheriq/data-plane";
 
 import {
@@ -27,6 +28,15 @@ const verifier: OpportunityIdentityVerifier = {
 };
 
 const service = {
+  async getDailyBrief(
+    received: OpportunityIdentity,
+    request: { runId?: string },
+  ) {
+    if (request.runId === "00000000-0000-0000-0000-000000000404") {
+      throw new OpportunityNotFoundError("Daily Brief not found.");
+    }
+    return { received, request, type: "daily-brief" };
+  },
   async getBootstrap(received: OpportunityIdentity) {
     return {
       received,
@@ -35,6 +45,9 @@ const service = {
         matchedProfiles: [{ id: "profile", name: "Roguelike Deckbuilder" }],
       },
     };
+  },
+  async listResults(received: OpportunityIdentity, request: unknown) {
+    return { received, request, type: "list-results" };
   },
   async previewProfile(received: OpportunityIdentity, request: unknown) {
     return { received, request };
@@ -102,6 +115,70 @@ describe("opportunity query-api routes", () => {
       payload.result.matchedProfiles[0]?.name,
       "Roguelike Deckbuilder",
     );
+  });
+
+  it("forwards Daily Brief run selection with the verified identity", async () => {
+    const request = { runId: "00000000-0000-0000-0000-000000000010" };
+    const response = await fetch(`${baseUrl}/v1/opportunities/daily-brief`, {
+      body: JSON.stringify(request),
+      headers: {
+        "content-type": "application/json",
+        "x-supabase-access-token": "token",
+      },
+      method: "POST",
+    });
+    const payload = (await response.json()) as {
+      received: OpportunityIdentity;
+      request: typeof request;
+      type: string;
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.type, "daily-brief");
+    assert.equal(payload.received.userId, identity.userId);
+    assert.deepEqual(payload.request, request);
+  });
+
+  it("returns not-found for an unavailable owned-run lookup", async () => {
+    const response = await fetch(`${baseUrl}/v1/opportunities/daily-brief`, {
+      body: JSON.stringify({
+        runId: "00000000-0000-0000-0000-000000000404",
+      }),
+      headers: {
+        "content-type": "application/json",
+        "x-supabase-access-token": "token",
+      },
+      method: "POST",
+    });
+    const payload = (await response.json()) as { code: string };
+
+    assert.equal(response.status, 404);
+    assert.equal(payload.code, "OPPORTUNITY_NOT_FOUND");
+  });
+
+  it("forwards result cursors and profile filters", async () => {
+    const request = {
+      cursor: "cursor",
+      eventLabel: "newly_qualified",
+      profileId: "00000000-0000-0000-0000-000000000020",
+      runId: "00000000-0000-0000-0000-000000000010",
+    };
+    const response = await fetch(`${baseUrl}/v1/opportunities/list-results`, {
+      body: JSON.stringify(request),
+      headers: {
+        "content-type": "application/json",
+        "x-supabase-access-token": "token",
+      },
+      method: "POST",
+    });
+    const payload = (await response.json()) as {
+      request: typeof request;
+      type: string;
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.type, "list-results");
+    assert.deepEqual(payload.request, request);
   });
 
   it("forwards v2 date operands and the profile timezone unchanged", async () => {

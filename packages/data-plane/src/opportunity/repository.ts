@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import {
+  type OpportunityBriefProfileStats,
   OPPORTUNITY_COHORT_VERSION,
   OPPORTUNITY_HEALTH_VERSION,
   OPPORTUNITY_MARKET_VERSION,
@@ -12,6 +13,7 @@ import {
   type OpportunityBootstrapResponse,
   type OpportunityChannelPreferenceSummary,
   type OpportunityDailyOverview,
+  type OpportunityDailyBriefIssue,
   type OpportunityEvaluationInput,
   type OpportunityEvaluationContext,
   type OpportunityFieldValue,
@@ -23,10 +25,22 @@ import {
   type OpportunityProfileVersion,
   type OpportunityPresetSummary,
   type OpportunityResultSummary,
+  type OpportunityResultLabel,
+  type OpportunityResultPage,
   type OpportunityRuleField,
   type OpportunityRuleSet,
   type OpportunitySignalFamily,
 } from "./types.js";
+import {
+  buildOpportunityDailyBriefIssue,
+  emptyOpportunityEventCounts,
+} from "./brief.js";
+import { OpportunityNotFoundError } from "./errors.js";
+import {
+  decodeOpportunityResultCursor,
+  encodeOpportunityResultCursor,
+  opportunityCursorFilterKey,
+} from "./result-cursor.js";
 import {
   compileOpportunityPreview,
   type OpportunityCompiledPreview,
@@ -200,9 +214,26 @@ interface ResultRow extends QueryResultRow {
   rank: number | null;
   rank_components: OpportunityResultSummary["rankComponents"];
   score: string | number | null;
+  screenshot_thumbnail_url: string | null;
   strongest_evidence: string[] | null;
   triggered_by_media_addition: boolean;
   why_now: string;
+}
+
+interface BriefProfileStatsRow extends QueryResultRow {
+  high_confidence_count: number | string;
+  materially_changed_count: number | string;
+  newly_discovered_count: number | string;
+  newly_qualified_count: number | string;
+  newly_released_count: number | string;
+  profile_id: string;
+  result_count: number | string;
+  top_result: null | {
+    appid: number;
+    name: string;
+    resultId: string;
+  };
+  tracked_update_count: number | string;
 }
 
 interface LatestRunRow extends QueryResultRow {
@@ -1243,6 +1274,655 @@ export class OpportunityRepository {
       timezone: row.timezone,
       updatedAt: iso(row.updated_at)!,
     }));
+  }
+
+  private async getBriefRun(params: {
+    runId?: string | null;
+    userId: string;
+    workspaceId: string;
+  }): Promise<LatestRunRow | null> {
+    const result = await this.pool.query<LatestRunRow>(
+      params.runId
+        ? `
+          SELECT
+            run.id,
+            run.run_kind,
+            run.status,
+            run.window_start,
+            run.window_end,
+            run.started_at,
+            run.completed_at,
+            run.result_count,
+            run.coverage_warnings,
+            cardinality(run.active_profile_versions) AS profiles_evaluated
+          FROM opportunity.runs run
+          WHERE run.id = $3
+            AND run.workspace_id = $1
+            AND run.user_id = $2
+            AND run.run_kind IN ('daily', 'manual', 'replay')
+          LIMIT 1
+        `
+        : `
+          SELECT
+            run.id,
+            run.run_kind,
+            run.status,
+            run.window_start,
+            run.window_end,
+            run.started_at,
+            run.completed_at,
+            run.result_count,
+            run.coverage_warnings,
+            cardinality(run.active_profile_versions) AS profiles_evaluated
+          FROM opportunity.runs run
+          WHERE run.workspace_id = $1
+            AND run.user_id = $2
+            AND run.run_kind IN ('daily', 'manual', 'replay')
+            AND run.status = 'completed'
+          ORDER BY
+            run.window_end DESC,
+            run.completed_at DESC NULLS LAST,
+            run.id DESC
+          LIMIT 1
+        `,
+      params.runId
+        ? [params.workspaceId, params.userId, params.runId]
+        : [params.workspaceId, params.userId],
+    );
+    if (params.runId && !result.rows[0]) {
+      throw new OpportunityNotFoundError(
+        "The requested opportunity brief was not found.",
+      );
+    }
+    return result.rows[0] ?? null;
+  }
+
+  private async queryBriefResultRows(params: {
+    cursor?: string | null;
+    eventLabel?: OpportunityResultLabel | null;
+    limit: number;
+    profileId?: string | null;
+    run: LatestRunRow;
+    userId: string;
+  }): Promise<{ hasMore: boolean; results: OpportunityResultSummary[] }> {
+    const profileId = params.profileId ?? null;
+    const eventLabel = params.eventLabel ?? null;
+    const filterKey = opportunityCursorFilterKey({
+      eventLabel,
+      profileId,
+      runId: params.run.id,
+    });
+    const cursor = decodeOpportunityResultCursor(
+      params.cursor ?? null,
+      filterKey,
+    );
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(params.limit)));
+    const result = await this.pool.query<ResultRow>(
+      `
+        SELECT
+          result.id,
+          result.appid,
+          app.name,
+          CASE WHEN material.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'eventType', material.event_type,
+            'signalFamily', material.signal_family,
+            'effectiveAt', material.effective_at,
+            'observedAt', material.observed_at,
+            'confidence', material.confidence,
+            'affectedRuleFields', material.affected_rule_fields,
+            'before', material.before_summary,
+            'after', material.after_summary
+          ) END AS change,
+          result.event_label,
+          result.event_fingerprint,
+          selected_media.hero_assets->>'header' AS header_image_url,
+          selected_media.screenshots->0->>'thumbnailUrl'
+            AS screenshot_thumbnail_url,
+          COALESCE(trigger_media.media_addition, false)
+            AS triggered_by_media_addition,
+          result.rank,
+          result.score,
+          result.rank_components,
+          result.confidence,
+          result.created_at,
+          COALESCE(market.potential_band, 'insufficient_data')
+            AS market_potential,
+          COALESCE(result.why_now->>'summary', result.event_label) AS why_now,
+          COALESCE(
+            ARRAY(
+              SELECT jsonb_array_elements_text(
+                COALESCE(result.evidence_summary->'strongest', '[]'::jsonb)
+              )
+            ),
+            '{}'::text[]
+          ) AS strongest_evidence,
+          COALESCE(
+            jsonb_agg(
+              DISTINCT jsonb_build_object('id', profile.id, 'name', profile.name)
+            ) FILTER (WHERE profile.id IS NOT NULL),
+            '[]'::jsonb
+          ) AS matched_profiles
+        FROM opportunity.results result
+        JOIN legacy.apps app ON app.appid = result.appid
+        LEFT JOIN opportunity.material_events material
+          ON material.id = result.material_event_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            bool_or(raw.change_type IN ('screenshot_added', 'trailer_added')),
+            false
+          ) AS media_addition
+          FROM events.app_change_events raw
+          WHERE material.id IS NOT NULL
+            AND raw.appid = result.appid
+            AND raw.occurred_at >= material.grouped_window_start
+            AND raw.occurred_at <= material.grouped_window_end
+            AND ('raw:' || raw.id::text) IN (
+              SELECT jsonb_array_elements_text(
+                COALESCE(material.raw_event_refs, '[]'::jsonb)
+              )
+            )
+        ) trigger_media ON true
+        LEFT JOIN LATERAL (
+          SELECT media.hero_assets, media.screenshots
+          FROM docs.app_media_versions media
+          WHERE media.appid = result.appid
+          ORDER BY media.first_seen_at DESC, media.id DESC
+          LIMIT 1
+        ) selected_media ON true
+        LEFT JOIN opportunity.market_context_snapshots market
+          ON market.id = result.market_context_snapshot_id
+        LEFT JOIN opportunity.result_profile_matches match
+          ON match.result_id = result.id
+        LEFT JOIN opportunity.profiles profile
+          ON profile.id = match.profile_id
+        WHERE result.user_id = $2
+          AND (
+            result.run_id = $1
+            OR (
+              $5::text = 'daily'
+              AND result.created_at >= $3
+              AND result.created_at < $4
+            )
+          )
+          AND (
+            $6::uuid IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM opportunity.result_profile_matches selected_match
+              WHERE selected_match.result_id = result.id
+                AND selected_match.profile_id = $6
+            )
+          )
+          AND ($7::text IS NULL OR result.event_label = $7)
+          AND (
+            NOT $8::boolean
+            OR (
+              $9::numeric IS NOT NULL
+              AND (
+                result.score < $9
+                OR result.score IS NULL
+                OR (
+                  result.score = $9
+                  AND (
+                    result.appid > $10
+                    OR (result.appid = $10 AND result.id > $11::uuid)
+                  )
+                )
+              )
+            )
+            OR (
+              $9::numeric IS NULL
+              AND result.score IS NULL
+              AND (
+                result.appid > $10
+                OR (result.appid = $10 AND result.id > $11::uuid)
+              )
+            )
+          )
+        GROUP BY
+          result.id,
+          app.name,
+          market.potential_band,
+          material.id,
+          selected_media.hero_assets,
+          selected_media.screenshots,
+          trigger_media.media_addition
+        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+        LIMIT $12
+      `,
+      [
+        params.run.id,
+        params.userId,
+        params.run.window_start,
+        params.run.window_end,
+        params.run.run_kind,
+        profileId,
+        eventLabel,
+        cursor !== null,
+        cursor?.score ?? null,
+        cursor?.appid ?? 0,
+        cursor?.id ?? "00000000-0000-0000-0000-000000000000",
+        boundedLimit + 1,
+      ],
+    );
+    const hasMore = result.rows.length > boundedLimit;
+    const rows = result.rows.slice(0, boundedLimit);
+    const changes = await presentOpportunityChanges(
+      this.pool,
+      rows.map((row) => row.change),
+      rows.map((row) => row.event_label),
+    );
+    return {
+      hasMore,
+      results: rows.map((row, index) =>
+        this.mapResult({ ...row, change: changes[index] ?? null }),
+      ),
+    };
+  }
+
+  private async queryBriefFeaturedRows(params: {
+    limit: number;
+    run: LatestRunRow;
+    userId: string;
+  }): Promise<OpportunityResultSummary[]> {
+    const boundedLimit = Math.max(1, Math.min(10, Math.floor(params.limit)));
+    const result = await this.pool.query<ResultRow>(
+      `
+        WITH scoped AS MATERIALIZED (
+          SELECT candidate.*
+          FROM opportunity.results candidate
+          WHERE candidate.user_id = $2
+            AND (
+              candidate.run_id = $1
+              OR (
+                $5::text = 'daily'
+                AND candidate.created_at >= $3
+                AND candidate.created_at < $4
+              )
+            )
+        ),
+        ranked AS MATERIALIZED (
+          SELECT
+            scoped.*,
+            row_number() OVER (
+              PARTITION BY scoped.appid
+              ORDER BY
+                scoped.score DESC NULLS LAST,
+                scoped.created_at DESC,
+                scoped.id
+            ) AS editorial_rank
+          FROM scoped
+        ),
+        canonical AS (
+          SELECT ranked.*
+          FROM ranked
+          WHERE ranked.editorial_rank = 1
+          ORDER BY ranked.score DESC NULLS LAST, ranked.appid, ranked.id
+          LIMIT $6
+        )
+        SELECT
+          result.id,
+          result.appid,
+          app.name,
+          CASE WHEN material.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'eventType', material.event_type,
+            'signalFamily', material.signal_family,
+            'effectiveAt', material.effective_at,
+            'observedAt', material.observed_at,
+            'confidence', material.confidence,
+            'affectedRuleFields', material.affected_rule_fields,
+            'before', material.before_summary,
+            'after', material.after_summary
+          ) END AS change,
+          result.event_label,
+          result.event_fingerprint,
+          selected_media.hero_assets->>'header' AS header_image_url,
+          selected_media.screenshots->0->>'thumbnailUrl'
+            AS screenshot_thumbnail_url,
+          COALESCE(trigger_media.media_addition, false)
+            AS triggered_by_media_addition,
+          result.rank,
+          result.score,
+          result.rank_components,
+          result.confidence,
+          result.created_at,
+          COALESCE(market.potential_band, 'insufficient_data')
+            AS market_potential,
+          COALESCE(result.why_now->>'summary', result.event_label) AS why_now,
+          COALESCE(
+            ARRAY(
+              SELECT jsonb_array_elements_text(
+                COALESCE(result.evidence_summary->'strongest', '[]'::jsonb)
+              )
+            ),
+            '{}'::text[]
+          ) AS strongest_evidence,
+          profile_matches.matched_profiles
+        FROM canonical result
+        JOIN legacy.apps app ON app.appid = result.appid
+        LEFT JOIN opportunity.material_events material
+          ON material.id = result.material_event_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            bool_or(raw.change_type IN ('screenshot_added', 'trailer_added')),
+            false
+          ) AS media_addition
+          FROM events.app_change_events raw
+          WHERE material.id IS NOT NULL
+            AND raw.appid = result.appid
+            AND raw.occurred_at >= material.grouped_window_start
+            AND raw.occurred_at <= material.grouped_window_end
+            AND ('raw:' || raw.id::text) IN (
+              SELECT jsonb_array_elements_text(
+                COALESCE(material.raw_event_refs, '[]'::jsonb)
+              )
+            )
+        ) trigger_media ON true
+        LEFT JOIN LATERAL (
+          SELECT media.hero_assets, media.screenshots
+          FROM docs.app_media_versions media
+          WHERE media.appid = result.appid
+          ORDER BY media.first_seen_at DESC, media.id DESC
+          LIMIT 1
+        ) selected_media ON true
+        LEFT JOIN opportunity.market_context_snapshots market
+          ON market.id = result.market_context_snapshot_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            jsonb_agg(
+              DISTINCT jsonb_build_object('id', profile.id, 'name', profile.name)
+            ) FILTER (WHERE profile.id IS NOT NULL),
+            '[]'::jsonb
+          ) AS matched_profiles
+          FROM scoped related
+          JOIN opportunity.result_profile_matches match
+            ON match.result_id = related.id
+          JOIN opportunity.profiles profile ON profile.id = match.profile_id
+          WHERE related.appid = result.appid
+            AND profile.status <> 'archived'
+        ) profile_matches ON true
+        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+        LIMIT $6
+      `,
+      [
+        params.run.id,
+        params.userId,
+        params.run.window_start,
+        params.run.window_end,
+        params.run.run_kind,
+        boundedLimit,
+      ],
+    );
+    const changes = await presentOpportunityChanges(
+      this.pool,
+      result.rows.map((row) => row.change),
+      result.rows.map((row) => row.event_label),
+    );
+    return result.rows.map((row, index) =>
+      this.mapResult({ ...row, change: changes[index] ?? null }),
+    );
+  }
+
+  async getDailyBrief(
+    identity: OpportunityIdentity,
+    params: { runId?: string | null } = {},
+  ): Promise<OpportunityDailyBriefIssue> {
+    const workspace = await this.ensureWorkspace(identity);
+    const [profiles, run] = await Promise.all([
+      this.listProfiles(workspace.id, identity.userId),
+      this.getBriefRun({
+        runId: params.runId,
+        userId: identity.userId,
+        workspaceId: workspace.id,
+      }),
+    ]);
+    if (!run) {
+      return buildOpportunityDailyBriefIssue({
+        availableResultCount: 0,
+        coverageWarnings: [],
+        featuredCandidates: [],
+        highConfidenceCount: 0,
+        issueDate: null,
+        newerRunUpdating: false,
+        profiles,
+        profilesEvaluated: 0,
+        profileStats: [],
+        runId: null,
+        status: "not_run",
+        windowEnd: null,
+        windowStart: null,
+      });
+    }
+
+    const scopeParams = [
+      run.id,
+      identity.userId,
+      run.window_start,
+      run.window_end,
+      run.run_kind,
+    ];
+    const [summary, profileStatsResult, featured, newerRun] = await Promise.all(
+      [
+        this.pool.query<
+          QueryResultRow & {
+            high_confidence_count: number | string;
+            result_count: number | string;
+          }
+        >(
+          `
+          SELECT
+            COUNT(DISTINCT result.appid) AS result_count,
+            COUNT(DISTINCT result.appid) FILTER (
+              WHERE result.confidence = 'high'
+            ) AS high_confidence_count
+          FROM opportunity.results result
+          WHERE result.user_id = $2
+            AND (
+              result.run_id = $1
+              OR (
+                $5::text = 'daily'
+                AND result.created_at >= $3
+                AND result.created_at < $4
+              )
+            )
+          LIMIT 1
+        `,
+          scopeParams,
+        ),
+        this.pool.query<BriefProfileStatsRow>(
+          `
+          WITH scoped AS (
+            SELECT result.*
+            FROM opportunity.results result
+            WHERE result.user_id = $2
+              AND (
+                result.run_id = $1
+                OR (
+                  $5::text = 'daily'
+                  AND result.created_at >= $3
+                  AND result.created_at < $4
+                )
+              )
+          )
+          SELECT
+            profile.id AS profile_id,
+            COUNT(DISTINCT scoped.appid) AS result_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.confidence = 'high'
+            ) AS high_confidence_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.event_label = 'newly_discovered'
+            ) AS newly_discovered_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.event_label = 'newly_released'
+            ) AS newly_released_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.event_label = 'newly_qualified'
+            ) AS newly_qualified_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.event_label = 'materially_changed'
+            ) AS materially_changed_count,
+            COUNT(DISTINCT scoped.appid) FILTER (
+              WHERE scoped.event_label = 'tracked_update'
+            ) AS tracked_update_count,
+            (array_agg(
+              jsonb_build_object(
+                'appid', scoped.appid,
+                'name', app.name,
+                'resultId', scoped.id
+              )
+              ORDER BY scoped.score DESC NULLS LAST, scoped.appid, scoped.id
+            ) FILTER (WHERE scoped.id IS NOT NULL))[1] AS top_result
+          FROM opportunity.profiles profile
+          LEFT JOIN opportunity.result_profile_matches match
+            ON match.profile_id = profile.id
+          LEFT JOIN scoped ON scoped.id = match.result_id
+          LEFT JOIN legacy.apps app ON app.appid = scoped.appid
+          WHERE profile.workspace_id = $6
+            AND profile.owner_user_id = $2
+            AND profile.status <> 'archived'
+          GROUP BY profile.id
+          ORDER BY profile.updated_at DESC, profile.id
+          LIMIT 100
+        `,
+          [...scopeParams, workspace.id],
+        ),
+        this.queryBriefFeaturedRows({
+          limit: 10,
+          run,
+          userId: identity.userId,
+        }),
+        this.pool.query(
+          `
+          SELECT 1
+          FROM opportunity.runs newer
+          WHERE newer.workspace_id = $1
+            AND newer.user_id = $2
+            AND newer.run_kind IN ('daily', 'manual', 'replay')
+            AND newer.status = 'running'
+            AND (
+              newer.window_end > $3
+              OR newer.started_at > $4
+            )
+          LIMIT 1
+        `,
+          [
+            workspace.id,
+            identity.userId,
+            run.window_end,
+            run.completed_at ?? run.started_at,
+          ],
+        ),
+      ],
+    );
+    const summaryRow = summary.rows[0];
+    const profileStats: OpportunityBriefProfileStats[] =
+      profileStatsResult.rows.map((row) => ({
+        eventCounts: {
+          ...emptyOpportunityEventCounts(),
+          materially_changed: Number(row.materially_changed_count),
+          newly_discovered: Number(row.newly_discovered_count),
+          newly_qualified: Number(row.newly_qualified_count),
+          newly_released: Number(row.newly_released_count),
+          tracked_update: Number(row.tracked_update_count),
+        },
+        highConfidenceCount: Number(row.high_confidence_count),
+        profileId: row.profile_id,
+        resultCount: Number(row.result_count),
+        topResult: row.top_result,
+      }));
+    const availableResultCount = Number(summaryRow?.result_count ?? 0);
+
+    return buildOpportunityDailyBriefIssue({
+      availableResultCount,
+      coverageWarnings: (run.coverage_warnings ?? []).map(
+        cleanOpportunityCoverageWarning,
+      ),
+      featuredCandidates: featured,
+      highConfidenceCount: Number(summaryRow?.high_confidence_count ?? 0),
+      issueDate: iso(run.completed_at ?? run.window_end),
+      newerRunUpdating:
+        (newerRun.rowCount ?? 0) > 0 || run.status === "running",
+      profiles,
+      profilesEvaluated: run.profiles_evaluated,
+      profileStats,
+      runId: run.id,
+      status:
+        run.status === "completed"
+          ? availableResultCount > 0
+            ? "ready"
+            : "empty"
+          : run.status === "running"
+            ? "running"
+            : "failed",
+      windowEnd: iso(run.window_end),
+      windowStart: iso(run.window_start),
+    });
+  }
+
+  async listResults(
+    identity: OpportunityIdentity,
+    params: {
+      cursor?: string | null;
+      eventLabel?: OpportunityResultLabel | null;
+      profileId?: string | null;
+      runId: string;
+    },
+  ): Promise<OpportunityResultPage> {
+    const workspace = await this.ensureWorkspace(identity);
+    const run = await this.getBriefRun({
+      runId: params.runId,
+      userId: identity.userId,
+      workspaceId: workspace.id,
+    });
+    if (!run) {
+      throw new OpportunityNotFoundError(
+        "The requested opportunity brief was not found.",
+      );
+    }
+    if (params.profileId) {
+      const profile = await this.pool.query(
+        `
+          SELECT 1
+          FROM opportunity.profiles
+          WHERE id = $1
+            AND workspace_id = $2
+            AND owner_user_id = $3
+            AND status <> 'archived'
+          LIMIT 1
+        `,
+        [params.profileId, workspace.id, identity.userId],
+      );
+      if (!profile.rows[0]) {
+        throw new OpportunityNotFoundError(
+          "The requested opportunity profile was not found.",
+        );
+      }
+    }
+    const page = await this.queryBriefResultRows({
+      cursor: params.cursor,
+      eventLabel: params.eventLabel,
+      limit: 25,
+      profileId: params.profileId,
+      run,
+      userId: identity.userId,
+    });
+    const lastResult = page.results.at(-1) ?? null;
+    const filterKey = opportunityCursorFilterKey({
+      eventLabel: params.eventLabel ?? null,
+      profileId: params.profileId ?? null,
+      runId: run.id,
+    });
+    return {
+      hasMore: page.hasMore,
+      nextCursor:
+        page.hasMore && lastResult
+          ? encodeOpportunityResultCursor(lastResult, filterKey)
+          : null,
+      pageSize: 25,
+      results: page.results,
+      runId: run.id,
+    };
   }
 
   async getLatestDailyOverview(
@@ -3647,6 +4327,7 @@ export class OpportunityRepository {
       rank: row.rank,
       rankComponents: row.rank_components,
       score: numberValue(row.score),
+      screenshotThumbnailUrl: row.screenshot_thumbnail_url ?? null,
       strongestEvidence: cleanOpportunityEvidence(
         row.strongest_evidence ?? [],
         changeSummary,

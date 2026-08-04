@@ -430,7 +430,11 @@ class RecordingDatabase {
     }
   }
 
-  private resultRows(): Array<{ id: string; profile_ids: string[] }> {
+  private resultRows(): Array<{
+    appid: number;
+    id: string;
+    profile_ids: string[];
+  }> {
     return [...this.state.results]
       .sort(
         (left, right) =>
@@ -440,6 +444,7 @@ class RecordingDatabase {
       .map((result) => {
         const id = this.resultId(Number(result.appid));
         return {
+          appid: Number(result.appid),
           id,
           profile_ids: [
             ...new Set(
@@ -582,8 +587,9 @@ class RecordingDatabase {
     }
 
     if (
-      sql.startsWith("SELECT result.id") &&
-      sql.includes("LEFT JOIN opportunity.result_profile_matches")
+      sql.startsWith("WITH scoped AS MATERIALIZED") &&
+      sql.includes("matched_profiles AS") &&
+      sql.includes("SELECT ranked.id")
     ) {
       return { rows: this.resultRows() as unknown as Row[] };
     }

@@ -1,8 +1,15 @@
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { OpportunityDestinationCipher } from "./delivery-secrets.js";
+import {
+  buildOpportunityDailyBriefIssue,
+  emptyOpportunityEventCounts,
+} from "./brief.js";
 import type {
+  OpportunityBriefProfileStats,
+  OpportunityConfidence,
   OpportunityPotentialBand,
+  OpportunityProfileSummary,
   OpportunityResultLabel,
   OpportunityResultSummary,
 } from "./types.js";
@@ -16,11 +23,16 @@ import { presentOpportunityChanges } from "./repository.js";
 export interface OpportunityDeliveryResult {
   appid: number;
   changeSummary: string;
+  confidence?: OpportunityConfidence;
+  createdAt?: string;
   eventLabel: OpportunityResultLabel;
+  headerImageUrl?: string | null;
   id: string;
   marketPotential: OpportunityPotentialBand;
+  matchedProfiles?: Array<{ id: string; name: string }>;
   name: string;
   score: number | null;
+  screenshotThumbnailUrl?: string | null;
   strongestEvidence: string[];
   whyNow: string;
 }
@@ -33,7 +45,11 @@ export interface OpportunityDeliveryWork {
   id: string;
   idempotencyKey: string;
   overviewUrl: string;
+  profiles?: OpportunityProfileSummary[];
+  renderedContentVersion?: "opportunity-digest/v1" | "opportunity-digest/v2";
   results: OpportunityDeliveryResult[];
+  windowEnd?: string | null;
+  windowStart?: string | null;
 }
 
 export interface OpportunityDeliveryProvider {
@@ -57,10 +73,16 @@ interface ClaimedDeliveryRow extends QueryResultRow {
   destination_ciphertext: string | null;
   id: string;
   idempotency_key: string;
+  profile_id: string | null;
+  rendered_content_version: "opportunity-digest/v1" | "opportunity-digest/v2";
   rendered_payload: {
     availableResultCount?: number;
     canonicalOverviewUrl?: string;
+    windowEnd?: string;
+    windowStart?: string;
   };
+  user_id: string;
+  workspace_id: string;
 }
 
 export class OpportunityDeliveryError extends Error {
@@ -137,10 +159,18 @@ export class OpportunityDeliveryRepository {
           WHERE delivery.id = claims.id
           RETURNING
             delivery.id,
+            delivery.workspace_id,
+            delivery.user_id,
             delivery.channel,
             delivery.delivery_kind,
             delivery.idempotency_key,
+            delivery.rendered_content_version,
             delivery.rendered_payload,
+            (
+              SELECT preference.profile_id
+              FROM opportunity.channel_preferences preference
+              WHERE preference.id = delivery.preference_id
+            ) AS profile_id,
             (
               SELECT preference.destination_ciphertext
               FROM opportunity.channel_preferences preference
@@ -162,11 +192,16 @@ export class OpportunityDeliveryRepository {
           QueryResultRow & {
             appid: number;
             change: OpportunityResultSummary["change"];
+            confidence: OpportunityConfidence;
+            created_at: Date | string;
             event_label: OpportunityResultLabel;
+            header_image_url: string | null;
             id: string;
             market_potential: OpportunityPotentialBand;
             name: string;
+            matched_profiles: Array<{ id: string; name: string }> | null;
             score: number | string | null;
+            screenshot_thumbnail_url: string | null;
             strongest_evidence: string[];
             why_now: string;
           }
@@ -193,6 +228,12 @@ export class OpportunityDeliveryRepository {
               ) AS change,
               result.event_label,
               result.score,
+              result.confidence,
+              result.created_at,
+              selected_media.hero_assets->>'header' AS header_image_url,
+              selected_media.screenshots->0->>'thumbnailUrl'
+                AS screenshot_thumbnail_url,
+              profile_matches.matched_profiles,
               COALESCE(
                 market.potential_band,
                 'insufficient_data'
@@ -216,11 +257,88 @@ export class OpportunityDeliveryRepository {
             JOIN legacy.apps app ON app.appid = result.appid
             LEFT JOIN opportunity.market_context_snapshots market
               ON market.id = result.market_context_snapshot_id
+            LEFT JOIN LATERAL (
+              SELECT media.hero_assets, media.screenshots
+              FROM docs.app_media_versions media
+              WHERE media.appid = result.appid
+              ORDER BY media.first_seen_at DESC, media.id DESC
+              LIMIT 1
+            ) selected_media ON true
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(
+                jsonb_agg(
+                  DISTINCT jsonb_build_object(
+                    'id', profile.id,
+                    'name', profile.name
+                  )
+                ) FILTER (WHERE profile.id IS NOT NULL),
+                '[]'::jsonb
+              ) AS matched_profiles
+              FROM opportunity.results related_result
+              JOIN opportunity.result_profile_matches match
+                ON match.result_id = related_result.id
+              JOIN opportunity.profiles profile ON profile.id = match.profile_id
+              WHERE related_result.workspace_id = delivery.workspace_id
+                AND related_result.user_id = delivery.user_id
+                AND related_result.appid = result.appid
+                AND (
+                  related_result.run_id = delivery.run_id
+                  OR (
+                    delivery.delivery_kind = 'daily_digest'
+                    AND related_result.created_at >=
+                      (delivery.rendered_payload->>'windowStart')::timestamptz
+                    AND related_result.created_at <
+                      (delivery.rendered_payload->>'windowEnd')::timestamptz
+                  )
+                )
+            ) profile_matches ON true
             WHERE delivery.id = $1
             ORDER BY selected.position
             LIMIT 100
           `,
           [row.id],
+        );
+        const profiles = await client.query<
+          QueryResultRow & {
+            current_version: number | null;
+            description: string | null;
+            id: string;
+            immediate_full_match_enabled: boolean;
+            local_delivery_time: string;
+            name: string;
+            next_evaluation_at: Date | string | null;
+            source_preset_name: string | null;
+            status: OpportunityProfileSummary["status"];
+            timezone: string;
+            updated_at: Date | string;
+          }
+        >(
+          `
+            SELECT
+              profile.id,
+              profile.name,
+              profile.description,
+              profile.status,
+              profile.timezone,
+              to_char(profile.local_delivery_time, 'HH24:MI') AS local_delivery_time,
+              profile.immediate_full_match_enabled,
+              profile.next_evaluation_at,
+              profile.updated_at,
+              version.version AS current_version,
+              preset.name AS source_preset_name
+            FROM opportunity.profiles profile
+            LEFT JOIN opportunity.profile_versions version
+              ON version.id = profile.current_version_id
+            LEFT JOIN opportunity.presets preset
+              ON preset.id = profile.source_preset_id
+            WHERE profile.workspace_id = $1
+              AND profile.owner_user_id = $2
+              AND profile.status <> 'archived'
+              AND ($3::uuid IS NULL OR profile.id = $3)
+            ORDER BY profile.updated_at DESC, profile.id
+            LIMIT 100
+          `,
+          [row.workspace_id, row.user_id, row.profile_id],
         );
         const presentedChanges = await presentOpportunityChanges(
           client,
@@ -236,6 +354,22 @@ export class OpportunityDeliveryRepository {
           id: row.id,
           idempotencyKey: row.idempotency_key,
           overviewUrl: row.rendered_payload.canonicalOverviewUrl ?? "",
+          profiles: profiles.rows.map((profile) => ({
+            currentVersion: profile.current_version,
+            description: profile.description,
+            id: profile.id,
+            immediateFullMatchEnabled: profile.immediate_full_match_enabled,
+            localDeliveryTime: profile.local_delivery_time,
+            name: decodeOpportunityText(profile.name),
+            nextEvaluationAt: profile.next_evaluation_at
+              ? new Date(profile.next_evaluation_at).toISOString()
+              : null,
+            sourcePresetName: profile.source_preset_name,
+            status: profile.status,
+            timezone: profile.timezone,
+            updatedAt: new Date(profile.updated_at).toISOString(),
+          })),
+          renderedContentVersion: row.rendered_content_version,
           results: results.rows.map((result, index) => {
             const changeSummary = opportunityChangeSummary(
               presentedChanges[index] ?? null,
@@ -244,11 +378,16 @@ export class OpportunityDeliveryRepository {
             return {
               appid: result.appid,
               changeSummary,
+              confidence: result.confidence,
+              createdAt: new Date(result.created_at).toISOString(),
               eventLabel: result.event_label,
+              headerImageUrl: result.header_image_url,
               id: result.id,
               marketPotential: result.market_potential,
+              matchedProfiles: result.matched_profiles ?? [],
               name: decodeOpportunityText(result.name),
               score: numberValue(result.score),
+              screenshotThumbnailUrl: result.screenshot_thumbnail_url,
               strongestEvidence: cleanOpportunityEvidence(
                 result.strongest_evidence,
                 changeSummary,
@@ -256,6 +395,8 @@ export class OpportunityDeliveryRepository {
               whyNow: `${changeSummary} The game matches your sourcing criteria.`,
             };
           }),
+          windowEnd: row.rendered_payload.windowEnd ?? null,
+          windowStart: row.rendered_payload.windowStart ?? null,
         });
       }
       return deliveries;
@@ -356,7 +497,7 @@ function potentialLabel(value: OpportunityPotentialBand): string {
   }[value];
 }
 
-export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
+function renderOpportunityDeliveryV1(work: OpportunityDeliveryWork): {
   html: string;
   slackBlocks: Array<Record<string, unknown>>;
   subject: string;
@@ -468,6 +609,314 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
     }),
   ];
   return { html, slackBlocks, subject, text };
+}
+
+function deliveryGameUrl(
+  work: OpportunityDeliveryWork,
+  result: OpportunityDeliveryResult,
+): string {
+  return `${work.overviewUrl.replace(/\?.*$/, "")}/games/${result.appid}?result=${result.id}`;
+}
+
+function safeRemoteImage(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function deliveryProfiles(
+  work: OpportunityDeliveryWork,
+): OpportunityProfileSummary[] {
+  if (work.profiles && work.profiles.length > 0) {
+    return work.profiles;
+  }
+  const profiles = new Map<string, { id: string; name: string }>();
+  work.results.forEach((result) =>
+    result.matchedProfiles?.forEach((profile) =>
+      profiles.set(profile.id, profile),
+    ),
+  );
+  return Array.from(profiles.values()).map((profile) => ({
+    currentVersion: null,
+    description: null,
+    id: profile.id,
+    immediateFullMatchEnabled: false,
+    localDeliveryTime: "09:00",
+    name: profile.name,
+    nextEvaluationAt: null,
+    sourcePresetName: null,
+    status: "enabled",
+    timezone: "UTC",
+    updatedAt: work.windowEnd ?? new Date(0).toISOString(),
+  }));
+}
+
+function deliveryProfileStats(
+  work: OpportunityDeliveryWork,
+  profiles: OpportunityProfileSummary[],
+): OpportunityBriefProfileStats[] {
+  return profiles.map((profile) => {
+    const matches = work.results.filter((result) =>
+      result.matchedProfiles?.some((match) => match.id === profile.id),
+    );
+    const eventCounts = emptyOpportunityEventCounts();
+    matches.forEach((result) => {
+      eventCounts[result.eventLabel] += 1;
+    });
+    const top = matches[0] ?? null;
+    return {
+      eventCounts,
+      highConfidenceCount: matches.filter(
+        (result) => result.confidence === "high",
+      ).length,
+      profileId: profile.id,
+      resultCount: matches.length,
+      topResult: top
+        ? { appid: top.appid, name: top.name, resultId: top.id }
+        : null,
+    };
+  });
+}
+
+function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
+  html: string;
+  slackBlocks: Array<Record<string, unknown>>;
+  subject: string;
+  text: string;
+} {
+  const profiles = deliveryProfiles(work);
+  const summaries: OpportunityResultSummary[] = work.results.map(
+    (result, index) => ({
+      appid: result.appid,
+      change: null,
+      changeSummary: result.changeSummary,
+      confidence: result.confidence ?? "directional",
+      createdAt:
+        result.createdAt ?? work.windowEnd ?? new Date(0).toISOString(),
+      eventFingerprint: `delivery:${result.id}`,
+      eventLabel: result.eventLabel,
+      headerImageUrl: result.headerImageUrl ?? null,
+      id: result.id,
+      marketPotential: result.marketPotential,
+      matchedProfiles: result.matchedProfiles ?? [],
+      name: result.name,
+      rank: index + 1,
+      rankComponents: {
+        evidenceQuality: 0,
+        marketMomentum: 0,
+        peerPosition: 0,
+        signalStrength: 0,
+        userFit: 0,
+      },
+      score: result.score,
+      screenshotThumbnailUrl: result.screenshotThumbnailUrl ?? null,
+      strongestEvidence: result.strongestEvidence,
+      triggeredByMediaAddition: false,
+      whyNow: result.whyNow,
+    }),
+  );
+  const issue = buildOpportunityDailyBriefIssue({
+    availableResultCount: work.availableResultCount,
+    coverageWarnings: [],
+    featuredCandidates: summaries,
+    featuredLimit: 100,
+    highConfidenceCount: summaries.filter(
+      (result) => result.confidence === "high",
+    ).length,
+    issueDate: work.windowEnd ?? null,
+    newerRunUpdating: false,
+    profiles,
+    profilesEvaluated: profiles.filter(
+      (profile) => profile.status === "enabled",
+    ).length,
+    profileStats: deliveryProfileStats(work, profiles),
+    runId: null,
+    status: summaries.length > 0 ? "ready" : "empty",
+    windowEnd: work.windowEnd ?? null,
+    windowStart: work.windowStart ?? null,
+  });
+  const truncationNotice =
+    work.availableResultCount > issue.featuredGames.length
+      ? `Showing the top ${issue.featuredGames.length} of ${work.availableResultCount} results. Open PublisherIQ for the complete brief.`
+      : null;
+  const subject = `Daily Brief: ${issue.headline}`;
+  const profileText = issue.profileDispatches.map(
+    (profile) => `${profile.name}: ${profile.summary}`,
+  );
+  const resultText = issue.featuredGames.map((result, index) => {
+    const source = work.results.find(
+      (candidate) => candidate.id === result.id,
+    )!;
+    return [
+      `${index + 1}. ${decodeOpportunityText(result.name)} — ${resultLabel(result.eventLabel)}`,
+      decodeOpportunityText(result.changeSummary),
+      `Market potential: ${potentialLabel(result.marketPotential)}`,
+      deliveryGameUrl(work, source),
+    ].join("\n");
+  });
+  const text = [
+    issue.headline,
+    issue.dek,
+    ...(truncationNotice ? [truncationNotice] : []),
+    "",
+    ...profileText,
+    "",
+    ...resultText.flatMap((result) => [result, ""]),
+    `Open the complete Daily Brief: ${work.overviewUrl}`,
+  ].join("\n");
+
+  const richGames = issue.featuredGames.slice(0, 4);
+  const compactGames = issue.featuredGames.slice(4);
+  const richHtml = richGames
+    .map((result, index) => {
+      const source = work.results.find(
+        (candidate) => candidate.id === result.id,
+      )!;
+      const link = deliveryGameUrl(work, source);
+      const image = safeRemoteImage(
+        index === 0
+          ? (result.headerImageUrl ?? result.screenshotThumbnailUrl)
+          : (result.screenshotThumbnailUrl ?? result.headerImageUrl),
+      );
+      return `
+        <article style="border-top:1px solid #dfd8ce;padding:24px 0">
+          ${image ? `<a href="${escapeHtml(link)}"><img src="${escapeHtml(image)}" width="632" alt="${escapeHtml(decodeOpportunityText(result.name))} Steam artwork" style="display:block;width:100%;height:auto;border-radius:8px;margin-bottom:16px" /></a>` : `<div style="display:block;background:#f1ebe3;border:1px solid #dfd8ce;border-radius:8px;color:#8b7468;font-size:11px;font-weight:700;letter-spacing:.12em;margin-bottom:16px;padding:42px 16px;text-align:center;text-transform:uppercase">PublisherIQ watch desk · Artwork unavailable</div>`}
+          <p style="margin:0 0 8px;color:#c4513f;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">${index === 0 ? "Lead opportunity" : resultLabel(result.eventLabel)}</p>
+          <h2 style="font-size:${index === 0 ? "26px" : "20px"};line-height:1.2;margin:0 0 8px;color:#211d1a">${escapeHtml(decodeOpportunityText(result.name))}</h2>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 12px;color:#3f3a35">${escapeHtml(decodeOpportunityText(result.changeSummary))}</p>
+          <a href="${escapeHtml(link)}" style="color:#c4513f;font-weight:700;text-decoration:none">Read the full game profile →</a>
+        </article>`;
+    })
+    .join("");
+  const compactHtml = compactGames
+    .map((result) => {
+      const source = work.results.find(
+        (candidate) => candidate.id === result.id,
+      )!;
+      return `<li style="margin:0;padding:12px 0;border-top:1px solid #eee8df"><a href="${escapeHtml(deliveryGameUrl(work, source))}" style="color:#211d1a;font-weight:700;text-decoration:none">${escapeHtml(decodeOpportunityText(result.name))}</a><br/><span style="color:#6b625a;font-size:13px">${escapeHtml(decodeOpportunityText(result.changeSummary))}</span></li>`;
+    })
+    .join("");
+  const profileHtml = issue.profileDispatches
+    .map(
+      (profile) =>
+        `<tr><td style="padding:12px 0;border-top:1px solid #eee8df"><strong>${escapeHtml(profile.name)}</strong><br/><span style="color:#6b625a;font-size:13px;line-height:1.5">${escapeHtml(profile.summary)}</span></td></tr>`,
+    )
+    .join("");
+  const html = `
+    <main style="font-family:'DM Sans',Arial,sans-serif;max-width:680px;margin:0 auto;padding:28px 24px;background:#fbf8f3;color:#211d1a">
+      <p style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#c4513f;font-weight:700;margin:0 0 18px">PublisherIQ · Daily Brief</p>
+      <h1 style="font-family:Georgia,serif;font-size:36px;line-height:1.05;letter-spacing:-.025em;margin:0 0 16px">${escapeHtml(issue.headline)}</h1>
+      <p style="font-size:17px;line-height:1.65;color:#514a43;margin:0 0 28px">${escapeHtml(issue.dek)}</p>
+      ${richHtml}
+      ${compactHtml ? `<h2 style="font-size:16px;margin:30px 0 0">Also worth opening</h2><ul style="list-style:none;margin:8px 0 0;padding:0">${compactHtml}</ul>` : ""}
+      <h2 style="font-size:16px;margin:32px 0 8px">Profile dispatches</h2>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0">${profileHtml}</table>
+      ${truncationNotice ? `<p style="margin-top:24px;color:#6b625a;font-size:13px">${escapeHtml(truncationNotice)}</p>` : ""}
+      <p style="margin-top:28px"><a href="${escapeHtml(work.overviewUrl)}" style="display:inline-block;background:#c4513f;color:#fff;padding:12px 18px;border-radius:6px;font-weight:700;text-decoration:none">Open the complete Daily Brief</a></p>
+    </main>`;
+
+  const slackBlocks: Array<Record<string, unknown>> = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: issue.headline.slice(0, 150),
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${escapeSlackMrkdwn(issue.dek)}\n<${work.overviewUrl}|Open the complete Daily Brief>`,
+      },
+    },
+    ...(truncationNotice
+      ? [
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: truncationNotice }],
+          },
+        ]
+      : []),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Profile dispatches*\n${issue.profileDispatches
+          .map(
+            (profile) =>
+              `*${escapeSlackMrkdwn(profile.name)}* — ${escapeSlackMrkdwn(profile.summary)}`,
+          )
+          .join("\n")}`.slice(0, 3000),
+      },
+    },
+    ...issue.featuredGames.slice(0, 3).map((result) => {
+      const source = work.results.find(
+        (candidate) => candidate.id === result.id,
+      )!;
+      const image = safeRemoteImage(
+        result.screenshotThumbnailUrl ?? result.headerImageUrl,
+      );
+      return {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(decodeOpportunityText(result.changeSummary))}`,
+        },
+        ...(image
+          ? {
+              accessory: {
+                type: "image",
+                image_url: image,
+                alt_text:
+                  `${decodeOpportunityText(result.name)} Steam artwork`.slice(
+                    0,
+                    2000,
+                  ),
+              },
+            }
+          : {}),
+      };
+    }),
+  ];
+  const remaining = issue.featuredGames.slice(3);
+  for (let index = 0; index < remaining.length; index += 10) {
+    const batch = remaining.slice(index, index + 10);
+    slackBlocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: batch
+          .map((result) => {
+            const source = work.results.find(
+              (candidate) => candidate.id === result.id,
+            )!;
+            return `• <${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}> — ${resultLabel(result.eventLabel)}`;
+          })
+          .join("\n")
+          .slice(0, 3000),
+      },
+    });
+  }
+  return { html, slackBlocks, subject, text };
+}
+
+export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
+  html: string;
+  slackBlocks: Array<Record<string, unknown>>;
+  subject: string;
+  text: string;
+} {
+  return work.renderedContentVersion === "opportunity-digest/v2" &&
+    work.deliveryKind === "daily_digest"
+    ? renderOpportunityDeliveryV2(work)
+    : renderOpportunityDeliveryV1(work);
 }
 
 export class OpportunityHttpDeliveryProvider implements OpportunityDeliveryProvider {

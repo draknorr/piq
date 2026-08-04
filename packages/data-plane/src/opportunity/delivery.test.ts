@@ -108,4 +108,72 @@ describe("opportunity delivery rendering", () => {
       /Added in the last 30 days/,
     );
   });
+
+  it("renders v2 daily deliveries as an editorial issue with media and profiles", () => {
+    const rendered = renderOpportunityDelivery({
+      ...DELIVERY,
+      renderedContentVersion: "opportunity-digest/v2",
+      profiles: [
+        {
+          currentVersion: 1,
+          description: "Games with playable demos.",
+          id: "profile",
+          immediateFullMatchEnabled: false,
+          localDeliveryTime: "09:00",
+          name: "Demo watch",
+          nextEvaluationAt: null,
+          sourcePresetName: null,
+          status: "enabled",
+          timezone: "UTC",
+          updatedAt: "2026-08-03T12:00:00.000Z",
+        },
+      ],
+      results: [
+        {
+          ...DELIVERY.results[0]!,
+          confidence: "high",
+          createdAt: "2026-08-03T12:00:00.000Z",
+          headerImageUrl: "https://cdn.example.com/header.jpg",
+          matchedProfiles: [{ id: "profile", name: "Demo watch" }],
+          screenshotThumbnailUrl: "https://cdn.example.com/screenshot.jpg",
+        },
+      ],
+      windowEnd: "2026-08-03T12:00:00.000Z",
+      windowStart: "2026-08-02T12:00:00.000Z",
+    });
+
+    assert.match(rendered.subject, /^Daily Brief:/);
+    assert.match(rendered.html, /PublisherIQ · Daily Brief/);
+    assert.match(rendered.html, /cdn\.example\.com\/header\.jpg/);
+    assert.match(rendered.html, /Demo watch/);
+    assert.match(rendered.text, /Profile dispatches|Demo watch/);
+    assert.match(JSON.stringify(rendered.slackBlocks), /image_url/);
+  });
+
+  it("keeps queued v1 deliveries on the compact renderer", () => {
+    const rendered = renderOpportunityDelivery({
+      ...DELIVERY,
+      renderedContentVersion: "opportunity-digest/v1",
+    });
+
+    assert.doesNotMatch(rendered.subject, /^Daily Brief:/);
+    assert.match(rendered.html, /View full analysis/);
+  });
+
+  it("uses a branded v2 email fallback for missing or unsafe media", () => {
+    const rendered = renderOpportunityDelivery({
+      ...DELIVERY,
+      renderedContentVersion: "opportunity-digest/v2",
+      results: [
+        {
+          ...DELIVERY.results[0]!,
+          headerImageUrl: "http://cdn.example.com/unsafe.jpg",
+          screenshotThumbnailUrl: null,
+        },
+      ],
+    });
+
+    assert.match(rendered.html, /PublisherIQ watch desk · Artwork unavailable/);
+    assert.doesNotMatch(rendered.html, /unsafe\.jpg/);
+  });
 });

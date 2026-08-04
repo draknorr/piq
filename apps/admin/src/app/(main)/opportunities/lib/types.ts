@@ -73,6 +73,13 @@ export type OpportunityRelativeDateWindow =
   | "next_7_days"
   | "next_30_days";
 
+export type OpportunityResultLabel =
+  | "newly_discovered"
+  | "newly_released"
+  | "newly_qualified"
+  | "materially_changed"
+  | "tracked_update";
+
 export type OpportunityDateOperand =
   | { date: string; kind: "absolute_date" }
   | { kind: "relative_window"; window: OpportunityRelativeDateWindow };
@@ -113,12 +120,7 @@ export interface OpportunityResultSummary {
   confidence: "high" | "directional";
   createdAt: string;
   eventFingerprint: string;
-  eventLabel:
-    | "newly_discovered"
-    | "newly_released"
-    | "newly_qualified"
-    | "materially_changed"
-    | "tracked_update";
+  eventLabel: OpportunityResultLabel;
   id: string;
   headerImageUrl: string | null;
   marketPotential:
@@ -132,9 +134,52 @@ export interface OpportunityResultSummary {
   rank: number | null;
   rankComponents: Record<string, number>;
   score: number | null;
+  screenshotThumbnailUrl: string | null;
   strongestEvidence: string[];
   triggeredByMediaAddition: boolean;
   whyNow: string;
+}
+
+export interface OpportunityBriefProfileDispatch {
+  description: string | null;
+  eventCounts: Record<OpportunityResultLabel, number>;
+  highConfidenceCount: number;
+  id: string;
+  listUrl: string;
+  name: string;
+  resultCount: number;
+  status: "draft" | "enabled" | "paused" | "archived";
+  summary: string;
+  topResult: null | {
+    appid: number;
+    name: string;
+    resultId: string;
+  };
+}
+
+export interface OpportunityDailyBriefIssue {
+  availableResultCount: number;
+  coverageWarnings: string[];
+  dek: string;
+  featuredGames: OpportunityResultSummary[];
+  headline: string;
+  highConfidenceCount: number;
+  issueDate: string | null;
+  newerRunUpdating: boolean;
+  profileDispatches: OpportunityBriefProfileDispatch[];
+  profilesEvaluated: number;
+  runId: string | null;
+  status: "ready" | "empty" | "not_run" | "running" | "failed";
+  windowEnd: string | null;
+  windowStart: string | null;
+}
+
+export interface OpportunityResultPage {
+  hasMore: boolean;
+  nextCursor: string | null;
+  pageSize: 25;
+  results: OpportunityResultSummary[];
+  runId: string;
 }
 
 export interface OpportunityMedia {
