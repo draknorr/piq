@@ -1124,3 +1124,178 @@ describe("opportunity relative-date transitions", () => {
     assert.equal(queries, 0);
   });
 });
+
+describe("opportunity Daily Brief repository", () => {
+  const identity = {
+    accessToken: "token",
+    email: "editor@example.com",
+    userId: "00000000-0000-0000-0000-000000000001",
+  };
+  const run = {
+    completed_at: "2026-08-03T17:01:00.000Z",
+    coverage_warnings: [],
+    id: "00000000-0000-0000-0000-000000000010",
+    profiles_evaluated: 2,
+    result_count: 0,
+    run_kind: "daily",
+    started_at: "2026-08-03T17:00:00.000Z",
+    status: "completed",
+    window_end: "2026-08-03T17:00:00.000Z",
+    window_start: "2026-08-02T17:00:00.000Z",
+  };
+
+  function bypassWorkspace(repository: OpportunityRepository): void {
+    const mutable = repository as unknown as {
+      ensureWorkspace: () => Promise<{
+        id: string;
+        name: string;
+        role: "owner";
+      }>;
+      listProfiles: () => Promise<[]>;
+    };
+    mutable.ensureWorkspace = async () => ({
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Editorial",
+      role: "owner",
+    });
+    mutable.listProfiles = async () => [];
+  }
+
+  it("uses the latest completed owned run and selects one canonical row per game", async () => {
+    const calls: QueryCall[] = [];
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rowCount?: number; rows: unknown[] }> => {
+        calls.push({ text, values });
+        if (text.includes("FROM opportunity.runs run")) {
+          return { rows: [run] };
+        }
+        if (text.includes("COUNT(DISTINCT result.appid) AS result_count")) {
+          return {
+            rows: [{ high_confidence_count: 0, result_count: 0 }],
+          };
+        }
+        if (text.includes("FROM opportunity.profiles profile")) {
+          return { rows: [] };
+        }
+        if (text.includes("ranked AS MATERIALIZED")) {
+          return { rows: [] };
+        }
+        if (text.includes("FROM opportunity.runs newer")) {
+          return { rowCount: 0, rows: [] };
+        }
+        throw new Error(`Unexpected Daily Brief query: ${text}`);
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    bypassWorkspace(repository);
+
+    const issue = await repository.getDailyBrief(identity);
+
+    assert.equal(issue.runId, run.id);
+    const runCall = calls.find((call) =>
+      call.text.includes("FROM opportunity.runs run"),
+    );
+    assert.match(runCall?.text ?? "", /run\.status = 'completed'/);
+    assert.deepEqual(runCall?.values, [
+      "00000000-0000-0000-0000-000000000002",
+      identity.userId,
+    ]);
+    const featuredCall = calls.find((call) =>
+      call.text.includes("ranked AS MATERIALIZED"),
+    );
+    assert.match(featuredCall?.text ?? "", /PARTITION BY scoped\.appid/);
+    assert.match(
+      featuredCall?.text ?? "",
+      /scoped\.created_at DESC[\s\S]*scoped\.id/,
+    );
+    assert.match(featuredCall?.text ?? "", /FROM scoped related/);
+  });
+
+  it("returns stable 25-item pages without duplicating the boundary row", async () => {
+    const resultRows = Array.from({ length: 26 }, (_, index) => ({
+      appid: 100 + index,
+      change: null,
+      confidence: "high",
+      created_at: "2026-08-03T17:00:00.000Z",
+      event_fingerprint: `event-${index}`,
+      event_label: "newly_qualified",
+      header_image_url: null,
+      id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
+      market_potential: "meaningful",
+      matched_profiles: [],
+      name: `Game ${index + 1}`,
+      rank: index + 1,
+      rank_components: {},
+      score: 100 - index,
+      screenshot_thumbnail_url: null,
+      strongest_evidence: [],
+      triggered_by_media_addition: false,
+      why_now: "Matched.",
+    }));
+    const pageCalls: QueryCall[] = [];
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (text.includes("FROM opportunity.runs run")) {
+          return { rows: [run] };
+        }
+        if (text.includes("ORDER BY result.score DESC NULLS LAST")) {
+          pageCalls.push({ text, values });
+          return { rows: values[7] ? [resultRows[25]] : resultRows };
+        }
+        throw new Error(`Unexpected pagination query: ${text}`);
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    bypassWorkspace(repository);
+
+    const first = await repository.listResults(identity, { runId: run.id });
+    const second = await repository.listResults(identity, {
+      cursor: first.nextCursor,
+      runId: run.id,
+    });
+
+    assert.equal(first.results.length, 25);
+    assert.equal(first.hasMore, true);
+    assert.equal(second.results.length, 1);
+    assert.equal(second.hasMore, false);
+    assert.equal(first.results.at(-1)?.appid, 124);
+    assert.equal(second.results[0]?.appid, 125);
+    assert.equal(pageCalls[1]?.values[8], 76);
+    assert.equal(pageCalls[1]?.values[9], 124);
+    assert.equal(
+      pageCalls[1]?.values[10],
+      "00000000-0000-0000-0000-000000000025",
+    );
+    assert.doesNotMatch(pageCalls[0]?.text ?? "", /LIMIT 500/);
+  });
+
+  it("rejects malformed cursors before querying a result page", async () => {
+    let resultQueries = 0;
+    const pool = {
+      query: async (text: string): Promise<{ rows: unknown[] }> => {
+        if (text.includes("FROM opportunity.runs run")) {
+          return { rows: [run] };
+        }
+        resultQueries += 1;
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    bypassWorkspace(repository);
+
+    await assert.rejects(
+      repository.listResults(identity, {
+        cursor: "invalid",
+        runId: run.id,
+      }),
+      /invalid for these filters/,
+    );
+    assert.equal(resultQueries, 0);
+  });
+});

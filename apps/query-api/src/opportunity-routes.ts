@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
+  OpportunityNotFoundError,
   type OpportunityIdentity,
   type OpportunityPreviewRequest,
+  type OpportunityResultLabel,
   type OpportunityRuleSet,
   type OpportunityService,
   type OpportunitySignalFamily,
@@ -158,6 +160,31 @@ export async function tryHandleOpportunityRequest(params: {
         );
         return true;
       }
+      case "/v1/opportunities/daily-brief": {
+        const body = await readJsonBody<{ runId?: string | null }>(
+          params.request,
+        );
+        sendJson(
+          params.response,
+          200,
+          await params.opportunityService.getDailyBrief(identity, body),
+        );
+        return true;
+      }
+      case "/v1/opportunities/list-results": {
+        const body = await readJsonBody<{
+          cursor?: string | null;
+          eventLabel?: OpportunityResultLabel | null;
+          profileId?: string | null;
+          runId: string;
+        }>(params.request);
+        sendJson(
+          params.response,
+          200,
+          await params.opportunityService.listResults(identity, body),
+        );
+        return true;
+      }
       case "/v1/opportunities/preview-profile": {
         const body = await readJsonBody<OpportunityPreviewRequest>(
           params.request,
@@ -305,6 +332,13 @@ export async function tryHandleOpportunityRequest(params: {
         return true;
     }
   } catch (error) {
+    if (error instanceof OpportunityNotFoundError) {
+      sendJson(params.response, 404, {
+        code: "OPPORTUNITY_NOT_FOUND",
+        error: error.message,
+      });
+      return true;
+    }
     if (isOpportunityQueryTimeout(error)) {
       sendJson(params.response, 504, {
         code: "OPPORTUNITY_QUERY_TIMEOUT",

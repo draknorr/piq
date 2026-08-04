@@ -1741,9 +1741,9 @@ describe("opportunity delivery preference scoping", () => {
   it("applies profile-specific preferences before the user-wide fallback", () => {
     const assignments = assignOpportunityDeliveryResults(
       [
-        { id: "one", profileIds: ["profile-a", "profile-b"] },
-        { id: "two", profileIds: ["profile-b"] },
-        { id: "three", profileIds: ["profile-c"] },
+        { appid: 1, id: "one", profileIds: ["profile-a", "profile-b"] },
+        { appid: 2, id: "two", profileIds: ["profile-b"] },
+        { appid: 3, id: "three", profileIds: ["profile-c"] },
       ],
       [
         {
@@ -1773,7 +1773,7 @@ describe("opportunity delivery preference scoping", () => {
 
   it("deduplicates within each channel but preserves cross-channel delivery", () => {
     const assignments = assignOpportunityDeliveryResults(
-      [{ id: "one", profileIds: ["profile-a"] }],
+      [{ appid: 1, id: "one", profileIds: ["profile-a"] }],
       [
         {
           channel: "email",
@@ -1813,8 +1813,8 @@ describe("opportunity delivery preference scoping", () => {
   it("reports the pre-limit result count for truncation notices", () => {
     const assignments = assignOpportunityDeliveryResults(
       [
-        { id: "one", profileIds: ["profile-a"] },
-        { id: "two", profileIds: ["profile-a"] },
+        { appid: 1, id: "one", profileIds: ["profile-a"] },
+        { appid: 2, id: "two", profileIds: ["profile-a"] },
       ],
       [
         {
@@ -1839,6 +1839,48 @@ describe("opportunity delivery preference scoping", () => {
     assert.deepEqual(assignments.get("global"), {
       availableResultCount: 0,
       resultIds: [],
+    });
+  });
+
+  it("deduplicates games before applying each channel limit", () => {
+    const assignments = assignOpportunityDeliveryResults(
+      [
+        { appid: 1, id: "strongest", profileIds: ["profile-a"] },
+        { appid: 1, id: "duplicate", profileIds: ["profile-b"] },
+        { appid: 2, id: "next", profileIds: ["profile-a"] },
+      ],
+      [
+        {
+          channel: "email",
+          id: "email",
+          maxResults: 2,
+          profileId: null,
+        },
+      ],
+    );
+
+    assert.deepEqual(assignments.get("email"), {
+      availableResultCount: 2,
+      resultIds: ["strongest", "next"],
+    });
+
+    const profileAssignment = assignOpportunityDeliveryResults(
+      [
+        { appid: 1, id: "strongest", profileIds: ["profile-a"] },
+        { appid: 1, id: "duplicate", profileIds: ["profile-b"] },
+      ],
+      [
+        {
+          channel: "slack",
+          id: "profile-b-slack",
+          maxResults: 1,
+          profileId: "profile-b",
+        },
+      ],
+    );
+    assert.deepEqual(profileAssignment.get("profile-b-slack"), {
+      availableResultCount: 1,
+      resultIds: ["strongest"],
     });
   });
 });

@@ -17,12 +17,15 @@ import {
 import type {
   OpportunityBootstrapResponse,
   OpportunityChannelPreferenceSummary,
+  OpportunityDailyBriefIssue,
   OpportunityGameRecord,
   OpportunityIdentity,
   OpportunityPreviewRequest,
   OpportunityPreviewResponse,
   OpportunityProfileDetail,
   OpportunityProfileVersion,
+  OpportunityResultLabel,
+  OpportunityResultPage,
   OpportunityRuleField,
   OpportunityRuleSet,
   OpportunitySignalFamily,
@@ -190,6 +193,59 @@ export class OpportunityService {
     identity: OpportunityIdentity,
   ): Promise<OpportunityBootstrapResponse> {
     return this.repository.getBootstrap(identity);
+  }
+
+  getDailyBrief(
+    identity: OpportunityIdentity,
+    params: { runId?: string | null } = {},
+  ): Promise<OpportunityDailyBriefIssue> {
+    if (params.runId !== undefined && params.runId !== null) {
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          params.runId,
+        )
+      ) {
+        throw new Error("A valid opportunity run ID is required.");
+      }
+    }
+    return this.repository.getDailyBrief(identity, params);
+  }
+
+  listResults(
+    identity: OpportunityIdentity,
+    params: {
+      cursor?: string | null;
+      eventLabel?: OpportunityResultLabel | null;
+      profileId?: string | null;
+      runId: string;
+    },
+  ): Promise<OpportunityResultPage> {
+    const eventLabels = new Set<OpportunityResultLabel>([
+      "materially_changed",
+      "newly_discovered",
+      "newly_qualified",
+      "newly_released",
+      "tracked_update",
+    ]);
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        params.runId,
+      )
+    ) {
+      throw new Error("A valid opportunity run ID is required.");
+    }
+    if (
+      params.profileId &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        params.profileId,
+      )
+    ) {
+      throw new Error("A valid opportunity profile ID is required.");
+    }
+    if (params.eventLabel && !eventLabels.has(params.eventLabel)) {
+      throw new Error("The opportunity event filter is not supported.");
+    }
+    return this.repository.listResults(identity, params);
   }
 
   async previewProfile(

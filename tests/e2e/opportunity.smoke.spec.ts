@@ -537,7 +537,9 @@ async function installOpportunityMocks(
   page: Page,
   options: {
     bootstrap?: unknown;
+    dailyBrief?: unknown;
     gameRecord?: unknown;
+    resultPage?: unknown;
     statefulActions?: boolean;
   } = {},
 ): Promise<Array<{ body: Record<string, unknown>; operation: string }>> {
@@ -548,6 +550,80 @@ async function installOpportunityMocks(
   const gameRecord = structuredClone(
     (options.gameRecord ?? GAME_RECORD) as typeof GAME_RECORD,
   );
+  const bootstrap = structuredClone(
+    (options.bootstrap ?? BOOTSTRAP) as typeof BOOTSTRAP,
+  );
+  const listedResults = Object.values(bootstrap.dailyOverview.groups).flat();
+  const featuredGames = Array.from(
+    new Map(listedResults.map((result) => [result.appid, result])).values(),
+  ).slice(0, 10);
+  const leadResult = featuredGames[0] ?? null;
+  const dailyBrief = options.dailyBrief ?? {
+    availableResultCount: featuredGames.length,
+    coverageWarnings: bootstrap.dailyOverview.coverageWarnings,
+    dek: "Steam changes and profile evidence distilled for PublisherIQ's sourcing desk.",
+    featuredGames,
+    headline:
+      featuredGames.length === 1
+        ? "1 game worth reviewing"
+        : `${featuredGames.length} games worth reviewing`,
+    highConfidenceCount: featuredGames.filter(
+      (result) => result.confidence === "high",
+    ).length,
+    issueDate: bootstrap.dailyOverview.windowEnd,
+    newerRunUpdating: false,
+    profileDispatches: bootstrap.profiles.map((profile) => ({
+      description: profile.description,
+      eventCounts: {
+        materially_changed: listedResults.filter(
+          (result) => result.eventLabel === "materially_changed",
+        ).length,
+        newly_discovered: listedResults.filter(
+          (result) => result.eventLabel === "newly_discovered",
+        ).length,
+        newly_qualified: listedResults.filter(
+          (result) => result.eventLabel === "newly_qualified",
+        ).length,
+        newly_released: listedResults.filter(
+          (result) => result.eventLabel === "newly_released",
+        ).length,
+        tracked_update: listedResults.filter(
+          (result) => result.eventLabel === "tracked_update",
+        ).length,
+      },
+      highConfidenceCount: listedResults.filter(
+        (result) => result.confidence === "high",
+      ).length,
+      id: profile.id,
+      listUrl: `/opportunities?tab=profile-lists&run=${bootstrap.dailyOverview.runId}&profile=${profile.id}`,
+      name: profile.name,
+      resultCount: listedResults.length,
+      status: profile.status,
+      summary:
+        listedResults.length === 0
+          ? "No new matches in this coverage window."
+          : `${listedResults.length} matching game${listedResults.length === 1 ? "" : "s"} in this coverage window.`,
+      topResult: leadResult
+        ? {
+            appid: leadResult.appid,
+            name: leadResult.name,
+            resultId: leadResult.id,
+          }
+        : null,
+    })),
+    profilesEvaluated: bootstrap.dailyOverview.profilesEvaluated,
+    runId: bootstrap.dailyOverview.runId,
+    status: featuredGames.length === 0 ? "empty" : "ready",
+    windowEnd: bootstrap.dailyOverview.windowEnd,
+    windowStart: bootstrap.dailyOverview.windowStart,
+  };
+  const resultPage = options.resultPage ?? {
+    hasMore: false,
+    nextCursor: null,
+    pageSize: 25,
+    results: listedResults,
+    runId: bootstrap.dailyOverview.runId,
+  };
   await installChatFetchMocks(page, { chatResponses: [] });
   await page.route("**/api/opportunities/**", async (route: Route) => {
     const operation = new URL(route.request().url()).pathname.split("/").at(-1);
@@ -593,12 +669,16 @@ async function installOpportunityMocks(
     }
     const payload =
       operation === "bootstrap"
-        ? (options.bootstrap ?? BOOTSTRAP)
-        : operation === "game-record"
-          ? gameRecord
-          : operation === "preview-profile"
-            ? PREVIEW
-            : {};
+        ? bootstrap
+        : operation === "daily-brief"
+          ? dailyBrief
+          : operation === "list-results"
+            ? resultPage
+            : operation === "game-record"
+              ? gameRecord
+              : operation === "preview-profile"
+                ? PREVIEW
+                : {};
     await route.fulfill({
       body: JSON.stringify(payload),
       contentType: "application/json",
@@ -618,25 +698,17 @@ test("daily opportunity brief opens a replayable evidence record", async ({
   await expect(
     page.getByRole("heading", { name: "Daily Intelligence Desk" }),
   ).toBeVisible();
+  await expect(page.getByText("PublisherIQ Daily Brief")).toBeVisible();
   await expect(
     page.getByText(/See the Steam games that newly match/i),
   ).toHaveCount(0);
   await expect(page.getByText(RESULT.name)).toBeVisible();
   await expect(page.getByText("1 game worth reviewing")).toBeVisible();
-  await expect(
-    page.getByText("Coverage status", { exact: true }),
-  ).toBeVisible();
-  await page.getByText("Coverage status", { exact: true }).click();
-  await expect(page.getByText("Recent market health changes")).toBeVisible();
-  await expect(page.getByText("Quiet → Still developing")).toBeVisible();
-  await expect(
-    page.getByText(/5,000-game evaluation cap reached/i),
-  ).toBeVisible();
+  await expect(page.getByText("YouTube evidence is partial.")).toBeVisible();
+  await expect(page.getByText("What moved across your lists")).toBeVisible();
   await expect(
     page.getByText("Price lowered from $19.99 to $14.99."),
   ).toBeVisible();
-  await expect(page.getByText("Opportunity fit: 83/100")).toBeVisible();
-  await expect(page.getByText("Matches your sourcing profile:")).toBeVisible();
   await expect(page.getByText(/Production smoke/i)).toHaveCount(0);
 
   await page.getByRole("link", { name: new RegExp(RESULT.name) }).click();
@@ -684,7 +756,7 @@ test("opportunity list translates stored changes without inventing values", asyn
       },
     },
   });
-  await page.goto("/opportunities");
+  await page.goto("/opportunities?tab=profile-lists");
 
   await expect(
     page.getByText("Developer changed from Old Harbor Studio to Harborlight."),
@@ -714,7 +786,7 @@ for (const role of ["owner", "admin", "member"] as const) {
         workspace: { ...BOOTSTRAP.workspace, role },
       },
     });
-    await page.goto("/opportunities");
+    await page.goto("/opportunities?tab=profile-lists");
 
     if (role === "member") {
       await expect(
@@ -792,7 +864,7 @@ test("opportunity records render truthful null and sparse change evidence", asyn
       },
     },
   });
-  await page.goto("/opportunities");
+  await page.goto("/opportunities?tab=profile-lists");
 
   await expect(
     page.getByText(

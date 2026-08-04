@@ -541,7 +541,7 @@ function isStatementTimeout(error: unknown): boolean {
 }
 
 export function assignOpportunityDeliveryResults(
-  results: Array<{ id: string; profileIds: string[] }>,
+  results: Array<{ appid: number; id: string; profileIds: string[] }>,
   preferences: Array<{
     channel: "email" | "slack";
     id: string;
@@ -549,25 +549,43 @@ export function assignOpportunityDeliveryResults(
     profileId: string | null;
   }>,
 ): Map<string, { availableResultCount: number; resultIds: string[] }> {
+  const uniqueResults = Array.from(
+    results
+      .reduce((byAppid, result) => {
+        const existing = byAppid.get(result.appid);
+        if (existing) {
+          existing.profileIds = Array.from(
+            new Set([...existing.profileIds, ...result.profileIds]),
+          );
+        } else {
+          byAppid.set(result.appid, {
+            ...result,
+            profileIds: [...result.profileIds],
+          });
+        }
+        return byAppid;
+      }, new Map<number, { appid: number; id: string; profileIds: string[] }>())
+      .values(),
+  );
   const assignments = new Map<
     string,
     { availableResultCount: number; resultIds: string[] }
   >();
-  const assignedByChannel = new Map<"email" | "slack", Set<string>>();
+  const assignedByChannel = new Map<"email" | "slack", Set<number>>();
   for (const preference of preferences) {
     const assigned =
-      assignedByChannel.get(preference.channel) ?? new Set<string>();
+      assignedByChannel.get(preference.channel) ?? new Set<number>();
     assignedByChannel.set(preference.channel, assigned);
-    const available = results.filter(
+    const available = uniqueResults.filter(
       (result) =>
-        !assigned.has(result.id) &&
+        !assigned.has(result.appid) &&
         (preference.profileId === null ||
           result.profileIds.includes(preference.profileId)),
     );
     const selected = available
       .slice(0, preference.maxResults)
       .map((result) => result.id);
-    available.forEach((result) => assigned.add(result.id));
+    available.forEach((result) => assigned.add(result.appid));
     assignments.set(preference.id, {
       availableResultCount: available.length,
       resultIds: selected,
@@ -3592,33 +3610,58 @@ export class OpportunityWorkerRepository {
       );
 
       const resultIds = await client.query<
-        QueryResultRow & { id: string; profile_ids: string[] }
+        QueryResultRow & { appid: number; id: string; profile_ids: string[] }
       >(
         `
-          SELECT
-            result.id,
-            COALESCE(
-              array_agg(DISTINCT match.profile_id)
-                FILTER (WHERE match.profile_id IS NOT NULL),
-              '{}'::uuid[]
-            ) AS profile_ids
-          FROM opportunity.results result
-          LEFT JOIN opportunity.result_profile_matches match
-            ON match.result_id = result.id
-          WHERE result.user_id = $2
-            AND (
-              result.run_id = $1
-              OR (
-                $3::text = 'daily'
-                AND result.created_at >= $4
-                AND result.created_at < $5
+          WITH scoped AS MATERIALIZED (
+            SELECT result.*
+            FROM opportunity.results result
+            WHERE result.user_id = $2
+              AND (
+                result.run_id = $1
+                OR (
+                  $3::text = 'daily'
+                  AND result.created_at >= $4
+                  AND result.created_at < $5
+                )
               )
-            )
-          GROUP BY result.id
+          ),
+          ranked AS MATERIALIZED (
+            SELECT
+              scoped.*,
+              row_number() OVER (
+                PARTITION BY scoped.appid
+                ORDER BY
+                  scoped.score DESC NULLS LAST,
+                  scoped.created_at DESC,
+                  scoped.id
+              ) AS editorial_rank
+            FROM scoped
+          ),
+          matched_profiles AS (
+            SELECT
+              scoped.appid,
+              COALESCE(
+                array_agg(DISTINCT match.profile_id)
+                  FILTER (WHERE match.profile_id IS NOT NULL),
+                '{}'::uuid[]
+              ) AS profile_ids
+            FROM scoped
+            LEFT JOIN opportunity.result_profile_matches match
+              ON match.result_id = scoped.id
+            GROUP BY scoped.appid
+          )
+          SELECT
+            ranked.id,
+            ranked.appid,
+            matched_profiles.profile_ids
+          FROM ranked
+          JOIN matched_profiles ON matched_profiles.appid = ranked.appid
+          WHERE ranked.editorial_rank = 1
           ORDER BY
-            result.score DESC NULLS LAST,
-            result.appid,
-            result.id
+            ranked.score DESC NULLS LAST,
+            ranked.appid,
+            ranked.id
           LIMIT 500
         `,
         [
@@ -3664,6 +3707,7 @@ export class OpportunityWorkerRepository {
       );
       const assignments = assignOpportunityDeliveryResults(
         resultIds.rows.map((row) => ({
+          appid: row.appid,
           id: row.id,
           profileIds: row.profile_ids,
         })),
@@ -3706,7 +3750,10 @@ export class OpportunityWorkerRepository {
               $6,
               $7::uuid[],
               $8,
-              'opportunity-digest/v1',
+              CASE
+                WHEN $5 = 'daily_digest' THEN 'opportunity-digest/v2'
+                ELSE 'opportunity-digest/v1'
+              END,
               $9::jsonb,
               $10
             )
@@ -3725,7 +3772,7 @@ export class OpportunityWorkerRepository {
             preference.id,
             JSON.stringify({
               availableResultCount: assignment.availableResultCount,
-              canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?run=${params.run.id}`,
+              canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?tab=daily-brief&run=${params.run.id}`,
               resultCount: selectedIds.length,
               truncated: assignment.availableResultCount > selectedIds.length,
               windowEnd: params.run.windowEnd,
@@ -3894,33 +3941,58 @@ export class OpportunityWorkerRepository {
       );
 
       const resultIds = await client.query<
-        QueryResultRow & { id: string; profile_ids: string[] }
+        QueryResultRow & { appid: number; id: string; profile_ids: string[] }
       >(
         `
-          SELECT
-            result.id,
-            COALESCE(
-              array_agg(DISTINCT match.profile_id)
-                FILTER (WHERE match.profile_id IS NOT NULL),
-              '{}'::uuid[]
-            ) AS profile_ids
-          FROM opportunity.results result
-          LEFT JOIN opportunity.result_profile_matches match
-            ON match.result_id = result.id
-          WHERE result.user_id = $2
-            AND (
-              result.run_id = $1
-              OR (
-                $3::text = 'daily'
-                AND result.created_at >= $4
-                AND result.created_at < $5
+          WITH scoped AS MATERIALIZED (
+            SELECT result.*
+            FROM opportunity.results result
+            WHERE result.user_id = $2
+              AND (
+                result.run_id = $1
+                OR (
+                  $3::text = 'daily'
+                  AND result.created_at >= $4
+                  AND result.created_at < $5
+                )
               )
-            )
-          GROUP BY result.id
+          ),
+          ranked AS MATERIALIZED (
+            SELECT
+              scoped.*,
+              row_number() OVER (
+                PARTITION BY scoped.appid
+                ORDER BY
+                  scoped.score DESC NULLS LAST,
+                  scoped.created_at DESC,
+                  scoped.id
+              ) AS editorial_rank
+            FROM scoped
+          ),
+          matched_profiles AS (
+            SELECT
+              scoped.appid,
+              COALESCE(
+                array_agg(DISTINCT match.profile_id)
+                  FILTER (WHERE match.profile_id IS NOT NULL),
+                '{}'::uuid[]
+              ) AS profile_ids
+            FROM scoped
+            LEFT JOIN opportunity.result_profile_matches match
+              ON match.result_id = scoped.id
+            GROUP BY scoped.appid
+          )
+          SELECT
+            ranked.id,
+            ranked.appid,
+            matched_profiles.profile_ids
+          FROM ranked
+          JOIN matched_profiles ON matched_profiles.appid = ranked.appid
+          WHERE ranked.editorial_rank = 1
           ORDER BY
-            result.score DESC NULLS LAST,
-            result.appid,
-            result.id
+            ranked.score DESC NULLS LAST,
+            ranked.appid,
+            ranked.id
           LIMIT 500
         `,
         [
@@ -3966,6 +4038,7 @@ export class OpportunityWorkerRepository {
       );
       const assignments = assignOpportunityDeliveryResults(
         resultIds.rows.map((row) => ({
+          appid: row.appid,
           id: row.id,
           profileIds: row.profile_ids,
         })),
@@ -3997,7 +4070,7 @@ export class OpportunityWorkerRepository {
           preference_id: preference.id,
           rendered_payload: {
             availableResultCount: assignment.availableResultCount,
-            canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?run=${params.run.id}`,
+            canonicalOverviewUrl: `${params.websiteBaseUrl.replace(/\/$/, "")}/opportunities?tab=daily-brief&run=${params.run.id}`,
             resultCount: assignment.resultIds.length,
             truncated:
               assignment.availableResultCount > assignment.resultIds.length,
@@ -4033,7 +4106,11 @@ export class OpportunityWorkerRepository {
               delivery.status,
               delivery.result_ids,
               delivery.preference_id,
-              'opportunity-digest/v1',
+              CASE
+                WHEN delivery.delivery_kind = 'daily_digest'
+                  THEN 'opportunity-digest/v2'
+                ELSE 'opportunity-digest/v1'
+              END,
               delivery.rendered_payload,
               delivery.idempotency_key
             FROM jsonb_to_recordset($4::jsonb) AS delivery(

@@ -465,9 +465,60 @@ export interface OpportunityResultSummary {
   rank: number | null;
   rankComponents: OpportunityRankComponents;
   score: number | null;
+  screenshotThumbnailUrl: string | null;
   strongestEvidence: string[];
   triggeredByMediaAddition: boolean;
   whyNow: string;
+}
+
+export interface OpportunityBriefProfileStats {
+  eventCounts: Record<OpportunityResultLabel, number>;
+  highConfidenceCount: number;
+  profileId: string;
+  resultCount: number;
+  topResult: null | {
+    appid: number;
+    name: string;
+    resultId: string;
+  };
+}
+
+export interface OpportunityBriefProfileDispatch {
+  description: string | null;
+  eventCounts: Record<OpportunityResultLabel, number>;
+  highConfidenceCount: number;
+  id: string;
+  listUrl: string;
+  name: string;
+  resultCount: number;
+  status: OpportunityProfileSummary["status"];
+  summary: string;
+  topResult: OpportunityBriefProfileStats["topResult"];
+}
+
+export interface OpportunityDailyBriefIssue {
+  availableResultCount: number;
+  coverageWarnings: string[];
+  dek: string;
+  featuredGames: OpportunityResultSummary[];
+  headline: string;
+  highConfidenceCount: number;
+  issueDate: string | null;
+  newerRunUpdating: boolean;
+  profileDispatches: OpportunityBriefProfileDispatch[];
+  profilesEvaluated: number;
+  runId: string | null;
+  status: "ready" | "empty" | "not_run" | "running" | "failed";
+  windowEnd: string | null;
+  windowStart: string | null;
+}
+
+export interface OpportunityResultPage {
+  hasMore: boolean;
+  nextCursor: string | null;
+  pageSize: 25;
+  results: OpportunityResultSummary[];
+  runId: string;
 }
 
 export interface OpportunityMedia {
