@@ -1619,6 +1619,7 @@ describe("opportunity worker result provenance", () => {
     });
 
     assert.ok(outcome.result);
+    assert.equal(outcome.result.reviewPriority, undefined);
     assert.equal(
       outcome.result.sourceTimestamps["legacy.apps"],
       "2026-07-27T11:36:16.366Z",
@@ -1670,6 +1671,7 @@ describe("opportunity worker result provenance", () => {
       },
     } as unknown as OpportunityWorkerRepository;
     const worker = new OpportunityWorker(repository, {
+      computeReviewPriorityV2: true,
       websiteBaseUrl: "https://publisheriq.com",
       workerId: "ranking-test-worker",
     });
@@ -1706,15 +1708,17 @@ describe("opportunity worker result provenance", () => {
     const outcome = await evaluateGame({
       appid: 42,
       candidateOutcomes: new Map(),
-      event: event({ appid: 42 }),
+      event: event({ appid: 42, eventType: "first_observed" }),
       input: {
         appid: 42,
         fields: {
           ccu_peak: unknownField(),
           is_released: knownField(false),
+          publisheriq_added_at: knownField("2026-07-27T00:00:00.000Z"),
+          self_published: knownField(true),
           total_reviews: unknownField(),
         },
-        name: "Unknown market position",
+        name: "Swords & Slippers",
       },
       priorState: {
         dismissedEventFingerprint: null,
@@ -1734,6 +1738,8 @@ describe("opportunity worker result provenance", () => {
 
     assert.ok(outcome.result);
     assert.equal(outcome.result.rank.components.peerPosition, 0.5);
+    assert.equal(outcome.result.reviewPriority?.lane, "new_game");
+    assert.notEqual(outcome.result.reviewPriority?.confidence.label, "limited");
   });
 });
 

@@ -18,6 +18,7 @@ import {
   type OpportunityEvaluationContext,
   type OpportunityFieldValue,
   type OpportunityGameRecord,
+  type OpportunityGameDescription,
   type OpportunityIdentity,
   type OpportunityPreviewRepresentative,
   type OpportunityProfileDetail,
@@ -25,10 +26,13 @@ import {
   type OpportunityProfileVersion,
   type OpportunityPresetSummary,
   type OpportunityResultSummary,
+  type OpportunityReviewPriorityDecision,
+  type OpportunityReviewPrioritySummary,
   type OpportunityResultLabel,
   type OpportunityResultPage,
   type OpportunityRuleField,
   type OpportunityRuleSet,
+  type OpportunityRankingPolicy,
   type OpportunitySignalFamily,
 } from "./types.js";
 import {
@@ -62,6 +66,7 @@ import {
   decodeOpportunityValue,
   opportunityChangeSummary,
   presentOpportunityChange,
+  resolveOpportunityRankingPolicy,
   type OpportunityTaxonomyNames,
 } from "./intelligence.js";
 
@@ -126,10 +131,157 @@ interface RuleInputRow extends QueryResultRow {
   source_max_metric_date: Date | string | null;
   steam_deck: string | null;
   storefront_source_at: Date | string | null;
+  storefront_description: unknown;
   storefront_status: string | null;
   tags: string[] | null;
   total_reviews: number | null;
   field_evidence: Record<string, unknown> | null;
+}
+
+function parseOpportunityGameDescription(
+  value: unknown,
+): OpportunityGameDescription | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const row = value as Record<string, unknown>;
+  const kind = row.kind;
+  const text = typeof row.text === "string" ? row.text.trim() : "";
+  if (
+    !text ||
+    ![
+      "steam_short",
+      "steam_about",
+      "steam_detailed",
+      "structured",
+      "unavailable",
+    ].includes(String(kind)) ||
+    row.sanitizerVersion !== "opportunity-description/v1"
+  ) {
+    return null;
+  }
+  return {
+    contentHash: typeof row.contentHash === "string" ? row.contentHash : null,
+    hasHeaderImage: row.hasHeaderImage === true,
+    hasReleasePath: row.hasReleasePath === true,
+    hasSupportedLanguages: row.hasSupportedLanguages === true,
+    kind: kind as OpportunityGameDescription["kind"],
+    sanitizerVersion: "opportunity-description/v1",
+    screenshotCount: Math.max(0, Number(row.screenshotCount) || 0),
+    sourceAt: typeof row.sourceAt === "string" ? row.sourceAt : null,
+    sourceSnapshotId:
+      typeof row.sourceSnapshotId === "string" ||
+      typeof row.sourceSnapshotId === "number"
+        ? String(row.sourceSnapshotId)
+        : null,
+    text,
+    trailerCount: Math.max(0, Number(row.trailerCount) || 0),
+  };
+}
+
+function opportunityRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseOpportunityReviewPrioritySummary(
+  value: unknown,
+): OpportunityReviewPrioritySummary | null {
+  const row = opportunityRecord(value);
+  const confidence = opportunityRecord(row?.confidence);
+  if (
+    !row ||
+    row.version !== "opportunity-ranking/v2" ||
+    !["new_game", "traction", "material_change"].includes(String(row.lane)) ||
+    ![
+      "discover_new_games",
+      "find_emerging_traction",
+      "monitor_material_changes",
+    ].includes(String(row.policy)) ||
+    !["review_now", "review_soon", "monitor"].includes(
+      String(row.priorityBand),
+    ) ||
+    !Array.isArray(row.reasons) ||
+    row.reasons.length > 3 ||
+    !row.reasons.every((reason) => typeof reason === "string") ||
+    typeof row.winningProfileId !== "string" ||
+    !confidence ||
+    confidence.version !== "opportunity-confidence/v2" ||
+    !["high", "directional", "limited"].includes(String(confidence.label)) ||
+    ![
+      confidence.applicableCount,
+      confidence.conflictingCount,
+      confidence.presentCount,
+      confidence.staleCount,
+    ].every((count) => Number.isInteger(count) && Number(count) >= 0) ||
+    typeof confidence.score !== "number" ||
+    !Number.isFinite(confidence.score) ||
+    !Array.isArray(confidence.reasons) ||
+    !confidence.reasons.every((reason) => typeof reason === "string") ||
+    Number(confidence.presentCount) > Number(confidence.applicableCount) ||
+    Number(confidence.staleCount) > Number(confidence.presentCount) ||
+    !(
+      row.internalScore === null ||
+      (typeof row.internalScore === "number" &&
+        Number.isFinite(row.internalScore) &&
+        row.internalScore >= 0 &&
+        row.internalScore <= 1)
+    )
+  ) {
+    return null;
+  }
+  return row as unknown as OpportunityReviewPrioritySummary;
+}
+
+function parseOpportunityReviewPriorityDecision(
+  value: unknown,
+): OpportunityReviewPriorityDecision | null {
+  const row = opportunityRecord(value);
+  if (
+    !parseOpportunityReviewPrioritySummary(value) ||
+    !row ||
+    row.eligibility !== "eligible" ||
+    !Array.isArray(row.allMatchedProfileIds) ||
+    !row.allMatchedProfileIds.every((id) => typeof id === "string") ||
+    !Array.isArray(row.components) ||
+    !row.components.every((component) => {
+      const item = opportunityRecord(component);
+      return (
+        item !== null &&
+        typeof item.key === "string" &&
+        typeof item.baseWeight === "number" &&
+        typeof item.effectiveWeight === "number" &&
+        (item.value === null || typeof item.value === "number") &&
+        (item.contribution === null || typeof item.contribution === "number")
+      );
+    }) ||
+    !Array.isArray(row.inputs) ||
+    !row.inputs.every((input) => {
+      const item = opportunityRecord(input);
+      return (
+        item !== null &&
+        typeof item.key === "string" &&
+        typeof item.confidenceWeight === "number" &&
+        ["available", "unavailable", "not_applicable"].includes(
+          String(item.availability),
+        )
+      );
+    }) ||
+    !Array.isArray(row.eligibilityReasonCodes) ||
+    !Array.isArray(row.sortTuple) ||
+    row.sortTuple.length !== 6 ||
+    typeof row.sortTuple[0] !== "number" ||
+    typeof row.sortTuple[1] !== "number" ||
+    !(row.sortTuple[2] === null || typeof row.sortTuple[2] === "number") ||
+    typeof row.sortTuple[3] !== "string" ||
+    typeof row.sortTuple[4] !== "number" ||
+    typeof row.sortTuple[5] !== "string" ||
+    !["explicit", "legacy_inference"].includes(String(row.selectionSource))
+  ) {
+    return null;
+  }
+  return row as unknown as OpportunityReviewPriorityDecision;
 }
 
 export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
@@ -207,12 +359,14 @@ interface ResultRow extends QueryResultRow {
   event_fingerprint: string;
   event_label: OpportunityResultSummary["eventLabel"];
   header_image_url: string | null;
+  game_description: OpportunityGameDescription | null;
   id: string;
   market_potential: OpportunityResultSummary["marketPotential"];
   matched_profiles: Array<{ id: string; name: string }> | null;
   name: string;
   rank: number | null;
   rank_components: OpportunityResultSummary["rankComponents"];
+  review_priority: OpportunityReviewPrioritySummary | null;
   score: string | number | null;
   screenshot_thumbnail_url: string | null;
   strongest_evidence: string[] | null;
@@ -699,6 +853,7 @@ function buildOpportunityRuleInput(
 
   const input = {
     appid: row.appid,
+    description: parseOpportunityGameDescription(row.storefront_description),
     fields,
     name: row.name,
   };
@@ -749,6 +904,7 @@ const RULE_INPUT_SELECT = `
     readiness_catalog.source_at AS catalog_source_at,
     readiness_storefront.status AS storefront_status,
     readiness_storefront.source_at AS storefront_source_at,
+    readiness_storefront.provenance->'description' AS storefront_description,
     readiness_pics.status AS pics_status,
     readiness_pics.source_at AS pics_source_at,
     readiness_market.status AS market_status,
@@ -970,6 +1126,7 @@ const RULE_INPUT_BATCH_SELECT = `
     readiness_catalog.source_at AS catalog_source_at,
     readiness_storefront.status AS storefront_status,
     readiness_storefront.source_at AS storefront_source_at,
+    readiness_storefront.provenance->'description' AS storefront_description,
     readiness_pics.status AS pics_status,
     readiness_pics.source_at AS pics_source_at,
     readiness_market.status AS market_status,
@@ -1383,6 +1540,8 @@ export class OpportunityRepository {
           result.rank,
           result.score,
           result.rank_components,
+          result.evidence_summary->'gameDescription' AS game_description,
+          result.evidence_summary->'reviewPriorityV2' AS review_priority,
           result.confidence,
           result.created_at,
           COALESCE(market.potential_band, 'insufficient_data')
@@ -1584,6 +1743,8 @@ export class OpportunityRepository {
           result.rank,
           result.score,
           result.rank_components,
+          result.evidence_summary->'gameDescription' AS game_description,
+          result.evidence_summary->'reviewPriorityV2' AS review_priority,
           result.confidence,
           result.created_at,
           COALESCE(market.potential_band, 'insufficient_data')
@@ -2081,6 +2242,8 @@ export class OpportunityRepository {
           )::integer AS rank,
           result.score,
           result.rank_components,
+          result.evidence_summary->'gameDescription' AS game_description,
+          result.evidence_summary->'reviewPriorityV2' AS review_priority,
           result.confidence,
           result.created_at,
           COALESCE(
@@ -2537,6 +2700,7 @@ export class OpportunityRepository {
     immediateFullMatchEnabled: boolean;
     localDeliveryTime: string;
     name: string;
+    rankingPolicy?: OpportunityRankingPolicy;
     rules: OpportunityRuleSet;
     sourcePresetVersionId?: string | null;
     timezone: string;
@@ -2690,6 +2854,9 @@ export class OpportunityRepository {
             healthVersion: OPPORTUNITY_HEALTH_VERSION,
             marketVersion: OPPORTUNITY_MARKET_VERSION,
             rankingVersion: OPPORTUNITY_RANKING_VERSION,
+            rankingPolicy:
+              params.rankingPolicy ??
+              resolveOpportunityRankingPolicy({ rules: params.rules }).policy,
           }),
           sourcePreset?.rows[0]?.version_id ?? null,
           params.enabled,
@@ -2785,6 +2952,7 @@ export class OpportunityRepository {
         event_subscriptions: OpportunitySignalFamily[];
         name: string;
         rules: OpportunityRuleSet;
+        slug: string;
         version_id: string;
       }
     >(
@@ -2792,6 +2960,7 @@ export class OpportunityRepository {
         SELECT
           preset.name,
           preset.description,
+          preset.slug,
           version.id AS version_id,
           version.rules,
           version.event_subscriptions
@@ -2817,6 +2986,13 @@ export class OpportunityRepository {
       immediateFullMatchEnabled: false,
       localDeliveryTime: params.localDeliveryTime,
       name: params.name?.trim() || cleanOpportunityProfileName(row.name),
+      rankingPolicy:
+        row.slug === "upcoming-games-with-demos"
+          ? "discover_new_games"
+          : row.slug === "new-self-published-indie-releases" ||
+              row.slug === "recently-released-early-traction"
+            ? "find_emerging_traction"
+            : "monitor_material_changes",
       rules: row.rules,
       sourcePresetVersionId: row.version_id,
       timezone: params.timezone,
@@ -2915,6 +3091,7 @@ export class OpportunityRepository {
     localDeliveryTime?: string;
     name: string;
     profileId: string;
+    rankingPolicy?: OpportunityRankingPolicy;
     rules: OpportunityRuleSet;
     timezone: string;
   }): Promise<OpportunityProfileVersion> {
@@ -2999,14 +3176,20 @@ export class OpportunityRepository {
           nextVersion,
           JSON.stringify(params.rules),
           params.eventSubscriptions,
-          JSON.stringify(
-            current.calculation_config ?? {
+          JSON.stringify({
+            ...(current.calculation_config ?? {
               cohortVersion: OPPORTUNITY_COHORT_VERSION,
               healthVersion: OPPORTUNITY_HEALTH_VERSION,
               marketVersion: OPPORTUNITY_MARKET_VERSION,
               rankingVersion: OPPORTUNITY_RANKING_VERSION,
-            },
-          ),
+            }),
+            rankingPolicy:
+              params.rankingPolicy ??
+              (current.calculation_config?.rankingPolicy as
+                | OpportunityRankingPolicy
+                | undefined) ??
+              resolveOpportunityRankingPolicy({ rules: params.rules }).policy,
+          }),
           current.source_preset_version_id,
           current.status,
           params.identity.userId,
@@ -3700,9 +3883,11 @@ export class OpportunityRepository {
             'eventLabel', canonical.event_label,
             'eventFingerprint', canonical.event_fingerprint,
             'headerImageUrl', selected_media.hero_assets->>'header',
+            'gameDescription', canonical.evidence_summary->'gameDescription',
             'rank', canonical.rank,
             'score', canonical.score,
             'rankComponents', canonical.rank_components,
+            'reviewPriority', canonical.evidence_summary->'reviewPriorityV2',
             'confidence', canonical.confidence,
             'createdAt', canonical.created_at,
             'marketPotential', COALESCE(market.potential_band, 'insufficient_data'),
@@ -3822,7 +4007,8 @@ export class OpportunityRepository {
               'name', profile.name,
               'profileVersionId', match.profile_version_id,
               'profileVersion', version.version,
-              'ruleOutcomes', match.rule_outcomes
+              'ruleOutcomes', match.rule_outcomes - 'reviewPriorityV2',
+              'reviewPriority', match.rule_outcomes->'reviewPriorityV2'
             ) ORDER BY profile.name)
             FROM opportunity.result_profile_matches match
             JOIN opportunity.profiles profile ON profile.id = match.profile_id
@@ -4032,16 +4218,23 @@ export class OpportunityRepository {
       ...decodeOpportunityValue(row.result_summary),
       change: primaryChange,
       changeSummary,
+      gameDescription: parseOpportunityGameDescription(
+        row.result_summary.gameDescription,
+      ),
       matchedProfiles: row.result_summary.matchedProfiles.map((profile) => ({
         ...profile,
         name: cleanOpportunityProfileName(profile.name),
       })),
       name: decodeOpportunityText(row.result_summary.name),
+      reviewPriority: parseOpportunityReviewPrioritySummary(
+        row.result_summary.reviewPriority,
+      ),
       strongestEvidence: cleanOpportunityEvidence(
         row.result_summary.strongestEvidence,
         changeSummary,
       ),
-      whyNow: `${changeSummary} The game matches your sourcing criteria.`,
+      whyNow:
+        cleanOpportunityUserText(row.result_summary.whyNow) ?? changeSummary,
     };
     const recentChanges = row.recent_changes.map((change, index) => ({
       ...decodeOpportunityValue(change),
@@ -4089,6 +4282,20 @@ export class OpportunityRepository {
       identity: params.identity,
       note: null,
     });
+    const matchedProfiles = decodeOpportunityValue(row.matched_profiles)
+      .map((profile) => ({
+        ...profile,
+        name: cleanOpportunityProfileName(profile.name),
+        reviewPriority: parseOpportunityReviewPriorityDecision(
+          profile.reviewPriority,
+        ),
+      }))
+      .sort((left, right) => {
+        const winner = resultSummary.reviewPriority?.winningProfileId;
+        if (left.id === winner) return -1;
+        if (right.id === winner) return 1;
+        return left.name.localeCompare(right.name);
+      });
     return {
       app: decodeOpportunityValue(row.app),
       cohort: decodeOpportunityValue(row.cohort),
@@ -4112,12 +4319,7 @@ export class OpportunityRepository {
           webmUrl: trailer.webmUrl ?? null,
         })),
       },
-      matchedProfiles: decodeOpportunityValue(row.matched_profiles).map(
-        (profile) => ({
-          ...profile,
-          name: cleanOpportunityProfileName(profile.name),
-        }),
-      ),
+      matchedProfiles,
       missingEvidence: row.missing_evidence ?? [],
       officialNews: decodeOpportunityValue(row.official_news),
       previousAppearances: decodeOpportunityValue(row.previous_appearances).map(
@@ -4308,6 +4510,19 @@ export class OpportunityRepository {
 
   private mapResult(row: ResultRow): OpportunityResultSummary {
     const changeSummary = opportunityChangeSummary(row.change, row.event_label);
+    const reviewPriority = parseOpportunityReviewPrioritySummary(
+      row.review_priority,
+    );
+    const matchedProfiles = (row.matched_profiles ?? [])
+      .map((profile) => ({
+        ...profile,
+        name: cleanOpportunityProfileName(profile.name),
+      }))
+      .sort((left, right) => {
+        if (left.id === reviewPriority?.winningProfileId) return -1;
+        if (right.id === reviewPriority?.winningProfileId) return 1;
+        return left.name.localeCompare(right.name);
+      });
     return {
       appid: row.appid,
       change: row.change ?? null,
@@ -4317,15 +4532,14 @@ export class OpportunityRepository {
       eventLabel: row.event_label,
       eventFingerprint: row.event_fingerprint,
       headerImageUrl: row.header_image_url ?? null,
+      gameDescription: parseOpportunityGameDescription(row.game_description),
       id: row.id,
       marketPotential: row.market_potential,
-      matchedProfiles: (row.matched_profiles ?? []).map((profile) => ({
-        ...profile,
-        name: cleanOpportunityProfileName(profile.name),
-      })),
+      matchedProfiles,
       name: decodeOpportunityText(row.name),
       rank: row.rank,
       rankComponents: row.rank_components,
+      reviewPriority,
       score: numberValue(row.score),
       screenshotThumbnailUrl: row.screenshot_thumbnail_url ?? null,
       strongestEvidence: cleanOpportunityEvidence(
@@ -4333,7 +4547,7 @@ export class OpportunityRepository {
         changeSummary,
       ),
       triggeredByMediaAddition: row.triggered_by_media_addition ?? false,
-      whyNow: `${changeSummary} The game matches your sourcing criteria.`,
+      whyNow: cleanOpportunityUserText(row.why_now) ?? changeSummary,
     };
   }
 }

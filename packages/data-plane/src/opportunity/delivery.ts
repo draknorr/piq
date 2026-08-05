@@ -8,8 +8,10 @@ import {
 import type {
   OpportunityBriefProfileStats,
   OpportunityConfidence,
+  OpportunityGameDescription,
   OpportunityPotentialBand,
   OpportunityProfileSummary,
+  OpportunityReviewPrioritySummary,
   OpportunityResultLabel,
   OpportunityResultSummary,
 } from "./types.js";
@@ -26,11 +28,13 @@ export interface OpportunityDeliveryResult {
   confidence?: OpportunityConfidence;
   createdAt?: string;
   eventLabel: OpportunityResultLabel;
+  gameDescription?: OpportunityGameDescription | null;
   headerImageUrl?: string | null;
   id: string;
   marketPotential: OpportunityPotentialBand;
   matchedProfiles?: Array<{ id: string; name: string }>;
   name: string;
+  reviewPriority?: OpportunityReviewPrioritySummary | null;
   score: number | null;
   screenshotThumbnailUrl?: string | null;
   strongestEvidence: string[];
@@ -83,6 +87,45 @@ interface ClaimedDeliveryRow extends QueryResultRow {
   };
   user_id: string;
   workspace_id: string;
+}
+
+interface HydratedDeliveryProfile {
+  current_version: number | null;
+  description: string | null;
+  id: string;
+  immediate_full_match_enabled: boolean;
+  local_delivery_time: string;
+  name: string;
+  next_evaluation_at: string | null;
+  source_preset_name: string | null;
+  status: OpportunityProfileSummary["status"];
+  timezone: string;
+  updated_at: string;
+}
+
+interface HydratedDeliveryResult {
+  appid: number;
+  change: OpportunityResultSummary["change"];
+  confidence: OpportunityConfidence;
+  created_at: string;
+  event_label: OpportunityResultLabel;
+  game_description: OpportunityGameDescription | null;
+  header_image_url: string | null;
+  id: string;
+  market_potential: OpportunityPotentialBand;
+  matched_profiles: Array<{ id: string; name: string }>;
+  name: string;
+  review_priority: OpportunityReviewPrioritySummary | null;
+  score: number | string | null;
+  screenshot_thumbnail_url: string | null;
+  strongest_evidence: string[];
+  why_now: string;
+}
+
+interface HydratedDeliveryRow extends QueryResultRow {
+  delivery_id: string;
+  profiles: HydratedDeliveryProfile[];
+  results: HydratedDeliveryResult[];
 }
 
 export class OpportunityDeliveryError extends Error {
@@ -179,7 +222,6 @@ export class OpportunityDeliveryRepository {
         `,
         [workerId, bounded],
       );
-      const deliveries: OpportunityDeliveryWork[] = [];
       for (const row of claimed.rows) {
         if (!row.destination_ciphertext) {
           throw new OpportunityDeliveryError(
@@ -188,75 +230,105 @@ export class OpportunityDeliveryRepository {
             false,
           );
         }
-        const results = await client.query<
-          QueryResultRow & {
-            appid: number;
-            change: OpportunityResultSummary["change"];
-            confidence: OpportunityConfidence;
-            created_at: Date | string;
-            event_label: OpportunityResultLabel;
-            header_image_url: string | null;
-            id: string;
-            market_potential: OpportunityPotentialBand;
-            name: string;
-            matched_profiles: Array<{ id: string; name: string }> | null;
-            score: number | string | null;
-            screenshot_thumbnail_url: string | null;
-            strongest_evidence: string[];
-            why_now: string;
-          }
-        >(
-          `
+      }
+      if (claimed.rows.length === 0) {
+        return [];
+      }
+      const hydrated = await client.query<HydratedDeliveryRow>(
+        `
+          WITH selected_deliveries AS MATERIALIZED (
             SELECT
-              result.id,
-              result.appid,
-              app.name,
-              (
-                SELECT jsonb_build_object(
-                  'eventType', material.event_type,
-                  'signalFamily', material.signal_family,
-                  'effectiveAt', material.effective_at,
-                  'observedAt', material.observed_at,
-                  'confidence', material.confidence,
-                  'affectedRuleFields', material.affected_rule_fields,
-                  'before', material.before_summary,
-                  'after', material.after_summary
-                )
-                FROM opportunity.material_events material
-                WHERE material.id = result.material_event_id
-                LIMIT 1
-              ) AS change,
-              result.event_label,
-              result.score,
-              result.confidence,
-              result.created_at,
-              selected_media.hero_assets->>'header' AS header_image_url,
-              selected_media.screenshots->0->>'thumbnailUrl'
-                AS screenshot_thumbnail_url,
-              profile_matches.matched_profiles,
-              COALESCE(
-                market.potential_band,
-                'insufficient_data'
-              ) AS market_potential,
-              COALESCE(
-                result.why_now->>'summary',
-                result.event_label
-              ) AS why_now,
-              COALESCE(
-                ARRAY(
-                  SELECT jsonb_array_elements_text(
-                    COALESCE(result.evidence_summary->'strongest', '[]'::jsonb)
-                  )
-                ),
-                '{}'::text[]
-              ) AS strongest_evidence
+              delivery.id,
+              delivery.result_ids,
+              preference.profile_id,
+              delivery.user_id,
+              delivery.workspace_id
             FROM opportunity.deliveries delivery
-            CROSS JOIN LATERAL
-              unnest(delivery.result_ids) WITH ORDINALITY AS selected(result_id, position)
+            LEFT JOIN opportunity.channel_preferences preference
+              ON preference.id = delivery.preference_id
+            WHERE delivery.id = ANY($1::uuid[])
+          ),
+          selected_results AS MATERIALIZED (
+            SELECT
+              delivery.id AS delivery_id,
+              selected.result_id,
+              selected.position
+            FROM selected_deliveries delivery
+            CROSS JOIN LATERAL unnest(delivery.result_ids)
+              WITH ORDINALITY AS selected(result_id, position)
+            WHERE selected.position <= 100
+          ),
+          profile_matches AS MATERIALIZED (
+            SELECT
+              selected.result_id,
+              COALESCE(
+                jsonb_agg(
+                  jsonb_build_object('id', profile.id, 'name', profile.name)
+                  ORDER BY profile.name, profile.id
+                ) FILTER (WHERE profile.id IS NOT NULL),
+                '[]'::jsonb
+              ) AS matched_profiles
+            FROM (
+              SELECT DISTINCT result_id
+              FROM selected_results
+            ) selected
+            LEFT JOIN opportunity.result_profile_matches match
+              ON match.result_id = selected.result_id
+            LEFT JOIN opportunity.profiles profile ON profile.id = match.profile_id
+            GROUP BY selected.result_id
+          ),
+          result_payload AS MATERIALIZED (
+            SELECT
+              selected.delivery_id,
+              jsonb_agg(
+                jsonb_build_object(
+                  'id', result.id,
+                  'appid', result.appid,
+                  'name', app.name,
+                  'change', CASE WHEN material.id IS NULL THEN NULL ELSE
+                    jsonb_build_object(
+                      'eventType', material.event_type,
+                      'signalFamily', material.signal_family,
+                      'effectiveAt', material.effective_at,
+                      'observedAt', material.observed_at,
+                      'confidence', material.confidence,
+                      'affectedRuleFields', material.affected_rule_fields,
+                      'before', material.before_summary,
+                      'after', material.after_summary
+                    )
+                  END,
+                  'event_label', result.event_label,
+                  'score', result.score,
+                  'confidence', result.confidence,
+                  'created_at', result.created_at,
+                  'game_description', result.evidence_summary->'gameDescription',
+                  'review_priority', result.evidence_summary->'reviewPriorityV2',
+                  'header_image_url', selected_media.hero_assets->>'header',
+                  'screenshot_thumbnail_url',
+                    selected_media.screenshots->0->>'thumbnailUrl',
+                  'matched_profiles', profile_matches.matched_profiles,
+                  'market_potential', COALESCE(
+                    market.potential_band,
+                    'insufficient_data'
+                  ),
+                  'why_now', COALESCE(
+                    result.why_now->>'summary',
+                    result.event_label
+                  ),
+                  'strongest_evidence',
+                    COALESCE(result.evidence_summary->'strongest', '[]'::jsonb)
+                )
+                ORDER BY selected.position
+              ) AS results
+            FROM selected_results selected
             JOIN opportunity.results result ON result.id = selected.result_id
             JOIN legacy.apps app ON app.appid = result.appid
+            LEFT JOIN opportunity.material_events material
+              ON material.id = result.material_event_id
             LEFT JOIN opportunity.market_context_snapshots market
               ON market.id = result.market_context_snapshot_id
+            LEFT JOIN profile_matches
+              ON profile_matches.result_id = result.id
             LEFT JOIN LATERAL (
               SELECT media.hero_assets, media.screenshots
               FROM docs.app_media_versions media
@@ -264,97 +336,89 @@ export class OpportunityDeliveryRepository {
               ORDER BY media.first_seen_at DESC, media.id DESC
               LIMIT 1
             ) selected_media ON true
-            LEFT JOIN LATERAL (
-              SELECT COALESCE(
-                jsonb_agg(
-                  DISTINCT jsonb_build_object(
-                    'id', profile.id,
-                    'name', profile.name
-                  )
-                ) FILTER (WHERE profile.id IS NOT NULL),
-                '[]'::jsonb
-              ) AS matched_profiles
-              FROM opportunity.results related_result
-              JOIN opportunity.result_profile_matches match
-                ON match.result_id = related_result.id
-              JOIN opportunity.profiles profile ON profile.id = match.profile_id
-              WHERE related_result.workspace_id = delivery.workspace_id
-                AND related_result.user_id = delivery.user_id
-                AND related_result.appid = result.appid
-                AND (
-                  related_result.run_id = delivery.run_id
-                  OR (
-                    delivery.delivery_kind = 'daily_digest'
-                    AND related_result.created_at >=
-                      (delivery.rendered_payload->>'windowStart')::timestamptz
-                    AND related_result.created_at <
-                      (delivery.rendered_payload->>'windowEnd')::timestamptz
-                  )
-                )
-            ) profile_matches ON true
-            WHERE delivery.id = $1
-            ORDER BY selected.position
-            LIMIT 100
-          `,
-          [row.id],
-        );
-        const profiles = await client.query<
-          QueryResultRow & {
-            current_version: number | null;
-            description: string | null;
-            id: string;
-            immediate_full_match_enabled: boolean;
-            local_delivery_time: string;
-            name: string;
-            next_evaluation_at: Date | string | null;
-            source_preset_name: string | null;
-            status: OpportunityProfileSummary["status"];
-            timezone: string;
-            updated_at: Date | string;
-          }
-        >(
-          `
+            GROUP BY selected.delivery_id
+          ),
+          profile_payload AS MATERIALIZED (
             SELECT
-              profile.id,
-              profile.name,
-              profile.description,
-              profile.status,
-              profile.timezone,
-              to_char(profile.local_delivery_time, 'HH24:MI') AS local_delivery_time,
-              profile.immediate_full_match_enabled,
-              profile.next_evaluation_at,
-              profile.updated_at,
-              version.version AS current_version,
-              preset.name AS source_preset_name
-            FROM opportunity.profiles profile
+              delivery.id AS delivery_id,
+              jsonb_agg(
+                jsonb_build_object(
+                  'id', profile.id,
+                  'name', profile.name,
+                  'description', profile.description,
+                  'status', profile.status,
+                  'timezone', profile.timezone,
+                  'local_delivery_time',
+                    to_char(profile.local_delivery_time, 'HH24:MI'),
+                  'immediate_full_match_enabled',
+                    profile.immediate_full_match_enabled,
+                  'next_evaluation_at', profile.next_evaluation_at,
+                  'updated_at', profile.updated_at,
+                  'current_version', version.version,
+                  'source_preset_name', preset.name
+                )
+                ORDER BY profile.updated_at DESC, profile.id
+              ) FILTER (WHERE profile.id IS NOT NULL) AS profiles
+            FROM selected_deliveries delivery
+            LEFT JOIN opportunity.profiles profile
+              ON profile.workspace_id = delivery.workspace_id
+             AND profile.owner_user_id = delivery.user_id
+             AND profile.status <> 'archived'
+             AND (
+               delivery.profile_id IS NULL
+               OR profile.id = delivery.profile_id
+             )
             LEFT JOIN opportunity.profile_versions version
               ON version.id = profile.current_version_id
             LEFT JOIN opportunity.presets preset
               ON preset.id = profile.source_preset_id
-            WHERE profile.workspace_id = $1
-              AND profile.owner_user_id = $2
-              AND profile.status <> 'archived'
-              AND ($3::uuid IS NULL OR profile.id = $3)
-            ORDER BY profile.updated_at DESC, profile.id
-            LIMIT 100
-          `,
-          [row.workspace_id, row.user_id, row.profile_id],
-        );
-        const presentedChanges = await presentOpportunityChanges(
-          client,
-          results.rows.map((result) => result.change),
-          results.rows.map((result) => result.event_label),
-        );
-        deliveries.push({
+            GROUP BY delivery.id
+          )
+          SELECT
+            delivery.id AS delivery_id,
+            COALESCE(result_payload.results, '[]'::jsonb) AS results,
+            COALESCE(profile_payload.profiles, '[]'::jsonb) AS profiles
+          FROM selected_deliveries delivery
+          LEFT JOIN result_payload
+            ON result_payload.delivery_id = delivery.id
+          LEFT JOIN profile_payload
+            ON profile_payload.delivery_id = delivery.id
+          ORDER BY delivery.id
+        `,
+        [claimed.rows.map((row) => row.id)],
+      );
+      const hydrationByDelivery = new Map(
+        hydrated.rows.map((row) => [row.delivery_id, row]),
+      );
+      const allResults = hydrated.rows.flatMap((row) => row.results);
+      const allPresentedChanges = await presentOpportunityChanges(
+        client,
+        allResults.map((result) => result.change),
+        allResults.map((result) => result.event_label),
+      );
+      const presentedChangeByResultId = new Map(
+        allResults.map((result, index) => [
+          result.id,
+          allPresentedChanges[index] ?? null,
+        ]),
+      );
+      return claimed.rows.map((row) => {
+        const hydration = hydrationByDelivery.get(row.id) ?? {
+          delivery_id: row.id,
+          profiles: [],
+          results: [],
+        };
+        return {
           availableResultCount:
-            row.rendered_payload.availableResultCount ?? results.rowCount ?? 0,
+            row.rendered_payload.availableResultCount ??
+            hydration.results.length,
           channel: row.channel,
           deliveryKind: row.delivery_kind,
-          destinationCiphertext: row.destination_ciphertext,
+          destinationCiphertext: row.destination_ciphertext!,
           id: row.id,
           idempotencyKey: row.idempotency_key,
           overviewUrl: row.rendered_payload.canonicalOverviewUrl ?? "",
-          profiles: profiles.rows.map((profile) => ({
+          profiles: hydration.profiles.map((profile) => ({
             currentVersion: profile.current_version,
             description: profile.description,
             id: profile.id,
@@ -370,9 +434,9 @@ export class OpportunityDeliveryRepository {
             updatedAt: new Date(profile.updated_at).toISOString(),
           })),
           renderedContentVersion: row.rendered_content_version,
-          results: results.rows.map((result, index) => {
+          results: hydration.results.map((result) => {
             const changeSummary = opportunityChangeSummary(
-              presentedChanges[index] ?? null,
+              presentedChangeByResultId.get(result.id) ?? null,
               result.event_label,
             );
             return {
@@ -381,25 +445,26 @@ export class OpportunityDeliveryRepository {
               confidence: result.confidence,
               createdAt: new Date(result.created_at).toISOString(),
               eventLabel: result.event_label,
+              gameDescription: result.game_description,
               headerImageUrl: result.header_image_url,
               id: result.id,
               marketPotential: result.market_potential,
               matchedProfiles: result.matched_profiles ?? [],
               name: decodeOpportunityText(result.name),
+              reviewPriority: result.review_priority,
               score: numberValue(result.score),
               screenshotThumbnailUrl: result.screenshot_thumbnail_url,
               strongestEvidence: cleanOpportunityEvidence(
                 result.strongest_evidence,
                 changeSummary,
               ),
-              whyNow: `${changeSummary} The game matches your sourcing criteria.`,
+              whyNow: decodeOpportunityText(result.why_now),
             };
           }),
           windowEnd: row.rendered_payload.windowEnd ?? null,
           windowStart: row.rendered_payload.windowStart ?? null,
-        });
-      }
-      return deliveries;
+        };
+      });
     });
   }
 
@@ -684,7 +749,10 @@ function deliveryProfileStats(
   });
 }
 
-function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
+function renderOpportunityDeliveryV2(
+  work: OpportunityDeliveryWork,
+  presentReviewPriorityV2: boolean,
+): {
   html: string;
   slackBlocks: Array<Record<string, unknown>>;
   subject: string;
@@ -701,6 +769,7 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
         result.createdAt ?? work.windowEnd ?? new Date(0).toISOString(),
       eventFingerprint: `delivery:${result.id}`,
       eventLabel: result.eventLabel,
+      gameDescription: result.gameDescription ?? null,
       headerImageUrl: result.headerImageUrl ?? null,
       id: result.id,
       marketPotential: result.marketPotential,
@@ -714,6 +783,7 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
         signalStrength: 0,
         userFit: 0,
       },
+      reviewPriority: result.reviewPriority ?? null,
       score: result.score,
       screenshotThumbnailUrl: result.screenshotThumbnailUrl ?? null,
       strongestEvidence: result.strongestEvidence,
@@ -755,7 +825,15 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
     )!;
     return [
       `${index + 1}. ${decodeOpportunityText(result.name)} — ${resultLabel(result.eventLabel)}`,
-      decodeOpportunityText(result.changeSummary),
+      decodeOpportunityText(
+        presentReviewPriorityV2
+          ? (source.gameDescription?.text ??
+              "Steam has not provided a short description for this game yet.")
+          : result.changeSummary,
+      ),
+      ...(presentReviewPriorityV2 && source.reviewPriority?.reasons.length
+        ? [source.reviewPriority.reasons.join(" · ")]
+        : [decodeOpportunityText(source.whyNow)]),
       `Market potential: ${potentialLabel(result.marketPotential)}`,
       deliveryGameUrl(work, source),
     ].join("\n");
@@ -784,12 +862,22 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
           ? (result.headerImageUrl ?? result.screenshotThumbnailUrl)
           : (result.screenshotThumbnailUrl ?? result.headerImageUrl),
       );
+      const description = decodeOpportunityText(
+        presentReviewPriorityV2
+          ? (source.gameDescription?.text ??
+              "Steam has not provided a short description for this game yet.")
+          : result.changeSummary,
+      );
+      const reasons = presentReviewPriorityV2 && source.reviewPriority?.reasons.length
+        ? source.reviewPriority.reasons.join(" · ")
+        : decodeOpportunityText(source.whyNow);
       return `
         <article style="border-top:1px solid #dfd8ce;padding:24px 0">
           ${image ? `<a href="${escapeHtml(link)}"><img src="${escapeHtml(image)}" width="632" alt="${escapeHtml(decodeOpportunityText(result.name))} Steam artwork" style="display:block;width:100%;height:auto;border-radius:8px;margin-bottom:16px" /></a>` : `<div style="display:block;background:#f1ebe3;border:1px solid #dfd8ce;border-radius:8px;color:#8b7468;font-size:11px;font-weight:700;letter-spacing:.12em;margin-bottom:16px;padding:42px 16px;text-align:center;text-transform:uppercase">PublisherIQ watch desk · Artwork unavailable</div>`}
           <p style="margin:0 0 8px;color:#c4513f;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">${index === 0 ? "Lead opportunity" : resultLabel(result.eventLabel)}</p>
           <h2 style="font-size:${index === 0 ? "26px" : "20px"};line-height:1.2;margin:0 0 8px;color:#211d1a">${escapeHtml(decodeOpportunityText(result.name))}</h2>
-          <p style="font-size:16px;line-height:1.6;margin:0 0 12px;color:#3f3a35">${escapeHtml(decodeOpportunityText(result.changeSummary))}</p>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 8px;color:#3f3a35">${escapeHtml(description)}</p>
+          <p style="font-size:13px;line-height:1.5;margin:0 0 12px;color:#6b625a">${escapeHtml(reasons)}</p>
           <a href="${escapeHtml(link)}" style="color:#c4513f;font-weight:700;text-decoration:none">Read the full game profile →</a>
         </article>`;
     })
@@ -799,7 +887,13 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
       const source = work.results.find(
         (candidate) => candidate.id === result.id,
       )!;
-      return `<li style="margin:0;padding:12px 0;border-top:1px solid #eee8df"><a href="${escapeHtml(deliveryGameUrl(work, source))}" style="color:#211d1a;font-weight:700;text-decoration:none">${escapeHtml(decodeOpportunityText(result.name))}</a><br/><span style="color:#6b625a;font-size:13px">${escapeHtml(decodeOpportunityText(result.changeSummary))}</span></li>`;
+      const description = decodeOpportunityText(
+        presentReviewPriorityV2
+          ? (source.gameDescription?.text ??
+              "Steam has not provided a short description for this game yet.")
+          : result.changeSummary,
+      );
+      return `<li style="margin:0;padding:12px 0;border-top:1px solid #eee8df"><a href="${escapeHtml(deliveryGameUrl(work, source))}" style="color:#211d1a;font-weight:700;text-decoration:none">${escapeHtml(decodeOpportunityText(result.name))}</a><br/><span style="color:#6b625a;font-size:13px">${escapeHtml(description)}</span></li>`;
     })
     .join("");
   const profileHtml = issue.profileDispatches
@@ -863,11 +957,20 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
       const image = safeRemoteImage(
         result.screenshotThumbnailUrl ?? result.headerImageUrl,
       );
+      const description = decodeOpportunityText(
+        presentReviewPriorityV2
+          ? (source.gameDescription?.text ??
+              "Steam has not provided a short description for this game yet.")
+          : result.changeSummary,
+      );
+      const reasons = presentReviewPriorityV2 && source.reviewPriority?.reasons.length
+        ? source.reviewPriority.reasons.join(" · ")
+        : decodeOpportunityText(source.whyNow);
       return {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*<${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(decodeOpportunityText(result.changeSummary))}`,
+          text: `*<${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(description)}\n_${escapeSlackMrkdwn(reasons)}_`,
         },
         ...(image
           ? {
@@ -907,7 +1010,10 @@ function renderOpportunityDeliveryV2(work: OpportunityDeliveryWork): {
   return { html, slackBlocks, subject, text };
 }
 
-export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
+export function renderOpportunityDelivery(
+  work: OpportunityDeliveryWork,
+  options: { presentReviewPriorityV2?: boolean } = {},
+): {
   html: string;
   slackBlocks: Array<Record<string, unknown>>;
   subject: string;
@@ -915,7 +1021,10 @@ export function renderOpportunityDelivery(work: OpportunityDeliveryWork): {
 } {
   return work.renderedContentVersion === "opportunity-digest/v2" &&
     work.deliveryKind === "daily_digest"
-    ? renderOpportunityDeliveryV2(work)
+    ? renderOpportunityDeliveryV2(
+        work,
+        options.presentReviewPriorityV2 ?? false,
+      )
     : renderOpportunityDeliveryV1(work);
 }
 
@@ -1021,6 +1130,7 @@ export class OpportunityDeliveryDispatcher {
     private readonly cipher: OpportunityDestinationCipher,
     private readonly provider: OpportunityDeliveryProvider,
     private readonly workerId: string,
+    private readonly presentReviewPriorityV2 = false,
   ) {}
 
   async runOnce(limit = 10): Promise<number> {
@@ -1028,7 +1138,9 @@ export class OpportunityDeliveryDispatcher {
     for (const delivery of deliveries) {
       try {
         const destination = this.cipher.decrypt(delivery.destinationCiphertext);
-        const rendered = renderOpportunityDelivery(delivery);
+        const rendered = renderOpportunityDelivery(delivery, {
+          presentReviewPriorityV2: this.presentReviewPriorityV2,
+        });
         const providerMessageId =
           delivery.channel === "email"
             ? await this.provider.sendEmail({

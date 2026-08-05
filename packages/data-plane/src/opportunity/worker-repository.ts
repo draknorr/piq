@@ -12,10 +12,12 @@ import type {
   OpportunityCohortMember,
   OpportunityEvaluationInput,
   OpportunityConfidence,
+  OpportunityGameDescription,
   OpportunityMarketContext,
   OpportunityMaterialEventType,
   OpportunityProfileEvaluation,
   OpportunityRankingEvidence,
+  OpportunityReviewPriorityDecision,
   OpportunityResultLabel,
   OpportunityRuleSet,
   OpportunityRuleField,
@@ -32,6 +34,9 @@ import {
   OPPORTUNITY_COHORT_VERSION,
   OPPORTUNITY_MARKET_VERSION,
   OPPORTUNITY_MATERIALITY_VERSION,
+  OPPORTUNITY_CONFIDENCE_VERSION,
+  OPPORTUNITY_DESCRIPTION_VERSION,
+  OPPORTUNITY_REVIEW_PRIORITY_VERSION,
   OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
 } from "./types.js";
@@ -67,6 +72,7 @@ export interface OpportunityWorkItem {
 }
 
 export interface OpportunityWorkerProfile {
+  calculationConfig?: Record<string, unknown>;
   eventSubscriptions: OpportunitySignalFamily[];
   id: string;
   immediateFullMatchEnabled: boolean;
@@ -114,6 +120,7 @@ export interface OpportunityRunContext {
 export interface OpportunityEvaluatedMatch {
   evaluation: OpportunityProfileEvaluation;
   profile: OpportunityWorkerProfile;
+  reviewPriority?: OpportunityReviewPriorityDecision;
 }
 
 export interface OpportunityReleasedCohort {
@@ -129,6 +136,7 @@ export interface OpportunityEvaluatedResult {
   appid: number;
   cohort: OpportunityReleasedCohort;
   confidence: "high" | "directional";
+  description?: OpportunityGameDescription;
   event: OpportunityWorkerMaterialEvent;
   eventLabel: OpportunityResultLabel;
   evidenceItems: Array<Record<string, unknown>>;
@@ -137,6 +145,7 @@ export interface OpportunityEvaluatedResult {
   missingEvidence: string[];
   profileVersionSetFingerprint: string;
   rank: OpportunityRankingEvidence;
+  reviewPriority?: OpportunityReviewPriorityDecision;
   reappearedAfterResultId: string | null;
   sourceTimestamps: Record<string, string | null>;
   strongestEvidence: string[];
@@ -1242,6 +1251,7 @@ export class OpportunityWorkerRepository {
     const versionIds = profileResult.rows.map((row) => row.version_id);
     const watermarks = await this.pool.query<
       QueryResultRow & {
+        calculation_config: Record<string, unknown>;
         catalog_event_id: string | number | null;
         lifecycle_event_id: string | number | null;
         material_event_at: Date | string | null;
@@ -1385,6 +1395,7 @@ export class OpportunityWorkerRepository {
           version.version AS version_number,
           version.rules,
           version.event_subscriptions
+          , version.calculation_config
         FROM opportunity.profiles profile
         JOIN opportunity.profile_versions version
           ON version.id = profile.current_version_id
@@ -1398,6 +1409,7 @@ export class OpportunityWorkerRepository {
       [workspaceId, userId, options?.immediateOnly ?? false],
     );
     return result.rows.map((row) => ({
+      calculationConfig: row.calculation_config ?? {},
       eventSubscriptions: row.event_subscriptions,
       id: row.id,
       immediateFullMatchEnabled: row.immediate_full_match_enabled,
@@ -2770,6 +2782,15 @@ export class OpportunityWorkerRepository {
         market: OPPORTUNITY_MARKET_VERSION,
         materiality: "opportunity-materiality/v1",
         ranking: "opportunity-ranking/v1",
+        confidence: result.reviewPriority
+          ? OPPORTUNITY_CONFIDENCE_VERSION
+          : undefined,
+        description: result.description
+          ? OPPORTUNITY_DESCRIPTION_VERSION
+          : undefined,
+        reviewPriority: result.reviewPriority
+          ? OPPORTUNITY_REVIEW_PRIORITY_VERSION
+          : undefined,
         ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
         rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
         signals: "signal-windows/v1",
@@ -2792,6 +2813,19 @@ export class OpportunityWorkerRepository {
         ),
         items: result.evidenceItems,
         strongest: result.strongestEvidence,
+        gameDescription: result.description ?? null,
+        reviewPriorityV2: result.reviewPriority
+          ? {
+              confidence: result.reviewPriority.confidence,
+              internalScore: result.reviewPriority.internalScore,
+              lane: result.reviewPriority.lane,
+              policy: result.reviewPriority.policy,
+              priorityBand: result.reviewPriority.priorityBand,
+              reasons: result.reviewPriority.reasons,
+              version: result.reviewPriority.version,
+              winningProfileId: result.reviewPriority.winningProfileId,
+            }
+          : null,
       },
       market: result.market,
       matches: result.matches.map((match) => ({
@@ -2801,7 +2835,12 @@ export class OpportunityWorkerRepository {
         preference_score: match.evaluation.preferenceContribution,
         profile_id: match.profile.id,
         profile_version_id: match.profile.versionId,
-        rule_outcomes: match.evaluation,
+        rule_outcomes: match.reviewPriority
+          ? {
+              ...match.evaluation,
+              reviewPriorityV2: match.reviewPriority,
+            }
+          : match.evaluation,
       })),
       material_event_id: result.event.id,
       missing_evidence: result.missingEvidence,
@@ -2810,6 +2849,7 @@ export class OpportunityWorkerRepository {
         ...result.rank.components,
         reasons: result.rank.reasons,
         weights: result.rank.weights,
+        v2: result.reviewPriority ?? null,
       },
       reappeared_after_result_id: result.reappearedAfterResultId,
       rule_evidence: Object.fromEntries(
@@ -2820,7 +2860,15 @@ export class OpportunityWorkerRepository {
       ),
       score: result.rank.finalScore,
       source_timestamps: result.sourceTimestamps,
-      why_now: { summary: result.whyNow },
+      why_now: {
+        reviewPriorityV2: result.reviewPriority
+          ? {
+              reasons: result.reviewPriority.reasons,
+              version: result.reviewPriority.version,
+            }
+          : null,
+        summary: result.whyNow,
+      },
     }));
     const inserted = await client.query<
       QueryResultRow & { created_count: string | number }
@@ -3413,9 +3461,18 @@ export class OpportunityWorkerRepository {
               ...result.rank.components,
               reasons: result.rank.reasons,
               weights: result.rank.weights,
+              v2: result.reviewPriority ?? null,
             }),
             JSON.stringify(ruleEvidence),
-            JSON.stringify({ summary: result.whyNow }),
+            JSON.stringify({
+              reviewPriorityV2: result.reviewPriority
+                ? {
+                    reasons: result.reviewPriority.reasons,
+                    version: result.reviewPriority.version,
+                  }
+                : null,
+              summary: result.whyNow,
+            }),
             JSON.stringify({
               currentMetrics: Object.fromEntries(
                 result.evidenceItems.map((item) => [
@@ -3425,6 +3482,19 @@ export class OpportunityWorkerRepository {
               ),
               items: result.evidenceItems,
               strongest: result.strongestEvidence,
+              gameDescription: result.description ?? null,
+              reviewPriorityV2: result.reviewPriority
+                ? {
+                    confidence: result.reviewPriority.confidence,
+                    internalScore: result.reviewPriority.internalScore,
+                    lane: result.reviewPriority.lane,
+                    policy: result.reviewPriority.policy,
+                    priorityBand: result.reviewPriority.priorityBand,
+                    reasons: result.reviewPriority.reasons,
+                    version: result.reviewPriority.version,
+                    winningProfileId: result.reviewPriority.winningProfileId,
+                  }
+                : null,
             }),
             JSON.stringify(result.sourceTimestamps),
             JSON.stringify({
@@ -3432,6 +3502,15 @@ export class OpportunityWorkerRepository {
               market: "opportunity-market/v1",
               materiality: "opportunity-materiality/v1",
               ranking: "opportunity-ranking/v1",
+              confidence: result.reviewPriority
+                ? OPPORTUNITY_CONFIDENCE_VERSION
+                : undefined,
+              description: result.description
+                ? OPPORTUNITY_DESCRIPTION_VERSION
+                : undefined,
+              reviewPriority: result.reviewPriority
+                ? OPPORTUNITY_REVIEW_PRIORITY_VERSION
+                : undefined,
               rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
               signals: "signal-windows/v1",
             }),
@@ -3485,7 +3564,14 @@ export class OpportunityWorkerRepository {
               resultId,
               match.profile.id,
               match.profile.versionId,
-              JSON.stringify(match.evaluation),
+              JSON.stringify(
+                match.reviewPriority
+                  ? {
+                      ...match.evaluation,
+                      reviewPriorityV2: match.reviewPriority,
+                    }
+                  : match.evaluation,
+              ),
               match.evaluation.preferenceContribution,
               match.profile.immediateFullMatchEnabled ? "immediate" : "daily",
             ],

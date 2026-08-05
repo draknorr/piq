@@ -251,6 +251,12 @@ function statementName(sql: string): string {
   if (sql.startsWith("WITH personal_schedule AS")) {
     return "profile schedule advancement";
   }
+  if (
+    sql.startsWith("WITH scoped AS MATERIALIZED") &&
+    sql.includes("editorial_rank")
+  ) {
+    return "daily brief editorial result selection";
+  }
   if (sql.startsWith("UPDATE opportunity.work_queue")) {
     return "work completion";
   }
@@ -380,7 +386,7 @@ async function main(): Promise<void> {
       "result/cohort/market/profile-match publication",
       "candidate-state publication",
       "result ranking",
-      "delivery result selection",
+      "daily brief editorial result selection",
       "delivery preference selection",
       "delivery publication",
       "profile schedule advancement",

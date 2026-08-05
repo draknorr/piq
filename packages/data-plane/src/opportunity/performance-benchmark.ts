@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import {
   calculateOpportunityMarketContext,
   calculateOpportunityRanking,
+  calculateOpportunityReviewPriority,
 } from "./intelligence.js";
 import { assertOpportunityRuleInputComplete } from "./repository.js";
 import { evaluateOpportunityProfile } from "./rules.js";
@@ -12,6 +13,7 @@ import {
   type OpportunityCohortMember,
   type OpportunityEvaluationInput,
   type OpportunityFieldValue,
+  type OpportunityRankingPolicy,
   type OpportunityRuleField,
   type OpportunityRuleSet,
   type OpportunityWorkerPhaseTimings,
@@ -112,6 +114,19 @@ function buildInput(appid: number): OpportunityEvaluationInput {
   ) as OpportunityEvaluationInput["fields"];
   const input = {
     appid,
+    description: {
+      contentHash: `description-${appid}`,
+      hasHeaderImage: true,
+      hasReleasePath: true,
+      hasSupportedLanguages: true,
+      kind: "steam_short" as const,
+      sanitizerVersion: "opportunity-description/v1" as const,
+      screenshotCount: 5,
+      sourceAt: "2026-07-28T00:00:00.000Z",
+      sourceSnapshotId: String(appid),
+      text: `Fixture Game ${appid} is a benchmark game with a bounded storefront description.`,
+      trailerCount: 1,
+    },
     fields,
     name: `Fixture Game ${appid}`,
   };
@@ -204,6 +219,7 @@ function digest(value: unknown): string {
 function runPass(
   mode: "cold" | "warm",
   cohortCache: Map<number, OpportunityCohortMember[]>,
+  includeReviewPriorityV2: boolean,
 ): OpportunityPerformanceBenchmarkPass {
   const totalStartedAt = performance.now();
 
@@ -230,6 +246,16 @@ function runPass(
         .map((candidate) => candidate.appid),
     ),
   );
+  const eligibleByAppid = new Map<
+    number,
+    (typeof candidateEvaluations)[number][]
+  >();
+  for (const candidate of candidateEvaluations) {
+    if (candidate.evaluation.outcome !== "eligible") continue;
+    const matches = eligibleByAppid.get(candidate.appid) ?? [];
+    matches.push(candidate);
+    eligibleByAppid.set(candidate.appid, matches);
+  }
   const profileEvaluationMs = elapsed(profileStartedAt);
 
   const cohortStartedAt = performance.now();
@@ -261,7 +287,50 @@ function runPass(
       },
       reasons: ["production-scale benchmark fixture"],
     });
-    return { appid, market, rank };
+    const matches = eligibleByAppid.get(appid) ?? [];
+    const input = inputs[appid - 1]!;
+    if (!includeReviewPriorityV2) {
+      return { appid, market, rank };
+    }
+    const policies: OpportunityRankingPolicy[] = [
+      "discover_new_games",
+      "find_emerging_traction",
+      "monitor_material_changes",
+    ];
+    const allMatchedProfileIds = matches.map(
+      (match) => `fixture-profile-${match.profileIndex}`,
+    );
+    const reviewPriorities = matches.map((match) => {
+      const policy = policies[match.profileIndex]!;
+      return calculateOpportunityReviewPriority({
+        affectedRuleFields: ["tags"],
+        allMatchedProfileIds,
+        cohort: { coverage: 1, fallbackTier: 1, members },
+        effectiveAt: "2026-08-05T12:00:00.000Z",
+        evaluation: match.evaluation,
+        eventMateriality: 0.8,
+        eventSubscribed: true,
+        eventType:
+          policy === "discover_new_games"
+            ? "first_observed"
+            : policy === "find_emerging_traction"
+              ? "review_breakthrough"
+              : "taxonomy_repositioned",
+        input,
+        lane:
+          policy === "discover_new_games"
+            ? "new_game"
+            : policy === "find_emerging_traction"
+              ? "traction"
+              : "material_change",
+        market,
+        now: "2026-08-05T16:00:00.000Z",
+        policy,
+        profileId: `fixture-profile-${match.profileIndex}`,
+        selectionSource: "explicit",
+      });
+    });
+    return { appid, market, rank, reviewPriorities };
   });
   const marketCalculationMs = elapsed(marketStartedAt);
 
@@ -307,10 +376,13 @@ function runPass(
   };
 }
 
-export function runOpportunityPerformanceBenchmark(): OpportunityPerformanceBenchmarkReport {
+export function runOpportunityPerformanceBenchmark(
+  options: { includeReviewPriorityV2?: boolean } = {},
+): OpportunityPerformanceBenchmarkReport {
+  const includeReviewPriorityV2 = options.includeReviewPriorityV2 ?? true;
   const cohortCache = new Map<number, OpportunityCohortMember[]>();
-  const cold = runPass("cold", cohortCache);
-  const warm = runPass("warm", cohortCache);
+  const cold = runPass("cold", cohortCache, includeReviewPriorityV2);
+  const warm = runPass("warm", cohortCache, includeReviewPriorityV2);
   return {
     fixture: OPPORTUNITY_PRODUCTION_SCALE_FIXTURE,
     localSyntheticOnly: true,

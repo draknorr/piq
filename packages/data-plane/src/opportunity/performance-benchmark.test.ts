@@ -32,9 +32,16 @@ describe("opportunity production-scale performance fixture", () => {
     assert.equal(cold.candidatePersistenceBatches, 24);
     assert.equal(
       cold.outputDigest,
-      "d2cb0d80127d5555db643776f26087914cb73ad6685649e1c1075e9362019312",
+      "27fa9be98349f4fe31d0a24d1a6debbf8ef1be9c48c584f9bf9bbbf8f3f2759c",
     );
     assert.equal(warm.outputDigest, cold.outputDigest);
+    const baseline = runOpportunityPerformanceBenchmark({
+      includeReviewPriorityV2: false,
+    });
+    assert.equal(
+      baseline.passes.cold.outputDigest,
+      "d2cb0d80127d5555db643776f26087914cb73ad6685649e1c1075e9362019312",
+    );
     assert.ok(cold.timings.totalMs <= report.thresholds.coldMs);
     assert.ok(warm.timings.totalMs <= report.thresholds.warmMs);
     for (const pass of [cold, warm]) {

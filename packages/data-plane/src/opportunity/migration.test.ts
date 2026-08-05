@@ -48,6 +48,15 @@ const storefrontTagMigration = readFileSync(
   ),
   "utf8",
 );
+const reviewPriorityMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../sql/tiger-bootstrap/0102_opportunity_review_priority_v2.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const workerRepository = readFileSync(
   fileURLToPath(new URL("./worker-repository.ts", import.meta.url)),
   "utf8",
@@ -108,6 +117,26 @@ describe("opportunity Tiger migration", () => {
     );
     assert.match(migration, /p_after AT TIME ZONE p_timezone/);
     assert.match(migration, /p_local_delivery_time/);
+  });
+});
+
+describe("opportunity review priority v2 migration", () => {
+  it("only replaces the bounded readiness capture function", () => {
+    assert.match(
+      reviewPriorityMigration,
+      /CREATE OR REPLACE FUNCTION ops\.capture_storefront_sync_readiness_v1\(\)/,
+    );
+    assert.match(
+      reviewPriorityMigration,
+      /snapshot_summary->'opportunityDescription'/,
+    );
+    assert.match(reviewPriorityMigration, /'description', v_description/);
+    assert.match(reviewPriorityMigration, /'storefront-readiness\/v2'/);
+    assert.doesNotMatch(reviewPriorityMigration, /\bCREATE TABLE\b/i);
+    assert.doesNotMatch(reviewPriorityMigration, /\bALTER TABLE\b/i);
+    assert.doesNotMatch(reviewPriorityMigration, /\bCREATE INDEX\b/i);
+    assert.doesNotMatch(reviewPriorityMigration, /^\s*UPDATE\s/gim);
+    assert.doesNotMatch(reviewPriorityMigration, /\b(?:DELETE|TRUNCATE)\b/i);
   });
 });
 

@@ -3,14 +3,18 @@ import { Pool, type QueryResultRow } from 'pg';
 import {
   CHANGE_EVENT_REGISTRY,
   CHANGE_EVENT_REGISTRY_VERSION,
-  resolveChangeEventDefinition,
+  resolveChangeEventDefinition
 } from '@publisheriq/shared';
 
 import { archiveJsonPayload, createChangeIntelArchiveStore } from './archive-store.js';
 import { hashNormalizedContent } from './hashing.js';
 import { stringifyJsonValue } from './json-sanitize.js';
 import { readChangeIntelRuntimeConfig } from './runtime-config.js';
-import { toComparableMediaVersion, toComparableStorefrontSnapshot } from './storefront.js';
+import {
+  buildOpportunityDescriptionSummary,
+  toComparableMediaVersion,
+  toComparableStorefrontSnapshot
+} from './storefront.js';
 import type {
   AppCaptureSource,
   AppChangeEventDraft,
@@ -20,7 +24,7 @@ import type {
   NormalizedNewsVersion,
   NormalizedStorefrontSnapshot,
   StorefrontTagEvidenceWrite,
-  VersionWriteResult,
+  VersionWriteResult
 } from './types.js';
 
 const DEFAULT_POOL_MAX = 5;
@@ -197,17 +201,15 @@ function truncateText(value: string | null | undefined, length: number): string 
   return value.length > length ? value.slice(0, length) : value;
 }
 
-function summarizeStorefrontSnapshot(
-  snapshot: NormalizedStorefrontSnapshot
-): Record<string, unknown> {
+function summarizeStorefrontSnapshot(snapshot: NormalizedStorefrontSnapshot): Record<string, unknown> {
   return {
     comingSoon: snapshot.comingSoon,
     isDelisted: snapshot.isDelisted,
     isFree: snapshot.isFree,
     hasPurchasePackages:
-      snapshot.hasPurchasePackages ??
-      (snapshot.packageIds?.length ?? 0) + (snapshot.packageGroupSubs?.length ?? 0) > 0,
+      snapshot.hasPurchasePackages ?? (snapshot.packageIds?.length ?? 0) + (snapshot.packageGroupSubs?.length ?? 0) > 0,
     name: snapshot.name,
+    opportunityDescription: buildOpportunityDescriptionSummary(snapshot),
     price: snapshot.price,
     releaseDate: snapshot.releaseDate,
     releaseDateText: snapshot.releaseDateText,
@@ -223,8 +225,8 @@ function summarizeStorefrontSnapshot(
       packageGroupSubs: snapshot.packageGroupSubs.length,
       packageIds: snapshot.packageIds.length,
       publishers: snapshot.publishers.length,
-      screenshots: snapshot.screenshots.length,
-    },
+      screenshots: snapshot.screenshots.length
+    }
   };
 }
 
@@ -232,14 +234,9 @@ function archiveTimestamp(pointer: { key: string } | null): string | null {
   return pointer ? new Date().toISOString() : null;
 }
 
-function requireArchivePointer<T extends { key: string } | null>(
-  pointer: T,
-  label: string
-): Exclude<T, null> {
+function requireArchivePointer<T extends { key: string } | null>(pointer: T, label: string): Exclude<T, null> {
   if (!pointer) {
-    throw new Error(
-      `CHANGE_INTEL_ARCHIVE_TARGET=object_storage is required to write ${label} to Tiger.`
-    );
+    throw new Error(`CHANGE_INTEL_ARCHIVE_TARGET=object_storage is required to write ${label} to Tiger.`);
   }
 
   return pointer as Exclude<T, null>;
@@ -252,14 +249,12 @@ async function readArchivedJson<T>(row: ArchiveColumns, label: string): Promise<
 
   const store = createChangeIntelArchiveStore();
   if (!store) {
-    throw new Error(
-      `CHANGE_INTEL_ARCHIVE_TARGET=object_storage is required to read ${label} from Tiger.`
-    );
+    throw new Error(`CHANGE_INTEL_ARCHIVE_TARGET=object_storage is required to read ${label} from Tiger.`);
   }
 
   const body = await store.read({
     bucket: row.archive_bucket,
-    key: row.archive_key,
+    key: row.archive_key
   });
 
   return JSON.parse(body.toString('utf8')) as T;
@@ -274,7 +269,7 @@ const STATUS_FIELD_COLUMNS = new Map<string, string>([
   ['last_storefront_sync', 'last_storefront_sync'],
   ['steam_last_modified', 'steam_last_modified'],
   ['steam_price_change_number', 'steam_price_change_number'],
-  ['storefront_accessible', 'storefront_accessible'],
+  ['storefront_accessible', 'storefront_accessible']
 ]);
 
 const SYNC_JOB_FIELD_COLUMNS = new Map<string, string>([
@@ -287,16 +282,14 @@ const SYNC_JOB_FIELD_COLUMNS = new Map<string, string>([
   ['items_skipped', 'items_skipped'],
   ['items_succeeded', 'items_succeeded'],
   ['items_updated', 'items_updated'],
-  ['status', 'status'],
+  ['status', 'status']
 ]);
 
 export class TigerChangeIntelRepository {
   constructor(private readonly pool: Pool) {}
 
   async listHintStatusRows(appids: number[]): Promise<TigerHintStatusRow[]> {
-    const uniqueAppids = Array.from(new Set(appids.filter(Number.isFinite))).sort(
-      (left, right) => left - right
-    );
+    const uniqueAppids = Array.from(new Set(appids.filter(Number.isFinite))).sort((left, right) => left - right);
     if (uniqueAppids.length === 0) {
       return [];
     }
@@ -347,13 +340,10 @@ export class TigerChangeIntelRepository {
       is_released: row.is_released,
       parent_appid: toNullableNumber(row.parent_appid),
       priority_score: toNullableNumber(row.priority_score),
-      release_date:
-        row.release_date instanceof Date
-          ? row.release_date.toISOString().slice(0, 10)
-          : row.release_date,
+      release_date: row.release_date instanceof Date ? row.release_date.toISOString().slice(0, 10) : row.release_date,
       steam_last_modified: toNullableNumber(row.steam_last_modified),
       steam_price_change_number: toNullableNumber(row.steam_price_change_number),
-      type: row.type,
+      type: row.type
     }));
   }
 
@@ -397,9 +387,9 @@ export class TigerChangeIntelRepository {
           rows.map((row) => ({
             appid: row.appid,
             steam_last_modified: row.steamLastModified,
-            steam_price_change_number: row.steamPriceChangeNumber,
+            steam_price_change_number: row.steamPriceChangeNumber
           }))
-        ),
+        )
       ]
     );
   }
@@ -433,9 +423,9 @@ export class TigerChangeIntelRepository {
             bucket: promotion.bucket,
             reason: promotion.reason,
             score: promotion.score,
-            until_at: promotion.until,
+            until_at: promotion.until
           }))
-        ),
+        )
       ]
     );
 
@@ -456,7 +446,7 @@ export class TigerChangeIntelRepository {
     return {
       heroImages: asRecord<NormalizedMediaVersion['heroImages']>(row.hero_assets),
       screenshots: asRecords<NormalizedMediaVersion['screenshots']>(row.screenshots),
-      movies: asRecords<NormalizedMediaVersion['movies']>(row.trailers),
+      movies: asRecords<NormalizedMediaVersion['movies']>(row.trailers)
     };
   }
 
@@ -478,7 +468,7 @@ export class TigerChangeIntelRepository {
       gid,
       publishedAt: new Date(0).toISOString(),
       title: row.title ?? '',
-      url: row.url,
+      url: row.url
     };
   }
 
@@ -501,17 +491,21 @@ export class TigerChangeIntelRepository {
         `
           UPDATE docs.app_source_snapshots
           SET last_seen_at = $2::timestamptz,
-              observed_at = $2::timestamptz
+              observed_at = $2::timestamptz,
+              snapshot_summary = snapshot_summary || jsonb_build_object(
+                'opportunityDescription',
+                $3::jsonb
+              )
           WHERE id = $1::bigint
         `,
-        [previousSnapshot.id, observedAt]
+        [previousSnapshot.id, observedAt, stringifyJsonValue(buildOpportunityDescriptionSummary(snapshot))]
       );
 
       return {
         inserted: false,
         currentHash: contentHash,
         currentId: String(previousSnapshot.id),
-        previousId: String(previousSnapshot.id),
+        previousId: String(previousSnapshot.id)
       };
     }
 
@@ -519,7 +513,7 @@ export class TigerChangeIntelRepository {
       await archiveJsonPayload({
         kind: 'app-source-snapshot',
         keyParts: [String(appid), 'storefront', contentHash],
-        payload: snapshot,
+        payload: snapshot
       }),
       'storefront snapshots'
     );
@@ -539,7 +533,7 @@ export class TigerChangeIntelRepository {
       pointer?.contentHash ?? null,
       pointer?.byteSize ?? null,
       pointer?.contentType ?? null,
-      archiveTimestamp(pointer),
+      archiveTimestamp(pointer)
     ];
     const insertPrefix = idOverride ? 'id, ' : '';
     const valuesPrefix = idOverride ? '$15::bigint, ' : '';
@@ -567,7 +561,7 @@ export class TigerChangeIntelRepository {
       inserted: true,
       currentHash: contentHash,
       currentId,
-      previousId: previousId ? String(previousId) : null,
+      previousId: previousId ? String(previousId) : null
     };
   }
 
@@ -598,7 +592,7 @@ export class TigerChangeIntelRepository {
         inserted: false,
         currentHash: contentHash,
         currentId: String(previousVersion.id),
-        previousId: String(previousVersion.id),
+        previousId: String(previousVersion.id)
       };
     }
 
@@ -612,7 +606,7 @@ export class TigerChangeIntelRepository {
       stringifyJsonValue(mediaVersion.screenshots),
       stringifyJsonValue(mediaVersion.movies),
       previousId,
-      observedAt,
+      observedAt
     ];
     const insertPrefix = idOverride ? 'id, ' : '';
     const valuesPrefix = idOverride ? '$9::bigint, ' : '';
@@ -638,7 +632,7 @@ export class TigerChangeIntelRepository {
       inserted: true,
       currentHash: contentHash,
       currentId,
-      previousId: previousId ? String(previousId) : null,
+      previousId: previousId ? String(previousId) : null
     };
   }
 
@@ -670,7 +664,7 @@ export class TigerChangeIntelRepository {
         newsVersion.feedlabel,
         newsVersion.feedname,
         newsVersion.publishedAt,
-        now,
+        now
       ]
     );
   }
@@ -700,7 +694,7 @@ export class TigerChangeIntelRepository {
         inserted: false,
         currentHash: contentHash,
         currentId: String(previousVersion.id),
-        previousId: String(previousVersion.id),
+        previousId: String(previousVersion.id)
       };
     }
 
@@ -708,7 +702,7 @@ export class TigerChangeIntelRepository {
       await archiveJsonPayload({
         kind: 'steam-news-version',
         keyParts: [newsVersion.gid, contentHash],
-        payload: newsVersion,
+        payload: newsVersion
       }),
       'news versions'
     );
@@ -727,7 +721,7 @@ export class TigerChangeIntelRepository {
       pointer?.byteSize ?? null,
       pointer?.contentType ?? null,
       archiveTimestamp(pointer),
-      observedAt,
+      observedAt
     ];
     const insertPrefix = idOverride ? 'id, ' : '';
     const valuesPrefix = idOverride ? '$14::bigint, ' : '';
@@ -754,7 +748,7 @@ export class TigerChangeIntelRepository {
       inserted: true,
       currentHash: contentHash,
       currentId,
-      previousId: previousId ? String(previousId) : null,
+      previousId: previousId ? String(previousId) : null
     };
   }
 
@@ -784,7 +778,7 @@ export class TigerChangeIntelRepository {
           ...(event.context ?? {}),
           event_registry_known: definition.isKnown,
           event_registry_version: CHANGE_EVENT_REGISTRY_VERSION,
-          signal_family: definition.signalFamily,
+          signal_family: definition.signalFamily
         },
         created_at: new Date().toISOString(),
         media_version_id: options.mediaVersionId ? Number(options.mediaVersionId) : null,
@@ -793,7 +787,7 @@ export class TigerChangeIntelRepository {
         related_snapshot_id: options.relatedSnapshotId ? Number(options.relatedSnapshotId) : null,
         source: event.source,
         source_snapshot_id: options.sourceSnapshotId ? Number(options.sourceSnapshotId) : null,
-        trigger_cursor: options.triggerCursor ?? null,
+        trigger_cursor: options.triggerCursor ?? null
       };
     });
 
@@ -828,10 +822,7 @@ export class TigerChangeIntelRepository {
     );
   }
 
-  async getLatestHeroAssetContentHash(
-    appid: number,
-    assetKind: HeroAssetKind
-  ): Promise<string | null> {
+  async getLatestHeroAssetContentHash(appid: number, assetKind: HeroAssetKind): Promise<string | null> {
     const { rows } = await this.pool.query<{ content_hash: string | null }>(
       `
         SELECT content_hash
@@ -886,7 +877,7 @@ export class TigerChangeIntelRepository {
         params.height,
         params.firstSeenAt ?? now,
         params.lastSeenAt ?? now,
-        now,
+        now
       ]
     );
   }
@@ -911,7 +902,7 @@ export class TigerChangeIntelRepository {
       priority: job.priority ?? 100,
       source: job.source,
       trigger_cursor: job.triggerCursor ?? '',
-      trigger_reason: job.triggerReason,
+      trigger_reason: job.triggerReason
     }));
 
     const { rows } = await this.pool.query<CountRow>(
@@ -948,22 +939,19 @@ export class TigerChangeIntelRepository {
       priority: parseCount(row.priority),
       source: row.source,
       triggerCursor: row.trigger_cursor ?? '',
-      triggerReason: row.trigger_reason,
+      triggerReason: row.trigger_reason
     }));
   }
 
-  async deferCaptureQueueItems(
-    jobIds: string[],
-    delaySeconds: number,
-    errorMessage: string
-  ): Promise<void> {
+  async deferCaptureQueueItems(jobIds: string[], delaySeconds: number, errorMessage: string): Promise<void> {
     if (jobIds.length === 0) {
       return;
     }
-    await this.pool.query(
-      'SELECT ops.defer_app_capture_work_v1($1::bigint[], $2::integer, $3::text)',
-      [jobIds.map(Number), Math.max(1, Math.min(Math.floor(delaySeconds), 86_400)), errorMessage]
-    );
+    await this.pool.query('SELECT ops.defer_app_capture_work_v1($1::bigint[], $2::integer, $3::text)', [
+      jobIds.map(Number),
+      Math.max(1, Math.min(Math.floor(delaySeconds), 86_400)),
+      errorMessage
+    ]);
   }
 
   async upsertStorefrontTagEvidence(rows: StorefrontTagEvidenceWrite[]): Promise<number> {
@@ -981,11 +969,11 @@ export class TigerChangeIntelRepository {
         pageUrl: row.pageUrl,
         rankDepth: row.tags.length,
         responseHash: row.responseHash,
-        surface: 'public_app_html',
+        surface: 'public_app_html'
       },
       source_at: row.observedAt,
       value: row.tags.map((tag) => tag.name),
-      version: row.parserVersion,
+      version: row.parserVersion
     }));
     const { rows: result } = await this.pool.query<CountRow>(
       'SELECT ops.upsert_storefront_tag_evidence_v1($1::jsonb) AS count',
@@ -1053,7 +1041,7 @@ export class TigerChangeIntelRepository {
         (oldestDirtyAt !== null && oldestDirtyAt <= params.oldestQueueBeforeIso),
       oldestDirtyAt,
       queued,
-      runningSweeps,
+      runningSweeps
     };
   }
 
@@ -1075,20 +1063,11 @@ export class TigerChangeIntelRepository {
           $4::integer
         )
       `,
-      [
-        jobIds.map((id) => Number(id)),
-        status,
-        errorMessage ?? null,
-        this.getCaptureDirtyWindowHours(),
-      ]
+      [jobIds.map((id) => Number(id)), status, errorMessage ?? null, this.getCaptureDirtyWindowHours()]
     );
   }
 
-  async requeueStaleCaptureClaims(
-    sources: AppCaptureSource[],
-    claimedBeforeIso: string,
-    limit = 500
-  ): Promise<number> {
+  async requeueStaleCaptureClaims(sources: AppCaptureSource[], claimedBeforeIso: string, limit = 500): Promise<number> {
     if (sources.length === 0) {
       return 0;
     }
@@ -1115,12 +1094,7 @@ export class TigerChangeIntelRepository {
 
     const columns = entries.map(([key]) => STATUS_FIELD_COLUMNS.get(key)!);
     const insertColumns = ['appid', ...columns, 'created_at', 'updated_at'];
-    const valuePlaceholders = [
-      '$1',
-      ...columns.map((_, index) => `$${index + 2}`),
-      'now()',
-      'now()',
-    ];
+    const valuePlaceholders = ['$1', ...columns.map((_, index) => `$${index + 2}`), 'now()', 'now()'];
     const updateSet = columns.map((column) => `${column} = EXCLUDED.${column}`);
     updateSet.push('updated_at = now()');
 
@@ -1226,9 +1200,7 @@ export class TigerChangeIntelRepository {
   }
 
   async upsertSteamNewsSearchProjectionForGids(gids: string[]): Promise<number> {
-    const normalizedGids = Array.from(
-      new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0))
-    );
+    const normalizedGids = Array.from(new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0)));
     if (normalizedGids.length === 0) {
       return 0;
     }
@@ -1280,17 +1252,14 @@ export class TigerChangeIntelRepository {
   }
 
   async deleteSteamNewsSearchProjectionForGids(gids: string[]): Promise<number> {
-    const normalizedGids = Array.from(
-      new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0))
-    );
+    const normalizedGids = Array.from(new Set(gids.map((gid) => gid.trim()).filter((gid) => gid.length > 0)));
     if (normalizedGids.length === 0) {
       return 0;
     }
 
-    const result = await this.pool.query(
-      'DELETE FROM docs.steam_news_search_projection WHERE gid = ANY($1::text[])',
-      [normalizedGids]
-    );
+    const result = await this.pool.query('DELETE FROM docs.steam_news_search_projection WHERE gid = ANY($1::text[])', [
+      normalizedGids
+    ]);
 
     return result.rowCount ?? 0;
   }
@@ -1303,10 +1272,7 @@ export class TigerChangeIntelRepository {
     const gids = rows.map((row) => row.gid);
 
     if (gids.length === 0) {
-      const deleted = await this.pool.query(
-        'DELETE FROM docs.steam_news_search_projection WHERE appid = $1',
-        [appid]
-      );
+      const deleted = await this.pool.query('DELETE FROM docs.steam_news_search_projection WHERE appid = $1', [appid]);
       return deleted.rowCount ?? 0;
     }
 
@@ -1539,9 +1505,9 @@ export class TigerChangeIntelRepository {
             raw_event_type: entry.rawEventType,
             signal_family: entry.signalFamily,
             source: entry.source,
-            user_label: entry.label,
+            user_label: entry.label
           }))
-        ),
+        )
       ]
     );
 
@@ -1825,10 +1791,7 @@ export function getTigerChangeIntelRepository(): TigerChangeIntelRepository {
       application_name: 'publisheriq-change-intel-ingestion',
       connectionString: requireTigerConnectionString(),
       max: readNumber(process.env.CHANGE_INTEL_TIGER_POOL_MAX, DEFAULT_POOL_MAX),
-      statement_timeout: readNumber(
-        process.env.CHANGE_INTEL_TIGER_STATEMENT_TIMEOUT_MS,
-        DEFAULT_STATEMENT_TIMEOUT_MS
-      ),
+      statement_timeout: readNumber(process.env.CHANGE_INTEL_TIGER_STATEMENT_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS)
     });
   }
 

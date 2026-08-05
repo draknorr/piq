@@ -24,6 +24,7 @@ import type {
   OpportunityPreviewResponse,
   OpportunityProfileDetail,
   OpportunityProfileVersion,
+  OpportunityRankingPolicy,
   OpportunityResultLabel,
   OpportunityResultPage,
   OpportunityRuleField,
@@ -368,6 +369,7 @@ export class OpportunityService {
       immediateFullMatchEnabled?: boolean;
       localDeliveryTime?: string;
       name: string;
+      rankingPolicy?: OpportunityRankingPolicy;
       rules: OpportunityRuleSet;
       sourcePresetVersionId?: string | null;
       timezone: string;
@@ -431,6 +433,7 @@ export class OpportunityService {
       localDeliveryTime?: string;
       name: string;
       profileId: string;
+      rankingPolicy?: OpportunityRankingPolicy;
       rules: OpportunityRuleSet;
       timezone: string;
     },

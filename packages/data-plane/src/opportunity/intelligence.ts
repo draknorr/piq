@@ -2,7 +2,10 @@ import {
   OPPORTUNITY_HEALTH_VERSION,
   OPPORTUNITY_MARKET_VERSION,
   OPPORTUNITY_RANKING_VERSION,
+  OPPORTUNITY_CONFIDENCE_VERSION,
+  OPPORTUNITY_REVIEW_PRIORITY_VERSION,
   type OpportunityCohortMember,
+  type OpportunityEvaluationInput,
   type OpportunityMarketContext,
   type OpportunityObservedChange,
   type OpportunityPercentileDistribution,
@@ -10,9 +13,887 @@ import {
   type OpportunityPresetHealthState,
   type OpportunityRankComponents,
   type OpportunityRankingEvidence,
+  type OpportunityRankingPolicy,
+  type OpportunityPriorityLane,
+  type OpportunityProfileEvaluation,
+  type OpportunityReviewPriorityComponent,
+  type OpportunityReviewPriorityDecision,
+  type OpportunityReviewPriorityInput,
   type OpportunityResultLabel,
+  type OpportunityRuleSet,
   type OpportunityRuleField,
 } from "./types.js";
+
+const TRACTION_RULE_FIELDS = new Set<OpportunityRuleField>([
+  "total_reviews",
+  "positive_percentage",
+  "reviews_added_7d",
+  "reviews_added_30d",
+  "ccu_peak",
+  "ccu_change_7d",
+  "ccu_change_30d",
+]);
+
+const POLICY_LANE_ORDER: Record<
+  OpportunityRankingPolicy,
+  Record<OpportunityPriorityLane, number>
+> = {
+  discover_new_games: { material_change: 2, new_game: 0, traction: 1 },
+  find_emerging_traction: { material_change: 2, new_game: 1, traction: 0 },
+  monitor_material_changes: { material_change: 0, new_game: 2, traction: 1 },
+};
+
+export function resolveOpportunityRankingPolicy(params: {
+  calculationConfig?: Record<string, unknown>;
+  rules: OpportunityRuleSet;
+}): {
+  policy: OpportunityRankingPolicy;
+  selectionSource: "explicit" | "legacy_inference";
+} {
+  const configured = params.calculationConfig?.rankingPolicy;
+  if (
+    configured === "discover_new_games" ||
+    configured === "find_emerging_traction" ||
+    configured === "monitor_material_changes"
+  ) {
+    return { policy: configured, selectionSource: "explicit" };
+  }
+  const required = params.rules.required.flatMap((group) => group.clauses);
+  if (
+    required.some(
+      (clause) =>
+        clause.field === "publisheriq_added_at" ||
+        (clause.field === "is_released" &&
+          clause.operator === "equals" &&
+          clause.value === false) ||
+        (clause.field === "release_date" && clause.operator === "in_window"),
+    )
+  ) {
+    return {
+      policy: "discover_new_games",
+      selectionSource: "legacy_inference",
+    };
+  }
+  if (
+    [...params.rules.required, ...params.rules.preferred].some((group) =>
+      group.clauses.some((clause) => TRACTION_RULE_FIELDS.has(clause.field)),
+    )
+  ) {
+    return {
+      policy: "find_emerging_traction",
+      selectionSource: "legacy_inference",
+    };
+  }
+  return {
+    policy: "monitor_material_changes",
+    selectionSource: "legacy_inference",
+  };
+}
+
+export function resolveOpportunityPriorityLane(params: {
+  effectiveAt: string;
+  eventType: string;
+  firstObservedAt: string | null;
+  hasApplicableTraction: boolean;
+  isReleased: boolean | null;
+  signalFamily: string;
+}): OpportunityPriorityLane {
+  if (
+    params.eventType === "first_observed" ||
+    params.eventType === "released"
+  ) {
+    return "new_game";
+  }
+  if (
+    params.eventType === "store_readiness_improved" &&
+    params.firstObservedAt &&
+    Date.parse(params.effectiveAt) - Date.parse(params.firstObservedAt) <=
+      30 * 86_400_000
+  ) {
+    return "new_game";
+  }
+  if (
+    params.isReleased === true &&
+    params.hasApplicableTraction &&
+    (params.eventType === "review_breakthrough" ||
+      params.eventType === "ccu_breakthrough" ||
+      params.signalFamily === "reviews" ||
+      params.signalFamily === "ccu")
+  ) {
+    return "traction";
+  }
+  return "material_change";
+}
+
+function reviewInput(params: {
+  assessment?: OpportunityReviewPriorityInput["assessment"];
+  availability: OpportunityReviewPriorityInput["availability"];
+  confidenceWeight?: number;
+  critical?: boolean;
+  key: string;
+  normalizedValue?: number | null;
+  rawValue?: unknown;
+  reasonCode: string;
+  source?: string;
+  sourceAt?: string | null;
+  version?: string | null;
+}): OpportunityReviewPriorityInput {
+  return {
+    assessment:
+      params.assessment ??
+      (params.availability === "available" ? "neutral" : "not_assessed"),
+    availability: params.availability,
+    calculationVersion: params.version ?? null,
+    confidenceWeight: params.confidenceWeight ?? 1,
+    criticalForConfidence: params.critical ?? false,
+    key: params.key,
+    normalizedValue: params.normalizedValue ?? null,
+    rawValue: params.rawValue ?? null,
+    reasonCode: params.reasonCode,
+    source: params.source ?? "opportunity-ranking/v2",
+    sourceAt: params.sourceAt ?? null,
+  };
+}
+
+function fieldInput(
+  input: OpportunityEvaluationInput,
+  field: OpportunityRuleField,
+  options?: {
+    critical?: boolean;
+    normalizedValue?: number | null;
+    notApplicable?: boolean;
+  },
+): OpportunityReviewPriorityInput {
+  const evidence = input.fields[field];
+  if (options?.notApplicable) {
+    return reviewInput({
+      availability: "not_applicable",
+      critical: options.critical,
+      key: field,
+      reasonCode: "not_applicable_for_lane",
+      source: evidence?.source,
+      sourceAt: evidence?.sourceAt,
+    });
+  }
+  if (!evidence || evidence.state === "unknown") {
+    return reviewInput({
+      availability: "unavailable",
+      critical: options?.critical,
+      key: field,
+      rawValue: evidence?.value,
+      reasonCode: evidence?.reason ?? "source_unavailable",
+      source: evidence?.source,
+      sourceAt: evidence?.sourceAt,
+      version: evidence?.calculationVersion,
+    });
+  }
+  const numeric =
+    typeof evidence.value === "number" && Number.isFinite(evidence.value)
+      ? evidence.value
+      : null;
+  return reviewInput({
+    assessment: numeric !== null && numeric <= 0 ? "negative" : "neutral",
+    availability: "available",
+    critical: options?.critical,
+    key: field,
+    normalizedValue: options?.normalizedValue ?? null,
+    rawValue: evidence.value,
+    reasonCode:
+      numeric !== null && numeric <= 0 ? "known_non_positive" : "observed",
+    source: evidence.source,
+    sourceAt: evidence.sourceAt,
+    version: evidence.calculationVersion,
+  });
+}
+
+function weightedComponent(
+  key: string,
+  baseWeight: number,
+  values: Array<{ value: number | null; weight: number }>,
+): OpportunityReviewPriorityComponent {
+  const available = values.filter(
+    (item): item is { value: number; weight: number } => item.value !== null,
+  );
+  const denominator = available.reduce((sum, item) => sum + item.weight, 0);
+  const value =
+    denominator > 0
+      ? available.reduce((sum, item) => sum + item.value * item.weight, 0) /
+        denominator
+      : null;
+  return {
+    baseWeight,
+    contribution: value === null ? null : value * baseWeight,
+    effectiveWeight: value === null ? 0 : baseWeight,
+    key,
+    value,
+  };
+}
+
+function empiricalMidrank(
+  value: number | null,
+  cohort: Array<number | null>,
+): number | null {
+  if (value === null) return null;
+  const measured = cohort.filter(
+    (item): item is number => item !== null && Number.isFinite(item),
+  );
+  if (measured.length < 10) return null;
+  const lower = measured.filter((item) => item < value).length;
+  const equal = measured.filter((item) => item === value).length;
+  return clamp((lower + equal * 0.5) / measured.length);
+}
+
+function logP90(value: number | null, p90: number | null): number | null {
+  if (value === null || p90 === null) return null;
+  return clamp(Math.log1p(Math.max(0, value)) / Math.log1p(Math.max(1, p90)));
+}
+
+function confidenceForDecision(params: {
+  cohort: {
+    coverage: number;
+    fallbackTier: 1 | 2 | 3 | 4 | 5;
+    members: OpportunityCohortMember[];
+  };
+  inputs: OpportunityReviewPriorityInput[];
+  lane: OpportunityPriorityLane;
+  marketApplicable: boolean;
+  now: string;
+}): OpportunityReviewPriorityDecision["confidence"] {
+  const applicable = params.inputs.filter(
+    (input) => input.availability !== "not_applicable",
+  );
+  const present = applicable.filter(
+    (input) => input.availability === "available",
+  );
+  const stale = present.filter((input) => {
+    if (
+      input.source === "profile_rule_outcome" ||
+      input.source === "profile_evaluation" ||
+      input.source === "opportunity.market_context_snapshots" ||
+      input.source === "opportunity.material_events"
+    ) {
+      return false;
+    }
+    if (!input.sourceAt) return true;
+    const age = Date.parse(params.now) - Date.parse(input.sourceAt);
+    const sla = input.source.includes("cohort")
+      ? 7 * 86_400_000
+      : 48 * 3_600_000;
+    return !Number.isFinite(age) || age > sla;
+  });
+  const criticalUnavailable = applicable.some(
+    (input) =>
+      input.criticalForConfidence && input.availability !== "available",
+  );
+  const criticalStale = stale.some((input) => input.criticalForConfidence);
+  const applicableWeight = applicable.reduce(
+    (sum, input) => sum + input.confidenceWeight,
+    0,
+  );
+  const presentWeight = present.reduce(
+    (sum, input) => sum + input.confidenceWeight,
+    0,
+  );
+  const staleWeight = stale.reduce(
+    (sum, input) => sum + input.confidenceWeight,
+    0,
+  );
+  const completeness =
+    applicableWeight > 0 ? presentWeight / applicableWeight : 0;
+  const freshness =
+    presentWeight > 0 ? (presentWeight - staleWeight) / presentWeight : 0;
+  const tierMultiplier =
+    [1, 0.9, 0.75, 0.6, 0.4][params.cohort.fallbackTier - 1] ?? 0.4;
+  const measured = params.cohort.members.filter(
+    (member) => member.totalReviews !== null || member.ccuPeak !== null,
+  ).length;
+  const cohortQuality = params.marketApplicable
+    ? params.cohort.coverage * Math.min(1, measured / 10) * tierMultiplier
+    : 1;
+  const denominator = params.marketApplicable ? 1 : 0.8;
+  const score = clamp(
+    (0.45 * completeness +
+      0.25 * freshness +
+      (params.marketApplicable ? 0.2 * cohortQuality : 0) +
+      0.1) /
+      denominator,
+  );
+  let label: OpportunityReviewPriorityDecision["confidence"]["label"];
+  if (score >= 0.8 && !criticalUnavailable && !criticalStale) {
+    label = "high";
+  } else if (
+    criticalUnavailable ||
+    criticalStale ||
+    (score < 0.5 && params.lane !== "new_game")
+  ) {
+    label = "limited";
+  } else {
+    label = "directional";
+  }
+  const reasons = [
+    ...(criticalUnavailable ? ["critical_input_unavailable"] : []),
+    ...(criticalStale ? ["critical_input_stale"] : []),
+    ...(params.lane === "new_game"
+      ? ["post_release_traction_not_applicable"]
+      : []),
+    ...(params.marketApplicable && cohortQuality < 0.6
+      ? ["cohort_coverage_limited"]
+      : []),
+  ];
+  return {
+    applicableCount: applicable.length,
+    conflictingCount: 0,
+    label,
+    presentCount: present.length,
+    reasons,
+    score,
+    staleCount: stale.length,
+    version: OPPORTUNITY_CONFIDENCE_VERSION,
+  };
+}
+
+export function calculateOpportunityReviewPriority(params: {
+  affectedRuleFields: OpportunityRuleField[];
+  allMatchedProfileIds: string[];
+  cohort: {
+    coverage: number;
+    fallbackTier: 1 | 2 | 3 | 4 | 5;
+    members: OpportunityCohortMember[];
+  };
+  effectiveAt: string;
+  evaluation: OpportunityProfileEvaluation;
+  eventMateriality: number;
+  eventSubscribed: boolean;
+  eventType: string;
+  input: OpportunityEvaluationInput;
+  lane: OpportunityPriorityLane;
+  market: OpportunityMarketContext;
+  now: string;
+  policy: OpportunityRankingPolicy;
+  profileId: string;
+  selectionSource: "explicit" | "legacy_inference";
+}): OpportunityReviewPriorityDecision {
+  const inputs: OpportunityReviewPriorityInput[] = [];
+  const components: OpportunityReviewPriorityComponent[] = [];
+  const preferredKnown = params.evaluation.preferredOutcomes.filter(
+    (outcome) => outcome.state !== "unknown",
+  );
+  const importance = { high: 1, low: 0.3, medium: 0.6 } as const;
+  inputs.push(
+    reviewInput({
+      availability: "available",
+      confidenceWeight: 1,
+      critical: true,
+      key: "eligibility",
+      normalizedValue: 1,
+      rawValue: params.evaluation.outcome,
+      reasonCode: "eligible_after_required_and_excluded_rules",
+      source: "profile_evaluation",
+      sourceAt: params.now,
+    }),
+  );
+  components.push(
+    weightedComponent(
+      "preferred_profile_match",
+      params.policy === "discover_new_games"
+        ? 0.35
+        : params.policy === "find_emerging_traction"
+          ? 0.2
+          : 0.25,
+      preferredKnown.map((outcome) => ({
+        value: outcome.state === "true" ? 1 : 0,
+        weight: importance[outcome.importance],
+      })),
+    ),
+  );
+  for (const outcome of params.evaluation.preferredOutcomes) {
+    inputs.push(
+      reviewInput({
+        assessment:
+          outcome.state === "true"
+            ? "positive"
+            : outcome.state === "false"
+              ? "negative"
+              : "not_assessed",
+        availability: outcome.state === "unknown" ? "unavailable" : "available",
+        confidenceWeight: importance[outcome.importance],
+        key: `preferred:${outcome.groupId}`,
+        normalizedValue:
+          outcome.state === "unknown" ? null : outcome.state === "true" ? 1 : 0,
+        rawValue: outcome.state,
+        reasonCode: `preferred_${outcome.state}`,
+        source: "profile_rule_outcome",
+      }),
+    );
+  }
+
+  const numericField = (field: OpportunityRuleField): number | null => {
+    const evidence = params.input.fields[field];
+    return evidence?.state === "known" && typeof evidence.value === "number"
+      ? evidence.value
+      : null;
+  };
+  const marketValue: Record<string, number | null> = {
+    developing: 0.5,
+    insufficient_data: null,
+    large_but_competitive: 0.8,
+    limited: 0.25,
+    meaningful: 0.7,
+  };
+
+  if (params.policy === "discover_new_games") {
+    const noPublisher = params.input.fields.no_publisher_listed;
+    const selfPublished = params.input.fields.self_published;
+    let openness: number | null = null;
+    if (noPublisher?.state === "known" && noPublisher.value === true)
+      openness = 1;
+    else if (selfPublished?.state === "known" && selfPublished.value === true)
+      openness = 0.8;
+    components.push(
+      weightedComponent("publishing_openness", 0.25, [
+        { value: openness, weight: 1 },
+      ]),
+    );
+    inputs.push(
+      reviewInput({
+        assessment: openness === null ? "not_assessed" : "positive",
+        availability: openness === null ? "unavailable" : "available",
+        key: "publishing_openness",
+        normalizedValue: openness,
+        rawValue: {
+          noPublisher: noPublisher?.value,
+          selfPublished: selfPublished?.value,
+        },
+        reasonCode:
+          openness === 1
+            ? "no_publisher_listed"
+            : openness === 0.8
+              ? "self_published"
+              : "publishing_openness_unknown",
+        source: "steam_storefront",
+        sourceAt: noPublisher?.sourceAt ?? selfPublished?.sourceAt,
+      }),
+    );
+    const marketScore = marketValue[params.market.potentialBand] ?? null;
+    components.push(
+      weightedComponent("comparable_market_attractiveness", 0.2, [
+        { value: marketScore, weight: 1 },
+      ]),
+    );
+    inputs.push(
+      reviewInput({
+        assessment:
+          marketScore === null
+            ? "not_assessed"
+            : marketScore >= 0.7
+              ? "positive"
+              : "neutral",
+        availability: marketScore === null ? "unavailable" : "available",
+        key: "comparable_market_attractiveness",
+        normalizedValue: marketScore,
+        rawValue: params.market.potentialBand,
+        reasonCode: `market_${params.market.potentialBand}`,
+        source: "opportunity.market_context_snapshots",
+      }),
+    );
+    const description = params.input.description;
+    const readinessValues = [
+      {
+        key: "useful_description",
+        value:
+          description && description.kind !== "unavailable"
+            ? 1
+            : description
+              ? 0
+              : null,
+        weight: 0.3,
+      },
+      {
+        key: "header_art",
+        value: description ? (description.hasHeaderImage ? 1 : 0) : null,
+        weight: 0.2,
+      },
+      {
+        key: "screenshots",
+        value: description ? (description.screenshotCount >= 3 ? 1 : 0) : null,
+        weight: 0.15,
+      },
+      {
+        key: "trailer",
+        value: description ? (description.trailerCount >= 1 ? 1 : 0) : null,
+        weight: 0.1,
+      },
+      {
+        key: "languages",
+        value: description ? (description.hasSupportedLanguages ? 1 : 0) : null,
+        weight: 0.15,
+      },
+      {
+        key: "release_path",
+        value: description ? (description.hasReleasePath ? 1 : 0) : null,
+        weight: 0.1,
+      },
+    ];
+    components.push(
+      weightedComponent("product_store_readiness", 0.1, readinessValues),
+    );
+    for (const readiness of readinessValues) {
+      inputs.push(
+        reviewInput({
+          assessment:
+            readiness.value === null
+              ? "not_assessed"
+              : readiness.value > 0
+                ? "positive"
+                : "negative",
+          availability: readiness.value === null ? "unavailable" : "available",
+          confidenceWeight: readiness.weight,
+          key: `readiness:${readiness.key}`,
+          normalizedValue: readiness.value,
+          rawValue: readiness.value,
+          reasonCode:
+            readiness.value === null
+              ? "readiness_unavailable"
+              : readiness.value > 0
+                ? "readiness_present"
+                : "readiness_missing",
+          source: "ops.app_data_readiness",
+          sourceAt: description?.sourceAt,
+        }),
+      );
+    }
+    const firstObserved = params.input.fields.publisheriq_added_at;
+    const age =
+      firstObserved?.state === "known" &&
+      typeof firstObserved.value === "string"
+        ? Math.max(0, Date.parse(params.now) - Date.parse(firstObserved.value))
+        : Number.NaN;
+    const freshness = Number.isFinite(age)
+      ? age <= 72 * 3_600_000
+        ? 1
+        : clamp(1 - (age - 72 * 3_600_000) / (27 * 86_400_000))
+      : null;
+    components.push(
+      weightedComponent("freshness_launch_timing", 0.1, [
+        { value: freshness, weight: 1 },
+      ]),
+    );
+    inputs.push(
+      reviewInput({
+        assessment:
+          freshness === null
+            ? "not_assessed"
+            : freshness > 0.5
+              ? "positive"
+              : "neutral",
+        availability: freshness === null ? "unavailable" : "available",
+        critical: true,
+        key: "first_observed_at",
+        normalizedValue: freshness,
+        rawValue: firstObserved?.value,
+        reasonCode:
+          freshness === null
+            ? "first_observation_unavailable"
+            : "immutable_first_observation",
+        source: firstObserved?.source,
+        sourceAt: firstObserved?.sourceAt,
+      }),
+    );
+    for (const field of [
+      "total_reviews",
+      "ccu_peak",
+      "reviews_added_7d",
+      "reviews_added_30d",
+      "ccu_change_7d",
+      "ccu_change_30d",
+    ] as const) {
+      inputs.push(fieldInput(params.input, field, { notApplicable: true }));
+    }
+  } else if (params.policy === "find_emerging_traction") {
+    const reviews = numericField("total_reviews");
+    const ccu = numericField("ccu_peak");
+    const levelReviews = logP90(
+      reviews,
+      params.market.distributions.totalReviews.p90,
+    );
+    const levelCcu = logP90(ccu, params.market.distributions.ccuPeak.p90);
+    components.push(
+      weightedComponent("traction_level", 0.25, [
+        { value: levelReviews, weight: 1 },
+        { value: levelCcu, weight: 1 },
+      ]),
+    );
+    const reviews7d = numericField("reviews_added_7d");
+    const reviews30d = numericField("reviews_added_30d");
+    const reviewRateDelta =
+      reviews7d === null || reviews30d === null
+        ? null
+        : reviews7d / 7 - Math.max(0, reviews30d - reviews7d) / 23;
+    // Current cohort rows do not carry historical 7/30-day rate distributions.
+    // Preserve those raw observations, but fail their normalized inputs closed
+    // until the bounded calibration artifact can supply like-for-like peers.
+    const reviewRateRank = null;
+    const reviews30dRank = logP90(
+      reviews30d,
+      params.market.distributions.reviewsAdded30d.p90,
+    );
+    const ccu7dRank = null;
+    const ccu30dRank = null;
+    const accelerationValues = [
+      reviewRateRank,
+      reviews30dRank,
+      ccu7dRank,
+      ccu30dRank,
+    ];
+    components.push(
+      weightedComponent(
+        "traction_acceleration",
+        0.3,
+        accelerationValues.map((value) => ({ value, weight: 1 })),
+      ),
+    );
+    components.push(
+      weightedComponent("peer_position", 0.15, [
+        {
+          value: empiricalMidrank(
+            reviews,
+            params.cohort.members.map((member) => member.totalReviews),
+          ),
+          weight: 1,
+        },
+        {
+          value: empiricalMidrank(
+            ccu,
+            params.cohort.members.map((member) => member.ccuPeak),
+          ),
+          weight: 1,
+        },
+      ]),
+    );
+    const marketScore = marketValue[params.market.potentialBand] ?? null;
+    components.push(
+      weightedComponent("market_context", 0.1, [
+        { value: marketScore, weight: 1 },
+      ]),
+    );
+    const levelValues = [levelReviews, levelCcu].filter(
+      (value): value is number => value !== null,
+    );
+    inputs.push(
+      fieldInput(params.input, "total_reviews", {
+        normalizedValue: levelReviews,
+      }),
+      fieldInput(params.input, "ccu_peak", { normalizedValue: levelCcu }),
+      reviewInput({
+        assessment:
+          reviewRateDelta === null
+            ? "not_assessed"
+            : reviewRateDelta <= 0
+              ? "negative"
+              : "positive",
+        availability: reviewRateRank === null ? "unavailable" : "available",
+        key: "review_rate_delta",
+        normalizedValue: reviewRateRank,
+        rawValue: reviewRateDelta,
+        reasonCode: "cohort_review_rate_distribution_unavailable",
+        source: "opportunity.released_cohort_features_v2",
+      }),
+      fieldInput(params.input, "reviews_added_30d", {
+        normalizedValue: reviews30dRank,
+      }),
+      fieldInput(params.input, "ccu_change_7d", {
+        normalizedValue: ccu7dRank,
+      }),
+      fieldInput(params.input, "ccu_change_30d", {
+        normalizedValue: ccu30dRank,
+      }),
+      reviewInput({
+        availability: levelValues.length > 0 ? "available" : "unavailable",
+        critical: true,
+        key: "current_traction_level",
+        normalizedValue:
+          levelValues.length > 0
+            ? levelValues.reduce((sum, value) => sum + value, 0) /
+              levelValues.length
+            : null,
+        reasonCode: "at_least_one_current_level_required",
+        source: "metrics.app_signal_windows_v1",
+      }),
+      reviewInput({
+        availability: accelerationValues.some((value) => value !== null)
+          ? "available"
+          : "unavailable",
+        critical: true,
+        key: "traction_acceleration_signal",
+        normalizedValue: reviews30dRank,
+        reasonCode: "at_least_one_acceleration_input_required",
+        source: "opportunity.released_cohort_features_v2",
+      }),
+    );
+  } else {
+    const affected = new Set(params.affectedRuleFields);
+    const requiredOrExcluded = [
+      ...params.evaluation.requiredOutcomes,
+      ...params.evaluation.excludedOutcomes,
+    ].flatMap((outcome) => outcome.clauseOutcomes.map((clause) => clause.field));
+    const preferred = params.evaluation.preferredOutcomes.flatMap((outcome) =>
+      outcome.clauseOutcomes.map((clause) => clause.field),
+    );
+    const relevance = requiredOrExcluded.some((field) => affected.has(field))
+      ? 1
+      : preferred.some((field) => affected.has(field))
+        ? 0.7
+        : params.eventSubscribed
+          ? 0.4
+          : 0;
+    const recencyAge = Math.max(
+      0,
+      Date.parse(params.now) - Date.parse(params.effectiveAt),
+    );
+    const recency =
+      recencyAge <= 24 * 3_600_000
+        ? 1
+        : clamp(1 - (recencyAge - 24 * 3_600_000) / (29 * 86_400_000));
+    components.push(
+      weightedComponent("profile_relevance", 0.25, [
+        { value: relevance, weight: 1 },
+      ]),
+    );
+    components.push(
+      weightedComponent("event_significance", 0.35, [
+        {
+          value:
+            params.eventType === "first_observed"
+              ? null
+              : clamp(params.eventMateriality),
+          weight: 1,
+        },
+      ]),
+    );
+    components.push(
+      weightedComponent("event_recency", 0.25, [{ value: recency, weight: 1 }]),
+    );
+    components.push(
+      weightedComponent("corroboration_consistency", 0.15, [
+        { value: 0.7, weight: 1 },
+      ]),
+    );
+    inputs.push(
+      reviewInput({
+        assessment:
+          params.eventType === "first_observed" ? "not_assessed" : "positive",
+        availability:
+          params.eventType === "first_observed"
+            ? "not_applicable"
+            : "available",
+        critical: true,
+        key: "event_materiality",
+        normalizedValue:
+          params.eventType === "first_observed"
+            ? null
+            : clamp(params.eventMateriality),
+        rawValue: params.eventMateriality,
+        reasonCode:
+          params.eventType === "first_observed"
+            ? "first_observation_suppressed"
+            : "material_event",
+        source: "opportunity.material_events",
+        sourceAt: params.effectiveAt,
+      }),
+    );
+  }
+
+  const active = components.filter((component) => component.value !== null);
+  const denominator = active.reduce(
+    (sum, component) => sum + component.baseWeight,
+    0,
+  );
+  const internalScore =
+    denominator > 0
+      ? active.reduce(
+          (sum, component) => sum + component.value! * component.baseWeight,
+          0,
+        ) / denominator
+      : null;
+  const priorityBand =
+    internalScore === null || internalScore < 0.55
+      ? "monitor"
+      : internalScore >= 0.75
+        ? "review_now"
+        : "review_soon";
+  const reasons = [
+    params.lane === "new_game"
+      ? "New on Steam"
+      : params.lane === "traction"
+        ? "Early traction is moving"
+        : "Material Steam change",
+    params.evaluation.preferredOutcomes.find(
+      (outcome) => outcome.state === "true",
+    )?.label,
+    params.policy === "discover_new_games" &&
+    params.input.fields.self_published?.value === true
+      ? "Self-published"
+      : null,
+    params.market.potentialBand === "large_but_competitive"
+      ? "Large, competitive market"
+      : null,
+  ]
+    .filter((reason): reason is string => Boolean(reason))
+    .slice(0, 3);
+  const confidence = confidenceForDecision({
+    cohort: params.cohort,
+    inputs,
+    lane: params.lane,
+    marketApplicable: params.policy !== "monitor_material_changes",
+    now: params.now,
+  });
+  return {
+    allMatchedProfileIds: [...params.allMatchedProfileIds].sort(),
+    components,
+    confidence,
+    eligibility: "eligible",
+    eligibilityReasonCodes: [],
+    inputs,
+    internalScore,
+    lane: params.lane,
+    policy: params.policy,
+    priorityBand,
+    reasons,
+    selectionSource: params.selectionSource,
+    sortTuple: [
+      POLICY_LANE_ORDER[params.policy][params.lane],
+      priorityBand === "review_now"
+        ? 0
+        : priorityBand === "review_soon"
+          ? 1
+          : 2,
+      internalScore,
+      params.effectiveAt,
+      params.input.appid,
+      params.profileId,
+    ],
+    version: OPPORTUNITY_REVIEW_PRIORITY_VERSION,
+    winningProfileId: params.profileId,
+  };
+}
+
+export function compareOpportunityReviewPriority(
+  left: OpportunityReviewPriorityDecision,
+  right: OpportunityReviewPriorityDecision,
+): number {
+  const [leftLane, leftBand, leftScore, leftAt, leftAppid, leftProfile] =
+    left.sortTuple;
+  const [rightLane, rightBand, rightScore, rightAt, rightAppid, rightProfile] =
+    right.sortTuple;
+  return (
+    leftLane - rightLane ||
+    leftBand - rightBand ||
+    (rightScore ?? -1) - (leftScore ?? -1) ||
+    rightAt.localeCompare(leftAt) ||
+    leftAppid - rightAppid ||
+    leftProfile.localeCompare(rightProfile)
+  );
+}
 
 export const OPPORTUNITY_RANK_WEIGHTS: OpportunityRankComponents = {
   evidenceQuality: 0.05,

@@ -150,6 +150,15 @@ Do not configure an HTTP health check; this is a process worker.
 | `DELIVERY_CLAIM_LIMIT`                | `10`                               | Delivery claims per poll                                          |
 | `POLL_INTERVAL_MS`                    | `5000`                             | Delay between idle polls                                          |
 | `MAX_IDLE_POLLS`                      | `0`                                | `0` runs continuously; positive values are for bounded local runs |
+| `OPPORTUNITY_PRIORITY_V2_COMPUTE`     | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering   |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`| `0`                                | Use canonical v2 copy in deliveries after the presentation gate   |
+
+The three policy-order controls are
+`OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY`,
+`OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION`, and
+`OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL`. They fail startup closed while the
+required policy calibration artifacts and canary gates remain unapproved; do
+not set them during dual-write rollout.
 
 If the encryption key is absent, evaluations and website results still run, but
 delivery configuration and dispatch remain unavailable.

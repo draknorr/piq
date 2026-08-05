@@ -4,6 +4,12 @@ export type OpportunityRuleSchemaVersion =
   | typeof OPPORTUNITY_RULE_SCHEMA_V1
   | typeof OPPORTUNITY_RULE_SCHEMA_VERSION;
 export const OPPORTUNITY_RANKING_VERSION = "opportunity-ranking/v1" as const;
+export const OPPORTUNITY_REVIEW_PRIORITY_VERSION =
+  "opportunity-ranking/v2" as const;
+export const OPPORTUNITY_CONFIDENCE_VERSION =
+  "opportunity-confidence/v2" as const;
+export const OPPORTUNITY_DESCRIPTION_VERSION =
+  "opportunity-description/v1" as const;
 export const OPPORTUNITY_COHORT_VERSION = "opportunity-cohort/v1" as const;
 export const OPPORTUNITY_MARKET_VERSION = "opportunity-market/v1" as const;
 export const OPPORTUNITY_HEALTH_VERSION = "opportunity-health/v1" as const;
@@ -24,6 +30,45 @@ export type OpportunityTriState = "true" | "false" | "unknown";
 export type OpportunityRuleGroupOperator = "any" | "all";
 export type OpportunityPreferenceImportance = "low" | "medium" | "high";
 export type OpportunityConfidence = "high" | "directional";
+export type OpportunityEvidenceConfidence = OpportunityConfidence | "limited";
+export type OpportunityRankingPolicy =
+  | "discover_new_games"
+  | "find_emerging_traction"
+  | "monitor_material_changes";
+export type OpportunityPriorityLane =
+  | "new_game"
+  | "traction"
+  | "material_change";
+export type OpportunityPriorityBand = "review_now" | "review_soon" | "monitor";
+export type OpportunityInputAvailability =
+  | "available"
+  | "unavailable"
+  | "not_applicable";
+export type OpportunityInputAssessment =
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "mixed"
+  | "not_assessed";
+
+export interface OpportunityGameDescription {
+  contentHash: string | null;
+  hasHeaderImage: boolean;
+  hasReleasePath: boolean;
+  hasSupportedLanguages: boolean;
+  kind:
+    | "steam_short"
+    | "steam_about"
+    | "steam_detailed"
+    | "structured"
+    | "unavailable";
+  sanitizerVersion: typeof OPPORTUNITY_DESCRIPTION_VERSION;
+  screenshotCount: number;
+  sourceAt: string | null;
+  sourceSnapshotId: string | null;
+  text: string;
+  trailerCount: number;
+}
 export type OpportunityEvidenceClass =
   | "observed_fact"
   | "derived_metric"
@@ -168,6 +213,7 @@ export interface OpportunityFieldValue {
 
 export interface OpportunityEvaluationInput {
   appid: number;
+  description?: OpportunityGameDescription | null;
   fields: Partial<Record<OpportunityRuleField, OpportunityFieldValue>>;
   name: string;
 }
@@ -350,6 +396,68 @@ export interface OpportunityRankingEvidence {
   weights: OpportunityRankComponents;
 }
 
+export interface OpportunityReviewPriorityInput {
+  assessment: OpportunityInputAssessment;
+  availability: OpportunityInputAvailability;
+  calculationVersion: string | null;
+  confidenceWeight: number;
+  criticalForConfidence: boolean;
+  key: string;
+  normalizedValue: number | null;
+  rawValue: unknown;
+  reasonCode: string;
+  source: string;
+  sourceAt: string | null;
+}
+
+export interface OpportunityReviewPriorityComponent {
+  baseWeight: number;
+  contribution: number | null;
+  effectiveWeight: number;
+  key: string;
+  value: number | null;
+}
+
+export interface OpportunityReviewPriorityConfidence {
+  applicableCount: number;
+  conflictingCount: number;
+  label: OpportunityEvidenceConfidence;
+  presentCount: number;
+  reasons: string[];
+  score: number;
+  staleCount: number;
+  version: typeof OPPORTUNITY_CONFIDENCE_VERSION;
+}
+
+export interface OpportunityReviewPriorityDecision {
+  allMatchedProfileIds: string[];
+  components: OpportunityReviewPriorityComponent[];
+  confidence: OpportunityReviewPriorityConfidence;
+  eligibility: "eligible";
+  eligibilityReasonCodes: string[];
+  inputs: OpportunityReviewPriorityInput[];
+  internalScore: number | null;
+  lane: OpportunityPriorityLane;
+  policy: OpportunityRankingPolicy;
+  priorityBand: OpportunityPriorityBand;
+  reasons: string[];
+  selectionSource: "explicit" | "legacy_inference";
+  sortTuple: [number, number, number | null, string, number, string];
+  version: typeof OPPORTUNITY_REVIEW_PRIORITY_VERSION;
+  winningProfileId: string;
+}
+
+export interface OpportunityReviewPrioritySummary {
+  confidence: OpportunityReviewPriorityConfidence;
+  internalScore: number | null;
+  lane: OpportunityPriorityLane;
+  policy: OpportunityRankingPolicy;
+  priorityBand: OpportunityPriorityBand;
+  reasons: string[];
+  version: typeof OPPORTUNITY_REVIEW_PRIORITY_VERSION;
+  winningProfileId: string;
+}
+
 export interface OpportunityCohortMember {
   appid: number;
   ccuPeak: number | null;
@@ -459,11 +567,13 @@ export interface OpportunityResultSummary {
   eventFingerprint: string;
   id: string;
   headerImageUrl: string | null;
+  gameDescription: OpportunityGameDescription | null;
   marketPotential: OpportunityPotentialBand;
   matchedProfiles: Array<{ id: string; name: string }>;
   name: string;
   rank: number | null;
   rankComponents: OpportunityRankComponents;
+  reviewPriority: OpportunityReviewPrioritySummary | null;
   score: number | null;
   screenshotThumbnailUrl: string | null;
   strongestEvidence: string[];
@@ -643,6 +753,7 @@ export interface OpportunityGameRecord {
     profileVersion: number;
     profileVersionId: string;
     ruleOutcomes: OpportunityProfileEvaluation;
+    reviewPriority: OpportunityReviewPriorityDecision | null;
   }>;
   missingEvidence: string[];
   officialNews: Array<{

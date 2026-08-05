@@ -204,10 +204,18 @@ describe("opportunity customer response contracts", () => {
             confidence: "high",
             created_at: "2026-07-27T08:00:00.000Z",
             event_label: "materially_changed",
+            game_description: {
+              kind: "steam_short",
+              sanitizerVersion: "opportunity-description/v99",
+              text: "Untrusted contract version.",
+            },
             market_potential: "meaningful",
             matched_profiles: [{ id: "profile-1", name: "Cozy scouting" }],
             name: "Lanterns at Low Tide",
             rank_components: { userFit: 1 },
+            review_priority: {
+              version: "opportunity-ranking/v99",
+            },
             score: "82.5",
             strongest_evidence: ["Price changed."],
             why_now: "The price changed.",
@@ -221,6 +229,25 @@ describe("opportunity customer response contracts", () => {
                 event_fingerprint: "event-1",
                 id: "result-1",
                 rank: 1,
+                review_priority: {
+                  confidence: {
+                    applicableCount: 4,
+                    conflictingCount: 0,
+                    label: "high",
+                    presentCount: 4,
+                    reasons: [],
+                    score: 1,
+                    staleCount: 0,
+                    version: "opportunity-confidence/v2",
+                  },
+                  internalScore: 0.8,
+                  lane: "material_change",
+                  policy: "monitor_material_changes",
+                  priorityBand: "review_now",
+                  reasons: ["Material Steam change"],
+                  version: "opportunity-ranking/v2",
+                  winningProfileId: "profile-1",
+                },
               },
               {
                 ...base,
@@ -246,6 +273,19 @@ describe("opportunity customer response contracts", () => {
     assert.deepEqual(
       overview.groups.materiallyChanged.map((result) => result.change),
       [observedChange, null],
+    );
+    assert.equal(
+      overview.groups.materiallyChanged[0]?.reviewPriority?.priorityBand,
+      "review_now",
+    );
+    assert.equal(
+      overview.groups.materiallyChanged[1]?.reviewPriority,
+      null,
+    );
+    assert.ok(
+      overview.groups.materiallyChanged.every(
+        (result) => result.gameDescription === null,
+      ),
     );
     assert.match(resultQuery, /'affectedRuleFields'/);
     assert.match(resultQuery, /material\.before_summary/);
