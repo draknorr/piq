@@ -212,8 +212,29 @@ function elapsed(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function normalizeDigestValue(value: unknown): unknown {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (Object.is(value, -0)) return 0;
+    return Number(value.toFixed(12));
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeDigestValue(item));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        normalizeDigestValue(item),
+      ]),
+    );
+  }
+  return value;
+}
+
+export function digestOpportunityBenchmarkOutput(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(normalizeDigestValue(value)))
+    .digest("hex");
 }
 
 function runPass(
@@ -359,7 +380,7 @@ function runPass(
     candidateEvaluations: candidateEvaluations.length,
     candidatePersistenceBatches: persistedCandidateBatches.length,
     mode,
-    outputDigest: digest({
+    outputDigest: digestOpportunityBenchmarkOutput({
       candidates: candidateEvaluations,
       results,
     }),

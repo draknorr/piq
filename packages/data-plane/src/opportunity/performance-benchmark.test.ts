@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  digestOpportunityBenchmarkOutput,
   OPPORTUNITY_PRODUCTION_SCALE_FIXTURE,
   runOpportunityPerformanceBenchmark,
 } from "./performance-benchmark.js";
 
 describe("opportunity production-scale performance fixture", () => {
+  it("canonicalizes floating-point tails without hiding meaningful changes", () => {
+    assert.equal(
+      digestOpportunityBenchmarkOutput({ score: 0.1 + 0.2 }),
+      digestOpportunityBenchmarkOutput({ score: 0.3 }),
+    );
+    assert.notEqual(
+      digestOpportunityBenchmarkOutput({ score: 0.3 }),
+      digestOpportunityBenchmarkOutput({ score: 0.300001 }),
+    );
+  });
+
   it("measures cold and warm phase timings with exact output parity", () => {
     const report = runOpportunityPerformanceBenchmark();
     const { cold, warm } = report.passes;
@@ -32,7 +44,7 @@ describe("opportunity production-scale performance fixture", () => {
     assert.equal(cold.candidatePersistenceBatches, 24);
     assert.equal(
       cold.outputDigest,
-      "27fa9be98349f4fe31d0a24d1a6debbf8ef1be9c48c584f9bf9bbbf8f3f2759c",
+      "406bbe0ea37853f6f969ea0ed78e091a2424796d730c506dc361024196f0fa21",
     );
     assert.equal(warm.outputDigest, cold.outputDigest);
     const baseline = runOpportunityPerformanceBenchmark({
@@ -40,7 +52,7 @@ describe("opportunity production-scale performance fixture", () => {
     });
     assert.equal(
       baseline.passes.cold.outputDigest,
-      "d2cb0d80127d5555db643776f26087914cb73ad6685649e1c1075e9362019312",
+      "7b625cb983f6f151939a62351a2e7c7157b40919bef1e264253ee03a85a44a52",
     );
     assert.ok(cold.timings.totalMs <= report.thresholds.coldMs);
     assert.ok(warm.timings.totalMs <= report.thresholds.warmMs);

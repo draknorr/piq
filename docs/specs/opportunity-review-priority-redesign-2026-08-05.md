@@ -129,7 +129,7 @@ Swords & Slippers was verified directly by both app ID and result ID. It is unre
 
 ### Current query-plan and runtime evidence
 
-The planning baseline's local node:test suites for worker, repository, delivery, performance, admin presenters, and media passed `54/54` targeted tests. The synthetic production-scale ranking fixture's sealed v1 digest is `d2cb0d80127d5555db643776f26087914cb73ad6685649e1c1075e9362019312`. The first implementation-gate measurements are recorded in Iteration 4 below; they supersede the earlier one-off runtime observations without changing this current-state map.
+The planning baseline's local node:test suites for worker, repository, delivery, performance, admin presenters, and media passed `54/54` targeted tests. The synthetic production-scale ranking fixture's cross-platform-canonical v1 digest is `7b625cb983f6f151939a62351a2e7c7157b40919bef1e264253ee03a85a44a52`. The first implementation-gate measurements are recorded in Iteration 4 below; they supersede the earlier one-off runtime observations without changing this current-state map.
 
 The repeatable targeted commands used were:
 
@@ -757,7 +757,7 @@ Current application behavior and v1 ordering therefore remain unchanged unless a
 
 ### Paired worker-path performance result
 
-The production-scale fixture used `3,974` candidates, three policies/profiles, and `1,245` surfaced results. Five unrecorded warmups preceded 30 alternating, sequential v1/v2 measurements. Output was deterministic across cold/warm passes. V2's sealed digest is `27fa9be98349f4fe31d0a24d1a6debbf8ef1be9c48c584f9bf9bbbf8f3f2759c`.
+The production-scale fixture used `3,974` candidates, three policies/profiles, and `1,245` surfaced results. Five unrecorded warmups preceded 30 alternating, sequential v1/v2 measurements. Output was deterministic across cold/warm passes. V2's cross-platform-canonical sealed digest is `406bbe0ea37853f6f969ea0ed78e091a2424796d730c506dc361024196f0fa21`.
 
 | Path | v1 p50 / p95 | v2 p50 / p95 | Runtime ratio p50 / p95 | Throughput ratio p50 / p95 | `<=5%` gate |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -770,7 +770,7 @@ A diagnostic single pass localized the added cost to both pure calculation and t
 
 The implementation verification completed with:
 
-- data-plane: `264/264` tests;
+- data-plane: `265/265` tests;
 - ingestion change-intel: `56/56` tests;
 - Query API: `32/32` tests;
 - admin: `275/275` tests;
@@ -779,6 +779,8 @@ The implementation verification completed with:
 - Swords & Slippers, inclusive 72-hour discovery grace, known-zero versus unavailable traction, deterministic multi-profile tie-breaking, unknown-version fail-closed parsing, bulk/legacy persistence parity, and delivery `D=1/D=10` round-trip invariance covered by named tests.
 
 Authenticated localhost rendered the redesigned route and verified its failure state, but its Supabase browser session did not yield a server-side access token for the internal opportunity calls, so the browser received HTTP `401` for `bootstrap` and `daily-brief`. That is an environment/session blocker for live list/detail visual-state capture, not a passing end-to-end UI result. The exact remaining UI evidence is the `375/768/1440` loading, empty/error, Swords/no-traction, full-traction, multi-profile, limited-confidence, and legacy matrix after a valid local session or an approved preview deployment.
+
+The first GitHub Actions run for draft PR `#111` passed builds and type checks but failed the production-scale benchmark's hard-coded raw SHA. Cold/warm output parity had already passed; the only mismatch was the raw v2 digest (`27fa...` on macOS arm64 versus `bbb26...` on Linux x64) under the same Node `20.20.2`. Matching CI timezone and locale did not reproduce the difference, while inspection found raw `Math.log1p`-derived tails in the hashed audit values. The benchmark now canonicalizes finite numeric leaves to 12 decimal places for the digest only, with a regression proving `0.1 + 0.2` equals `0.3` while a `0.000001` semantic change remains detectable. The focused test passes on Node `20.20.2` and Node `26.0.0`, and the full data-plane suite passes `265/265`; application ranking values are unchanged. A pushed Actions rerun remains the external acceptance proof.
 
 ### Claim / evidence / gap ledger — iteration 4
 
@@ -791,6 +793,14 @@ Authenticated localhost rendered the redesigned route and verified its failure s
 | **Blocked visual gate** | The complete responsive/browser matrix is not yet evidenced. | Authenticated route rendered, but opportunity API calls returned `401` because no usable server-side session token was available. | Use a valid local session or an approved preview deployment, then capture all named states and accessibility checks. |
 | Unapproved production write | `0102` replaces one readiness function only; no table, column, index, data rewrite, backfill, or replay. | Local migration shape tests pass; production function remains unchanged. | Before apply, give change/reason/risk/rollback and obtain explicit database-write approval. |
 | Rollout decision | A production rollout cannot advance past dormant code while any hard gate above is red. | Stop rules in this specification are explicit and the performance gate failed. | GitHub review may proceed; production enablement/deployment stops until the failed gates are resolved. |
+
+### Claim / evidence / gap ledger — iteration 5 (GitHub preview and CI portability)
+
+| Classification | Decision or claim | Evidence / acceptance proof | Residual gap / next action |
+| --- | --- | --- | --- |
+| GitHub preview published | The feature-off implementation is available for review without changing production behavior or data. | Draft PR `#111` at commit `82173c6`; Vercel preview deployment succeeded; all v2 controls remain off and migration `0102` is unapplied. | Keep the PR draft while performance, calibration, and visual gates are red. |
+| Locally resolved CI defect | The first Actions failure was benchmark digest portability, not cold/warm ranking divergence. | Actions run `31052822639`, Linux x64/Node `20.20.2`; raw SHA mismatch occurred after `outputParity=true`. Canonical-digest regressions and the full `265/265` data-plane suite pass locally on Node 20/26. | Push the focused fix and require a green Actions rerun before treating GitHub rollout as healthy. |
+| Production remains stopped | A successful preview or green CI cannot waive the measured performance, calibration, complete visual, or explicit database-write gates. | Existing red-gate evidence and fail-closed controls above; no migration, backfill, replay, environment change, or production deployment has been performed. | Optimize and recalibrate first; obtain the separately described database-write approval only after every preceding hard gate is green. |
 
 ## Deliverables for This Planning Goal
 
