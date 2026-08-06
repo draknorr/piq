@@ -1708,7 +1708,12 @@ describe("opportunity worker result provenance", () => {
     const outcome = await evaluateGame({
       appid: 42,
       candidateOutcomes: new Map(),
-      event: event({ appid: 42, eventType: "first_observed" }),
+      event: event({
+        appid: 42,
+        effectiveAt: "2026-07-27T10:00:00.000Z",
+        eventType: "taxonomy_repositioned",
+        observedAt: "2026-07-27T10:00:00.000Z",
+      }),
       input: {
         appid: 42,
         fields: {
@@ -1731,8 +1736,8 @@ describe("opportunity worker result provenance", () => {
       run: {
         id: "run",
         kind: "daily",
-        windowEnd: "2026-07-27T01:00:00.000Z",
-        windowStart: "2026-07-27T00:00:00.000Z",
+        windowEnd: "2026-07-27T11:00:00.000Z",
+        windowStart: "2026-07-27T09:00:00.000Z",
       },
     });
 
