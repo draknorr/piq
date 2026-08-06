@@ -3358,6 +3358,13 @@ export class OpportunityWorkerRepository {
                 THEN (scoped.v2->'t'->>2)::numeric
               ELSE NULL
             END AS internal_score,
+            CASE
+              WHEN jsonb_typeof(scoped.v2->'t'->2) = 'null' THEN true
+              WHEN jsonb_typeof(scoped.v2->'t'->2) = 'number'
+                THEN scoped.v2->'t'->>2
+                  ~ '^(0(\\.[0-9]+)?|1(\\.0+)?)$'
+              ELSE false
+            END AS internal_score_valid,
             scoped.v2->'t'->>3 AS effective_at,
             scoped.v2->'t'->>5 AS winning_profile_id
           FROM scoped
@@ -3369,6 +3376,12 @@ export class OpportunityWorkerRepository {
               ELSE false
             END
             AND scoped.calculation_versions->>'reviewPriority' = $7
+            AND jsonb_typeof(scoped.v2->'p') = 'number'
+            AND jsonb_typeof(scoped.v2->'l') = 'number'
+            AND jsonb_typeof(scoped.v2->'b') = 'number'
+            AND scoped.v2->>'p' ~ '^[0-2]$'
+            AND scoped.v2->>'l' = scoped.v2->'t'->>0
+            AND scoped.v2->>'b' = scoped.v2->'t'->>1
             AND scoped.v2->'t'->>4 = scoped.appid::text
         ),
         eligible AS MATERIALIZED (
@@ -3386,6 +3399,7 @@ export class OpportunityWorkerRepository {
           FROM valid
           WHERE valid.lane_ordinal IS NOT NULL
             AND valid.band_ordinal IS NOT NULL
+            AND valid.internal_score_valid
             AND valid.effective_at
               ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z$'
             AND valid.winning_profile_id
