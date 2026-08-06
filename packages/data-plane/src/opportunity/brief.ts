@@ -49,6 +49,18 @@ function compareResults(
   left: OpportunityResultSummary,
   right: OpportunityResultSummary,
 ): number {
+  const leftRank =
+    Number.isInteger(left.rank) && (left.rank ?? 0) > 0
+      ? (left.rank as number)
+      : Number.POSITIVE_INFINITY;
+  const rightRank =
+    Number.isInteger(right.rank) && (right.rank ?? 0) > 0
+      ? (right.rank as number)
+      : Number.POSITIVE_INFINITY;
+  const rankDifference = leftRank - rightRank;
+  if (rankDifference !== 0) {
+    return rankDifference;
+  }
   const scoreDifference = (right.score ?? -1) - (left.score ?? -1);
   if (scoreDifference !== 0) {
     return scoreDifference;
@@ -106,6 +118,7 @@ function dominantEventLabel(
 function profileSummary(
   profile: OpportunityProfileSummary,
   stats: OpportunityBriefProfileStats,
+  useReviewPriorityCopy: boolean,
 ): string {
   if (profile.status !== "enabled") {
     return "This profile was not monitored in this issue.";
@@ -113,19 +126,24 @@ function profileSummary(
   if (stats.resultCount === 0) {
     return "No game crossed this profile’s sourcing criteria in this issue.";
   }
-  const eventLabel = dominantEventLabel(stats.eventCounts);
-  const eventCount = eventLabel ? stats.eventCounts[eventLabel] : 0;
-  const movement = eventLabel
-    ? `${eventCount} ${eventCount === 1 ? EVENT_NOUNS[eventLabel].singular : EVENT_NOUNS[eventLabel].plural}`
-    : `${stats.resultCount} matching games`;
+  if (!useReviewPriorityCopy) {
+    const eventLabel = dominantEventLabel(stats.eventCounts);
+    const eventCount = eventLabel ? stats.eventCounts[eventLabel] : 0;
+    const movement = eventLabel
+      ? `${eventCount} ${eventCount === 1 ? EVENT_NOUNS[eventLabel].singular : EVENT_NOUNS[eventLabel].plural}`
+      : `${stats.resultCount} matching games`;
+    const lead = stats.topResult ? `, led by ${stats.topResult.name}` : "";
+    return `${stats.resultCount} ${stats.resultCount === 1 ? "game matched" : "games matched"}; ${movement}${lead}.`;
+  }
   const lead = stats.topResult ? `, led by ${stats.topResult.name}` : "";
-  return `${stats.resultCount} ${stats.resultCount === 1 ? "game matched" : "games matched"}; ${movement}${lead}.`;
+  return `${stats.resultCount} ${stats.resultCount === 1 ? "game matched" : "games matched"}${lead}.`;
 }
 
 function buildProfileDispatches(params: {
   profiles: OpportunityProfileSummary[];
   profileStats: OpportunityBriefProfileStats[];
   runId: string | null;
+  useReviewPriorityCopy: boolean;
 }): OpportunityBriefProfileDispatch[] {
   const byProfile = new Map(
     params.profileStats.map((stats) => [stats.profileId, stats]),
@@ -156,7 +174,7 @@ function buildProfileDispatches(params: {
         name: profile.name,
         resultCount: stats.resultCount,
         status: profile.status,
-        summary: profileSummary(profile, stats),
+        summary: profileSummary(profile, stats, params.useReviewPriorityCopy),
         topResult: stats.topResult,
       };
     });
@@ -177,6 +195,7 @@ export function buildOpportunityDailyBriefIssue(params: {
   status: OpportunityDailyBriefIssue["status"];
   windowEnd: string | null;
   windowStart: string | null;
+  useReviewPriorityCopy?: boolean;
 }): OpportunityDailyBriefIssue {
   const featuredGames = dedupeOpportunityBriefGames(
     params.featuredCandidates,
@@ -204,7 +223,10 @@ export function buildOpportunityDailyBriefIssue(params: {
     highConfidenceCount: params.highConfidenceCount,
     issueDate: params.issueDate,
     newerRunUpdating: params.newerRunUpdating,
-    profileDispatches: buildProfileDispatches(params),
+    profileDispatches: buildProfileDispatches({
+      ...params,
+      useReviewPriorityCopy: params.useReviewPriorityCopy ?? false,
+    }),
     profilesEvaluated: params.profilesEvaluated,
     runId: params.runId,
     status: params.status,

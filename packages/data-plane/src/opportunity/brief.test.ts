@@ -94,6 +94,30 @@ describe("opportunity Daily Brief composition", () => {
     );
   });
 
+  it("uses persisted rank before score for the Daily Brief reading order", () => {
+    const games = dedupeOpportunityBriefGames([
+      result({
+        appid: 10,
+        id: "rank-eight",
+        name: "Score leader",
+        rank: 8,
+        score: 99,
+      }),
+      result({
+        appid: 20,
+        id: "rank-one",
+        name: "Priority leader",
+        rank: 1,
+        score: 72,
+      }),
+    ]);
+
+    assert.deepEqual(
+      games.map((game) => game.id),
+      ["rank-one", "rank-eight"],
+    );
+  });
+
   it("accounts for active, quiet, and paused profiles", () => {
     const eventCounts = emptyOpportunityEventCounts();
     eventCounts.newly_qualified = 2;
@@ -135,7 +159,7 @@ describe("opportunity Daily Brief composition", () => {
     );
   });
 
-  it("uses singular editorial copy for one profile event", () => {
+  it("keeps legacy event copy unless review-priority presentation is requested", () => {
     const eventCounts = emptyOpportunityEventCounts();
     eventCounts.newly_qualified = 1;
     const issue = buildOpportunityDailyBriefIssue({
@@ -163,5 +187,34 @@ describe("opportunity Daily Brief composition", () => {
     });
 
     assert.match(issue.profileDispatches[0]?.summary ?? "", /1 new match,/);
+
+    const reviewPriorityIssue = buildOpportunityDailyBriefIssue({
+      availableResultCount: 1,
+      coverageWarnings: [],
+      featuredCandidates: [result({ appid: 10, id: "lead", name: "Lead" })],
+      highConfidenceCount: 1,
+      issueDate: "2026-08-03T17:00:00.000Z",
+      newerRunUpdating: false,
+      profileStats: [
+        {
+          eventCounts,
+          highConfidenceCount: 1,
+          profileId: "Active",
+          resultCount: 1,
+          topResult: { appid: 10, name: "Lead", resultId: "lead" },
+        },
+      ],
+      profiles: [profile("Active")],
+      profilesEvaluated: 1,
+      runId: "run",
+      status: "ready",
+      useReviewPriorityCopy: true,
+      windowEnd: "2026-08-03T17:00:00.000Z",
+      windowStart: "2026-08-02T17:00:00.000Z",
+    });
+    assert.equal(
+      reviewPriorityIssue.profileDispatches[0]?.summary,
+      "1 game matched, led by Lead.",
+    );
   });
 });

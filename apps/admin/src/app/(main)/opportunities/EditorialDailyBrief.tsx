@@ -22,6 +22,11 @@ import type {
   OpportunityDailyBriefIssue,
   OpportunityResultSummary,
 } from "./lib/types";
+import {
+  opportunityProfileDispatchSummary,
+  opportunityPriorityLabel,
+  opportunityResultDescription,
+} from "./lib/review-priority-presentation";
 
 function issueDate(value: string | null): string {
   if (!value) {
@@ -116,11 +121,13 @@ export function EditorialDailyBrief({
   issue,
   loading,
   onRetry,
+  presentReviewPriorityV2,
 }: {
   error: string | null;
   issue: OpportunityDailyBriefIssue | null;
   loading: boolean;
   onRetry: () => void;
+  presentReviewPriorityV2: boolean;
 }) {
   if (loading && !issue) {
     return <LoadingBrief />;
@@ -228,21 +235,41 @@ export function EditorialDailyBrief({
                 <span>Lead opportunity</span>
                 <span className="text-text-muted">•</span>
                 <span className="text-text-tertiary">
-                  {opportunityStrengthLabel(lead.score)}
+                  {presentReviewPriorityV2
+                    ? opportunityPriorityLabel(lead)
+                    : opportunityStrengthLabel(lead.score)}
                 </span>
               </div>
               <h3 className="mt-3 max-w-[22ch] text-3xl font-semibold leading-[1.04] tracking-[-0.035em] text-text-primary md:text-4xl">
-                {lead.changeSummary}
+                {presentReviewPriorityV2 ? lead.name : lead.changeSummary}
               </h3>
               <p className="mt-4 max-w-[70ch] text-base leading-7 text-text-secondary">
-                {opportunityWhyItMatters(lead)}
+                {presentReviewPriorityV2
+                  ? opportunityResultDescription(lead)
+                  : opportunityWhyItMatters(lead)}
               </p>
+              {presentReviewPriorityV2 && lead.reviewPriority && (
+                <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-text-primary">
+                  {lead.reviewPriority.reasons.slice(0, 3).map((reason) => (
+                    <li
+                      className="before:mr-1.5 before:text-accent-primary before:content-['•']"
+                      key={reason}
+                    >
+                      {reason}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-text-tertiary">
+                <span>{opportunityPotentialLabel(lead.marketPotential)}</span>
                 <span>
-                  {opportunityPotentialLabel(lead.marketPotential)} market
-                </span>
-                <span>
-                  {opportunityConfidenceLabel(lead.confidence)} evidence
+                  {presentReviewPriorityV2 && lead.reviewPriority
+                    ? {
+                        directional: "Directional evidence",
+                        high: "High confidence",
+                        limited: "Limited evidence",
+                      }[lead.reviewPriority.confidence.label]
+                    : `${opportunityConfidenceLabel(lead.confidence)} evidence`}
                 </span>
                 {lead.matchedProfiles.length > 0 && (
                   <span>
@@ -270,13 +297,18 @@ export function EditorialDailyBrief({
                   <BriefImage game={game} />
                   <div className="min-w-0">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-primary">
-                      {String(index + 2).padStart(2, "0")} · On the desk
+                      {String(index + 2).padStart(2, "0")} ·{" "}
+                      {presentReviewPriorityV2
+                        ? opportunityPriorityLabel(game)
+                        : "On the desk"}
                     </p>
                     <h4 className="mt-2 text-lg font-semibold leading-5 text-text-primary">
                       {game.name}
                     </h4>
                     <p className="mt-2 line-clamp-3 text-sm leading-5 text-text-secondary">
-                      {game.changeSummary}
+                      {presentReviewPriorityV2
+                        ? opportunityResultDescription(game)
+                        : game.changeSummary}
                     </p>
                   </div>
                 </Link>
@@ -293,7 +325,9 @@ export function EditorialDailyBrief({
                   Profile dispatches
                 </p>
                 <h3 className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
-                  What moved across your lists
+                  {presentReviewPriorityV2
+                    ? "What matched across your lists"
+                    : "What moved across your lists"}
                 </h3>
               </div>
               {issue.windowStart && issue.windowEnd && (
@@ -322,7 +356,9 @@ export function EditorialDailyBrief({
                       </span>
                     </div>
                     <p className="mt-2 max-w-[65ch] text-sm leading-6 text-text-secondary">
-                      {profile.summary}
+                      {presentReviewPriorityV2
+                        ? opportunityProfileDispatchSummary(profile)
+                        : profile.summary}
                     </p>
                     {profile.topResult && (
                       <Link
@@ -368,7 +404,9 @@ export function EditorialDailyBrief({
                           {game.name}
                         </span>
                         <span className="mt-1 line-clamp-2 block text-xs leading-5 text-text-tertiary">
-                          {game.changeSummary}
+                          {presentReviewPriorityV2
+                            ? opportunityResultDescription(game)
+                            : game.changeSummary}
                         </span>
                       </span>
                       <ArrowRight className="mt-0.5 h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary" />
