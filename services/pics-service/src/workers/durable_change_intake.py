@@ -27,6 +27,10 @@ from .durable_processor import DurablePICSProcessor, PICSProcessingStats
 logger = logging.getLogger(__name__)
 
 
+class IncompletePICSChangeResponseError(RuntimeError):
+    """Raised when Steam cannot provide a complete incremental change response."""
+
+
 class DurableChangeIntakeWorker:
     """Poll PICS and commit each upstream response before moving its cursor."""
 
@@ -119,53 +123,70 @@ class DurableChangeIntakeWorker:
 
         try:
             while self._running:
-                failure_kind = "poll"
+                sleep_seconds = float(settings.poll_interval)
                 try:
                     last_change = self.poll_once(last_change)
                     self._consecutive_poll_failures = 0
                     self._last_poll_error = None
                     self._last_successful_change_poll_at = datetime.now(timezone.utc).isoformat()
-                    if self._processor is not None and self._processing_due():
-                        failure_kind = "processing"
-                        if self._fetcher is None:
-                            raise RuntimeError("PICS fetcher is not initialized")
-                        processing_started = time.monotonic()
-                        self._next_processing_at_monotonic = processing_started + int(
-                            settings.pics_product_info_min_interval_seconds
-                        )
-                        self._last_processing_started_at = datetime.now(timezone.utc).isoformat()
-                        self._last_processing_stats = self._processor.process_once(self._fetcher)
-                        self._consecutive_processing_failures = 0
-                        self._last_processing_error = None
-                    self._update_health_status(last_change)
-                    gevent.sleep(settings.poll_interval)
-                except Exception as error:
-                    if failure_kind == "processing":
-                        self._consecutive_processing_failures += 1
-                        self._last_processing_error = str(error)
-                        consecutive_failures = self._consecutive_processing_failures
-                    else:
-                        self._consecutive_poll_failures += 1
-                        self._last_poll_error = str(error)
-                        consecutive_failures = self._consecutive_poll_failures
-                    backoff_seconds = min(
-                        max(settings.poll_interval, 10) * (2 ** min(consecutive_failures - 1, 4)),
-                        300,
-                    )
+                except IncompletePICSChangeResponseError as error:
+                    self._consecutive_poll_failures += 1
+                    self._last_poll_error = str(error)
+                    sleep_seconds = self._failure_backoff_seconds(self._consecutive_poll_failures)
                     logger.error(
-                        "Error in durable PICS %s (failure #%s, backing off %ss): %s",
-                        failure_kind,
-                        consecutive_failures,
-                        backoff_seconds,
+                        "Durable PICS intake is source-blocked (failure #%s, "
+                        "retrying in at most %ss while durable processing continues): %s",
+                        self._consecutive_poll_failures,
+                        sleep_seconds,
                         error,
                     )
-                    if consecutive_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                except Exception as error:
+                    self._consecutive_poll_failures += 1
+                    self._last_poll_error = str(error)
+                    sleep_seconds = self._failure_backoff_seconds(self._consecutive_poll_failures)
+                    logger.error(
+                        "Error in durable PICS poll (failure #%s, backing off %ss): %s",
+                        self._consecutive_poll_failures,
+                        sleep_seconds,
+                        error,
+                    )
+                    if self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
-                            f"Exceeded consecutive durable PICS {failure_kind} failures; exiting"
+                            "Exceeded consecutive durable PICS poll failures; exiting"
                         ) from error
-                    self._update_health_status(last_change)
-                    gevent.sleep(backoff_seconds)
+
+                try:
+                    self._process_once_if_due()
+                except Exception as error:
+                    self._consecutive_processing_failures += 1
+                    self._last_processing_error = str(error)
+                    processing_backoff_seconds = self._failure_backoff_seconds(
+                        self._consecutive_processing_failures
+                    )
+                    logger.error(
+                        "Error in durable PICS processing (failure #%s, backing off %ss): %s",
+                        self._consecutive_processing_failures,
+                        processing_backoff_seconds,
+                        error,
+                    )
+                    if self._consecutive_processing_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                        self._update_health_status(last_change, forced_state="unhealthy")
+                        raise RuntimeError(
+                            "Exceeded consecutive durable PICS processing failures; exiting"
+                        ) from error
+                    sleep_seconds = min(sleep_seconds, processing_backoff_seconds)
+
+                if self._processor is not None:
+                    seconds_until_processing = max(
+                        0.0,
+                        self._next_processing_at_monotonic - time.monotonic(),
+                    )
+                    if seconds_until_processing > 0:
+                        sleep_seconds = min(sleep_seconds, seconds_until_processing)
+
+                self._update_health_status(last_change)
+                gevent.sleep(sleep_seconds)
         finally:
             self._steam.disconnect()
 
@@ -256,7 +277,7 @@ class DurableChangeIntakeWorker:
 
         self._last_committed_batch = committed
         if not committed.source_complete:
-            raise RuntimeError(
+            raise IncompletePICSChangeResponseError(
                 "PICS returned an incomplete app-change response; "
                 f"batch {committed.batch_id} was retained as source_blocked and "
                 "the intake cursor was not advanced "
@@ -279,6 +300,30 @@ class DurableChangeIntakeWorker:
     def _processing_due(self, now_monotonic: Optional[float] = None) -> bool:
         now = time.monotonic() if now_monotonic is None else now_monotonic
         return now >= self._next_processing_at_monotonic
+
+    def _process_once_if_due(self) -> None:
+        if self._processor is None or not self._processing_due():
+            return
+        if self._fetcher is None:
+            raise RuntimeError("PICS fetcher is not initialized")
+
+        processing_started = time.monotonic()
+        self._next_processing_at_monotonic = processing_started + int(
+            settings.pics_product_info_min_interval_seconds
+        )
+        self._last_processing_started_at = datetime.now(timezone.utc).isoformat()
+        self._last_processing_stats = self._processor.process_once(self._fetcher)
+        self._consecutive_processing_failures = 0
+        self._last_processing_error = None
+
+    @staticmethod
+    def _failure_backoff_seconds(consecutive_failures: int) -> float:
+        return float(
+            min(
+                max(settings.poll_interval, 10) * (2 ** min(max(consecutive_failures, 1) - 1, 4)),
+                300,
+            )
+        )
 
     def _archive_change_response(
         self,
