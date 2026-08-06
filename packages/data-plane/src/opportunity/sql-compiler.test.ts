@@ -14,9 +14,11 @@ describe("opportunity SQL compiler", () => {
   it("builds a fail-closed safety predicate for persisted results", () => {
     const sql = opportunityPersistedResultContentSafetySql("result", "app");
 
-    assert.match(sql, /result\.missing_evidence/);
+    assert.doesNotMatch(sql, /result\.missing_evidence/);
     assert.match(sql, /app\.content_descriptors/);
+    assert.match(sql, /descriptor_evidence\.evidence_state = 'known'/);
     assert.match(sql, /tag_evidence\.field_name = 'tags'/);
+    assert.match(sql, /tag_evidence\.evidence_state = 'known'/);
     assert.match(sql, /'hentai', 'mature', 'nsfw', 'nudity', 'sexual content'/);
     assert.match(sql, /@ == "3" \|\| @ == "adult"/);
     assert.throws(
