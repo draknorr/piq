@@ -3287,11 +3287,162 @@ export class OpportunityWorkerRepository {
     );
   }
 
+  private async rankPersistedResults(
+    client: PoolClient,
+    params: {
+      orderReviewPriorityV2: boolean;
+      run: OpportunityRunContext;
+      userId: string;
+    },
+  ): Promise<void> {
+    if (!params.orderReviewPriorityV2) {
+      await client.query(
+        `
+          WITH ranked AS (
+            SELECT
+              id,
+              row_number() OVER (
+                ORDER BY score DESC NULLS LAST, appid, id
+              ) AS rank
+            FROM opportunity.results
+            WHERE run_id = $1
+              AND user_id = $2
+          )
+          UPDATE opportunity.results result
+          SET rank = ranked.rank
+          FROM ranked
+          WHERE result.id = ranked.id
+        `,
+        [params.run.id, params.userId],
+      );
+      return;
+    }
+
+    await client.query(
+      `
+        WITH scoped AS MATERIALIZED (
+          SELECT
+            result.*,
+            row_number() OVER (
+              ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+            ) AS v1_slot,
+            result.rank_components->'v2' AS v2
+          FROM opportunity.results result
+          WHERE result.user_id = $2
+            AND (
+              result.run_id = $1
+              OR (
+                $3::text = 'daily'
+                AND result.created_at >= $4
+                AND result.created_at < $5
+              )
+            )
+        ),
+        valid AS MATERIALIZED (
+          SELECT
+            scoped.*,
+            CASE
+              WHEN scoped.v2->'t'->>0 ~ '^[0-2]$'
+                THEN (scoped.v2->'t'->>0)::integer
+              ELSE NULL
+            END AS lane_ordinal,
+            CASE
+              WHEN scoped.v2->'t'->>1 ~ '^[0-2]$'
+                THEN (scoped.v2->'t'->>1)::integer
+              ELSE NULL
+            END AS band_ordinal,
+            CASE
+              WHEN jsonb_typeof(scoped.v2->'t'->2) = 'number'
+                AND scoped.v2->'t'->>2
+                  ~ '^(0(\\.[0-9]+)?|1(\\.0+)?)$'
+                THEN (scoped.v2->'t'->>2)::numeric
+              ELSE NULL
+            END AS internal_score,
+            CASE
+              WHEN jsonb_typeof(scoped.v2->'t'->2) = 'null' THEN true
+              WHEN jsonb_typeof(scoped.v2->'t'->2) = 'number'
+                THEN scoped.v2->'t'->>2
+                  ~ '^(0(\\.[0-9]+)?|1(\\.0+)?)$'
+              ELSE false
+            END AS internal_score_valid,
+            scoped.v2->'t'->>3 AS effective_at,
+            scoped.v2->'t'->>5 AS winning_profile_id
+          FROM scoped
+          WHERE jsonb_typeof(scoped.v2) = 'object'
+            AND scoped.v2->>'e' = $6
+            AND CASE
+              WHEN jsonb_typeof(scoped.v2->'t') = 'array'
+                THEN jsonb_array_length(scoped.v2->'t') = 6
+              ELSE false
+            END
+            AND scoped.calculation_versions->>'reviewPriority' = $7
+            AND jsonb_typeof(scoped.v2->'p') = 'number'
+            AND jsonb_typeof(scoped.v2->'l') = 'number'
+            AND jsonb_typeof(scoped.v2->'b') = 'number'
+            AND scoped.v2->>'p' ~ '^[0-2]$'
+            AND scoped.v2->>'l' = scoped.v2->'t'->>0
+            AND scoped.v2->>'b' = scoped.v2->'t'->>1
+            AND scoped.v2->'t'->>4 = scoped.appid::text
+        ),
+        eligible AS MATERIALIZED (
+          SELECT
+            valid.*,
+            row_number() OVER (
+              ORDER BY
+                valid.lane_ordinal,
+                valid.band_ordinal,
+                valid.internal_score DESC NULLS LAST,
+                valid.effective_at DESC,
+                valid.appid,
+                valid.winning_profile_id
+            ) AS v2_ordinal
+          FROM valid
+          WHERE valid.lane_ordinal IS NOT NULL
+            AND valid.band_ordinal IS NOT NULL
+            AND valid.internal_score_valid
+            AND valid.effective_at
+              ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z$'
+            AND valid.winning_profile_id
+              ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ),
+        eligible_slots AS MATERIALIZED (
+          SELECT
+            eligible.v1_slot,
+            row_number() OVER (ORDER BY eligible.v1_slot) AS v2_ordinal
+          FROM eligible
+        ),
+        ranked AS (
+          SELECT
+            scoped.id,
+            COALESCE(eligible_slots.v1_slot, scoped.v1_slot) AS rank
+          FROM scoped
+          LEFT JOIN eligible ON eligible.id = scoped.id
+          LEFT JOIN eligible_slots
+            ON eligible_slots.v2_ordinal = eligible.v2_ordinal
+        )
+        UPDATE opportunity.results result
+        SET rank = ranked.rank
+        FROM ranked
+        WHERE result.id = ranked.id
+      `,
+      [
+        params.run.id,
+        params.userId,
+        params.run.kind,
+        params.run.windowStart,
+        params.run.windowEnd,
+        OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION,
+        OPPORTUNITY_REVIEW_PRIORITY_VERSION,
+      ],
+    );
+  }
+
   async persistRunOutcomeLegacy(params: {
     evaluations: OpportunityCandidateEvaluation[];
     pending: OpportunityPendingEvaluation[];
     results: OpportunityEvaluatedResult[];
     run: OpportunityRunContext;
+    orderReviewPriorityV2?: boolean;
     userId: string;
     workId: number;
     workerId: string;
@@ -3722,25 +3873,17 @@ export class OpportunityWorkerRepository {
         runId: params.run.id,
       });
 
-      await client.query(
-        `
-          WITH ranked AS (
-            SELECT
-              id,
-              row_number() OVER (
-                ORDER BY score DESC NULLS LAST, appid, id
-              ) AS rank
-            FROM opportunity.results
-            WHERE run_id = $1
-              AND user_id = $2
-          )
-          UPDATE opportunity.results result
-          SET rank = ranked.rank
-          FROM ranked
-          WHERE result.id = ranked.id
-        `,
-        [params.run.id, params.userId],
-      );
+      await this.rankPersistedResults(client, {
+        orderReviewPriorityV2: params.orderReviewPriorityV2 ?? false,
+        run: params.run,
+        userId: params.userId,
+      });
+      const editorialOrderSql = params.orderReviewPriorityV2
+        ? "scoped.rank ASC NULLS LAST,"
+        : "scoped.score DESC NULLS LAST,";
+      const deliveryOrderSql = params.orderReviewPriorityV2
+        ? "ranked.rank ASC NULLS LAST,"
+        : "ranked.score DESC NULLS LAST,";
 
       const resultIds = await client.query<
         QueryResultRow & { appid: number; id: string; profile_ids: string[] }
@@ -3765,7 +3908,7 @@ export class OpportunityWorkerRepository {
               row_number() OVER (
                 PARTITION BY scoped.appid
                 ORDER BY
-                  scoped.score DESC NULLS LAST,
+                  ${editorialOrderSql}
                   scoped.created_at DESC,
                   scoped.id
               ) AS editorial_rank
@@ -3792,7 +3935,7 @@ export class OpportunityWorkerRepository {
           JOIN matched_profiles ON matched_profiles.appid = ranked.appid
           WHERE ranked.editorial_rank = 1
           ORDER BY
-            ranked.score DESC NULLS LAST,
+            ${deliveryOrderSql}
             ranked.appid,
             ranked.id
           LIMIT 500
@@ -4007,6 +4150,7 @@ export class OpportunityWorkerRepository {
     >;
     results: OpportunityEvaluatedResult[];
     run: OpportunityRunContext;
+    orderReviewPriorityV2?: boolean;
     userId: string;
     workId: number;
     workerId: string;
@@ -4053,25 +4197,17 @@ export class OpportunityWorkerRepository {
         runId: params.run.id,
       });
 
-      await client.query(
-        `
-          WITH ranked AS (
-            SELECT
-              id,
-              row_number() OVER (
-                ORDER BY score DESC NULLS LAST, appid, id
-              ) AS rank
-            FROM opportunity.results
-            WHERE run_id = $1
-              AND user_id = $2
-          )
-          UPDATE opportunity.results result
-          SET rank = ranked.rank
-          FROM ranked
-          WHERE result.id = ranked.id
-        `,
-        [params.run.id, params.userId],
-      );
+      await this.rankPersistedResults(client, {
+        orderReviewPriorityV2: params.orderReviewPriorityV2 ?? false,
+        run: params.run,
+        userId: params.userId,
+      });
+      const editorialOrderSql = params.orderReviewPriorityV2
+        ? "scoped.rank ASC NULLS LAST,"
+        : "scoped.score DESC NULLS LAST,";
+      const deliveryOrderSql = params.orderReviewPriorityV2
+        ? "ranked.rank ASC NULLS LAST,"
+        : "ranked.score DESC NULLS LAST,";
 
       const resultIds = await client.query<
         QueryResultRow & { appid: number; id: string; profile_ids: string[] }
@@ -4096,7 +4232,7 @@ export class OpportunityWorkerRepository {
               row_number() OVER (
                 PARTITION BY scoped.appid
                 ORDER BY
-                  scoped.score DESC NULLS LAST,
+                  ${editorialOrderSql}
                   scoped.created_at DESC,
                   scoped.id
               ) AS editorial_rank
@@ -4123,7 +4259,7 @@ export class OpportunityWorkerRepository {
           JOIN matched_profiles ON matched_profiles.appid = ranked.appid
           WHERE ranked.editorial_rank = 1
           ORDER BY
-            ranked.score DESC NULLS LAST,
+            ${deliveryOrderSql}
             ranked.appid,
             ranked.id
           LIMIT 500

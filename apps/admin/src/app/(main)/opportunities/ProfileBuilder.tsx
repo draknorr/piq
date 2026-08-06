@@ -33,9 +33,6 @@ import type {
   OpportunitySignalFamily,
 } from "./lib/types";
 
-const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
-  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
-
 const RANKING_POLICIES: Array<{
   description: string;
   label: string;
@@ -468,6 +465,7 @@ interface ProfileBuilderProps {
     profileId: string,
     status: "enabled" | "paused" | "archived",
   ) => Promise<void>;
+  presentReviewPriorityV2: boolean;
 }
 
 export function ProfileBuilder({
@@ -477,6 +475,7 @@ export function ProfileBuilder({
   onClose,
   onSaved,
   onStatusChanged,
+  presentReviewPriorityV2,
 }: ProfileBuilderProps) {
   const [name, setName] = useState(
     initialProfile?.name ?? "Untitled opportunity profile",
@@ -592,7 +591,7 @@ export function ProfileBuilder({
         immediateFullMatchEnabled: immediate,
         localDeliveryTime,
         name,
-        ...(OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+        ...(presentReviewPriorityV2
           ? { rankingPolicy }
           : {}),
         rules,
@@ -702,7 +701,7 @@ export function ProfileBuilder({
             </label>
           </div>
 
-          {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED && (
+          {presentReviewPriorityV2 && (
           <fieldset className="border-y border-border-subtle py-5">
             <legend className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
               Review-priority intent

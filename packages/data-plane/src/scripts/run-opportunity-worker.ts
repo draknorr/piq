@@ -11,6 +11,10 @@ import {
   OpportunityWorker,
   OpportunityWorkerRepository,
 } from "../opportunity/index.js";
+import {
+  createOpportunityPriorityV2OrderControl,
+  createOpportunityWorkspaceFeatureControl,
+} from "../opportunity/feature-controls.js";
 
 const log = logger.child({ worker: "steam-opportunity" });
 
@@ -32,24 +36,22 @@ async function main(): Promise<void> {
     process.env.OPPORTUNITY_WEBSITE_BASE_URL ??
     process.env.NEXT_PUBLIC_APP_URL ??
     "http://localhost:3001";
-  const orderReviewPriorityV2 = {
-    discoverNewGames:
-      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY === "1",
-    findEmergingTraction:
-      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION === "1",
-    monitorMaterialChanges:
-      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL === "1",
-  };
-  if (Object.values(orderReviewPriorityV2).some(Boolean)) {
-    throw new Error(
-      "Opportunity v2 ordering remains blocked until its policy-specific calibration artifact and canary gate are approved.",
-    );
-  }
+  const orderReviewPriorityV2 = createOpportunityPriorityV2OrderControl({
+    discovery: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY,
+    materialChanges: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL,
+    traction: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION,
+    workspaceIds: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS,
+  });
+  const presentationControl = createOpportunityWorkspaceFeatureControl(
+    process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION,
+    process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS,
+  );
   const pool = getDataPlanePool();
   const worker = new OpportunityWorker(new OpportunityWorkerRepository(pool), {
     claimLimit,
     computeReviewPriorityV2:
       process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
+    orderReviewPriorityV2,
     websiteBaseUrl,
     workerId,
   });
@@ -65,7 +67,7 @@ async function main(): Promise<void> {
             "PublisherIQ <opportunities@publisheriq.com>",
         }),
         workerId,
-        process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1",
+        presentationControl,
       )
     : null;
   let shuttingDown = false;
@@ -83,10 +85,21 @@ async function main(): Promise<void> {
       process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
     deliveryEnabled: Boolean(deliveryDispatcher),
     deliveryLimit,
-    presentReviewPriorityV2:
-      process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1",
+    presentReviewPriorityV2: presentationControl.enabled,
+    presentationScope: presentationControl.allWorkspaces
+      ? "all"
+      : presentationControl.enabled
+        ? "allowlist"
+        : "disabled",
+    presentationWorkspaceCount: presentationControl.workspaceIds.size,
     maxIdlePolls: maxIdlePolls || null,
-    orderReviewPriorityV2,
+    orderReviewPriorityV2: orderReviewPriorityV2.enabled,
+    orderingScope: orderReviewPriorityV2.allWorkspaces
+      ? "all"
+      : orderReviewPriorityV2.enabled
+        ? "allowlist"
+        : "disabled",
+    orderingWorkspaceCount: orderReviewPriorityV2.workspaceIds.size,
     pollIntervalMs,
     websiteBaseUrl,
     workerId,

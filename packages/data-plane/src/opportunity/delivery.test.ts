@@ -3,10 +3,14 @@ import { describe, it } from "node:test";
 import type { Pool } from "pg";
 
 import {
+  OpportunityDeliveryDispatcher,
   OpportunityDeliveryRepository,
   renderOpportunityDelivery,
+  type OpportunityDeliveryProvider,
   type OpportunityDeliveryWork,
 } from "./delivery.js";
+import type { OpportunityDestinationCipher } from "./delivery-secrets.js";
+import { createOpportunityWorkspaceFeatureControl } from "./feature-controls.js";
 
 const DELIVERY: OpportunityDeliveryWork = {
   availableResultCount: 1,
@@ -29,12 +33,13 @@ const DELIVERY: OpportunityDeliveryWork = {
       whyNow: "A demo arrived and every required rule now matches.",
     },
   ],
+  workspaceId: "00000000-0000-4000-8000-000000000300",
 };
 
-function deliveryClaimFixture(params: {
-  count: number;
-  taxonomy: boolean;
-}): { pool: Pool; statements: string[] } {
+function deliveryClaimFixture(params: { count: number; taxonomy: boolean }): {
+  pool: Pool;
+  statements: string[];
+} {
   const statements: string[] = [];
   const claimed = Array.from({ length: params.count }, (_, index) => ({
     channel: "email",
@@ -93,7 +98,9 @@ function deliveryClaimFixture(params: {
           rows: claimed.map((delivery) => ({
             delivery_id: delivery.id,
             profiles: [],
-            results: result ? [{ ...result, id: `${result.id}-${delivery.id}` }] : [],
+            results: result
+              ? [{ ...result, id: `${result.id}-${delivery.id}` }]
+              : [],
           })),
         };
       }
@@ -124,6 +131,10 @@ describe("opportunity delivery hydration", () => {
       );
 
       assert.equal(work.length, count);
+      assert.equal(
+        work[0]?.workspaceId,
+        "00000000-0000-4000-8000-000000000300",
+      );
       assert.equal(fixture.statements.length, 4);
       assert.equal(
         fixture.statements.filter((sql) =>
@@ -346,5 +357,82 @@ describe("opportunity delivery rendering", () => {
 
     assert.match(rendered.html, /PublisherIQ watch desk · Artwork unavailable/);
     assert.doesNotMatch(rendered.html, /unsafe\.jpg/);
+  });
+});
+
+describe("opportunity delivery presentation scope", () => {
+  it("renders v2 copy only for allowlisted workspaces in the same claim", async () => {
+    const allowlistedWorkspaceId = "00000000-0000-4000-8000-000000000301";
+    const unlistedWorkspaceId = "00000000-0000-4000-8000-000000000302";
+    const reviewPriority = {
+      confidence: {
+        applicableCount: 3,
+        conflictingCount: 0,
+        label: "high" as const,
+        presentCount: 3,
+        reasons: [],
+        score: 1,
+        staleCount: 0,
+        version: "opportunity-confidence/v2" as const,
+      },
+      internalScore: 0.8,
+      lane: "new_game" as const,
+      policy: "discover_new_games" as const,
+      priorityBand: "review_now" as const,
+      reasons: ["Scoped v2 reason"],
+      version: "opportunity-ranking/v2" as const,
+      winningProfileId: "profile",
+    };
+    const deliveries = [allowlistedWorkspaceId, unlistedWorkspaceId].map(
+      (workspaceId, index): OpportunityDeliveryWork => ({
+        ...DELIVERY,
+        id: `delivery-${index}`,
+        idempotencyKey: `delivery-${index}`,
+        renderedContentVersion: "opportunity-digest/v2",
+        results: [{ ...DELIVERY.results[0]!, reviewPriority }],
+        workspaceId,
+      }),
+    );
+    const completed: string[] = [];
+    const failed: string[] = [];
+    const repository = {
+      async claim(): Promise<OpportunityDeliveryWork[]> {
+        return deliveries;
+      },
+      async complete(params: { deliveryId: string }): Promise<void> {
+        completed.push(params.deliveryId);
+      },
+      async fail(params: { deliveryId: string }): Promise<void> {
+        failed.push(params.deliveryId);
+      },
+    } as unknown as OpportunityDeliveryRepository;
+    const cipher = {
+      decrypt(): string {
+        return "reviewer@example.com";
+      },
+    } as unknown as OpportunityDestinationCipher;
+    const sentText: string[] = [];
+    const provider: OpportunityDeliveryProvider = {
+      async sendEmail(params): Promise<string> {
+        sentText.push(params.text);
+        return `message-${sentText.length}`;
+      },
+      async sendSlack(): Promise<string> {
+        throw new Error("unexpected Slack delivery");
+      },
+    };
+    const dispatcher = new OpportunityDeliveryDispatcher(
+      repository,
+      cipher,
+      provider,
+      "worker",
+      createOpportunityWorkspaceFeatureControl("1", allowlistedWorkspaceId),
+    );
+
+    assert.equal(await dispatcher.runOnce(10), 2);
+    assert.match(sentText[0]!, /Scoped v2 reason/);
+    assert.doesNotMatch(sentText[1]!, /Scoped v2 reason/);
+    assert.deepEqual(completed, ["delivery-0", "delivery-1"]);
+    assert.deepEqual(failed, []);
   });
 });
