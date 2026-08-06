@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { diffNewsVersions, normalizeNewsVersion } from './news.js';
 import {
+  buildOpportunityDescriptionSummary,
   collectChangedHeroAssets,
   diffStorefrontMedia,
   diffVerifiedHeroMedia,
   diffStorefrontSnapshots,
   normalizeStorefrontMediaVersion,
-  normalizeStorefrontSnapshot,
+  normalizeStorefrontSnapshot
 } from './storefront.js';
 
 const baseSnapshot = normalizeStorefrontSnapshot({
@@ -44,8 +45,86 @@ const baseSnapshot = normalizeStorefrontSnapshot({
   website: 'https://example.com',
   packageIds: [1],
   packageGroupSubs: [10],
-  screenshots: [{ id: 1, thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg', fullUrl: 'https://cdn.example.com/shot.jpg' }],
-  movies: [{ id: 1, name: 'Trailer', thumbnailUrl: 'https://cdn.example.com/trailer.jpg', mp4Url: 'https://cdn.example.com/trailer.mp4', webmUrl: null, hlsUrl: null, highlight: true }],
+  screenshots: [
+    {
+      id: 1,
+      thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg',
+      fullUrl: 'https://cdn.example.com/shot.jpg'
+    }
+  ],
+  movies: [
+    {
+      id: 1,
+      name: 'Trailer',
+      thumbnailUrl: 'https://cdn.example.com/trailer.jpg',
+      mp4Url: 'https://cdn.example.com/trailer.mp4',
+      webmUrl: null,
+      hlsUrl: null,
+      highlight: true
+    }
+  ]
+});
+
+test('opportunity description summary sanitizes and preserves bounded readiness facts', () => {
+  const summary = buildOpportunityDescriptionSummary({
+    ...baseSnapshot,
+    descriptions: {
+      ...baseSnapshot.descriptions,
+      short: '<b>A character action roguelite</b> &amp; twisted fairytale.\u202e <script>alert(1)</script>'
+    },
+    screenshots: Array.from({ length: 4 }, (_, index) => ({
+      fullUrl: `https://cdn.example.com/${index}.jpg`,
+      id: index,
+      order: index,
+      thumbnailUrl: null
+    }))
+  });
+
+  assert.equal(summary.kind, 'steam_short');
+  assert.equal(summary.text, 'A character action roguelite & twisted fairytale. alert(1)');
+  assert.equal(summary.sanitizerVersion, 'opportunity-description/v1');
+  assert.equal(summary.hasHeaderImage, true);
+  assert.equal(summary.hasReleasePath, true);
+  assert.equal(summary.hasSupportedLanguages, true);
+  assert.equal(summary.screenshotCount, 4);
+  assert.equal(summary.trailerCount, 1);
+});
+
+test('opportunity description summary uses about, structured, and unavailable fallbacks', () => {
+  const about = buildOpportunityDescriptionSummary({
+    ...baseSnapshot,
+    descriptions: {
+      about: 'A useful &mdash; fallback description.',
+      detailed: null,
+      short: 'Tiny'
+    }
+  });
+  assert.equal(about.kind, 'steam_about');
+  assert.equal(about.text, 'A useful — fallback description.');
+
+  const structured = buildOpportunityDescriptionSummary({
+    ...baseSnapshot,
+    descriptions: { about: null, detailed: null, short: null }
+  });
+  assert.equal(structured.kind, 'structured');
+  assert.equal(structured.text, 'Example is a Steam Action game.');
+
+  const unavailable = buildOpportunityDescriptionSummary({
+    ...baseSnapshot,
+    descriptions: { about: null, detailed: null, short: null },
+    genres: []
+  });
+  assert.equal(unavailable.kind, 'unavailable');
+  assert.equal(unavailable.text, 'Steam has not provided a short description for this game yet.');
+});
+
+test('opportunity description summary caps graphemes and UTF-8 bytes', () => {
+  const summary = buildOpportunityDescriptionSummary({
+    ...baseSnapshot,
+    descriptions: { about: null, detailed: null, short: '🎮'.repeat(500) }
+  });
+  assert.ok(Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(summary.text)).length <= 320);
+  assert.ok(new TextEncoder().encode(summary.text).byteLength <= 800);
 });
 
 test('storefront snapshot diff detects content changes', () => {
@@ -55,15 +134,15 @@ test('storefront snapshot diff detects content changes', () => {
     descriptions: {
       ...baseSnapshot.descriptions,
       short: 'Sharper short copy',
-      detailed: 'Updated copy',
+      detailed: 'Updated copy'
     },
     price: {
       currentCents: 1499,
-      discountPercent: 25,
+      discountPercent: 25
     },
     developers: ['Studio', 'Co-Dev'],
     packageIds: [1, 2],
-    demoAppids: [4707330],
+    demoAppids: [4707330]
   };
 
   const events = diffStorefrontSnapshots(baseSnapshot, changedSnapshot);
@@ -85,13 +164,16 @@ test('storefront snapshot diff ignores platform key-order churn from stored json
     platforms: {
       mac: false,
       linux: false,
-      windows: true,
-    },
+      windows: true
+    }
   };
 
   const events = diffStorefrontSnapshots(previousSnapshot, baseSnapshot);
 
-  assert.equal(events.some((event) => event.eventType === 'platforms_changed'), false);
+  assert.equal(
+    events.some((event) => event.eventType === 'platforms_changed'),
+    false
+  );
 });
 
 test('storefront media diff suppresses query-only screenshot churn and still detects trailer changes', () => {
@@ -102,15 +184,15 @@ test('storefront media diff suppresses query-only screenshot churn and still det
       {
         ...previousMedia.screenshots[0],
         fullUrl: 'https://cdn.example.com/shot.jpg?t=200',
-        thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg?t=200',
-      },
+        thumbnailUrl: 'https://cdn.example.com/shot-thumb.jpg?t=200'
+      }
     ],
     movies: [
       {
         ...previousMedia.movies[0],
-        thumbnailUrl: 'https://cdn.example.com/trailer-v2.jpg',
-      },
-    ],
+        thumbnailUrl: 'https://cdn.example.com/trailer-v2.jpg'
+      }
+    ]
   };
 
   const events = diffStorefrontMedia(previousMedia, nextMedia);
@@ -128,13 +210,13 @@ test('verified hero media diff suppresses query-only churn but keeps real change
     ...previousMedia,
     heroImages: {
       ...previousMedia.heroImages,
-      header: 'https://cdn.example.com/header.jpg?t=200',
-    },
+      header: 'https://cdn.example.com/header.jpg?t=200'
+    }
   };
 
   const unchangedResult = await diffVerifiedHeroMedia(previousMedia, unchangedHeader, {
     getPreviousContentHash: async (kind) => (kind === 'header' ? 'same-hash' : null),
-    getCurrentContentHash: async () => 'same-hash',
+    getCurrentContentHash: async () => 'same-hash'
   });
 
   assert.deepEqual(unchangedResult.events, []);
@@ -144,20 +226,23 @@ test('verified hero media diff suppresses query-only churn but keeps real change
     ...previousMedia,
     heroImages: {
       ...previousMedia.heroImages,
-      header: 'https://cdn.example.com/header.jpg?t=300',
-    },
+      header: 'https://cdn.example.com/header.jpg?t=300'
+    }
   };
 
   const changedResult = await diffVerifiedHeroMedia(previousMedia, changedHeader, {
     getPreviousContentHash: async (kind) => (kind === 'header' ? 'old-hash' : null),
-    getCurrentContentHash: async () => 'new-hash',
+    getCurrentContentHash: async () => 'new-hash'
   });
 
-  assert.deepEqual(changedResult.events.map((event) => event.eventType), ['header_url_changed']);
-  assert.deepEqual(changedResult.events[0]?.context, { mediaChangeReason: 'content_hash_changed' });
-  assert.deepEqual(changedResult.changedAssets, [
-    { kind: 'header', url: 'https://cdn.example.com/header.jpg?t=300' },
-  ]);
+  assert.deepEqual(
+    changedResult.events.map((event) => event.eventType),
+    ['header_url_changed']
+  );
+  assert.deepEqual(changedResult.events[0]?.context, {
+    mediaChangeReason: 'content_hash_changed'
+  });
+  assert.deepEqual(changedResult.changedAssets, [{ kind: 'header', url: 'https://cdn.example.com/header.jpg?t=300' }]);
 });
 
 test('collectChangedHeroAssets ignores background-only changes', () => {
@@ -166,8 +251,8 @@ test('collectChangedHeroAssets ignores background-only changes', () => {
     ...previousMedia,
     heroImages: {
       ...previousMedia.heroImages,
-      background: 'https://cdn.example.com/background-v2.jpg',
-    },
+      background: 'https://cdn.example.com/background-v2.jpg'
+    }
   };
 
   assert.deepEqual(collectChangedHeroAssets(previousMedia, nextMedia), []);
@@ -182,16 +267,22 @@ test('news diff distinguishes publish from edit', () => {
     contents: 'Initial notes',
     feedlabel: 'Patchnotes',
     date: 1_700_000_000,
-    feedname: 'steam_updates',
+    feedname: 'steam_updates'
   });
 
-  assert.deepEqual(diffNewsVersions(null, published).map((event) => event.eventType), ['news_published']);
+  assert.deepEqual(
+    diffNewsVersions(null, published).map((event) => event.eventType),
+    ['news_published']
+  );
 
   const edited = {
     ...published,
-    contents: 'Updated notes',
+    contents: 'Updated notes'
   };
-  assert.deepEqual(diffNewsVersions(published, edited).map((event) => event.eventType), ['news_edited']);
+  assert.deepEqual(
+    diffNewsVersions(published, edited).map((event) => event.eventType),
+    ['news_edited']
+  );
 });
 
 test('news diff ignores key-order-only changes from stored jsonb payloads', () => {
@@ -203,7 +294,7 @@ test('news diff ignores key-order-only changes from stored jsonb payloads', () =
     contents: 'Initial notes',
     feedlabel: 'Patchnotes',
     date: 1_700_000_000,
-    feedname: 'steam_updates',
+    feedname: 'steam_updates'
   });
 
   const reordered = {
@@ -214,8 +305,11 @@ test('news diff ignores key-order-only changes from stored jsonb payloads', () =
     title: published.title,
     feedname: published.feedname,
     author: published.author,
-    feedlabel: published.feedlabel,
+    feedlabel: published.feedlabel
   };
 
-  assert.deepEqual(diffNewsVersions(published, reordered).map((event) => event.eventType), []);
+  assert.deepEqual(
+    diffNewsVersions(published, reordered).map((event) => event.eventType),
+    []
+  );
 });

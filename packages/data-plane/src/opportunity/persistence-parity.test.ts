@@ -9,13 +9,18 @@ import {
   OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
   OPPORTUNITY_COHORT_RESOLVER_VERSION,
   OPPORTUNITY_COHORT_VERSION,
+  OPPORTUNITY_CONFIDENCE_VERSION,
+  OPPORTUNITY_DESCRIPTION_VERSION,
   OPPORTUNITY_MARKET_VERSION,
   OPPORTUNITY_RANKING_VERSION,
+  OPPORTUNITY_REVIEW_PRIORITY_VERSION,
   OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityProfileEvaluation,
+  type OpportunityReviewPriorityDecision,
   type OpportunityRuleSet,
 } from "./types.js";
+import { OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION } from "./review-priority-storage.js";
 import {
   type OpportunityCandidateEvaluation,
   type OpportunityEvaluatedResult,
@@ -107,9 +112,67 @@ const BASE_CALCULATION_VERSIONS = {
   market: OPPORTUNITY_MARKET_VERSION,
   materiality: "opportunity-materiality/v1",
   ranking: OPPORTUNITY_RANKING_VERSION,
+  confidence: OPPORTUNITY_CONFIDENCE_VERSION,
+  description: OPPORTUNITY_DESCRIPTION_VERSION,
+  reviewPriority: OPPORTUNITY_REVIEW_PRIORITY_VERSION,
+  reviewPriorityStorage: OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION,
   rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
   signals: "signal-windows/v1",
 };
+
+function reviewPriority(
+  profile: OpportunityWorkerProfile,
+  allProfiles: OpportunityWorkerProfile[],
+): OpportunityReviewPriorityDecision {
+  return {
+    allMatchedProfileIds: allProfiles.map((candidate) => candidate.id).sort(),
+    components: [
+      {
+        baseWeight: 1,
+        contribution: 0.8,
+        effectiveWeight: 1,
+        key: "profile_relevance",
+        value: 0.8,
+      },
+    ],
+    confidence: {
+      applicableCount: 1,
+      conflictingCount: 0,
+      label: "high",
+      presentCount: 1,
+      reasons: [],
+      score: 1,
+      staleCount: 0,
+      version: OPPORTUNITY_CONFIDENCE_VERSION,
+    },
+    eligibility: "eligible",
+    eligibilityReasonCodes: [],
+    inputs: [
+      {
+        assessment: "positive",
+        availability: "available",
+        calculationVersion: null,
+        confidenceWeight: 1,
+        criticalForConfidence: true,
+        key: "eligibility",
+        normalizedValue: 1,
+        rawValue: "eligible",
+        reasonCode: "eligible",
+        source: "profile_evaluation",
+        sourceAt: "2026-07-28T19:00:00.000Z",
+      },
+    ],
+    internalScore: 0.8,
+    lane: "material_change",
+    policy: "monitor_material_changes",
+    priorityBand: "review_now",
+    reasons: ["Material Steam change"],
+    selectionSource: "explicit",
+    sortTuple: [0, 0, 0.8, "2026-07-28T18:45:00.000Z", 101, profile.id],
+    version: OPPORTUNITY_REVIEW_PRIORITY_VERSION,
+    winningProfileId: profile.id,
+  };
+}
 
 function parseJson(value: unknown): unknown {
   assert.equal(typeof value, "string");
@@ -201,6 +264,9 @@ function result(
       evaluation("eligible", 0.25 + index * 0.1),
     ]),
   );
+  const decisions = new Map(
+    profiles.map((profile) => [profile, reviewPriority(profile, profiles)]),
+  );
   return {
     appid,
     cohort: {
@@ -240,6 +306,19 @@ function result(
       sourceAt: "2026-07-28T18:30:00.000Z",
     },
     confidence: "high",
+    description: {
+      contentHash: "description-hash",
+      hasHeaderImage: true,
+      hasReleasePath: true,
+      hasSupportedLanguages: true,
+      kind: "steam_short",
+      sanitizerVersion: OPPORTUNITY_DESCRIPTION_VERSION,
+      screenshotCount: 4,
+      sourceAt: "2026-07-28T17:00:00.000Z",
+      sourceSnapshotId: "9001",
+      text: `App ${appid} is a commercial fixture.`,
+      trailerCount: 1,
+    },
     event: {
       appid,
       createsDailyResult: true,
@@ -291,6 +370,7 @@ function result(
     matches: profiles.map((profile) => ({
       evaluation: evaluations.get(profile)!,
       profile,
+      reviewPriority: decisions.get(profile)!,
     })),
     missingEvidence: ["reviews_added_7d"],
     profileVersionSetFingerprint: "profile-version-set-v1",
@@ -313,6 +393,7 @@ function result(
         userFit: 0.25,
       },
     },
+    reviewPriority: decisions.get(profiles[0]!)!,
     reappearedAfterResultId: null,
     sourceTimestamps: {
       "metrics.apps_page_projection": "2026-07-28T18:00:00.000Z",

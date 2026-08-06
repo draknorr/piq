@@ -23,6 +23,7 @@ import type {
   OpportunityDateOperand,
   OpportunityPreview,
   OpportunityProfileDetail,
+  OpportunityRankingPolicy,
   OpportunityRelativeDateWindow,
   OpportunityRuleClause,
   OpportunityRuleField,
@@ -31,6 +32,61 @@ import type {
   OpportunityRuleSet,
   OpportunitySignalFamily,
 } from "./lib/types";
+
+const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
+  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
+
+const RANKING_POLICIES: Array<{
+  description: string;
+  label: string;
+  value: OpportunityRankingPolicy;
+}> = [
+  {
+    description: "Put newly observed and unreleased Steam games first.",
+    label: "Discover new games",
+    value: "discover_new_games",
+  },
+  {
+    description: "Prioritize released games with early or accelerating demand.",
+    label: "Find emerging traction",
+    value: "find_emerging_traction",
+  },
+  {
+    description: "Resurface known games when a substantive Steam change lands.",
+    label: "Monitor material changes",
+    value: "monitor_material_changes",
+  },
+];
+
+function inferredRankingPolicy(
+  rules: OpportunityRuleSet,
+): OpportunityRankingPolicy {
+  const required = rules.required.flatMap((group) => group.clauses);
+  if (
+    required.some(
+      (clause) =>
+        clause.field === "publisheriq_added_at" ||
+        (clause.field === "is_released" && clause.value === false) ||
+        (clause.field === "release_date" && clause.operator === "in_window"),
+    )
+  ) {
+    return "discover_new_games";
+  }
+  const traction = new Set<OpportunityRuleField>([
+    "total_reviews",
+    "positive_percentage",
+    "reviews_added_7d",
+    "reviews_added_30d",
+    "ccu_peak",
+    "ccu_change_7d",
+    "ccu_change_30d",
+  ]);
+  return [...rules.required, ...rules.preferred].some((group) =>
+    group.clauses.some((clause) => traction.has(clause.field)),
+  )
+    ? "find_emerging_traction"
+    : "monitor_material_changes";
+}
 
 const FIELD_OPTIONS: Array<{
   field: OpportunityRuleField;
@@ -434,6 +490,18 @@ export function ProfileBuilder({
       localToday(),
     ),
   );
+  const configuredPolicy =
+    initialProfile?.currentVersionDetail.calculationConfig?.rankingPolicy;
+  const hasExplicitPolicy = RANKING_POLICIES.some(
+    (policy) => policy.value === configuredPolicy,
+  );
+  const [rankingPolicy, setRankingPolicy] = useState<OpportunityRankingPolicy>(
+    hasExplicitPolicy
+      ? (configuredPolicy as OpportunityRankingPolicy)
+      : initialProfile
+        ? inferredRankingPolicy(initialProfile.currentVersionDetail.rules)
+        : "discover_new_games",
+  );
   const [subscriptions, setSubscriptions] = useState<OpportunitySignalFamily[]>(
     initialProfile?.currentVersionDetail.eventSubscriptions ?? [
       "release",
@@ -524,6 +592,9 @@ export function ProfileBuilder({
         immediateFullMatchEnabled: immediate,
         localDeliveryTime,
         name,
+        ...(OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+          ? { rankingPolicy }
+          : {}),
         rules,
         timezone,
       };
@@ -630,6 +701,59 @@ export function ProfileBuilder({
               />
             </label>
           </div>
+
+          {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED && (
+          <fieldset className="border-y border-border-subtle py-5">
+            <legend className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+              Review-priority intent
+            </legend>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-text-secondary">
+              Choose the job this profile performs. PublisherIQ will use only
+              evidence appropriate to that job when it orders review work.
+            </p>
+            {initialProfile && !hasExplicitPolicy && (
+              <p className="mt-3 inline-flex items-center gap-2 rounded-md bg-semantic-warning-muted px-3 py-2 text-xs text-semantic-warning">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                Intent inferred from the existing profile. Saving records your
+                explicit choice.
+              </p>
+            )}
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              {RANKING_POLICIES.map((policy) => {
+                const selected = policy.value === rankingPolicy;
+                return (
+                  <label
+                    key={policy.value}
+                    className={`cursor-pointer rounded-lg border px-4 py-3 transition ${
+                      selected
+                        ? "border-accent-primary bg-accent-primary-muted"
+                        : "border-border-muted bg-surface hover:border-border-prominent"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="ranking-policy"
+                      value={policy.value}
+                      checked={selected}
+                      onChange={() => setRankingPolicy(policy.value)}
+                      className="sr-only"
+                    />
+                    <span className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                      <span
+                        className={`h-2 w-2 rounded-full ${selected ? "bg-accent-primary" : "bg-border-prominent"}`}
+                        aria-hidden="true"
+                      />
+                      {policy.label}
+                    </span>
+                    <span className="mt-1.5 block text-xs leading-5 text-text-tertiary">
+                      {policy.description}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+          )}
 
           <details className="group rounded-xl border border-border-muted bg-surface">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3.5 transition hover:bg-surface-elevated/50 [&::-webkit-details-marker]:hidden">

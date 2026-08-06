@@ -5,18 +5,108 @@ import {
   normalizeStringArray,
   normalizeText,
   normalizeUrl,
-  stableStringify,
+  stableStringify
 } from './hashing.js';
 import type {
   AppChangeEventDraft,
   HeroAssetDescriptor,
   NormalizedMediaVersion,
   NormalizedStorefrontSnapshot,
+  OpportunityDescriptionSummary,
   StorefrontMovie,
-  StorefrontScreenshot,
+  StorefrontScreenshot
 } from './types.js';
 
 type VerifiedHeroAssetKind = 'header' | 'capsule';
+
+export const OPPORTUNITY_DESCRIPTION_VERSION = 'opportunity-description/v1' as const;
+
+const DESCRIPTION_ENTITY_MAP: Record<string, string> = {
+  amp: '&',
+  apos: "'",
+  gt: '>',
+  hellip: '…',
+  ldquo: '“',
+  lsquo: '‘',
+  lt: '<',
+  mdash: '—',
+  nbsp: ' ',
+  ndash: '–',
+  quot: '"',
+  rdquo: '”',
+  rsquo: '’'
+};
+
+function decodeDescriptionEntities(value: string): string {
+  return value.replace(
+    /&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi,
+    (entity, decimal: string | undefined, hexadecimal: string | undefined, named: string | undefined) => {
+      const numeric = decimal ? Number.parseInt(decimal, 10) : hexadecimal ? Number.parseInt(hexadecimal, 16) : null;
+      if (numeric !== null) {
+        return Number.isInteger(numeric) && numeric >= 0 && numeric <= 0x10ffff
+          ? String.fromCodePoint(numeric)
+          : entity;
+      }
+      return named ? (DESCRIPTION_ENTITY_MAP[named.toLocaleLowerCase()] ?? entity) : entity;
+    }
+  );
+}
+
+function sanitizeDescriptionText(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = decodeDescriptionEntities(value)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/./gu, (character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+      const isBidirectionalOverride =
+        (codePoint >= 0x202a && codePoint <= 0x202e) || (codePoint >= 0x2066 && codePoint <= 0x2069);
+      return isControl || isBidirectionalOverride ? ' ' : character;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+  const graphemes = Array.from(segmenter.segment(normalized), (entry) => entry.segment).slice(0, 320);
+  const encoder = new TextEncoder();
+  while (graphemes.length > 0 && encoder.encode(graphemes.join('')).byteLength > 800) {
+    graphemes.pop();
+  }
+  return graphemes.join('').trim() || null;
+}
+
+export function buildOpportunityDescriptionSummary(
+  snapshot: NormalizedStorefrontSnapshot
+): OpportunityDescriptionSummary {
+  const candidates = [
+    ['steam_short', sanitizeDescriptionText(snapshot.descriptions.short)],
+    ['steam_about', sanitizeDescriptionText(snapshot.descriptions.about)],
+    ['steam_detailed', sanitizeDescriptionText(snapshot.descriptions.detailed)]
+  ] as const;
+  const selected = candidates.find(
+    ([kind, text]) => Boolean(text) && (kind !== 'steam_short' || text!.replace(/\s/g, '').length >= 20)
+  );
+  const primaryGenre = sanitizeDescriptionText(snapshot.genres[0]?.description ?? null);
+  const structured = sanitizeDescriptionText(primaryGenre ? `${snapshot.name} is a Steam ${primaryGenre} game.` : null);
+  const text = selected?.[1] ?? structured ?? 'Steam has not provided a short description for this game yet.';
+  const kind = selected?.[0] ?? (structured ? 'structured' : 'unavailable');
+
+  return {
+    hasHeaderImage: Boolean(snapshot.heroImages.header),
+    hasReleasePath: Boolean(snapshot.releaseDate || snapshot.demoAppids.length > 0 || snapshot.hasPurchasePackages),
+    hasSupportedLanguages: Boolean(snapshot.supportedLanguages?.trim()),
+    kind,
+    sanitizerVersion: OPPORTUNITY_DESCRIPTION_VERSION,
+    screenshotCount: snapshot.screenshots.length,
+    text,
+    trailerCount: snapshot.movies.length
+  };
+}
 
 interface VerifiedHeroDiffOptions {
   getPreviousContentHash: (kind: VerifiedHeroAssetKind) => Promise<string | null>;
@@ -29,7 +119,7 @@ function normalizeCategories(
   return [...values]
     .map((entry) => ({
       id: entry.id,
-      description: normalizeText(entry.description) ?? '',
+      description: normalizeText(entry.description) ?? ''
     }))
     .sort((left, right) => left.id - right.id);
 }
@@ -40,7 +130,7 @@ function normalizeGenres(
   return [...values]
     .map((entry) => ({
       id: entry.id.trim(),
-      description: normalizeText(entry.description) ?? '',
+      description: normalizeText(entry.description) ?? ''
     }))
     .sort((left, right) => {
       const leftNumber = Number(left.id);
@@ -60,7 +150,7 @@ function normalizeScreenshots(values: ParsedStorefrontApp['screenshots']): Store
       id: entry.id ?? null,
       fullUrl: normalizeUrl(entry.fullUrl) ?? '',
       thumbnailUrl: normalizeUrl(entry.thumbnailUrl),
-      order: index,
+      order: index
     }))
     .filter((entry) => entry.fullUrl.length > 0);
 }
@@ -75,7 +165,7 @@ function normalizeMovies(values: ParsedStorefrontApp['movies']): StorefrontMovie
       mp4Url: normalizeUrl(entry.mp4Url),
       webmUrl: normalizeUrl(entry.webmUrl),
       hlsUrl: normalizeUrl(entry.hlsUrl),
-      order: index,
+      order: index
     }))
     .filter((entry) => entry.mp4Url || entry.webmUrl || entry.hlsUrl || entry.thumbnailUrl);
 }
@@ -84,7 +174,7 @@ function canonicalizeScreenshot(entry: StorefrontScreenshot): StorefrontScreensh
   return {
     ...entry,
     fullUrl: canonicalizeUrlForComparison(entry.fullUrl) ?? '',
-    thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl),
+    thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl)
   };
 }
 
@@ -94,7 +184,7 @@ function canonicalizeMovie(entry: StorefrontMovie): StorefrontMovie {
     thumbnailUrl: canonicalizeUrlForComparison(entry.thumbnailUrl),
     mp4Url: canonicalizeUrlForComparison(entry.mp4Url),
     webmUrl: canonicalizeUrlForComparison(entry.webmUrl),
-    hlsUrl: canonicalizeUrlForComparison(entry.hlsUrl),
+    hlsUrl: canonicalizeUrlForComparison(entry.hlsUrl)
   };
 }
 
@@ -114,32 +204,28 @@ function movieComparisonKey(entry: StorefrontMovie): string {
   );
 }
 
-export function toComparableStorefrontSnapshot(
-  snapshot: NormalizedStorefrontSnapshot
-): NormalizedStorefrontSnapshot {
+export function toComparableStorefrontSnapshot(snapshot: NormalizedStorefrontSnapshot): NormalizedStorefrontSnapshot {
   return {
     ...snapshot,
     heroImages: {
       header: canonicalHeroUrl(snapshot.heroImages.header),
       capsule: canonicalHeroUrl(snapshot.heroImages.capsule),
-      background: canonicalHeroUrl(snapshot.heroImages.background),
+      background: canonicalHeroUrl(snapshot.heroImages.background)
     },
     screenshots: snapshot.screenshots.map(canonicalizeScreenshot),
-    movies: snapshot.movies.map(canonicalizeMovie),
+    movies: snapshot.movies.map(canonicalizeMovie)
   };
 }
 
-export function toComparableMediaVersion(
-  mediaVersion: NormalizedMediaVersion
-): NormalizedMediaVersion {
+export function toComparableMediaVersion(mediaVersion: NormalizedMediaVersion): NormalizedMediaVersion {
   return {
     heroImages: {
       header: canonicalHeroUrl(mediaVersion.heroImages.header),
       capsule: canonicalHeroUrl(mediaVersion.heroImages.capsule),
-      background: canonicalHeroUrl(mediaVersion.heroImages.background),
+      background: canonicalHeroUrl(mediaVersion.heroImages.background)
     },
     screenshots: mediaVersion.screenshots.map(canonicalizeScreenshot),
-    movies: mediaVersion.movies.map(canonicalizeMovie),
+    movies: mediaVersion.movies.map(canonicalizeMovie)
   };
 }
 
@@ -179,8 +265,8 @@ function maybePushArrayChange(
     afterValue: nextValues,
     context: {
       added: collectAdded(nextValues, previousValues),
-      removed: collectRemoved(previousValues, nextValues),
-    },
+      removed: collectRemoved(previousValues, nextValues)
+    }
   });
 }
 
@@ -196,21 +282,21 @@ export function normalizeStorefrontSnapshot(details: ParsedStorefrontApp): Norma
     descriptions: {
       short: normalizeText(details.shortDescription),
       about: normalizeText(details.aboutTheGame),
-      detailed: normalizeText(details.detailedDescription),
+      detailed: normalizeText(details.detailedDescription)
     },
     supportedLanguages: normalizeText(details.supportedLanguages),
     developers: normalizeStringArray(details.developers),
     publishers: normalizeStringArray(details.publishers),
     price: {
       currentCents: details.priceCents,
-      discountPercent: details.discountPercent,
+      discountPercent: details.discountPercent
     },
     categories: normalizeCategories(details.categories),
     genres: normalizeGenres(details.genres),
     platforms: {
       windows: Boolean(details.platforms.windows),
       mac: Boolean(details.platforms.mac),
-      linux: Boolean(details.platforms.linux),
+      linux: Boolean(details.platforms.linux)
     },
     controllerSupport: normalizeText(details.controllerSupport),
     dlcAppids: [...details.dlcAppids].sort((left, right) => left - right),
@@ -221,20 +307,18 @@ export function normalizeStorefrontSnapshot(details: ParsedStorefrontApp): Norma
     heroImages: {
       header: normalizeUrl(details.headerImage),
       capsule: normalizeUrl(details.capsuleImage),
-      background: normalizeUrl(details.backgroundImage),
+      background: normalizeUrl(details.backgroundImage)
     },
     screenshots: normalizeScreenshots(details.screenshots),
-    movies: normalizeMovies(details.movies),
+    movies: normalizeMovies(details.movies)
   };
 }
 
-export function normalizeStorefrontMediaVersion(
-  snapshot: NormalizedStorefrontSnapshot
-): NormalizedMediaVersion {
+export function normalizeStorefrontMediaVersion(snapshot: NormalizedStorefrontSnapshot): NormalizedMediaVersion {
   return {
     heroImages: snapshot.heroImages,
     screenshots: snapshot.screenshots,
-    movies: snapshot.movies,
+    movies: snapshot.movies
   };
 }
 
@@ -253,7 +337,7 @@ export function diffStorefrontSnapshots(
       eventType: 'short_description_rewrite',
       source: 'storefront',
       beforeValue: previousSnapshot.descriptions.short,
-      afterValue: nextSnapshot.descriptions.short,
+      afterValue: nextSnapshot.descriptions.short
     });
   }
 
@@ -266,12 +350,12 @@ export function diffStorefrontSnapshots(
       source: 'storefront',
       beforeValue: {
         about: previousSnapshot.descriptions.about,
-        detailed: previousSnapshot.descriptions.detailed,
+        detailed: previousSnapshot.descriptions.detailed
       },
       afterValue: {
         about: nextSnapshot.descriptions.about,
-        detailed: nextSnapshot.descriptions.detailed,
-      },
+        detailed: nextSnapshot.descriptions.detailed
+      }
     });
   }
 
@@ -280,7 +364,7 @@ export function diffStorefrontSnapshots(
       eventType: 'release_date_text_change',
       source: 'storefront',
       beforeValue: previousSnapshot.releaseDateText,
-      afterValue: nextSnapshot.releaseDateText,
+      afterValue: nextSnapshot.releaseDateText
     });
   }
 
@@ -289,7 +373,7 @@ export function diffStorefrontSnapshots(
       eventType: 'price_change',
       source: 'storefront',
       beforeValue: previousSnapshot.price.currentCents,
-      afterValue: nextSnapshot.price.currentCents,
+      afterValue: nextSnapshot.price.currentCents
     });
   }
 
@@ -298,7 +382,7 @@ export function diffStorefrontSnapshots(
       eventType: 'discount_start',
       source: 'storefront',
       beforeValue: previousSnapshot.price.discountPercent,
-      afterValue: nextSnapshot.price.discountPercent,
+      afterValue: nextSnapshot.price.discountPercent
     });
   }
 
@@ -307,7 +391,7 @@ export function diffStorefrontSnapshots(
       eventType: 'discount_end',
       source: 'storefront',
       beforeValue: previousSnapshot.price.discountPercent,
-      afterValue: nextSnapshot.price.discountPercent,
+      afterValue: nextSnapshot.price.discountPercent
     });
   }
 
@@ -339,8 +423,20 @@ export function diffStorefrontSnapshots(
     listEnabledPlatforms(previousSnapshot.platforms),
     listEnabledPlatforms(nextSnapshot.platforms)
   );
-  maybePushArrayChange(events, 'developer_association_changed', 'storefront', previousSnapshot.developers, nextSnapshot.developers);
-  maybePushArrayChange(events, 'publisher_association_changed', 'storefront', previousSnapshot.publishers, nextSnapshot.publishers);
+  maybePushArrayChange(
+    events,
+    'developer_association_changed',
+    'storefront',
+    previousSnapshot.developers,
+    nextSnapshot.developers
+  );
+  maybePushArrayChange(
+    events,
+    'publisher_association_changed',
+    'storefront',
+    previousSnapshot.publishers,
+    nextSnapshot.publishers
+  );
   maybePushArrayChange(
     events,
     'dlc_references_changed',
@@ -361,11 +457,11 @@ export function diffStorefrontSnapshots(
     'storefront',
     [
       ...previousSnapshot.packageIds.map((packageId) => `package:${packageId}`),
-      ...previousSnapshot.packageGroupSubs.map((packageId) => `group-sub:${packageId}`),
+      ...previousSnapshot.packageGroupSubs.map((packageId) => `group-sub:${packageId}`)
     ],
     [
       ...nextSnapshot.packageIds.map((packageId) => `package:${packageId}`),
-      ...nextSnapshot.packageGroupSubs.map((packageId) => `group-sub:${packageId}`),
+      ...nextSnapshot.packageGroupSubs.map((packageId) => `group-sub:${packageId}`)
     ]
   );
 
@@ -374,7 +470,7 @@ export function diffStorefrontSnapshots(
       eventType: 'controller_support_changed',
       source: 'storefront',
       beforeValue: previousSnapshot.controllerSupport,
-      afterValue: nextSnapshot.controllerSupport,
+      afterValue: nextSnapshot.controllerSupport
     });
   }
 
@@ -414,7 +510,7 @@ export function diffStorefrontMedia(
     events.push({
       eventType: 'screenshot_added',
       source: 'media',
-      afterValue: addedScreenshots,
+      afterValue: addedScreenshots
     });
   }
 
@@ -422,7 +518,7 @@ export function diffStorefrontMedia(
     events.push({
       eventType: 'screenshot_removed',
       source: 'media',
-      beforeValue: removedScreenshots,
+      beforeValue: removedScreenshots
     });
   }
 
@@ -435,7 +531,7 @@ export function diffStorefrontMedia(
       eventType: 'screenshot_reordered',
       source: 'media',
       beforeValue: previousScreenshotUrls,
-      afterValue: nextScreenshotUrls,
+      afterValue: nextScreenshotUrls
     });
   }
 
@@ -448,7 +544,7 @@ export function diffStorefrontMedia(
     events.push({
       eventType: 'trailer_added',
       source: 'media',
-      afterValue: addedMovies,
+      afterValue: addedMovies
     });
   }
 
@@ -456,7 +552,7 @@ export function diffStorefrontMedia(
     events.push({
       eventType: 'trailer_removed',
       source: 'media',
-      beforeValue: removedMovies,
+      beforeValue: removedMovies
     });
   }
 
@@ -465,7 +561,7 @@ export function diffStorefrontMedia(
       eventType: 'trailer_reordered',
       source: 'media',
       beforeValue: previousMovieKeys,
-      afterValue: nextMovieKeys,
+      afterValue: nextMovieKeys
     });
   }
 
@@ -479,16 +575,13 @@ export function diffStorefrontMedia(
     }
 
     const previousThumbnailUrl = previousMovieThumbnails.get(movie.id) ?? null;
-    if (
-      canonicalizeUrlForComparison(previousThumbnailUrl) !==
-      canonicalizeUrlForComparison(movie.thumbnailUrl)
-    ) {
+    if (canonicalizeUrlForComparison(previousThumbnailUrl) !== canonicalizeUrlForComparison(movie.thumbnailUrl)) {
       events.push({
         eventType: 'trailer_thumbnail_changed',
         source: 'media',
         beforeValue: previousThumbnailUrl,
         afterValue: movie.thumbnailUrl,
-        context: { movieId: movie.id, movieName: movie.name },
+        context: { movieId: movie.id, movieName: movie.name }
       });
     }
   }
@@ -500,7 +593,10 @@ export async function diffVerifiedHeroMedia(
   previousMedia: NormalizedMediaVersion | null,
   nextMedia: NormalizedMediaVersion,
   options: VerifiedHeroDiffOptions
-): Promise<{ events: AppChangeEventDraft[]; changedAssets: HeroAssetDescriptor[] }> {
+): Promise<{
+  events: AppChangeEventDraft[];
+  changedAssets: HeroAssetDescriptor[];
+}> {
   if (!previousMedia) {
     return { events: [], changedAssets: [] };
   }
@@ -524,7 +620,7 @@ export async function diffVerifiedHeroMedia(
         eventType: kind === 'header' ? 'header_url_changed' : 'capsule_url_changed',
         source: 'media',
         beforeValue: previousUrl,
-        afterValue: nextUrl,
+        afterValue: nextUrl
       });
 
       if (nextUrl) {
@@ -552,7 +648,7 @@ export async function diffVerifiedHeroMedia(
       source: 'media',
       beforeValue: previousUrl,
       afterValue: nextUrl,
-      context: { mediaChangeReason: 'content_hash_changed' },
+      context: { mediaChangeReason: 'content_hash_changed' }
     });
     changedAssets.push({ kind, url: nextUrl });
   }

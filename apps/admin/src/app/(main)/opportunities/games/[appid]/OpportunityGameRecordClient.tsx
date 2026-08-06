@@ -49,6 +49,9 @@ import type {
 } from "../../lib/types";
 import { OpportunityMediaLightbox } from "./OpportunityMediaLightbox";
 
+const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
+  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
+
 function metricToken(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
@@ -280,6 +283,22 @@ export function OpportunityGameRecordClient({
   const currentMetrics = Object.entries(record.currentMetrics).filter(
     ([name, value]) => metricKind(name) !== null && value !== null,
   );
+  const priority = record.result.reviewPriority;
+  const priorityTitle = priority
+    ? `${
+        priority.lane === "new_game"
+          ? "New discovery"
+          : priority.lane === "traction"
+            ? "Traction"
+            : "Material change"
+      } — ${
+        priority.priorityBand === "review_now"
+          ? "Review now"
+          : priority.priorityBand === "review_soon"
+            ? "Review soon"
+            : "Monitor"
+      }`
+    : "Legacy opportunity result";
 
   return (
     <div className="-m-4 min-h-screen bg-surface md:-m-6 lg:-m-8">
@@ -331,6 +350,12 @@ export function OpportunityGameRecordClient({
                   View on Steam <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
+              {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED && (
+                <p className="mt-4 max-w-3xl text-sm leading-6 text-text-secondary">
+                  {record.result.gameDescription?.text ??
+                    "Steam has not provided a short description for this game yet."}
+                </p>
+              )}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <ActionButton
                   active={tracked}
@@ -391,48 +416,109 @@ export function OpportunityGameRecordClient({
       <main className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_350px]">
         <div className="min-w-0 px-5 py-8 md:px-8 md:py-10">
           <section className="grid gap-8 border-b border-border-muted pb-10 md:grid-cols-[minmax(0,1fr)_280px]">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
-                What changed
-              </p>
-              <p className="mt-3 text-[clamp(1.25rem,2.5vw,1.8rem)] font-medium leading-tight text-text-primary">
-                {record.result.changeSummary}
-              </p>
-              <p className="mt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-                Why it matters
-              </p>
-              <p className="mt-2 max-w-3xl text-base leading-7 text-text-secondary">
-                {opportunityWhyItMatters(record.result)}
-              </p>
-              {record.result.matchedProfiles.length > 0 && (
-                <p className="mt-5 text-sm text-text-tertiary">
-                  <span className="font-semibold text-text-primary">
-                    Matches your sourcing profile:
-                  </span>{" "}
-                  {record.result.matchedProfiles
-                    .map((profile) => profile.name)
-                    .join(", ")}
-                </p>
-              )}
-            </div>
-            <div className="border-l border-border-muted pl-6">
-              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                Opportunity fit
-              </p>
-              <p className="mt-2 text-4xl font-semibold tabular-nums text-text-primary">
-                {record.rank.finalScore === null
-                  ? "—"
-                  : `${Math.round(record.rank.finalScore)}/100`}
-              </p>
-              <p className="mt-2 text-sm font-semibold text-accent-primary">
-                {opportunityStrengthLabel(record.rank.finalScore)}
-              </p>
-              <p className="mt-4 text-xs leading-5 text-text-tertiary">
-                A higher score means stronger alignment with your sourcing
-                criteria, comparable-game position, market momentum, and
-                evidence quality.
-              </p>
-            </div>
+            {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+              <>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+                    Why review now
+                  </p>
+                  <p className="mt-3 text-[clamp(1.25rem,2.5vw,1.8rem)] font-medium leading-tight text-text-primary">
+                    {priorityTitle}
+                  </p>
+                  {priority ? (
+                    <ul className="mt-5 space-y-2 text-sm leading-6 text-text-secondary">
+                      {priority.reasons.map((reason) => (
+                        <li key={reason} className="flex gap-2">
+                          <span
+                            className="text-accent-primary"
+                            aria-hidden="true"
+                          >
+                            •
+                          </span>
+                          {reason}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-4 text-sm leading-6 text-semantic-warning">
+                      Review priority will appear after the next natural
+                      evaluation.
+                    </p>
+                  )}
+                  <details className="mt-6 border-t border-border-subtle pt-4">
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+                      What changed
+                    </summary>
+                    <p className="mt-3 text-sm leading-6 text-text-secondary">
+                      {record.result.changeSummary}
+                    </p>
+                  </details>
+                  {record.result.matchedProfiles.length > 0 && (
+                    <p className="mt-5 text-sm text-text-tertiary">
+                      <span className="font-semibold text-text-primary">
+                        Matches your sourcing profile:
+                      </span>{" "}
+                      {record.result.matchedProfiles
+                        .map((profile) => profile.name)
+                        .join(", ")}
+                    </p>
+                  )}
+                </div>
+                <div className="md:border-l md:border-border-muted md:pl-6">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                    Evidence confidence
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-text-primary">
+                    {priority?.confidence.label === "high"
+                      ? "High confidence"
+                      : priority?.confidence.label === "limited"
+                        ? "Limited evidence"
+                        : "Directional evidence"}
+                  </p>
+                  <p className="mt-4 text-xs leading-5 text-text-tertiary">
+                    {priority?.confidence.label === "high"
+                      ? "Applicable profile, market, and game evidence is complete and current."
+                      : priority?.confidence.label === "limited"
+                        ? "One or more applicable inputs are unavailable, stale, or conflicting."
+                        : "The available evidence supports triage, while some applicable context is still developing."}
+                  </p>
+                  <p className="mt-5 text-xs font-semibold text-text-secondary">
+                    {opportunityPotentialLabel(record.result.marketPotential)}{" "}
+                    market
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+                    What changed
+                  </p>
+                  <p className="mt-3 text-[clamp(1.25rem,2.5vw,1.8rem)] font-medium leading-tight text-text-primary">
+                    {record.result.changeSummary}
+                  </p>
+                  <p className="mt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+                    Why it matters
+                  </p>
+                  <p className="mt-2 max-w-3xl text-base leading-7 text-text-secondary">
+                    {opportunityWhyItMatters(record.result)}
+                  </p>
+                </div>
+                <div className="border-l border-border-muted pl-6">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                    Opportunity fit
+                  </p>
+                  <p className="mt-2 text-4xl font-semibold tabular-nums text-text-primary">
+                    {record.rank.finalScore === null
+                      ? "—"
+                      : `${Math.round(record.rank.finalScore)}/100`}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-accent-primary">
+                    {opportunityStrengthLabel(record.rank.finalScore)}
+                  </p>
+                </div>
+              </>
+            )}
           </section>
 
           <SectionHeader
@@ -472,30 +558,129 @@ export function OpportunityGameRecordClient({
 
           <SectionHeader
             icon={BarChart3}
-            kicker="Opportunity strength"
-            title="What drives this opportunity score"
+            kicker={
+              OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+                ? "Decision audit"
+                : "Opportunity strength"
+            }
+            title={
+              OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+                ? "How review priority was decided"
+                : "What drives this opportunity score"
+            }
           />
-          <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-5">
-            {Object.entries(record.rank.components).map(
-              ([component, value]) => {
-                const presentation = OPPORTUNITY_COMPONENTS[component];
-                if (typeof value !== "number" || !presentation) return null;
-                return (
-                  <div key={component} className="bg-surface-raised px-4 py-5">
-                    <p className="text-sm font-semibold text-text-primary">
-                      {presentation.label}
+          {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+            record.matchedProfiles.some((profile) => profile.reviewPriority) ? (
+            <div className="space-y-4 border-y border-border-muted py-5">
+              {record.matchedProfiles.map((profile) =>
+                profile.reviewPriority ? (
+                  <details key={profile.profileVersionId} className="group">
+                    <summary className="cursor-pointer list-none text-sm font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+                      {profile.name} ·{" "}
+                      {profile.reviewPriority.policy.replaceAll("_", " ")}
+                      {profile.id === priority?.winningProfileId
+                        ? " · Winning match"
+                        : ""}
+                    </summary>
+                    <p className="mt-3 text-xs leading-5 text-text-tertiary">
+                      Internal ordering value — not a success forecast:{" "}
+                      {profile.reviewPriority.internalScore === null
+                        ? "Unavailable"
+                        : `${Math.round(profile.reviewPriority.internalScore * 100)}%`}
+                      {" · "}
+                      {profile.reviewPriority.confidence.presentCount}/
+                      {profile.reviewPriority.confidence.applicableCount}{" "}
+                      applicable inputs present
                     </p>
-                    <p className="mt-3 text-lg font-semibold text-accent-primary">
-                      {opportunityComponentStrength(value)}
-                    </p>
-                    <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                      {presentation.description}
-                    </p>
-                  </div>
-                );
-              },
-            )}
-          </div>
+                    <div className="mt-4 grid gap-px overflow-hidden bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
+                      {profile.reviewPriority.components.map((component) => (
+                        <div
+                          key={component.key}
+                          className="bg-surface-raised px-4 py-4"
+                        >
+                          <p className="text-xs font-semibold capitalize text-text-secondary">
+                            {component.key.replaceAll("_", " ")}
+                          </p>
+                          <p className="mt-2 text-lg font-semibold text-accent-primary">
+                            {component.value === null
+                              ? "Unavailable"
+                              : `${Math.round(component.value * 100)}%`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="w-full min-w-[620px] text-left text-xs">
+                        <thead className="text-text-muted">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold">Input</th>
+                            <th className="px-3 py-2 font-semibold">State</th>
+                            <th className="px-3 py-2 font-semibold">
+                              Assessment
+                            </th>
+                            <th className="px-3 py-2 font-semibold">Source</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border-subtle">
+                          {profile.reviewPriority.inputs.map((input) => (
+                            <tr key={input.key}>
+                              <td className="px-3 py-2 font-medium text-text-primary">
+                                {input.key.replaceAll("_", " ")}
+                              </td>
+                              <td className="px-3 py-2 text-text-secondary">
+                                {input.availability === "not_applicable"
+                                  ? "Not applicable"
+                                  : input.availability === "unavailable"
+                                    ? "Unavailable"
+                                    : "Available"}
+                              </td>
+                              <td className="px-3 py-2 capitalize text-text-secondary">
+                                {input.assessment.replaceAll("_", " ")}
+                              </td>
+                              <td className="px-3 py-2 text-text-tertiary">
+                                {input.source}
+                                {input.sourceAt
+                                  ? ` · ${formatOpportunityDate(input.sourceAt)}`
+                                  : ""}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                ) : null,
+              )}
+            </div>
+          ) : (
+            <p className="border-y border-border-muted py-5 text-sm text-text-tertiary">
+              Detailed priority evidence is not available for this legacy
+              result.
+            </p>
+            )
+          ) : (
+            <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-5">
+              {Object.entries(record.rank.components).map(
+                ([component, value]) => {
+                  const presentation = OPPORTUNITY_COMPONENTS[component];
+                  if (typeof value !== "number" || !presentation) return null;
+                  return (
+                    <div key={component} className="bg-surface-raised px-4 py-5">
+                      <p className="text-sm font-semibold text-text-primary">
+                        {presentation.label}
+                      </p>
+                      <p className="mt-3 text-lg font-semibold text-accent-primary">
+                        {opportunityComponentStrength(value)}
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                        {presentation.description}
+                      </p>
+                    </div>
+                  );
+                },
+              )}
+            </div>
+          )}
 
           <SectionHeader
             icon={Radar}
@@ -505,7 +690,12 @@ export function OpportunityGameRecordClient({
           <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
             {currentMetrics.length === 0 ? (
               <p className="col-span-full bg-surface-raised px-4 py-5 text-sm text-text-tertiary">
-                Current player and review metrics are not yet available.
+                {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+                  ? priority?.lane === "new_game" ||
+                    record.app.releaseState?.toLowerCase() !== "released"
+                    ? "This game is unreleased, so post-release traction is not available yet."
+                    : "Current traction data is not available from the recorded sources."
+                  : "Current player and review metrics are not yet available."}
               </p>
             ) : (
               currentMetrics.slice(0, 4).map(([name, value]) => (
@@ -578,7 +768,24 @@ export function OpportunityGameRecordClient({
                     {record.cohort.members.slice(0, 20).map((member) => (
                       <tr key={member.appid}>
                         <td className="px-3 py-3 font-medium text-text-primary">
-                          {member.name}
+                          {Number.isInteger(member.appid) &&
+                          member.appid > 0 ? (
+                            <a
+                              href={`https://store.steampowered.com/app/${member.appid}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={`Open ${member.name} on Steam`}
+                              className="inline-flex items-center gap-1.5 hover:text-accent-primary"
+                            >
+                              {member.name}
+                              <ExternalLink
+                                className="h-3 w-3"
+                                aria-hidden="true"
+                              />
+                            </a>
+                          ) : (
+                            member.name
+                          )}
                         </td>
                         <td className="max-w-xs px-3 py-3 text-text-tertiary">
                           {member.inclusionReasons.join(" · ")}

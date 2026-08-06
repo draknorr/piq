@@ -14,6 +14,7 @@ import {
   Filter,
   FlaskConical,
   Image as ImageIcon,
+  Info,
   Mail,
   Plus,
   RefreshCw,
@@ -49,6 +50,9 @@ import {
 } from "./lib/workspace-query";
 
 type ProfilesView = "catalog" | "loading" | "editor";
+
+const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
+  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
 
 const RESULT_SECTIONS: Array<{
   key: keyof OpportunityBootstrap["dailyOverview"]["groups"];
@@ -831,13 +835,21 @@ function ProfileLists({
             </div>
           </div>
         ) : loading && !hasResults ? (
-          <div className="grid min-h-[360px] place-items-center">
-            <div className="text-center">
-              <RefreshCw className="mx-auto h-5 w-5 animate-spin text-accent-primary" />
-              <p className="mt-3 text-sm font-medium text-text-secondary">
-                Loading profile matches
-              </p>
-            </div>
+          <div className="space-y-3 py-8" aria-live="polite" aria-busy="true">
+            <p className="sr-only">Loading opportunities</p>
+            {[0, 1, 2].map((index) => (
+              <div
+                key={index}
+                className="grid min-h-36 animate-pulse grid-cols-[112px_1fr] gap-4 border-b border-border-subtle py-4"
+              >
+                <div className="rounded-md bg-surface-elevated" />
+                <div className="space-y-3 py-1">
+                  <div className="h-4 w-2/5 rounded bg-surface-elevated" />
+                  <div className="h-3 w-full rounded bg-surface-elevated" />
+                  <div className="h-3 w-4/5 rounded bg-surface-elevated" />
+                </div>
+              </div>
+            ))}
           </div>
         ) : !hasResults ? (
           <div className="grid min-h-[420px] place-items-center">
@@ -849,8 +861,9 @@ function ProfileLists({
                   : "No games match these list filters"}
               </h3>
               <p className="mt-2 text-sm leading-6 text-text-tertiary">
-                Try another profile or event type. Enabled profiles will keep
-                watching Steam for meaningful changes.
+                {issue?.status === "not_run"
+                  ? "Enable a sourcing profile to begin evaluating Steam games for review."
+                  : "Try another profile or event type. Enabled profiles will keep watching Steam for meaningful changes."}
               </p>
             </div>
           </div>
@@ -917,78 +930,251 @@ function ResultSection({
       </div>
       <div className="divide-y divide-border-subtle">
         {results.map((result) => (
-          <Link
-            key={result.id}
-            href={`/opportunities/games/${result.appid}?result=${result.id}`}
-            prefetch={false}
-            className={`group my-px block rounded-lg px-2 py-4 transition sm:grid sm:grid-cols-[112px_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-3 xl:grid-cols-[132px_minmax(0,1fr)_150px_24px] xl:gap-5 ${
-              result.triggeredByMediaAddition
-                ? "bg-accent-primary-muted/35 ring-1 ring-inset ring-accent-primary/40 hover:bg-accent-primary-muted/50"
-                : "hover:bg-surface-elevated/45"
-            }`}
-          >
-            <OpportunityResultImage result={result} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h4 className="min-w-0 truncate text-base font-semibold text-text-primary">
-                  {result.name}
-                </h4>
-                {result.triggeredByMediaAddition && (
-                  <span className="shrink-0 rounded-full border border-accent-primary/30 bg-accent-primary-muted px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-accent-primary">
-                    New media
-                  </span>
-                )}
-              </div>
-              <p className="mt-2 max-w-3xl text-base font-medium leading-6 text-text-primary">
-                {result.changeSummary}
-              </p>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">
-                {opportunityWhyItMatters(result)}
-              </p>
-              {result.matchedProfiles.length > 0 && (
-                <p className="mt-3 text-xs text-text-tertiary">
-                  <span className="font-semibold text-text-secondary">
-                    Matches your sourcing profile:
-                  </span>{" "}
-                  {result.matchedProfiles
-                    .map((profile) => profile.name)
-                    .join(", ")}
-                </p>
-              )}
-            </div>
-            <div className="clear-both flex flex-wrap gap-x-5 gap-y-2 pt-3 sm:col-start-2 sm:pt-0 xl:col-start-auto xl:block xl:space-y-3 xl:text-right">
-              <div>
-                <p className="text-sm font-semibold text-text-primary">
-                  {opportunityStrengthLabel(result.score)}
-                </p>
-                <p className="mt-0.5 text-xs tabular-nums text-text-tertiary">
-                  Opportunity fit:{" "}
-                  {result.score === null
-                    ? "Not available"
-                    : `${Math.round(result.score)}/100`}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-text-secondary">
-                  Market potential:{" "}
-                  {opportunityPotentialLabel(result.marketPotential)}
-                </p>
-                <p
-                  className="mt-0.5 text-xs text-text-tertiary"
-                  title={opportunityConfidenceExplanation(result.confidence)}
-                >
-                  {opportunityConfidenceLabel(result.confidence)}
-                </p>
-              </div>
-            </div>
-            <ArrowRight
-              aria-hidden="true"
-              className="mt-1 hidden h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary xl:block"
-            />
-          </Link>
+          OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+            <OpportunityResultCard key={result.id} result={result} />
+          ) : (
+            <LegacyOpportunityResultCard key={result.id} result={result} />
+          )
         ))}
       </div>
     </section>
+  );
+}
+
+function LegacyOpportunityResultCard({
+  result,
+}: {
+  result: OpportunityResultSummary;
+}) {
+  return (
+    <Link
+      href={`/opportunities/games/${result.appid}?result=${result.id}`}
+      prefetch={false}
+      className={`group my-px block rounded-lg px-2 py-4 transition sm:grid sm:grid-cols-[112px_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-3 xl:grid-cols-[132px_minmax(0,1fr)_150px_24px] xl:gap-5 ${
+        result.triggeredByMediaAddition
+          ? "bg-accent-primary-muted/35 ring-1 ring-inset ring-accent-primary/40 hover:bg-accent-primary-muted/50"
+          : "hover:bg-surface-elevated/45"
+      }`}
+    >
+      <OpportunityResultImage result={result} />
+      <div className="min-w-0">
+        <h4 className="min-w-0 truncate text-base font-semibold text-text-primary">
+          {result.name}
+        </h4>
+        <p className="mt-2 max-w-3xl text-base font-medium leading-6 text-text-primary">
+          {result.changeSummary}
+        </p>
+        <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">
+          {opportunityWhyItMatters(result)}
+        </p>
+        {result.matchedProfiles.length > 0 && (
+          <p className="mt-3 text-xs text-text-tertiary">
+            <span className="font-semibold text-text-secondary">
+              Matches your sourcing profile:
+            </span>{" "}
+            {result.matchedProfiles.map((profile) => profile.name).join(", ")}
+          </p>
+        )}
+      </div>
+      <div className="clear-both flex flex-wrap gap-x-5 gap-y-2 pt-3 sm:col-start-2 sm:pt-0 xl:col-start-auto xl:block xl:space-y-3 xl:text-right">
+        <div>
+          <p className="text-sm font-semibold text-text-primary">
+            {opportunityStrengthLabel(result.score)}
+          </p>
+          <p className="mt-0.5 text-xs tabular-nums text-text-tertiary">
+            Opportunity fit:{" "}
+            {result.score === null
+              ? "Not available"
+              : `${Math.round(result.score)}/100`}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-text-secondary">
+            Market potential: {opportunityPotentialLabel(result.marketPotential)}
+          </p>
+          <p
+            className="mt-0.5 text-xs text-text-tertiary"
+            title={opportunityConfidenceExplanation(result.confidence)}
+          >
+            {opportunityConfidenceLabel(result.confidence)}
+          </p>
+        </div>
+      </div>
+      <ArrowRight
+        aria-hidden="true"
+        className="mt-1 hidden h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary xl:block"
+      />
+    </Link>
+  );
+}
+
+function priorityLabel(result: OpportunityResultSummary): string {
+  if (!result.reviewPriority) return "Legacy result";
+  const lane = {
+    material_change: "Material change",
+    new_game: "New discovery",
+    traction: "Traction",
+  }[result.reviewPriority.lane];
+  const band = {
+    monitor: "Monitor",
+    review_now: "Review now",
+    review_soon: "Review soon",
+  }[result.reviewPriority.priorityBand];
+  return `${lane} — ${band}`;
+}
+
+function OpportunityResultCard({
+  result,
+}: {
+  result: OpportunityResultSummary;
+}) {
+  const visibleProfiles = result.matchedProfiles.slice(0, 2);
+  const extraProfiles = Math.max(
+    0,
+    result.matchedProfiles.length - visibleProfiles.length,
+  );
+  return (
+    <article
+      className={`group relative my-px rounded-lg px-2 py-4 transition sm:grid sm:grid-cols-[112px_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-3 xl:grid-cols-[132px_minmax(0,1fr)_190px_24px] xl:gap-5 ${
+        result.triggeredByMediaAddition
+          ? "bg-accent-primary-muted/35 ring-1 ring-inset ring-accent-primary/40 hover:bg-accent-primary-muted/50"
+          : "hover:bg-surface-elevated/45"
+      }`}
+    >
+      <Link
+        aria-label={`Open opportunity record for ${result.name}`}
+        href={`/opportunities/games/${result.appid}?result=${result.id}`}
+        prefetch={false}
+        className="absolute inset-0 z-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      />
+      <div className="pointer-events-none relative z-[1]">
+        <OpportunityResultImage result={result} />
+      </div>
+      <div className="pointer-events-none relative z-[1] min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h4 className="min-w-0 truncate text-base font-semibold text-text-primary">
+            {result.name}
+          </h4>
+          {result.triggeredByMediaAddition && (
+            <span className="shrink-0 rounded-full border border-accent-primary/30 bg-accent-primary-muted px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-accent-primary">
+              New media
+            </span>
+          )}
+        </div>
+        <p className="mt-2 line-clamp-2 max-w-3xl text-sm leading-6 text-text-secondary">
+          {result.gameDescription?.text ??
+            "Steam has not provided a short description for this game yet."}
+        </p>
+        {result.reviewPriority ? (
+          <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs font-medium text-text-primary">
+            {result.reviewPriority.reasons.slice(0, 3).map((reason) => (
+              <li
+                key={reason}
+                className="before:mr-1.5 before:text-accent-primary before:content-['•']"
+              >
+                {reason}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-xs text-semantic-warning">
+            Legacy result — review priority will appear after the next natural
+            evaluation.
+          </p>
+        )}
+        {result.matchedProfiles.length > 0 && (
+          <p className="mt-3 text-xs text-text-tertiary">
+            <span className="font-semibold text-text-secondary">Matches:</span>{" "}
+            {visibleProfiles.map((profile) => profile.name).join(", ")}
+            {extraProfiles > 0 ? ` +${extraProfiles} profiles` : ""}
+          </p>
+        )}
+      </div>
+      <div className="relative z-[2] clear-both flex flex-wrap gap-x-5 gap-y-2 pt-3 sm:col-start-2 sm:pt-0 xl:col-start-auto xl:block xl:space-y-3 xl:text-right">
+        <div className="pointer-events-none">
+          <p className="text-sm font-semibold text-text-primary">
+            {priorityLabel(result)}
+          </p>
+          <p className="mt-1 text-xs text-text-tertiary">
+            {opportunityPotentialLabel(result.marketPotential)} market
+          </p>
+        </div>
+        <OpportunityConfidenceDisclosure result={result} />
+      </div>
+      <ArrowRight
+        aria-hidden="true"
+        className="pointer-events-none relative z-[1] mt-1 hidden h-4 w-4 text-text-muted transition-transform group-hover:translate-x-1 group-hover:text-accent-primary xl:block"
+      />
+    </article>
+  );
+}
+
+function OpportunityConfidenceDisclosure({
+  result,
+}: {
+  result: OpportunityResultSummary;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const confidence = result.reviewPriority?.confidence;
+  const popoverId = `opportunity-confidence-${result.id}`;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
+
+  return (
+    <div className="pointer-events-auto relative xl:ml-auto">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-controls={popoverId}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border-muted bg-surface-raised px-2.5 py-1 text-xs font-semibold text-text-secondary outline-none hover:border-border-prominent focus-visible:ring-2 focus-visible:ring-accent-primary"
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        {confidence
+          ? confidence.label === "high"
+            ? "High confidence"
+            : confidence.label === "limited"
+              ? "Limited evidence"
+              : "Directional evidence"
+          : opportunityConfidenceLabel(result.confidence)}
+      </button>
+      {open && (
+        <div
+          id={popoverId}
+          role="status"
+          className="absolute right-0 top-10 z-20 w-72 rounded-lg border border-border-muted bg-surface-raised p-3 text-left text-xs leading-5 text-text-secondary shadow-lg"
+        >
+          {confidence
+            ? confidence.label === "high"
+              ? "The applicable profile, market, and game evidence is complete and current."
+              : confidence.label === "limited"
+                ? "One or more applicable inputs are unavailable, stale, or conflicting."
+                : "This evidence is directional; post-release traction may not be expected yet."
+            : opportunityConfidenceExplanation(result.confidence)}
+          {confidence && (
+            <p className="mt-2 text-text-muted">
+              {confidence.presentCount}/{confidence.applicableCount}{" "}
+              applicable inputs present
+              {confidence.staleCount
+                ? ` · ${confidence.staleCount} stale`
+                : ""}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

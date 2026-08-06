@@ -32,9 +32,24 @@ async function main(): Promise<void> {
     process.env.OPPORTUNITY_WEBSITE_BASE_URL ??
     process.env.NEXT_PUBLIC_APP_URL ??
     "http://localhost:3001";
+  const orderReviewPriorityV2 = {
+    discoverNewGames:
+      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY === "1",
+    findEmergingTraction:
+      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION === "1",
+    monitorMaterialChanges:
+      process.env.OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL === "1",
+  };
+  if (Object.values(orderReviewPriorityV2).some(Boolean)) {
+    throw new Error(
+      "Opportunity v2 ordering remains blocked until its policy-specific calibration artifact and canary gate are approved.",
+    );
+  }
   const pool = getDataPlanePool();
   const worker = new OpportunityWorker(new OpportunityWorkerRepository(pool), {
     claimLimit,
+    computeReviewPriorityV2:
+      process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
     websiteBaseUrl,
     workerId,
   });
@@ -50,6 +65,7 @@ async function main(): Promise<void> {
             "PublisherIQ <opportunities@publisheriq.com>",
         }),
         workerId,
+        process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1",
       )
     : null;
   let shuttingDown = false;
@@ -63,9 +79,14 @@ async function main(): Promise<void> {
 
   log.info("Starting Steam opportunity worker", {
     claimLimit,
+    computeReviewPriorityV2:
+      process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
     deliveryEnabled: Boolean(deliveryDispatcher),
     deliveryLimit,
+    presentReviewPriorityV2:
+      process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1",
     maxIdlePolls: maxIdlePolls || null,
+    orderReviewPriorityV2,
     pollIntervalMs,
     websiteBaseUrl,
     workerId,

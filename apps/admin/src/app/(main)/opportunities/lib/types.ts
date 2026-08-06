@@ -80,6 +80,80 @@ export type OpportunityResultLabel =
   | "materially_changed"
   | "tracked_update";
 
+export type OpportunityRankingPolicy =
+  | "discover_new_games"
+  | "find_emerging_traction"
+  | "monitor_material_changes";
+
+export interface OpportunityGameDescription {
+  contentHash: string | null;
+  hasHeaderImage: boolean;
+  hasReleasePath: boolean;
+  hasSupportedLanguages: boolean;
+  kind:
+    | "steam_short"
+    | "steam_about"
+    | "steam_detailed"
+    | "structured"
+    | "unavailable";
+  sanitizerVersion: "opportunity-description/v1";
+  screenshotCount: number;
+  sourceAt: string | null;
+  sourceSnapshotId: string | null;
+  text: string;
+  trailerCount: number;
+}
+
+export interface OpportunityReviewPriorityConfidence {
+  applicableCount: number;
+  conflictingCount: number;
+  label: "high" | "directional" | "limited";
+  presentCount: number;
+  reasons: string[];
+  score: number;
+  staleCount: number;
+  version: "opportunity-confidence/v2";
+}
+
+export interface OpportunityReviewPrioritySummary {
+  confidence: OpportunityReviewPriorityConfidence;
+  internalScore: number | null;
+  lane: "new_game" | "traction" | "material_change";
+  policy: OpportunityRankingPolicy;
+  priorityBand: "review_now" | "review_soon" | "monitor";
+  reasons: string[];
+  version: "opportunity-ranking/v2";
+  winningProfileId: string;
+}
+
+export interface OpportunityReviewPriorityDecision extends OpportunityReviewPrioritySummary {
+  allMatchedProfileIds: string[];
+  components: Array<{
+    baseWeight: number;
+    contribution: number | null;
+    effectiveWeight: number;
+    key: string;
+    value: number | null;
+  }>;
+  eligibility: "eligible";
+  eligibilityReasonCodes: string[];
+  inputs: Array<{
+    assessment: "positive" | "neutral" | "negative" | "mixed" | "not_assessed";
+    availability: "available" | "unavailable" | "not_applicable";
+    calculationVersion: string | null;
+    confidenceWeight: number;
+    criticalForConfidence: boolean;
+    key: string;
+    normalizedValue: number | null;
+    rawValue: unknown;
+    reasonCode: string;
+    source: string;
+    sourceAt: string | null;
+  }>;
+  selectionSource: "explicit" | "legacy_inference";
+  sortTuple: [number, number, number | null, string, number, string];
+}
+
 export type OpportunityDateOperand =
   | { date: string; kind: "absolute_date" }
   | { kind: "relative_window"; window: OpportunityRelativeDateWindow };
@@ -123,6 +197,7 @@ export interface OpportunityResultSummary {
   eventLabel: OpportunityResultLabel;
   id: string;
   headerImageUrl: string | null;
+  gameDescription: OpportunityGameDescription | null;
   marketPotential:
     | "insufficient_data"
     | "limited"
@@ -132,7 +207,8 @@ export interface OpportunityResultSummary {
   matchedProfiles: Array<{ id: string; name: string }>;
   name: string;
   rank: number | null;
-  rankComponents: Record<string, number>;
+  rankComponents: Record<string, unknown>;
+  reviewPriority: OpportunityReviewPrioritySummary | null;
   score: number | null;
   screenshotThumbnailUrl: string | null;
   strongestEvidence: string[];
@@ -313,6 +389,7 @@ export interface OpportunityBootstrap {
 export interface OpportunityProfileDetail {
   currentVersion: number | null;
   currentVersionDetail: {
+    calculationConfig: Record<string, unknown>;
     eventSubscriptions: OpportunitySignalFamily[];
     id: string;
     profileId: string;
@@ -442,6 +519,7 @@ export interface OpportunityGameRecord {
       preferredOutcomes: RuleOutcomeGroup[];
       requiredOutcomes: RuleOutcomeGroup[];
     };
+    reviewPriority: OpportunityReviewPriorityDecision | null;
   }>;
   missingEvidence: string[];
   officialNews: Array<{

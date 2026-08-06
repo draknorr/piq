@@ -4,6 +4,7 @@ import {
   OpportunityNotFoundError,
   type OpportunityIdentity,
   type OpportunityPreviewRequest,
+  type OpportunityRankingPolicy,
   type OpportunityResultLabel,
   type OpportunityRuleSet,
   type OpportunityService,
@@ -204,6 +205,7 @@ export async function tryHandleOpportunityRequest(params: {
           immediateFullMatchEnabled?: boolean;
           localDeliveryTime?: string;
           name: string;
+          rankingPolicy?: OpportunityRankingPolicy;
           rules: OpportunityRuleSet;
           sourcePresetVersionId?: string | null;
           timezone: string;
@@ -246,6 +248,7 @@ export async function tryHandleOpportunityRequest(params: {
           localDeliveryTime?: string;
           name: string;
           profileId: string;
+          rankingPolicy?: OpportunityRankingPolicy;
           rules: OpportunityRuleSet;
           timezone: string;
         }>(params.request);

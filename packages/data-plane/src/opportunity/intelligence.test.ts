@@ -7,13 +7,17 @@ import {
   calculateOpportunityMarketContext,
   calculateOpportunityPresetHealth,
   calculateOpportunityRanking,
+  calculateOpportunityReviewPriority,
   cleanOpportunityProfileName,
+  compareOpportunityReviewPriority,
   decodeOpportunityText,
   describeOpportunityChange,
 } from "./intelligence.js";
 import type {
   OpportunityCohortMember,
+  OpportunityEvaluationInput,
   OpportunityObservedChange,
+  OpportunityProfileEvaluation,
 } from "./types.js";
 
 function member(
@@ -50,6 +54,227 @@ function change(
     ...overrides,
   };
 }
+
+const ELIGIBLE_PROFILE_EVALUATION = {
+  excluded: false,
+  excludedOutcomes: [],
+  missingRequiredFields: [],
+  outcome: "eligible",
+  preferenceContribution: 1,
+  preferredOutcomes: [
+    {
+      clauseOutcomes: [
+        {
+          actualValue: ["Cozy"],
+          clauseId: "cozy-clause",
+          comparisonValue: "Cozy",
+          confidence: "high",
+          evidenceClass: "observed_fact",
+          explanation: "Steam tags include Cozy.",
+          field: "tags",
+          operator: "contains",
+          source: "steam_storefront",
+          sourceAt: "2026-08-05T15:24:39.229Z",
+          state: "true",
+        },
+      ],
+      contribution: 1,
+      groupId: "cozy",
+      importance: "high",
+      label: "Cozy games",
+      operator: "any",
+      state: "true",
+    },
+  ],
+  requiredOutcomes: [],
+} as OpportunityProfileEvaluation;
+
+function known(value: unknown, sourceAt = "2026-08-05T15:24:39.229Z") {
+  return {
+    calculationVersion: null,
+    confidence: "high" as const,
+    evidenceClass: "observed_fact" as const,
+    source: "steam_storefront",
+    sourceAt,
+    state: "known" as const,
+    value,
+  };
+}
+
+function unknown(reason = "source_blocked") {
+  return {
+    confidence: "directional" as const,
+    evidenceClass: "observed_fact" as const,
+    reason,
+    source: "market_metrics",
+    sourceAt: null,
+    state: "unknown" as const,
+    value: null,
+  };
+}
+
+function discoveryInput(
+  overrides: OpportunityEvaluationInput["fields"] = {},
+): OpportunityEvaluationInput {
+  return {
+    appid: 3_563_080,
+    description: {
+      contentHash: "description-hash",
+      hasHeaderImage: true,
+      hasReleasePath: true,
+      hasSupportedLanguages: true,
+      kind: "steam_short",
+      sanitizerVersion: "opportunity-description/v1",
+      screenshotCount: 6,
+      sourceAt: "2026-08-05T15:24:39.229Z",
+      sourceSnapshotId: "snapshot",
+      text: "Swords & Slippers is a cozy role-playing adventure.",
+      trailerCount: 1,
+    },
+    fields: {
+      ccu_change_30d: unknown(),
+      ccu_change_7d: unknown(),
+      ccu_peak: unknown(),
+      publisheriq_added_at: known("2026-08-05T15:24:39.229Z"),
+      reviews_added_30d: unknown(),
+      reviews_added_7d: unknown(),
+      self_published: known(true),
+      tags: known(["Cozy", "RPG"]),
+      total_reviews: unknown(),
+      ...overrides,
+    },
+    name: "Swords & Slippers",
+  };
+}
+
+function reviewPriorityParams(
+  overrides: Partial<
+    Parameters<typeof calculateOpportunityReviewPriority>[0]
+  > = {},
+): Parameters<typeof calculateOpportunityReviewPriority>[0] {
+  const members = Array.from({ length: 20 }, (_, index) => member(index + 1));
+  return {
+    affectedRuleFields: [],
+    allMatchedProfileIds: ["new-games"],
+    cohort: { coverage: 1, fallbackTier: 1, members },
+    effectiveAt: "2026-08-05T15:24:39.229Z",
+    evaluation: ELIGIBLE_PROFILE_EVALUATION,
+    eventMateriality: 1,
+    eventSubscribed: true,
+    eventType: "first_observed",
+    input: discoveryInput(),
+    lane: "new_game",
+    market: calculateOpportunityMarketContext(members),
+    now: "2026-08-05T16:00:00.000Z",
+    policy: "discover_new_games",
+    profileId: "new-games",
+    selectionSource: "explicit",
+    ...overrides,
+  };
+}
+
+describe("opportunity review priority v2", () => {
+  it("keeps Swords & Slippers reviewable without post-release traction", () => {
+    const result = calculateOpportunityReviewPriority(reviewPriorityParams());
+    const tractionInputs = result.inputs.filter((input) =>
+      [
+        "total_reviews",
+        "ccu_peak",
+        "reviews_added_7d",
+        "reviews_added_30d",
+        "ccu_change_7d",
+        "ccu_change_30d",
+      ].includes(input.key),
+    );
+
+    assert.equal(result.lane, "new_game");
+    assert.notEqual(result.internalScore, null);
+    assert.ok(result.reasons.includes("Self-published"));
+    assert.ok(
+      tractionInputs.every(
+        (input) => input.availability === "not_applicable",
+      ),
+    );
+    assert.notEqual(result.confidence.label, "limited");
+  });
+
+  it("preserves the inclusive 72-hour discovery grace boundary", () => {
+    const firstObservedAt = "2026-08-01T00:00:00.000Z";
+    const atBoundary = calculateOpportunityReviewPriority(
+      reviewPriorityParams({
+        input: discoveryInput({
+          publisheriq_added_at: known(firstObservedAt, firstObservedAt),
+        }),
+        now: "2026-08-04T00:00:00.000Z",
+      }),
+    );
+    const afterBoundary = calculateOpportunityReviewPriority(
+      reviewPriorityParams({
+        input: discoveryInput({
+          publisheriq_added_at: known(firstObservedAt, firstObservedAt),
+        }),
+        now: "2026-08-04T00:00:00.001Z",
+      }),
+    );
+    const atValue = atBoundary.components.find(
+      (component) => component.key === "freshness_launch_timing",
+    )?.value;
+    const afterValue = afterBoundary.components.find(
+      (component) => component.key === "freshness_launch_timing",
+    )?.value;
+
+    assert.equal(atValue, 1);
+    assert.ok((afterValue ?? 1) < 1);
+  });
+
+  it("distinguishes known zero traction from unavailable traction", () => {
+    const knownZero = calculateOpportunityReviewPriority(
+      reviewPriorityParams({
+        input: discoveryInput({
+          ccu_peak: known(0),
+          reviews_added_30d: known(0),
+          total_reviews: known(0),
+        }),
+        lane: "traction",
+        policy: "find_emerging_traction",
+      }),
+    );
+    const unavailable = calculateOpportunityReviewPriority(
+      reviewPriorityParams({
+        lane: "traction",
+        policy: "find_emerging_traction",
+      }),
+    );
+
+    assert.equal(
+      knownZero.inputs.find((input) => input.key === "total_reviews")
+        ?.availability,
+      "available",
+    );
+    assert.equal(
+      knownZero.inputs.find((input) => input.key === "total_reviews")
+        ?.assessment,
+      "negative",
+    );
+    assert.equal(
+      unavailable.inputs.find((input) => input.key === "total_reviews")
+        ?.availability,
+      "unavailable",
+    );
+  });
+
+  it("breaks multi-profile ties by the persisted profile id", () => {
+    const left = calculateOpportunityReviewPriority(
+      reviewPriorityParams({ profileId: "a-profile" }),
+    );
+    const right = calculateOpportunityReviewPriority(
+      reviewPriorityParams({ profileId: "b-profile" }),
+    );
+
+    assert.ok(compareOpportunityReviewPriority(left, right) < 0);
+    assert.ok(compareOpportunityReviewPriority(right, left) > 0);
+  });
+});
 
 describe("opportunity intelligence", () => {
   it("keeps conservative production-calibrated v1 market thresholds", () => {

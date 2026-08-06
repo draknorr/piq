@@ -4,14 +4,20 @@ import { performance } from "node:perf_hooks";
 import {
   calculateOpportunityMarketContext,
   calculateOpportunityRanking,
+  calculateOpportunityReviewPriority,
 } from "./intelligence.js";
 import { assertOpportunityRuleInputComplete } from "./repository.js";
+import {
+  decodeOpportunityReviewPriorityDecision,
+  encodeOpportunityReviewPriorityDecision,
+} from "./review-priority-storage.js";
 import { evaluateOpportunityProfile } from "./rules.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityCohortMember,
   type OpportunityEvaluationInput,
   type OpportunityFieldValue,
+  type OpportunityRankingPolicy,
   type OpportunityRuleField,
   type OpportunityRuleSet,
   type OpportunityWorkerPhaseTimings,
@@ -22,17 +28,34 @@ export const OPPORTUNITY_PRODUCTION_SCALE_FIXTURE = {
   profileCount: 3,
   surfacedResultCount: 1_245,
 } as const;
+const BENCHMARK_EFFECTIVE_AT = "2026-08-05T12:00:00.000Z";
+const BENCHMARK_EFFECTIVE_AT_MS = Date.parse(BENCHMARK_EFFECTIVE_AT);
+const BENCHMARK_NOW = "2026-08-05T16:00:00.000Z";
+const BENCHMARK_NOW_MS = Date.parse(BENCHMARK_NOW);
 
 export interface OpportunityPerformanceBenchmarkPass {
   cacheHits: number;
   cacheMisses: number;
   candidateEvaluations: number;
+  candidatePersistenceMs: number;
   candidatePersistenceBatches: number;
+  candidatePersistenceBytes: number;
   mode: "cold" | "warm";
   outputDigest: string;
   resultPersistenceBatches: number;
+  resultPersistenceBytes: number;
+  resultPersistenceMs: number;
+  marketContextMs: number;
+  reviewPriorityMs: number;
   surfacedResults: number;
   timings: OpportunityWorkerPhaseTimings;
+}
+
+interface OpportunityPerformanceBenchmarkRun extends Omit<
+  OpportunityPerformanceBenchmarkPass,
+  "outputDigest"
+> {
+  output: unknown;
 }
 
 export interface OpportunityPerformanceBenchmarkReport {
@@ -112,6 +135,19 @@ function buildInput(appid: number): OpportunityEvaluationInput {
   ) as OpportunityEvaluationInput["fields"];
   const input = {
     appid,
+    description: {
+      contentHash: `description-${appid}`,
+      hasHeaderImage: true,
+      hasReleasePath: true,
+      hasSupportedLanguages: true,
+      kind: "steam_short" as const,
+      sanitizerVersion: "opportunity-description/v1" as const,
+      screenshotCount: 5,
+      sourceAt: "2026-07-28T00:00:00.000Z",
+      sourceSnapshotId: String(appid),
+      text: `Fixture Game ${appid} is a benchmark game with a bounded storefront description.`,
+      trailerCount: 1,
+    },
     fields,
     name: `Fixture Game ${appid}`,
   };
@@ -197,14 +233,24 @@ function elapsed(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export function digestOpportunityBenchmarkOutput(value: unknown): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(value, (_key, item: unknown) => {
+        if (typeof item !== "number" || !Number.isFinite(item)) return item;
+        if (Object.is(item, -0)) return 0;
+        return Number(item.toFixed(12));
+      }),
+    )
+    .digest("hex");
 }
 
 function runPass(
   mode: "cold" | "warm",
   cohortCache: Map<number, OpportunityCohortMember[]>,
-): OpportunityPerformanceBenchmarkPass {
+  includeReviewPriorityV2: boolean,
+  materializeLogicalOutput: boolean,
+): OpportunityPerformanceBenchmarkRun {
   const totalStartedAt = performance.now();
 
   const inputStartedAt = performance.now();
@@ -230,6 +276,16 @@ function runPass(
         .map((candidate) => candidate.appid),
     ),
   );
+  const eligibleByAppid = new Map<
+    number,
+    (typeof candidateEvaluations)[number][]
+  >();
+  for (const candidate of candidateEvaluations) {
+    if (candidate.evaluation.outcome !== "eligible") continue;
+    const matches = eligibleByAppid.get(candidate.appid) ?? [];
+    matches.push(candidate);
+    eligibleByAppid.set(candidate.appid, matches);
+  }
   const profileEvaluationMs = elapsed(profileStartedAt);
 
   const cohortStartedAt = performance.now();
@@ -249,7 +305,7 @@ function runPass(
   const cohortResolutionMs = elapsed(cohortStartedAt);
 
   const marketStartedAt = performance.now();
-  const results = cohorts.map(({ appid, members }) => {
+  const baseResults = cohorts.map(({ appid, members }) => {
     const market = calculateOpportunityMarketContext(members);
     const rank = calculateOpportunityRanking({
       components: {
@@ -261,40 +317,127 @@ function runPass(
       },
       reasons: ["production-scale benchmark fixture"],
     });
-    return { appid, market, rank };
+    return { appid, market, members, rank };
   });
-  const marketCalculationMs = elapsed(marketStartedAt);
+  const marketContextMs = elapsed(marketStartedAt);
+  const priorityStartedAt = performance.now();
+  const results = includeReviewPriorityV2
+    ? baseResults.map(({ appid, market, members, rank }) => {
+        const matches = eligibleByAppid.get(appid) ?? [];
+        const input = inputs[appid - 1]!;
+        const policies: OpportunityRankingPolicy[] = [
+          "discover_new_games",
+          "find_emerging_traction",
+          "monitor_material_changes",
+        ];
+        const allMatchedProfileIds = matches
+          .map((match) => `fixture-profile-${match.profileIndex}`)
+          .sort();
+        let cohortMeasuredCount = 0;
+        for (const member of members) {
+          if (member.totalReviews !== null || member.ccuPeak !== null) {
+            cohortMeasuredCount += 1;
+          }
+        }
+        const reviewPriorities = matches.map((match) => {
+          const policy = policies[match.profileIndex]!;
+          return encodeOpportunityReviewPriorityDecision(
+            calculateOpportunityReviewPriority({
+              affectedRuleFields: ["tags"],
+              allMatchedProfileIds,
+              allMatchedProfileIdsSorted: true,
+              cohort: { coverage: 1, fallbackTier: 1, members },
+              cohortMeasuredCount,
+              effectiveAt: BENCHMARK_EFFECTIVE_AT,
+              effectiveAtMs: BENCHMARK_EFFECTIVE_AT_MS,
+              evaluation: match.evaluation,
+              eventMateriality: 0.8,
+              eventSubscribed: true,
+              eventType:
+                policy === "discover_new_games"
+                  ? "first_observed"
+                  : policy === "find_emerging_traction"
+                    ? "review_breakthrough"
+                    : "taxonomy_repositioned",
+              input,
+              lane:
+                policy === "discover_new_games"
+                  ? "new_game"
+                  : policy === "find_emerging_traction"
+                    ? "traction"
+                    : "material_change",
+              market,
+              now: BENCHMARK_NOW,
+              nowMs: BENCHMARK_NOW_MS,
+              policy,
+              profileId: `fixture-profile-${match.profileIndex}`,
+              selectionSource: "explicit",
+            }),
+          );
+        });
+        return { appid, market, rank, reviewPriorities };
+      })
+    : baseResults.map(({ appid, market, rank }) => ({ appid, market, rank }));
+  const reviewPriorityMs = elapsed(priorityStartedAt);
+  const marketCalculationMs = marketContextMs + reviewPriorityMs;
 
   const persistenceStartedAt = performance.now();
-  const persistedResultBatches: unknown[][] = [];
+  const resultPersistenceStartedAt = performance.now();
+  let resultPersistenceBatches = 0;
+  let resultPersistenceBytes = 0;
   for (let offset = 0; offset < results.length; offset += 100) {
-    persistedResultBatches.push(
-      JSON.parse(
-        JSON.stringify(results.slice(offset, offset + 100)),
-      ) as unknown[],
-    );
+    const batch = results.slice(offset, offset + 100);
+    const serialized = JSON.stringify(batch);
+    resultPersistenceBatches += 1;
+    resultPersistenceBytes += Buffer.byteLength(serialized, "utf8");
   }
-  const persistedCandidateBatches: unknown[][] = [];
+  const resultPersistenceMs = elapsed(resultPersistenceStartedAt);
+  const candidatePersistenceStartedAt = performance.now();
+  let candidatePersistenceBatches = 0;
+  let candidatePersistenceBytes = 0;
   for (let offset = 0; offset < candidateEvaluations.length; offset += 500) {
-    persistedCandidateBatches.push(
-      JSON.parse(
-        JSON.stringify(candidateEvaluations.slice(offset, offset + 500)),
-      ) as unknown[],
+    const serialized = JSON.stringify(
+      candidateEvaluations.slice(offset, offset + 500),
     );
+    candidatePersistenceBatches += 1;
+    candidatePersistenceBytes += Buffer.byteLength(serialized, "utf8");
   }
+  const candidatePersistenceMs = elapsed(candidatePersistenceStartedAt);
   const persistenceMs = elapsed(persistenceStartedAt);
+  const totalMs = elapsed(totalStartedAt);
+  const logicalResults =
+    materializeLogicalOutput && includeReviewPriorityV2
+      ? results.map((result) => ({
+          ...result,
+          reviewPriorities:
+            "reviewPriorities" in result &&
+            Array.isArray(result.reviewPriorities)
+              ? result.reviewPriorities.map((decision) =>
+                  decodeOpportunityReviewPriorityDecision(decision),
+                )
+              : undefined,
+        }))
+      : results;
 
   return {
     cacheHits,
     cacheMisses,
     candidateEvaluations: candidateEvaluations.length,
-    candidatePersistenceBatches: persistedCandidateBatches.length,
+    candidatePersistenceMs,
+    candidatePersistenceBatches,
+    candidatePersistenceBytes,
     mode,
-    outputDigest: digest({
-      candidates: candidateEvaluations,
-      results,
-    }),
-    resultPersistenceBatches: persistedResultBatches.length,
+    output: materializeLogicalOutput
+      ? {
+          candidates: candidateEvaluations,
+          results: logicalResults,
+        }
+      : null,
+    resultPersistenceBatches,
+    resultPersistenceBytes,
+    resultPersistenceMs,
+    marketContextMs,
+    reviewPriorityMs,
     surfacedResults: results.length,
     timings: {
       cohortResolutionMs,
@@ -302,19 +445,41 @@ function runPass(
       marketCalculationMs,
       persistenceMs,
       profileEvaluationMs,
-      totalMs: elapsed(totalStartedAt),
+      totalMs,
     },
   };
 }
 
-export function runOpportunityPerformanceBenchmark(): OpportunityPerformanceBenchmarkReport {
+export function runOpportunityPerformanceBenchmark(
+  options: {
+    includeReviewPriorityV2?: boolean;
+    verifyOutput?: boolean;
+  } = {},
+): OpportunityPerformanceBenchmarkReport {
+  const includeReviewPriorityV2 = options.includeReviewPriorityV2 ?? true;
+  const verifyOutput = options.verifyOutput ?? true;
   const cohortCache = new Map<number, OpportunityCohortMember[]>();
-  const cold = runPass("cold", cohortCache);
-  const warm = runPass("warm", cohortCache);
+  const finalizePass = (
+    run: OpportunityPerformanceBenchmarkRun,
+  ): OpportunityPerformanceBenchmarkPass => {
+    const { output, ...timing } = run;
+    return {
+      ...timing,
+      outputDigest: verifyOutput
+        ? digestOpportunityBenchmarkOutput(output)
+        : "verification-skipped",
+    };
+  };
+  const cold = finalizePass(
+    runPass("cold", cohortCache, includeReviewPriorityV2, verifyOutput),
+  );
+  const warm = finalizePass(
+    runPass("warm", cohortCache, includeReviewPriorityV2, verifyOutput),
+  );
   return {
     fixture: OPPORTUNITY_PRODUCTION_SCALE_FIXTURE,
     localSyntheticOnly: true,
-    outputParity: cold.outputDigest === warm.outputDigest,
+    outputParity: verifyOutput && cold.outputDigest === warm.outputDigest,
     passes: { cold, warm },
     thresholds: {
       coldMs: 3 * 60 * 1000,

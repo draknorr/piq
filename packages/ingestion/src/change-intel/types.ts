@@ -1,9 +1,4 @@
-export type AppCaptureSource =
-  | 'storefront'
-  | 'storefront_tags'
-  | 'news'
-  | 'hero_asset'
-  | 'projection_refresh';
+export type AppCaptureSource = 'storefront' | 'storefront_tags' | 'news' | 'hero_asset' | 'projection_refresh';
 
 export type AppSnapshotSource = 'storefront' | 'pics';
 
@@ -106,6 +101,17 @@ export interface NormalizedStorefrontSnapshot {
   heroImages: StorefrontHeroImages;
   screenshots: StorefrontScreenshot[];
   movies: StorefrontMovie[];
+}
+
+export interface OpportunityDescriptionSummary {
+  hasHeaderImage: boolean;
+  hasReleasePath: boolean;
+  hasSupportedLanguages: boolean;
+  kind: 'steam_short' | 'steam_about' | 'steam_detailed' | 'structured' | 'unavailable';
+  sanitizerVersion: 'opportunity-description/v1';
+  screenshotCount: number;
+  text: string;
+  trailerCount: number;
 }
 
 export interface NormalizedMediaVersion {
