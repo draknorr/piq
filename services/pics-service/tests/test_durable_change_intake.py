@@ -27,6 +27,7 @@ from src.database.durable_intake import (  # noqa: E402
 from src.database.tiger_change_history import ArchivePointer  # noqa: E402
 from src.workers.durable_change_intake import (  # noqa: E402
     DurableChangeIntakeWorker,
+    IncompletePICSChangeResponseError,
 )
 
 
@@ -254,7 +255,7 @@ def test_poll_once_retains_force_full_response_without_advancing_cursor():
         force_full_app_update=True,
     )
 
-    with pytest.raises(RuntimeError, match="source_blocked"):
+    with pytest.raises(IncompletePICSChangeResponseError, match="source_blocked"):
         worker.poll_once(10)
 
     assert len(store.calls) == 1
@@ -268,3 +269,78 @@ def test_processing_cadence_guard_uses_monotonic_deadline():
 
     assert worker._processing_due(214.999) is False
     assert worker._processing_due(215.0) is True
+
+
+def test_run_processes_due_work_while_incremental_intake_is_source_blocked(monkeypatch):
+    class FakeSteam:
+        is_connected = True
+
+        def set_heartbeat_interval(self, _value):
+            pass
+
+        def set_auto_reconnect(self, _value):
+            pass
+
+        def connect(self):
+            return True
+
+        def disconnect(self):
+            pass
+
+    class StartCursorStore:
+        def get_start_change_number(self, **_kwargs):
+            return 10
+
+    class FakeProcessor:
+        worker_id = "test-worker"
+
+        def __init__(self):
+            self.calls = []
+
+        def process_once(self, fetcher):
+            self.calls.append(fetcher)
+            return None
+
+    worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
+    worker._work_mode = "durable"
+    worker._stream_key = "primary"
+    worker._steam = FakeSteam()
+    worker._store = StartCursorStore()
+    worker._health = None
+    worker._fetcher = None
+    worker._processor = FakeProcessor()
+    worker._running = False
+    worker._consecutive_poll_failures = 0
+    worker._last_poll_error = None
+    worker._consecutive_processing_failures = 0
+    worker._last_processing_error = None
+    worker._last_successful_change_poll_at = None
+    worker._last_committed_batch = None
+    worker._last_processing_stats = None
+    worker._last_processing_started_at = None
+    worker._next_processing_at_monotonic = 0.0
+    worker._last_intake_phase_seconds = {}
+
+    fetcher = object()
+    monkeypatch.setattr(
+        "src.workers.durable_change_intake.PICSFetcher",
+        lambda *_args, **_kwargs: fetcher,
+    )
+    monkeypatch.setattr(
+        worker,
+        "poll_once",
+        lambda _last_change: (_ for _ in ()).throw(
+            IncompletePICSChangeResponseError("source_blocked")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.workers.durable_change_intake.gevent.sleep",
+        lambda _seconds: setattr(worker, "_running", False),
+    )
+
+    worker.run()
+
+    assert worker._processor.calls == [fetcher]
+    assert worker._consecutive_poll_failures == 1
+    assert worker._last_poll_error == "source_blocked"
+    assert worker._consecutive_processing_failures == 0

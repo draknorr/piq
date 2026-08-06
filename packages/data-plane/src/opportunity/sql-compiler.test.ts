@@ -16,6 +16,8 @@ describe("opportunity SQL compiler", () => {
 
     assert.match(sql, /result\.missing_evidence/);
     assert.match(sql, /app\.content_descriptors/);
+    assert.match(sql, /tag_evidence\.field_name = 'tags'/);
+    assert.match(sql, /'hentai', 'mature', 'nsfw', 'nudity', 'sexual content'/);
     assert.match(sql, /@ == "3" \|\| @ == "adult"/);
     assert.throws(
       () => opportunityPersistedResultContentSafetySql("result; DROP"),
@@ -77,7 +79,7 @@ describe("opportunity SQL compiler", () => {
     ]);
   });
 
-  it("requires content-descriptor readiness even when a profile has no rules", () => {
+  it("requires non-empty tags or descriptor readiness even when a profile has no rules", () => {
     const compiled = compileOpportunityPreview({
       excluded: [],
       preferred: [],
@@ -86,15 +88,18 @@ describe("opportunity SQL compiler", () => {
     });
 
     assert.match(compiled.matchSql, /evidence_content_descriptors_pics/);
+    assert.match(compiled.matchSql, /evidence_tags_storefront/);
+    assert.match(compiled.matchSql, /jsonb_array_length/);
     assert.match(compiled.matchSql, /readiness_pics\.status = 'ready'/);
     assert.match(compiled.excludedSql, /@ == "3" \|\| @ == "adult"/);
+    assert.match(compiled.excludedSql, /sexual content/);
     assert.equal(
       compiled.requiredGroups[0]?.groupId,
       "content-safety-readiness",
     );
     assert.equal(
       compiled.requiredStages[0]?.label,
-      "Content descriptors available",
+      "Content tags or descriptors available",
     );
   });
 
@@ -152,12 +157,17 @@ describe("opportunity SQL compiler", () => {
       compiled.fromSql,
       /LEFT JOIN ops\.app_field_evidence evidence_content_descriptors_pics/,
     );
+    assert.match(
+      compiled.fromSql,
+      /LEFT JOIN ops\.app_field_evidence evidence_tags_storefront/,
+    );
     assert.match(compiled.matchSql, /self_published_app\.appid IS NOT NULL/);
     assert.match(
       compiled.matchSql,
       /evidence_content_descriptors_pics\.evidence_state = 'known'/,
     );
     assert.match(compiled.excludedSql, /WHEN '3' THEN 'adult'/);
+    assert.match(compiled.excludedSql, /lower\(btrim\(content_tag\.value\)\)/);
     assert.match(compiled.excludedSql, /jsonb_path_query_array/);
     assert.doesNotMatch(
       compiled.matchSql,

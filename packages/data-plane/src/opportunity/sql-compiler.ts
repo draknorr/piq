@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import {
   assertOpportunityRuleSet,
+  OPPORTUNITY_ADULT_CONTENT_TAGS,
   OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES,
 } from "./rules.js";
 import {
@@ -63,10 +64,33 @@ interface FieldSql {
 const STOREFRONT_READY = "readiness_storefront.status = 'ready'";
 const PICS_READY = "readiness_pics.status = 'ready'";
 const CONTENT_DESCRIPTORS_EVIDENCE_ALIAS = "evidence_content_descriptors_pics";
+const CONTENT_TAGS_EVIDENCE_ALIAS = "evidence_tags_storefront";
 const SELF_PUBLISHED_ALIAS = "self_published_app";
 const CONTENT_SAFETY_READINESS_GROUP_ID = "content-safety-readiness";
-const CONTENT_SAFETY_READINESS_LABEL = "Content descriptors available";
+const CONTENT_SAFETY_READINESS_LABEL = "Content tags or descriptors available";
 const ADULT_CONTENT_JSONPATH = '$.* ? (@ == "3" || @ == "adult")';
+const ADULT_CONTENT_TAG_VALUES_SQL = OPPORTUNITY_ADULT_CONTENT_TAGS.map(
+  (tag) => `'${tag}'`,
+).join(", ");
+
+const CONTENT_TAGS_VALUE_SQL = `CASE
+  WHEN jsonb_typeof(${CONTENT_TAGS_EVIDENCE_ALIAS}.value) = 'array'
+    THEN ${CONTENT_TAGS_EVIDENCE_ALIAS}.value
+  ELSE '[]'::jsonb
+END`;
+
+const CONTENT_TAGS_READY_SQL = `(
+  ${CONTENT_TAGS_EVIDENCE_ALIAS}.evidence_state = 'known'
+  AND jsonb_array_length(${CONTENT_TAGS_VALUE_SQL}) > 0
+)`;
+
+const ADULT_CONTENT_TAGS_SQL = `EXISTS (
+  SELECT 1
+  FROM jsonb_array_elements_text(${CONTENT_TAGS_VALUE_SQL}) AS content_tag(value)
+  WHERE lower(btrim(content_tag.value)) = ANY (
+    ARRAY[${ADULT_CONTENT_TAG_VALUES_SQL}]::text[]
+  )
+)`;
 
 const CONTENT_DESCRIPTOR_RULE_VALUE_SQL = `CASE raw_descriptor.value
 ${Object.entries(OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES)
@@ -95,7 +119,64 @@ export function opportunityPersistedResultContentSafetySql(
   if (appAlias) {
     assertSqlIdentifier(appAlias);
   }
-  const adultContentSql = appAlias
+  const descriptorEvidenceKnownSql = `EXISTS (
+    SELECT 1
+    FROM ops.app_field_evidence descriptor_evidence
+    WHERE descriptor_evidence.appid = ${resultAlias}.appid
+      AND descriptor_evidence.field_name = 'content_descriptors'
+      AND descriptor_evidence.source = 'pics'
+      AND descriptor_evidence.evidence_state = 'known'
+  )`;
+  const tagEvidenceKnownSql = `EXISTS (
+    SELECT 1
+    FROM ops.app_field_evidence tag_evidence
+    WHERE tag_evidence.appid = ${resultAlias}.appid
+      AND tag_evidence.field_name = 'tags'
+      AND tag_evidence.source = 'storefront'
+      AND tag_evidence.evidence_state = 'known'
+      AND jsonb_array_length(
+        CASE
+          WHEN jsonb_typeof(tag_evidence.value) = 'array' THEN tag_evidence.value
+          ELSE '[]'::jsonb
+        END
+      ) > 0
+  )`;
+  const legacyDescriptorReadySql = appAlias
+    ? `(
+      NOT EXISTS (
+        SELECT 1
+        FROM ops.app_field_evidence descriptor_evidence_any
+        WHERE descriptor_evidence_any.appid = ${resultAlias}.appid
+          AND descriptor_evidence_any.field_name = 'content_descriptors'
+          AND descriptor_evidence_any.source = 'pics'
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM ops.app_data_readiness pics_readiness
+        WHERE pics_readiness.appid = ${resultAlias}.appid
+          AND pics_readiness.source = 'pics'
+          AND pics_readiness.status = 'ready'
+      )
+      AND ${appAlias}.content_descriptors IS NOT NULL
+    )`
+    : `EXISTS (
+      SELECT 1
+      FROM legacy.apps content_safety_ready_app
+      JOIN ops.app_data_readiness pics_readiness
+        ON pics_readiness.appid = content_safety_ready_app.appid
+       AND pics_readiness.source = 'pics'
+       AND pics_readiness.status = 'ready'
+      WHERE content_safety_ready_app.appid = ${resultAlias}.appid
+        AND content_safety_ready_app.content_descriptors IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ops.app_field_evidence descriptor_evidence_any
+          WHERE descriptor_evidence_any.appid = content_safety_ready_app.appid
+            AND descriptor_evidence_any.field_name = 'content_descriptors'
+            AND descriptor_evidence_any.source = 'pics'
+        )
+    )`;
+  const adultDescriptorSql = appAlias
     ? `jsonb_path_exists(
       COALESCE(${appAlias}.content_descriptors, '{}'::jsonb),
       '${ADULT_CONTENT_JSONPATH}'
@@ -109,10 +190,32 @@ export function opportunityPersistedResultContentSafetySql(
           '${ADULT_CONTENT_JSONPATH}'
         )
     )`;
+  const adultTagSql = `EXISTS (
+    SELECT 1
+    FROM ops.app_field_evidence adult_tag_evidence
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+      CASE
+        WHEN jsonb_typeof(adult_tag_evidence.value) = 'array'
+          THEN adult_tag_evidence.value
+        ELSE '[]'::jsonb
+      END
+    ) AS adult_tag(value)
+    WHERE adult_tag_evidence.appid = ${resultAlias}.appid
+      AND adult_tag_evidence.field_name = 'tags'
+      AND adult_tag_evidence.source = 'storefront'
+      AND adult_tag_evidence.evidence_state = 'known'
+      AND lower(btrim(adult_tag.value)) = ANY (
+        ARRAY[${ADULT_CONTENT_TAG_VALUES_SQL}]::text[]
+      )
+  )`;
   return `(NOT (
     COALESCE(${resultAlias}.missing_evidence, '[]'::jsonb)
       ? 'content_descriptors'
-  ) AND NOT (${adultContentSql}))`;
+  ) AND (
+    ${descriptorEvidenceKnownSql}
+    OR ${tagEvidenceKnownSql}
+    OR ${legacyDescriptorReadySql}
+  ) AND NOT (${adultDescriptorSql}) AND NOT (${adultTagSql}))`;
 }
 
 function fieldEvidenceKnownSql(
@@ -734,11 +837,19 @@ export function compileOpportunityPreview(
     group,
     sql: groupTrueSql(group, context),
   }));
-  const contentSafetyReadinessSql = fieldSql("content_descriptors").knownSql;
-  const adultContentSql = `((${contentSafetyReadinessSql}) AND jsonb_path_exists(
-    ${CONTENT_DESCRIPTOR_RESOLVED_VALUE_SQL},
-    '${ADULT_CONTENT_JSONPATH}'
-  ))`;
+  const contentDescriptorReadinessSql = fieldSql(
+    "content_descriptors",
+  ).knownSql;
+  const contentSafetyReadinessSql = `(
+    (${contentDescriptorReadinessSql}) OR (${CONTENT_TAGS_READY_SQL})
+  )`;
+  const adultContentSql = `(
+    ((${contentDescriptorReadinessSql}) AND jsonb_path_exists(
+      ${CONTENT_DESCRIPTOR_RESOLVED_VALUE_SQL},
+      '${ADULT_CONTENT_JSONPATH}'
+    ))
+    OR ((${CONTENT_TAGS_READY_SQL}) AND (${ADULT_CONTENT_TAGS_SQL}))
+  )`;
   const excludedGroupSql = rules.excluded.map((group) =>
     groupTrueSql(group, context),
   );
@@ -767,6 +878,7 @@ export function compileOpportunityPreview(
       ...[...rules.required, ...rules.preferred, ...rules.excluded].flatMap(
         (group) => group.clauses.map((clause) => clause.field),
       ),
+      "tags" as const,
       "content_descriptors" as const,
     ]),
   );
@@ -837,6 +949,12 @@ export function opportunityPreviewFromSql(
     ON ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.appid = a.appid
     AND ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.field_name = 'content_descriptors'
     AND ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.source = 'pics'`
+      : null,
+    fields.has("tags")
+      ? `LEFT JOIN ops.app_field_evidence ${CONTENT_TAGS_EVIDENCE_ALIAS}
+    ON ${CONTENT_TAGS_EVIDENCE_ALIAS}.appid = a.appid
+    AND ${CONTENT_TAGS_EVIDENCE_ALIAS}.field_name = 'tags'
+    AND ${CONTENT_TAGS_EVIDENCE_ALIAS}.source = 'storefront'`
       : null,
     [...fields].some((field) => STOREFRONT_FIELDS.has(field))
       ? `LEFT JOIN ops.app_data_readiness readiness_storefront
