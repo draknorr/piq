@@ -42,6 +42,12 @@ describe("opportunity production-scale performance fixture", () => {
     assert.equal(warm.cacheHits, 1_245);
     assert.equal(cold.resultPersistenceBatches, 13);
     assert.equal(cold.candidatePersistenceBatches, 24);
+    assert.ok(cold.resultPersistenceBytes > 0);
+    assert.ok(cold.candidatePersistenceBytes > 0);
+    assert.ok(cold.marketContextMs >= 0);
+    assert.ok(cold.reviewPriorityMs > 0);
+    assert.ok(cold.resultPersistenceMs > 0);
+    assert.ok(cold.candidatePersistenceMs > 0);
     assert.equal(
       cold.outputDigest,
       "406bbe0ea37853f6f969ea0ed78e091a2424796d730c506dc361024196f0fa21",
@@ -50,6 +56,13 @@ describe("opportunity production-scale performance fixture", () => {
     const baseline = runOpportunityPerformanceBenchmark({
       includeReviewPriorityV2: false,
     });
+    assert.ok(
+      cold.resultPersistenceBytes > baseline.passes.cold.resultPersistenceBytes,
+    );
+    assert.ok(
+      cold.resultPersistenceBytes <= 4.5 * 1024 * 1024,
+      `expected compact V2 result envelope <= 4.5 MiB, received ${cold.resultPersistenceBytes} bytes`,
+    );
     assert.equal(
       baseline.passes.cold.outputDigest,
       "7b625cb983f6f151939a62351a2e7c7157b40919bef1e264253ee03a85a44a52",

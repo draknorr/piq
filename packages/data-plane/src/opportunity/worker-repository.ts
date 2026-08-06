@@ -44,6 +44,11 @@ import {
   OpportunityRepository,
   presentOpportunityChanges,
 } from "./repository.js";
+import {
+  encodeOpportunityReviewPriorityDecision,
+  OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION,
+  type OpportunityReviewPriorityStorageV1,
+} from "./review-priority-storage.js";
 
 const COHORT_FEATURE_PAGE_SIZE = 25_000;
 const COHORT_FEATURE_MAX_ROWS = 250_000;
@@ -121,6 +126,7 @@ export interface OpportunityEvaluatedMatch {
   evaluation: OpportunityProfileEvaluation;
   profile: OpportunityWorkerProfile;
   reviewPriority?: OpportunityReviewPriorityDecision;
+  reviewPriorityStorage?: OpportunityReviewPriorityStorageV1;
 }
 
 export interface OpportunityReleasedCohort {
@@ -2771,6 +2777,19 @@ export class OpportunityWorkerRepository {
     if (params.results.length === 0) {
       return 0;
     }
+    const encodedPriorities = new WeakMap<
+      OpportunityReviewPriorityDecision,
+      ReturnType<typeof encodeOpportunityReviewPriorityDecision>
+    >();
+    const encodePriority = (
+      decision: OpportunityReviewPriorityDecision,
+    ): ReturnType<typeof encodeOpportunityReviewPriorityDecision> => {
+      const existing = encodedPriorities.get(decision);
+      if (existing) return existing;
+      const encoded = encodeOpportunityReviewPriorityDecision(decision);
+      encodedPriorities.set(decision, encoded);
+      return encoded;
+    };
     const payload = params.results.map((result) => ({
       appid: result.appid,
       calculation_versions: {
@@ -2790,6 +2809,9 @@ export class OpportunityWorkerRepository {
           : undefined,
         reviewPriority: result.reviewPriority
           ? OPPORTUNITY_REVIEW_PRIORITY_VERSION
+          : undefined,
+        reviewPriorityStorage: result.reviewPriority
+          ? OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION
           : undefined,
         ruleInputProjection: OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
         rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
@@ -2835,12 +2857,15 @@ export class OpportunityWorkerRepository {
         preference_score: match.evaluation.preferenceContribution,
         profile_id: match.profile.id,
         profile_version_id: match.profile.versionId,
-        rule_outcomes: match.reviewPriority
-          ? {
-              ...match.evaluation,
-              reviewPriorityV2: match.reviewPriority,
-            }
-          : match.evaluation,
+        rule_outcomes:
+          match.reviewPriorityStorage || match.reviewPriority
+            ? {
+                ...match.evaluation,
+                reviewPriorityV2:
+                  match.reviewPriorityStorage ??
+                  encodePriority(match.reviewPriority!),
+              }
+            : match.evaluation,
       })),
       material_event_id: result.event.id,
       missing_evidence: result.missingEvidence,
@@ -2849,7 +2874,9 @@ export class OpportunityWorkerRepository {
         ...result.rank.components,
         reasons: result.rank.reasons,
         weights: result.rank.weights,
-        v2: result.reviewPriority ?? null,
+        v2: result.reviewPriority
+          ? encodePriority(result.reviewPriority)
+          : null,
       },
       reappeared_after_result_id: result.reappearedAfterResultId,
       rule_evidence: Object.fromEntries(
@@ -3271,6 +3298,19 @@ export class OpportunityWorkerRepository {
     workspaceId: string;
     websiteBaseUrl: string;
   }): Promise<void> {
+    const encodedPriorities = new WeakMap<
+      OpportunityReviewPriorityDecision,
+      ReturnType<typeof encodeOpportunityReviewPriorityDecision>
+    >();
+    const encodePriority = (
+      decision: OpportunityReviewPriorityDecision,
+    ): ReturnType<typeof encodeOpportunityReviewPriorityDecision> => {
+      const existing = encodedPriorities.get(decision);
+      if (existing) return existing;
+      const encoded = encodeOpportunityReviewPriorityDecision(decision);
+      encodedPriorities.set(decision, encoded);
+      return encoded;
+    };
     await this.transaction(async (client) => {
       let createdResults = 0;
       for (const result of params.results) {
@@ -3461,7 +3501,9 @@ export class OpportunityWorkerRepository {
               ...result.rank.components,
               reasons: result.rank.reasons,
               weights: result.rank.weights,
-              v2: result.reviewPriority ?? null,
+              v2: result.reviewPriority
+                ? encodePriority(result.reviewPriority)
+                : null,
             }),
             JSON.stringify(ruleEvidence),
             JSON.stringify({
@@ -3510,6 +3552,9 @@ export class OpportunityWorkerRepository {
                 : undefined,
               reviewPriority: result.reviewPriority
                 ? OPPORTUNITY_REVIEW_PRIORITY_VERSION
+                : undefined,
+              reviewPriorityStorage: result.reviewPriority
+                ? OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION
                 : undefined,
               rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
               signals: "signal-windows/v1",
@@ -3565,10 +3610,12 @@ export class OpportunityWorkerRepository {
               match.profile.id,
               match.profile.versionId,
               JSON.stringify(
-                match.reviewPriority
+                match.reviewPriorityStorage || match.reviewPriority
                   ? {
                       ...match.evaluation,
-                      reviewPriorityV2: match.reviewPriority,
+                      reviewPriorityV2:
+                        match.reviewPriorityStorage ??
+                        encodePriority(match.reviewPriority!),
                     }
                   : match.evaluation,
               ),

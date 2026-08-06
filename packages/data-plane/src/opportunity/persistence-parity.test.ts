@@ -20,6 +20,7 @@ import {
   type OpportunityReviewPriorityDecision,
   type OpportunityRuleSet,
 } from "./types.js";
+import { OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION } from "./review-priority-storage.js";
 import {
   type OpportunityCandidateEvaluation,
   type OpportunityEvaluatedResult,
@@ -114,6 +115,7 @@ const BASE_CALCULATION_VERSIONS = {
   confidence: OPPORTUNITY_CONFIDENCE_VERSION,
   description: OPPORTUNITY_DESCRIPTION_VERSION,
   reviewPriority: OPPORTUNITY_REVIEW_PRIORITY_VERSION,
+  reviewPriorityStorage: OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION,
   rules: OPPORTUNITY_RULE_SCHEMA_VERSION,
   signals: "signal-windows/v1",
 };

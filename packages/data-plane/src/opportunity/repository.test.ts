@@ -4,10 +4,12 @@ import { describe, it } from "node:test";
 import type { Pool } from "pg";
 
 import { OpportunityRepository } from "./repository.js";
+import { encodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
 import { compileOpportunityPreview } from "./sql-compiler.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityObservedChange,
+  type OpportunityReviewPriorityDecision,
   type OpportunityRuleSet,
 } from "./types.js";
 
@@ -161,6 +163,32 @@ describe("opportunity preset health presentation", () => {
 });
 
 describe("opportunity customer response contracts", () => {
+  const detailReviewPriority: OpportunityReviewPriorityDecision = {
+    allMatchedProfileIds: ["profile-1"],
+    components: [],
+    confidence: {
+      applicableCount: 0,
+      conflictingCount: 0,
+      label: "high",
+      presentCount: 0,
+      reasons: [],
+      score: 1,
+      staleCount: 0,
+      version: "opportunity-confidence/v2",
+    },
+    eligibility: "eligible",
+    eligibilityReasonCodes: [],
+    inputs: [],
+    internalScore: 0.8,
+    lane: "material_change",
+    policy: "monitor_material_changes",
+    priorityBand: "review_now",
+    reasons: ["Material Steam change"],
+    selectionSource: "explicit",
+    sortTuple: [0, 0, 0.8, "2026-07-27T08:00:00.000Z", 424242, "profile-1"],
+    version: "opportunity-ranking/v2",
+    winningProfileId: "profile-1",
+  };
   const observedChange: OpportunityObservedChange = {
     affectedRuleFields: ["price_cents"],
     after: [{ price_cents: 1499 }],
@@ -278,10 +306,7 @@ describe("opportunity customer response contracts", () => {
       overview.groups.materiallyChanged[0]?.reviewPriority?.priorityBand,
       "review_now",
     );
-    assert.equal(
-      overview.groups.materiallyChanged[1]?.reviewPriority,
-      null,
-    );
+    assert.equal(overview.groups.materiallyChanged[1]?.reviewPriority, null);
     assert.ok(
       overview.groups.materiallyChanged.every(
         (result) => result.gameDescription === null,
@@ -363,7 +388,16 @@ describe("opportunity customer response contracts", () => {
                     },
                   ],
                 },
-                matched_profiles: [],
+                matched_profiles: [
+                  {
+                    id: "profile-1",
+                    name: "Cozy scouting",
+                    reviewPriority:
+                      encodeOpportunityReviewPriorityDecision(
+                        detailReviewPriority,
+                      ),
+                  },
+                ],
                 missing_evidence: ["genres"],
                 official_news: [],
                 previous_appearances: [],
@@ -426,6 +460,10 @@ describe("opportunity customer response contracts", () => {
       });
       assert.deepEqual(record.result.change, observedChange);
       assert.deepEqual(record.recentChanges, [recentChange]);
+      assert.deepEqual(
+        record.matchedProfiles[0]?.reviewPriority,
+        detailReviewPriority,
+      );
       assert.equal(
         record.evidenceResolution.evaluatedAt,
         "2026-07-27T08:00:00.000Z",

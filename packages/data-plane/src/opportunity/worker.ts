@@ -14,6 +14,7 @@ import {
   evaluateOpportunityProfile,
   supportsReleasedMarketHealth,
 } from "./rules.js";
+import { encodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
 import type {
   OpportunityEvaluationInput,
   OpportunityFieldValue,
@@ -21,6 +22,7 @@ import type {
   OpportunityMaterialEventType,
   OpportunityProfileEvaluation,
   OpportunityRankComponents,
+  OpportunityReviewPriorityDecision,
   OpportunityResultLabel,
   OpportunityRuleField,
   OpportunityWorkerPhaseTimings,
@@ -943,70 +945,100 @@ export class OpportunityWorker {
           : null,
       signalFamily: context.event.signalFamily,
     });
-    const allMatchedProfileIds = matches.map((match) => match.profile.id);
-    const matchesWithPriority: OpportunityEvaluatedMatch[] =
-      this.computeReviewPriorityV2
-        ? matches.map((match) => {
-            const selection = resolveOpportunityRankingPolicy({
-              calculationConfig: match.profile.calculationConfig,
-              rules: match.profile.rules,
-            });
-            return {
-              ...match,
-              reviewPriority: calculateOpportunityReviewPriority({
-                affectedRuleFields: context.event.affectedRuleFields ?? [],
-                allMatchedProfileIds,
-                cohort,
-                effectiveAt: context.event.effectiveAt,
-                evaluation: match.evaluation,
-                eventMateriality: context.event.materiality,
-                eventSubscribed: match.profile.eventSubscriptions.includes(
-                  context.event.signalFamily,
-                ),
-                eventType: context.event.eventType,
-                input: context.input,
-                lane,
-                market,
-                now: context.run.windowEnd,
-                policy: selection.policy,
-                profileId: match.profile.id,
-                selectionSource: selection.selectionSource,
-              }),
-            };
-          })
-        : matches;
-    const reviewPriority = this.computeReviewPriorityV2
-      ? [...matchesWithPriority]
-          .filter(
-            (match): match is OpportunityEvaluatedMatch & {
-              reviewPriority: NonNullable<
-                OpportunityEvaluatedMatch["reviewPriority"]
-              >;
-            } => Boolean(match.reviewPriority),
-          )
-          .sort((left, right) =>
+    const allMatchedProfileIds = matches
+      .map((match) => match.profile.id)
+      .sort();
+    let cohortMeasuredCount: number | undefined;
+    let effectiveAtMs: number | undefined;
+    let reviewPriorityNowMs: number | undefined;
+    if (this.computeReviewPriorityV2) {
+      cohortMeasuredCount = 0;
+      for (const member of cohort.members) {
+        if (member.totalReviews !== null || member.ccuPeak !== null) {
+          cohortMeasuredCount += 1;
+        }
+      }
+      effectiveAtMs = Date.parse(context.event.effectiveAt);
+      reviewPriorityNowMs = Date.parse(context.run.windowEnd);
+    }
+    const matchesWithPriority: OpportunityEvaluatedMatch[] = this
+      .computeReviewPriorityV2
+      ? matches.map((match) => {
+          const selection = resolveOpportunityRankingPolicy({
+            calculationConfig: match.profile.calculationConfig,
+            rules: match.profile.rules,
+          });
+          return {
+            ...match,
+            reviewPriority: calculateOpportunityReviewPriority({
+              affectedRuleFields: context.event.affectedRuleFields ?? [],
+              allMatchedProfileIds,
+              allMatchedProfileIdsSorted: true,
+              cohort,
+              cohortMeasuredCount,
+              effectiveAt: context.event.effectiveAt,
+              effectiveAtMs,
+              evaluation: match.evaluation,
+              eventMateriality: context.event.materiality,
+              eventSubscribed: match.profile.eventSubscriptions.includes(
+                context.event.signalFamily,
+              ),
+              eventType: context.event.eventType,
+              input: context.input,
+              lane,
+              market,
+              now: context.run.windowEnd,
+              nowMs: reviewPriorityNowMs,
+              policy: selection.policy,
+              profileId: match.profile.id,
+              selectionSource: selection.selectionSource,
+            }),
+          };
+        })
+      : matches;
+    let reviewPriority: OpportunityReviewPriorityDecision | undefined;
+    if (this.computeReviewPriorityV2) {
+      for (const match of matchesWithPriority) {
+        if (
+          match.reviewPriority &&
+          (!reviewPriority ||
             compareOpportunityReviewPriority(
-              left.reviewPriority,
-              right.reviewPriority,
-            ),
-          )[0]?.reviewPriority
+              match.reviewPriority,
+              reviewPriority,
+            ) < 0)
+        ) {
+          reviewPriority = match.reviewPriority;
+        }
+      }
+    }
+    const persistedMatches = this.computeReviewPriorityV2
+      ? matchesWithPriority.map((match) => ({
+          ...match,
+          reviewPriority:
+            match.reviewPriority === reviewPriority
+              ? match.reviewPriority
+              : undefined,
+          reviewPriorityStorage: match.reviewPriority
+            ? encodeOpportunityReviewPriorityDecision(match.reviewPriority)
+            : undefined,
+        }))
+      : matchesWithPriority;
+    const description: OpportunityGameDescription | undefined = this
+      .computeReviewPriorityV2
+      ? (context.input.description ?? {
+          contentHash: null,
+          hasHeaderImage: false,
+          hasReleasePath: false,
+          hasSupportedLanguages: false,
+          kind: "unavailable",
+          sanitizerVersion: "opportunity-description/v1",
+          screenshotCount: 0,
+          sourceAt: null,
+          sourceSnapshotId: null,
+          text: "Steam has not provided a short description for this game yet.",
+          trailerCount: 0,
+        })
       : undefined;
-    const description: OpportunityGameDescription | undefined =
-      this.computeReviewPriorityV2
-        ? (context.input.description ?? {
-            contentHash: null,
-            hasHeaderImage: false,
-            hasReleasePath: false,
-            hasSupportedLanguages: false,
-            kind: "unavailable",
-            sanitizerVersion: "opportunity-description/v1",
-            screenshotCount: 0,
-            sourceAt: null,
-            sourceSnapshotId: null,
-            text: "Steam has not provided a short description for this game yet.",
-            trailerCount: 0,
-          })
-        : undefined;
 
     return {
       appid: context.appid,
@@ -1023,7 +1055,7 @@ export class OpportunityWorker {
       eventLabel: label,
       evidenceItems,
       market,
-      matches: matchesWithPriority,
+      matches: persistedMatches,
       missingEvidence,
       profileVersionSetFingerprint: stableFingerprint(
         matches.map((match) => match.profile.versionId),

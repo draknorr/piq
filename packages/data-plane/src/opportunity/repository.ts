@@ -53,6 +53,7 @@ import {
   describeOpportunityRuleSet,
   supportsReleasedMarketHealth,
 } from "./rules.js";
+import { decodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
 import {
   isOpportunityDateOperand,
   previousLocalDayEvaluationContext,
@@ -237,9 +238,10 @@ function parseOpportunityReviewPrioritySummary(
 function parseOpportunityReviewPriorityDecision(
   value: unknown,
 ): OpportunityReviewPriorityDecision | null {
-  const row = opportunityRecord(value);
+  const decoded = decodeOpportunityReviewPriorityDecision(value);
+  const row = opportunityRecord(decoded);
   if (
-    !parseOpportunityReviewPrioritySummary(value) ||
+    !parseOpportunityReviewPrioritySummary(decoded) ||
     !row ||
     row.eligibility !== "eligible" ||
     !Array.isArray(row.allMatchedProfileIds) ||
@@ -281,7 +283,7 @@ function parseOpportunityReviewPriorityDecision(
   ) {
     return null;
   }
-  return row as unknown as OpportunityReviewPriorityDecision;
+  return decoded as OpportunityReviewPriorityDecision;
 }
 
 export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
