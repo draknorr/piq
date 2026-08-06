@@ -208,10 +208,7 @@ export function opportunityPersistedResultContentSafetySql(
         ARRAY[${ADULT_CONTENT_TAG_VALUES_SQL}]::text[]
       )
   )`;
-  return `(NOT (
-    COALESCE(${resultAlias}.missing_evidence, '[]'::jsonb)
-      ? 'content_descriptors'
-  ) AND (
+  return `((
     ${descriptorEvidenceKnownSql}
     OR ${tagEvidenceKnownSql}
     OR ${legacyDescriptorReadySql}

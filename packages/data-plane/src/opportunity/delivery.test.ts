@@ -145,8 +145,8 @@ describe("opportunity delivery hydration", () => {
       assert.ok(
         fixture.statements.some(
           (sql) =>
-            sql.includes("result.missing_evidence") &&
-            sql.includes("? 'content_descriptors'") &&
+            !sql.includes("result.missing_evidence") &&
+            sql.includes("tag_evidence.evidence_state = 'known'") &&
             sql.includes('@ == "3" || @ == "adult"') &&
             sql.includes("adult_tag_evidence") &&
             sql.includes("'sexual content'"),

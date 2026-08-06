@@ -321,10 +321,11 @@ describe("opportunity customer response contracts", () => {
       /raw\.change_type IN \('screenshot_added', 'trailer_added'\)/,
     );
     assert.match(resultQuery, /media\.id = trigger_media\.media_version_id/);
-    assert.match(
+    assert.doesNotMatch(
       resultQuery,
-      /result\.missing_evidence[\s\S]*\? 'content_descriptors'/,
+      /COALESCE\(result\.missing_evidence, '\[\]'::jsonb\)\s+\? 'content_descriptors'/,
     );
+    assert.match(resultQuery, /tag_evidence\.evidence_state = 'known'/);
     assert.match(resultQuery, /@ == "3" \|\| @ == "adult"/);
   });
 
@@ -498,10 +499,11 @@ describe("opportunity customer response contracts", () => {
         gameRecordQuery,
         /media\.id = trigger_media\.media_version_id/,
       );
-      assert.match(
+      assert.doesNotMatch(
         gameRecordQuery,
-        /canonical\.missing_evidence[\s\S]*\? 'content_descriptors'/,
+        /COALESCE\(canonical\.missing_evidence, '\[\]'::jsonb\)\s+\? 'content_descriptors'/,
       );
+      assert.match(gameRecordQuery, /tag_evidence\.evidence_state = 'known'/);
       assert.match(gameRecordQuery, /@ == "3" \|\| @ == "adult"/);
     });
   }
