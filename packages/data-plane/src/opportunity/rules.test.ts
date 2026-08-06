@@ -480,7 +480,7 @@ describe("opportunity rule engine", () => {
     assert.deepEqual(result.missingRequiredFields, ["tags"]);
   });
 
-  it("holds an otherwise eligible game until content descriptors are known", () => {
+  it("accepts non-empty tags while explicit content descriptors are pending", () => {
     const result = evaluateOpportunityProfile(
       RULES,
       input({
@@ -491,13 +491,13 @@ describe("opportunity rule engine", () => {
       }),
     );
 
-    assert.equal(result.outcome, "pending");
+    assert.equal(result.outcome, "eligible");
     assert.equal(result.excluded, false);
-    assert.deepEqual(result.missingRequiredFields, ["content_descriptors"]);
+    assert.deepEqual(result.missingRequiredFields, []);
     assert.equal(result.preferenceContribution, 0);
   });
 
-  it("requires content-descriptor readiness even when a profile has no content rule", () => {
+  it("requires tags or descriptor readiness even when a profile has no content rule", () => {
     const result = evaluateOpportunityProfile(
       {
         excluded: [],
@@ -507,6 +507,25 @@ describe("opportunity rule engine", () => {
       },
       input({
         content_descriptors: unknown("Content descriptors unavailable."),
+        tags: unknown("Tags unavailable."),
+      }),
+    );
+
+    assert.equal(result.outcome, "pending");
+    assert.deepEqual(result.missingRequiredFields, ["content_descriptors"]);
+  });
+
+  it("does not treat a known empty tag profile as content classification", () => {
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: [],
+        required: [],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input({
+        content_descriptors: unknown("Content descriptors unavailable."),
+        tags: known([]),
       }),
     );
 
@@ -524,6 +543,24 @@ describe("opportunity rule engine", () => {
       },
       input({
         content_descriptors: known({ 0: "3" }),
+      }),
+    );
+
+    assert.equal(result.outcome, "ineligible");
+    assert.equal(result.excluded, true);
+  });
+
+  it("excludes adult Store tags even when descriptors are unavailable", () => {
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: [],
+        required: [],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input({
+        content_descriptors: unknown("Content descriptors unavailable."),
+        tags: known(["Indie", "NSFW"]),
       }),
     );
 

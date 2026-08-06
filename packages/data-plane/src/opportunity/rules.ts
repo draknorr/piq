@@ -74,6 +74,16 @@ export const OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES = {
   "5": "general_mature_content",
 } as const;
 
+export const OPPORTUNITY_ADULT_CONTENT_TAGS = [
+  "hentai",
+  "mature",
+  "nsfw",
+  "nudity",
+  "sexual content",
+] as const;
+
+const ADULT_CONTENT_TAGS = new Set<string>(OPPORTUNITY_ADULT_CONTENT_TAGS);
+
 function rawContentDescriptorValues(value: unknown): unknown[] {
   if (Array.isArray(value)) {
     return value;
@@ -111,6 +121,15 @@ export function normalizeOpportunityContentDescriptors(
             ] ?? descriptor,
         ),
     ),
+  );
+}
+
+function normalizeOpportunityContentTags(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(value.map((tag) => String(tag).trim()).filter(Boolean)),
   );
 }
 
@@ -450,11 +469,19 @@ export function evaluateOpportunityProfile(
   );
   const contentDescriptorsReady =
     input.fields.content_descriptors?.state === "known";
+  const contentTags =
+    input.fields.tags?.state === "known"
+      ? normalizeOpportunityContentTags(input.fields.tags.value)
+      : [];
+  const contentTagsReady = contentTags.length > 0;
+  const contentClassificationReady =
+    contentDescriptorsReady || contentTagsReady;
   const adultContent =
-    contentDescriptorsReady &&
-    normalizeOpportunityContentDescriptors(
-      input.fields.content_descriptors?.value,
-    ).some((descriptor) => descriptor.toLocaleLowerCase() === "adult");
+    (contentDescriptorsReady &&
+      normalizeOpportunityContentDescriptors(
+        input.fields.content_descriptors?.value,
+      ).some((descriptor) => descriptor.toLocaleLowerCase() === "adult")) ||
+    contentTags.some((tag) => ADULT_CONTENT_TAGS.has(tag.toLocaleLowerCase()));
   const excluded =
     adultContent ||
     excludedOutcomes.some((outcome) => outcome.state === "true");
@@ -465,13 +492,13 @@ export function evaluateOpportunityProfile(
           .filter((clause) => clause.state === "unknown")
           .map((clause) => clause.field),
       ),
-      ...(contentDescriptorsReady ? [] : (["content_descriptors"] as const)),
+      ...(contentClassificationReady ? [] : (["content_descriptors"] as const)),
     ]),
   );
   const outcome: OpportunityProfileEvaluation["outcome"] =
     excluded || requiredState === "false"
       ? "ineligible"
-      : requiredState === "unknown" || !contentDescriptorsReady
+      : requiredState === "unknown" || !contentClassificationReady
         ? "pending"
         : "eligible";
 

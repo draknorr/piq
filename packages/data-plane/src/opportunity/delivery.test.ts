@@ -147,7 +147,9 @@ describe("opportunity delivery hydration", () => {
           (sql) =>
             sql.includes("result.missing_evidence") &&
             sql.includes("? 'content_descriptors'") &&
-            sql.includes('@ == "3" || @ == "adult"'),
+            sql.includes('@ == "3" || @ == "adult"') &&
+            sql.includes("adult_tag_evidence") &&
+            sql.includes("'sexual content'"),
         ),
       );
     });

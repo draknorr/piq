@@ -3263,7 +3263,12 @@ export class OpportunityWorkerRepository {
       }
     }
     for (const candidate of params.evaluations) {
-      if (candidate.evaluation.missingRequiredFields.includes("tags")) {
+      if (
+        candidate.evaluation.missingRequiredFields.includes("tags") ||
+        candidate.evaluation.missingRequiredFields.includes(
+          "content_descriptors",
+        )
+      ) {
         priorities.set(
           candidate.appid,
           Math.max(priorities.get(candidate.appid) ?? 0, 950),
@@ -3282,7 +3287,7 @@ export class OpportunityWorkerRepository {
       priority,
       source: "storefront_tags",
       trigger_cursor: params.runId,
-      trigger_reason: "opportunity_missing_tags",
+      trigger_reason: "opportunity_missing_content_classification",
     }));
     await client.query(
       "SELECT ops.mark_app_capture_work_dirty($1::jsonb, $2::integer)",
