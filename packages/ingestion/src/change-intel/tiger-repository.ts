@@ -979,6 +979,68 @@ export class TigerChangeIntelRepository {
       'SELECT ops.upsert_storefront_tag_evidence_v1($1::jsonb) AS count',
       [stringifyJsonValue(payload)]
     );
+
+    const appids = Array.from(new Set(rows.map((row) => row.appid))).sort(
+      (left, right) => left - right
+    );
+    await this.pool.query(
+      `
+        WITH pending AS (
+          SELECT DISTINCT ON (
+            candidate.workspace_id,
+            candidate.user_id,
+            candidate.appid
+          )
+            candidate.workspace_id,
+            candidate.user_id,
+            candidate.appid,
+            candidate.material_event_id
+          FROM opportunity.candidate_state candidate
+          WHERE candidate.appid = ANY($1::integer[])
+            AND candidate.state = 'pending_readiness'
+            AND (
+              'content_descriptors' = ANY(candidate.missing_fields)
+              OR 'tags' = ANY(candidate.missing_fields)
+            )
+          ORDER BY
+            candidate.workspace_id,
+            candidate.user_id,
+            candidate.appid,
+            candidate.updated_at DESC,
+            candidate.material_event_id DESC NULLS LAST
+        )
+        INSERT INTO opportunity.work_queue (
+          kind,
+          lane,
+          workspace_id,
+          user_id,
+          appid,
+          material_event_id,
+          scheduled_for,
+          priority,
+          idempotency_key,
+          payload
+        )
+        SELECT
+          'readiness_recheck',
+          'profile_readiness',
+          pending.workspace_id,
+          pending.user_id,
+          pending.appid,
+          pending.material_event_id,
+          now(),
+          1500,
+          'classification-ready:storefront-tags:v1:' || pending.user_id || ':' ||
+            pending.appid || ':' || COALESCE(pending.material_event_id::text, 'none'),
+          jsonb_build_object(
+            'reason', 'storefront_tags_ready',
+            'evidenceSource', 'storefront'
+          )
+        FROM pending
+        ON CONFLICT (idempotency_key) DO NOTHING
+      `,
+      [appids]
+    );
     return parseCount(result[0]?.count);
   }
 

@@ -46,3 +46,46 @@ test('Storefront traffic pressure includes queue age as well as running sweeps',
     runningSweeps: 0,
   });
 });
+
+test('Storefront tag evidence wakes pending opportunity classification immediately', async () => {
+  const queries: Array<{ sql: string; values: unknown[] | undefined }> = [];
+  const pool = {
+    query: async (sql: string, values?: unknown[]) => {
+      queries.push({ sql, values });
+      return sql.includes('upsert_storefront_tag_evidence_v1')
+        ? { rows: [{ count: '2' }] }
+        : { rows: [] };
+    },
+  } as unknown as Pool;
+
+  const count = await new TigerChangeIntelRepository(pool).upsertStorefrontTagEvidence([
+    {
+      appid: 20,
+      country: 'us',
+      locale: 'english',
+      observedAt: '2026-08-06T12:00:00.000Z',
+      pageUrl: 'https://store.steampowered.com/app/20/?l=english&cc=us',
+      parserVersion: 'steam-store-page-tags/v1',
+      responseHash: 'a'.repeat(64),
+      tags: [{ count: 5, name: 'Strategy', rank: 1, tagid: 9 }],
+    },
+    {
+      appid: 10,
+      country: 'us',
+      locale: 'english',
+      observedAt: '2026-08-06T12:00:00.000Z',
+      pageUrl: 'https://store.steampowered.com/app/10/?l=english&cc=us',
+      parserVersion: 'steam-store-page-tags/v1',
+      responseHash: 'b'.repeat(64),
+      tags: [],
+    },
+  ]);
+
+  assert.equal(count, 2);
+  assert.equal(queries.length, 2);
+  assert.match(queries[1]?.sql ?? '', /INSERT INTO opportunity\.work_queue/);
+  assert.match(queries[1]?.sql ?? '', /classification-ready:storefront-tags:v1/);
+  assert.match(queries[1]?.sql ?? '', /'content_descriptors' = ANY\(candidate\.missing_fields\)/);
+  assert.match(queries[1]?.sql ?? '', /'tags' = ANY\(candidate\.missing_fields\)/);
+  assert.deepEqual(queries[1]?.values, [[10, 20]]);
+});
