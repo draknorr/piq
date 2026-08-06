@@ -314,10 +314,15 @@ describe("opportunity delivery rendering", () => {
             lane: "new_game",
             policy: "discover_new_games",
             priorityBand: "review_now",
-            reasons: ["New on Steam", "Self-published"],
+            reasons: [
+              "New on Steam",
+              "Self-published",
+              "Large, competitive market",
+            ],
             version: "opportunity-ranking/v2",
             winningProfileId: "profile",
           },
+          marketPotential: "large_but_competitive",
         },
       ],
     };
@@ -330,6 +335,20 @@ describe("opportunity delivery rendering", () => {
     assert.doesNotMatch(controlledOff.text, /canonical game description/);
     assert.match(controlledOn.text, /canonical game description/);
     assert.match(controlledOn.text, /New on Steam · Self-published/);
+    assert.equal(
+      controlledOn.text.match(/Large, competitive market/g)?.length,
+      1,
+    );
+    assert.equal(
+      controlledOn.html.match(/Large, competitive market/g)?.length,
+      1,
+    );
+    assert.equal(
+      JSON.stringify(controlledOn.slackBlocks).match(
+        /Large, competitive market/g,
+      )?.length,
+      1,
+    );
   });
 
   it("keeps queued v1 deliveries on the compact renderer", () => {

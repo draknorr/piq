@@ -1,8 +1,20 @@
 import type {
   OpportunityBootstrap,
   OpportunityBriefProfileDispatch,
+  OpportunityReviewPriorityDecision,
+  OpportunityReviewPrioritySummary,
   OpportunityResultSummary,
 } from "./types";
+import { opportunityPotentialLabel } from "./api";
+
+const POST_RELEASE_TRACTION_INPUT_KEYS = new Set([
+  "ccu_change_30d",
+  "ccu_change_7d",
+  "ccu_peak",
+  "reviews_added_30d",
+  "reviews_added_7d",
+  "total_reviews",
+]);
 
 export interface OpportunityResultSection {
   key: string;
@@ -63,6 +75,61 @@ export function opportunityResultDescription(
     result.gameDescription?.text ??
     "Steam has not provided a short description for this game yet."
   );
+}
+
+function normalizedPresentationText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+export function opportunityVisibleReviewReasons(
+  result: OpportunityResultSummary,
+): string[] {
+  if (!result.reviewPriority) return [];
+  const marketLabel = normalizedPresentationText(
+    opportunityPotentialLabel(result.marketPotential),
+  );
+  return result.reviewPriority.reasons
+    .filter((reason) => normalizedPresentationText(reason) !== marketLabel)
+    .slice(0, 3);
+}
+
+export function opportunityTractionIsNotApplicable(record: {
+  matchedProfiles: Array<{
+    id: string;
+    reviewPriority: OpportunityReviewPriorityDecision | null;
+  }>;
+  result: { reviewPriority: OpportunityReviewPrioritySummary | null };
+}): boolean {
+  const summary = record.result.reviewPriority;
+  if (!summary || summary.lane !== "new_game") return false;
+  const decision = record.matchedProfiles.find(
+    (profile) => profile.id === summary.winningProfileId,
+  )?.reviewPriority;
+  if (!decision) return false;
+  const tractionInputs = decision.inputs.filter((input) =>
+    POST_RELEASE_TRACTION_INPUT_KEYS.has(input.key),
+  );
+  return (
+    tractionInputs.length === POST_RELEASE_TRACTION_INPUT_KEYS.size &&
+    tractionInputs.every((input) => input.availability === "not_applicable")
+  );
+}
+
+export function opportunityNotApplicablePeerSummary(record: {
+  marketContext: null | {
+    distributions: Record<string, { measured: number; p50: number | null }>;
+  };
+}): string | null {
+  const totalReviews = record.marketContext?.distributions.totalReviews;
+  if (!totalReviews || totalReviews.measured <= 0) return null;
+  const measured = totalReviews.measured.toLocaleString();
+  if (totalReviews.p50 === null) {
+    return `${measured} comparable released games informed the market context.`;
+  }
+  return `${measured} comparable released games informed the market context; their median total Steam reviews were ${totalReviews.p50.toLocaleString()}.`;
 }
 
 export function opportunityProfileDispatchSummary(
