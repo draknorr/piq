@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import type { OpportunityBootstrap, OpportunityResultSummary } from "./types";
 import {
+  opportunityProfileDispatchSummary,
   opportunityPriorityLabel,
   opportunityResultDescription,
   opportunityResultSections,
@@ -116,6 +117,30 @@ describe("opportunity review-priority presentation", () => {
     assert.equal(
       opportunityResultDescription(game),
       "Steam has not provided a short description for this game yet.",
+    );
+  });
+
+  it("replaces legacy event nouns with neutral V2 profile copy", () => {
+    assert.equal(
+      opportunityProfileDispatchSummary({
+        description: null,
+        eventCounts: {
+          materially_changed: 1,
+          newly_discovered: 0,
+          newly_qualified: 0,
+          newly_released: 0,
+          tracked_update: 0,
+        },
+        highConfidenceCount: 1,
+        id: "profile",
+        listUrl: "/opportunities",
+        name: "Profile",
+        resultCount: 1,
+        status: "enabled",
+        summary: "1 game matched; 1 material change, led by Swords.",
+        topResult: { appid: 1, name: "Swords", resultId: "result" },
+      }),
+      "1 game matched, led by Swords.",
     );
   });
 });

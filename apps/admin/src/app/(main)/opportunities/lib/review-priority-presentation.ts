@@ -1,4 +1,8 @@
-import type { OpportunityBootstrap, OpportunityResultSummary } from "./types";
+import type {
+  OpportunityBootstrap,
+  OpportunityBriefProfileDispatch,
+  OpportunityResultSummary,
+} from "./types";
 
 export interface OpportunityResultSection {
   key: string;
@@ -59,6 +63,16 @@ export function opportunityResultDescription(
     result.gameDescription?.text ??
     "Steam has not provided a short description for this game yet."
   );
+}
+
+export function opportunityProfileDispatchSummary(
+  profile: OpportunityBriefProfileDispatch,
+): string {
+  if (profile.status !== "enabled" || profile.resultCount === 0) {
+    return profile.summary;
+  }
+  const lead = profile.topResult ? `, led by ${profile.topResult.name}` : "";
+  return `${profile.resultCount} ${profile.resultCount === 1 ? "game matched" : "games matched"}${lead}.`;
 }
 
 export function opportunityResultSections(params: {

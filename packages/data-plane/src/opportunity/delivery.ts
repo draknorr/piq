@@ -815,6 +815,7 @@ function renderOpportunityDeliveryV2(
     profileStats: deliveryProfileStats(work, profiles),
     runId: null,
     status: summaries.length > 0 ? "ready" : "empty",
+    useReviewPriorityCopy: presentReviewPriorityV2,
     windowEnd: work.windowEnd ?? null,
     windowStart: work.windowStart ?? null,
   });

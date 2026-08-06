@@ -23,6 +23,7 @@ import type {
   OpportunityResultSummary,
 } from "./lib/types";
 import {
+  opportunityProfileDispatchSummary,
   opportunityPriorityLabel,
   opportunityResultDescription,
 } from "./lib/review-priority-presentation";
@@ -355,7 +356,9 @@ export function EditorialDailyBrief({
                       </span>
                     </div>
                     <p className="mt-2 max-w-[65ch] text-sm leading-6 text-text-secondary">
-                      {profile.summary}
+                      {presentReviewPriorityV2
+                        ? opportunityProfileDispatchSummary(profile)
+                        : profile.summary}
                     </p>
                     {profile.topResult && (
                       <Link
