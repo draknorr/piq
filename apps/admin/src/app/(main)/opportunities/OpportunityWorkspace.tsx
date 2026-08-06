@@ -53,6 +53,7 @@ import {
   opportunityPriorityLabel,
   opportunityResultDescription,
   opportunityResultSections,
+  opportunityVisibleReviewReasons,
 } from "./lib/review-priority-presentation";
 
 type ProfilesView = "catalog" | "loading" | "editor";
@@ -1040,7 +1041,7 @@ function OpportunityResultCard({
         </p>
         {result.reviewPriority ? (
           <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs font-medium text-text-primary">
-            {result.reviewPriority.reasons.slice(0, 3).map((reason) => (
+            {opportunityVisibleReviewReasons(result).map((reason) => (
               <li
                 key={reason}
                 className="before:mr-1.5 before:text-accent-primary before:content-['•']"

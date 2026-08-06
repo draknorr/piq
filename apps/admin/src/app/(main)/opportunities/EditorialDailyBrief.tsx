@@ -26,6 +26,7 @@ import {
   opportunityProfileDispatchSummary,
   opportunityPriorityLabel,
   opportunityResultDescription,
+  opportunityVisibleReviewReasons,
 } from "./lib/review-priority-presentation";
 
 function issueDate(value: string | null): string {
@@ -250,7 +251,7 @@ export function EditorialDailyBrief({
               </p>
               {presentReviewPriorityV2 && lead.reviewPriority && (
                 <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-text-primary">
-                  {lead.reviewPriority.reasons.slice(0, 3).map((reason) => (
+                  {opportunityVisibleReviewReasons(lead).map((reason) => (
                     <li
                       className="before:mr-1.5 before:text-accent-primary before:content-['•']"
                       key={reason}

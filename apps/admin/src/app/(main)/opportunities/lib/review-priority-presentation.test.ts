@@ -1,13 +1,76 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { OpportunityBootstrap, OpportunityResultSummary } from "./types";
+import type {
+  OpportunityBootstrap,
+  OpportunityReviewPriorityDecision,
+  OpportunityReviewPrioritySummary,
+  OpportunityResultSummary,
+} from "./types";
 import {
+  opportunityNotApplicablePeerSummary,
   opportunityProfileDispatchSummary,
   opportunityPriorityLabel,
   opportunityResultDescription,
   opportunityResultSections,
+  opportunityTractionIsNotApplicable,
+  opportunityVisibleReviewReasons,
 } from "./review-priority-presentation";
+
+function reviewPriority(): OpportunityReviewPrioritySummary {
+  return {
+    confidence: {
+      applicableCount: 3,
+      conflictingCount: 0,
+      label: "high",
+      presentCount: 3,
+      reasons: ["post_release_traction_not_applicable"],
+      score: 1,
+      staleCount: 0,
+      version: "opportunity-confidence/v2",
+    },
+    internalScore: 0.72,
+    lane: "new_game",
+    policy: "discovery",
+    priorityBand: "review_soon",
+    reasons: ["New on Steam", "Large, competitive market"],
+    version: "opportunity-ranking/v2",
+    winningProfileId: "profile",
+  };
+}
+
+function tractionDecision(): OpportunityReviewPriorityDecision {
+  const summary = reviewPriority();
+  return {
+    ...summary,
+    allMatchedProfileIds: ["profile"],
+    components: [],
+    eligibility: "eligible",
+    eligibilityReasonCodes: [],
+    inputs: [
+      "total_reviews",
+      "ccu_peak",
+      "reviews_added_7d",
+      "reviews_added_30d",
+      "ccu_change_7d",
+      "ccu_change_30d",
+    ].map((key) => ({
+      assessment: "not_assessed" as const,
+      availability: "not_applicable" as const,
+      calculationVersion: null,
+      confidenceWeight: 1,
+      criticalForConfidence: false,
+      key,
+      normalizedValue: null,
+      rawValue: null,
+      reasonCode: "post_release_traction_not_applicable",
+      source: "opportunity-ranking/v2",
+      sourceAt: null,
+    })),
+    selectionSource: "explicit",
+    sortTuple: [0, 1, 0.72, "2026-08-05T00:00:00.000Z", 1, "profile"],
+  };
+}
 
 function result(
   id: string,
@@ -92,31 +155,38 @@ describe("opportunity review-priority presentation", () => {
 
   it("formats canonical V2 labels and the honest description fallback", () => {
     const game = result("swords", 1, {
-      reviewPriority: {
-        confidence: {
-          applicableCount: 3,
-          conflictingCount: 0,
-          label: "high",
-          presentCount: 3,
-          reasons: [],
-          score: 1,
-          staleCount: 0,
-          version: "opportunity-confidence/v2",
-        },
-        internalScore: 0.72,
-        lane: "new_game",
-        policy: "discovery",
-        priorityBand: "review_soon",
-        reasons: ["New on Steam"],
-        version: "opportunity-ranking/v2",
-        winningProfileId: "profile",
-      },
+      reviewPriority: reviewPriority(),
     });
 
     assert.equal(opportunityPriorityLabel(game), "New discovery — Review soon");
     assert.equal(
       opportunityResultDescription(game),
       "Steam has not provided a short description for this game yet.",
+    );
+  });
+
+  it("does not repeat the complete market label as a why-now reason", () => {
+    const game = result("market", 1, { reviewPriority: reviewPriority() });
+    assert.deepEqual(opportunityVisibleReviewReasons(game), ["New on Steam"]);
+  });
+
+  it("uses the winning decision to distinguish not-applicable traction", () => {
+    assert.equal(
+      opportunityTractionIsNotApplicable({
+        matchedProfiles: [
+          { id: "profile", reviewPriority: tractionDecision() },
+        ],
+        result: { reviewPriority: reviewPriority() },
+      }),
+      true,
+    );
+    assert.equal(
+      opportunityNotApplicablePeerSummary({
+        marketContext: {
+          distributions: { totalReviews: { measured: 50, p50: 144 } },
+        },
+      }),
+      "50 comparable released games informed the market context; their median total Steam reviews were 144.",
     );
   });
 

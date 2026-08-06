@@ -48,6 +48,11 @@ import type {
   OpportunityRuleOperator,
 } from "../../lib/types";
 import { isOpportunityPriorityV2PresentationEnabled } from "../../lib/feature-controls";
+import {
+  opportunityNotApplicablePeerSummary,
+  opportunityTractionIsNotApplicable,
+  opportunityVisibleReviewReasons,
+} from "../../lib/review-priority-presentation";
 import { OpportunityMediaLightbox } from "./OpportunityMediaLightbox";
 
 function metricToken(value: string): string {
@@ -285,6 +290,11 @@ export function OpportunityGameRecordClient({
     ([name, value]) => metricKind(name) !== null && value !== null,
   );
   const priority = record.result.reviewPriority;
+  const tractionNotApplicable =
+    presentReviewPriorityV2 && opportunityTractionIsNotApplicable(record);
+  const notApplicablePeerSummary = tractionNotApplicable
+    ? opportunityNotApplicablePeerSummary(record)
+    : null;
   const priorityTitle = priority
     ? `${
         priority.lane === "new_game"
@@ -428,17 +438,19 @@ export function OpportunityGameRecordClient({
                   </p>
                   {priority ? (
                     <ul className="mt-5 space-y-2 text-sm leading-6 text-text-secondary">
-                      {priority.reasons.map((reason) => (
-                        <li key={reason} className="flex gap-2">
-                          <span
-                            className="text-accent-primary"
-                            aria-hidden="true"
-                          >
-                            •
-                          </span>
-                          {reason}
-                        </li>
-                      ))}
+                      {opportunityVisibleReviewReasons(record.result).map(
+                        (reason) => (
+                          <li key={reason} className="flex gap-2">
+                            <span
+                              className="text-accent-primary"
+                              aria-hidden="true"
+                            >
+                              •
+                            </span>
+                            {reason}
+                          </li>
+                        ),
+                      )}
                     </ul>
                   ) : (
                     <p className="mt-4 text-sm leading-6 text-semantic-warning">
@@ -693,13 +705,16 @@ export function OpportunityGameRecordClient({
             title="Current traction and comparable-game benchmarks"
           />
           <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
-            {currentMetrics.length === 0 ? (
+            {tractionNotApplicable ? (
+              <p className="col-span-full bg-surface-raised px-4 py-5 text-sm text-text-tertiary">
+                {record.app.releaseState?.toLowerCase() === "released"
+                  ? "This game is newly released, so post-release traction is not applicable yet."
+                  : "This game is unreleased, so post-release traction is not applicable yet."}
+              </p>
+            ) : currentMetrics.length === 0 ? (
               <p className="col-span-full bg-surface-raised px-4 py-5 text-sm text-text-tertiary">
                 {presentReviewPriorityV2
-                  ? priority?.lane === "new_game" ||
-                    record.app.releaseState?.toLowerCase() !== "released"
-                    ? "This game is unreleased, so post-release traction is not available yet."
-                    : "Current traction data is not available from the recorded sources."
+                  ? "Current traction data is not available from the recorded sources."
                   : "Current player and review metrics are not yet available."}
               </p>
             ) : (
@@ -721,21 +736,28 @@ export function OpportunityGameRecordClient({
           <p className="mt-5 max-w-3xl text-sm leading-6 text-text-secondary">
             {demandSummary(market?.demandDirection)}
           </p>
-
-          {market && Object.keys(market.distributions).length > 0 && (
-            <div className="mt-7 divide-y divide-border-subtle border-y border-border-muted">
-              {Object.entries(market.distributions).map(
-                ([name, distribution]) => (
-                  <MarketMetricRow
-                    key={name}
-                    current={findCurrentMetric(record.currentMetrics, name)}
-                    distribution={distribution}
-                    name={name}
-                  />
-                ),
-              )}
-            </div>
+          {notApplicablePeerSummary && (
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-tertiary">
+              {notApplicablePeerSummary}
+            </p>
           )}
+
+          {market &&
+            !tractionNotApplicable &&
+            Object.keys(market.distributions).length > 0 && (
+              <div className="mt-7 divide-y divide-border-subtle border-y border-border-muted">
+                {Object.entries(market.distributions).map(
+                  ([name, distribution]) => (
+                    <MarketMetricRow
+                      key={name}
+                      current={findCurrentMetric(record.currentMetrics, name)}
+                      distribution={distribution}
+                      name={name}
+                    />
+                  ),
+                )}
+              </div>
+            )}
 
           <h3 className="mt-10 text-lg font-semibold text-text-primary">
             Comparable games behind the benchmarks
