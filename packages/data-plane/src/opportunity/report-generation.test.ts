@@ -235,7 +235,13 @@ describe("opportunity option-enabled report generation", () => {
           testCase.input.appid,
           `${testCase.profile.name} criteria changed eligibility.`,
         ),
-        input: testCase.input,
+        input: {
+          ...testCase.input,
+          fields: {
+            content_descriptors: known([]),
+            ...testCase.input.fields,
+          },
+        },
         priorState: {
           dismissedEventFingerprint: null,
           ignored: false,

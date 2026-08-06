@@ -1,13 +1,28 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { compileOpportunityPreview } from "./sql-compiler.js";
+import {
+  compileOpportunityPreview,
+  opportunityPersistedResultContentSafetySql,
+} from "./sql-compiler.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
   type OpportunityRuleSet,
 } from "./types.js";
 
 describe("opportunity SQL compiler", () => {
+  it("builds a fail-closed safety predicate for persisted results", () => {
+    const sql = opportunityPersistedResultContentSafetySql("result", "app");
+
+    assert.match(sql, /result\.missing_evidence/);
+    assert.match(sql, /app\.content_descriptors/);
+    assert.match(sql, /@ == "3" \|\| @ == "adult"/);
+    assert.throws(
+      () => opportunityPersistedResultContentSafetySql("result; DROP"),
+      /Invalid internal SQL identifier/,
+    );
+  });
+
   it("parameterizes user values and preserves required/excluded semantics", () => {
     const rules: OpportunityRuleSet = {
       excluded: [
@@ -58,8 +73,29 @@ describe("opportunity SQL compiler", () => {
     assert.deepEqual(compiled.values, [
       "Roguelike",
       "Deckbuilding",
-      "%adult' OR TRUE --%",
+      "adult' OR TRUE --",
     ]);
+  });
+
+  it("requires content-descriptor readiness even when a profile has no rules", () => {
+    const compiled = compileOpportunityPreview({
+      excluded: [],
+      preferred: [],
+      required: [],
+      schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+    });
+
+    assert.match(compiled.matchSql, /evidence_content_descriptors_pics/);
+    assert.match(compiled.matchSql, /readiness_pics\.status = 'ready'/);
+    assert.match(compiled.excludedSql, /@ == "3" \|\| @ == "adult"/);
+    assert.equal(
+      compiled.requiredGroups[0]?.groupId,
+      "content-safety-readiness",
+    );
+    assert.equal(
+      compiled.requiredStages[0]?.label,
+      "Content descriptors available",
+    );
   });
 
   it("uses set-based joins for self-published and descriptor evidence", () => {
@@ -121,6 +157,8 @@ describe("opportunity SQL compiler", () => {
       compiled.matchSql,
       /evidence_content_descriptors_pics\.evidence_state = 'known'/,
     );
+    assert.match(compiled.excludedSql, /WHEN '3' THEN 'adult'/);
+    assert.match(compiled.excludedSql, /jsonb_path_query_array/);
     assert.doesNotMatch(
       compiled.matchSql,
       /FROM legacy\.app_developers app_developer/,

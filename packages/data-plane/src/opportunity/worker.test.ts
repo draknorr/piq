@@ -1446,6 +1446,48 @@ describe("opportunity worker event policy", () => {
 });
 
 describe("opportunity worker date evaluation", () => {
+  it("does not create a result while content descriptors are unknown", async () => {
+    const worker = new OpportunityWorker({} as OpportunityWorkerRepository, {
+      websiteBaseUrl: "https://publisheriq.com",
+      workerId: "content-safety-test",
+    });
+
+    const evaluated = await worker.evaluateGame({
+      appid: 10,
+      candidateOutcomes: new Map(),
+      event: event({ appid: 10 }),
+      input: {
+        appid: 10,
+        fields: {
+          content_descriptors: unknownField(),
+          is_released: knownField(false),
+        },
+        name: "Unscreened Game",
+      },
+      priorState: {
+        dismissedEventFingerprint: null,
+        ignored: false,
+        priorEventFingerprints: new Set(),
+        priorResultId: null,
+        tracked: false,
+      },
+      profiles: [PROFILE],
+      run: {
+        id: "run",
+        kind: "daily",
+        windowEnd: "2026-03-09T16:00:00.000Z",
+        windowStart: "2026-03-08T16:00:00.000Z",
+      },
+    });
+
+    assert.equal(evaluated.evaluations[0]?.evaluation.outcome, "pending");
+    assert.deepEqual(
+      evaluated.evaluations[0]?.evaluation.missingRequiredFields,
+      ["content_descriptors"],
+    );
+    assert.equal(evaluated.result, null);
+  });
+
   it("evaluates added timestamps in each profile timezone at the run cutoff", async () => {
     const rules: OpportunityRuleSet = {
       excluded: [],
@@ -1484,6 +1526,7 @@ describe("opportunity worker date evaluation", () => {
       input: {
         appid: 10,
         fields: {
+          content_descriptors: knownField([]),
           publisheriq_added_at: knownField("2026-03-09T06:30:00.000Z"),
         },
         name: "Timezone Test",
@@ -1545,6 +1588,7 @@ describe("opportunity worker result provenance", () => {
           state: "known",
           value: 42,
         },
+        content_descriptors: knownField([]),
         is_released: {
           confidence: "high",
           evidenceClass: "observed_fact",
@@ -1718,6 +1762,7 @@ describe("opportunity worker result provenance", () => {
         appid: 42,
         fields: {
           ccu_peak: unknownField(),
+          content_descriptors: knownField([]),
           is_released: knownField(false),
           publisheriq_added_at: knownField("2026-07-27T00:00:00.000Z"),
           self_published: knownField(true),

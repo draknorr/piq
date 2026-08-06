@@ -7,7 +7,10 @@ import type {
   OpportunityRuleSet,
   OpportunityRuleValue,
 } from "./types.js";
-import { assertOpportunityRuleSet } from "./rules.js";
+import {
+  assertOpportunityRuleSet,
+  OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES,
+} from "./rules.js";
 import {
   localDateStartUtc,
   opportunityDateRangeForOperand,
@@ -61,6 +64,56 @@ const STOREFRONT_READY = "readiness_storefront.status = 'ready'";
 const PICS_READY = "readiness_pics.status = 'ready'";
 const CONTENT_DESCRIPTORS_EVIDENCE_ALIAS = "evidence_content_descriptors_pics";
 const SELF_PUBLISHED_ALIAS = "self_published_app";
+const CONTENT_SAFETY_READINESS_GROUP_ID = "content-safety-readiness";
+const CONTENT_SAFETY_READINESS_LABEL = "Content descriptors available";
+const ADULT_CONTENT_JSONPATH = '$.* ? (@ == "3" || @ == "adult")';
+
+const CONTENT_DESCRIPTOR_RULE_VALUE_SQL = `CASE raw_descriptor.value
+${Object.entries(OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES)
+  .map(([descriptor, value]) => `  WHEN '${descriptor}' THEN '${value}'`)
+  .join("\n")}
+  ELSE raw_descriptor.value
+END`;
+
+const CONTENT_DESCRIPTOR_RESOLVED_VALUE_SQL = `CASE
+  WHEN ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.evidence_state = 'known'
+    THEN COALESCE(${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.value, '{}'::jsonb)
+  ELSE COALESCE(a.content_descriptors, '{}'::jsonb)
+END`;
+
+function assertSqlIdentifier(identifier: string): void {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
+    throw new Error(`Invalid internal SQL identifier: ${identifier}`);
+  }
+}
+
+export function opportunityPersistedResultContentSafetySql(
+  resultAlias: string,
+  appAlias?: string,
+): string {
+  assertSqlIdentifier(resultAlias);
+  if (appAlias) {
+    assertSqlIdentifier(appAlias);
+  }
+  const adultContentSql = appAlias
+    ? `jsonb_path_exists(
+      COALESCE(${appAlias}.content_descriptors, '{}'::jsonb),
+      '${ADULT_CONTENT_JSONPATH}'
+    )`
+    : `EXISTS (
+      SELECT 1
+      FROM legacy.apps content_safety_app
+      WHERE content_safety_app.appid = ${resultAlias}.appid
+        AND jsonb_path_exists(
+          COALESCE(content_safety_app.content_descriptors, '{}'::jsonb),
+          '${ADULT_CONTENT_JSONPATH}'
+        )
+    )`;
+  return `(NOT (
+    COALESCE(${resultAlias}.missing_evidence, '[]'::jsonb)
+      ? 'content_descriptors'
+  ) AND NOT (${adultContentSql}))`;
+}
 
 function fieldEvidenceKnownSql(
   field: OpportunityRuleField,
@@ -406,6 +459,16 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
       };
     case "content_descriptors":
       return {
+        collection: {
+          appidExpression: "a.appid",
+          nameExpression: CONTENT_DESCRIPTOR_RULE_VALUE_SQL,
+          relationSql: `jsonb_array_elements_text(
+            jsonb_path_query_array(
+              ${CONTENT_DESCRIPTOR_RESOLVED_VALUE_SQL},
+              '$.*'
+            )
+          ) AS raw_descriptor(value)`,
+        },
         knownSql: `(
           ${CONTENT_DESCRIPTORS_EVIDENCE_ALIAS}.evidence_state = 'known'
           OR (
@@ -414,7 +477,6 @@ function fieldSql(field: OpportunityRuleField): FieldSql {
             AND a.content_descriptors IS NOT NULL
           )
         )`,
-        textCollectionSql: "a.content_descriptors::text",
       };
     case "has_demo":
       return {
@@ -672,32 +734,41 @@ export function compileOpportunityPreview(
     group,
     sql: groupTrueSql(group, context),
   }));
+  const contentSafetyReadinessSql = fieldSql("content_descriptors").knownSql;
+  const adultContentSql = `((${contentSafetyReadinessSql}) AND jsonb_path_exists(
+    ${CONTENT_DESCRIPTOR_RESOLVED_VALUE_SQL},
+    '${ADULT_CONTENT_JSONPATH}'
+  ))`;
   const excludedGroupSql = rules.excluded.map((group) =>
     groupTrueSql(group, context),
   );
-  const requiredStages = requiredGroupSql.map((entry, index) => ({
-    groupId: entry.group.id,
-    label: entry.group.label,
-    matchSql:
-      index === 0
-        ? entry.sql
-        : `(${requiredGroupSql
-            .slice(0, index + 1)
-            .map((required) => required.sql)
-            .join(" AND ")})`,
-  }));
+  const requiredStages = [
+    {
+      groupId: CONTENT_SAFETY_READINESS_GROUP_ID,
+      label: CONTENT_SAFETY_READINESS_LABEL,
+      matchSql: contentSafetyReadinessSql,
+    },
+    ...requiredGroupSql.map((entry, index) => ({
+      groupId: entry.group.id,
+      label: entry.group.label,
+      matchSql: `(${[
+        contentSafetyReadinessSql,
+        ...requiredGroupSql.slice(0, index + 1).map((required) => required.sql),
+      ].join(" AND ")})`,
+    })),
+  ];
   const requiredSql =
     requiredGroupSql.length === 0
       ? "TRUE"
       : requiredGroupSql.map((entry) => entry.sql).join(" AND ");
-  const excludedSql =
-    excludedGroupSql.length === 0 ? "FALSE" : excludedGroupSql.join(" OR ");
+  const excludedSql = [adultContentSql, ...excludedGroupSql].join(" OR ");
   const fields = Array.from(
-    new Set(
-      [...rules.required, ...rules.preferred, ...rules.excluded].flatMap(
+    new Set([
+      ...[...rules.required, ...rules.preferred, ...rules.excluded].flatMap(
         (group) => group.clauses.map((clause) => clause.field),
       ),
-    ),
+      "content_descriptors" as const,
+    ]),
   );
 
   return {
@@ -707,12 +778,19 @@ export function compileOpportunityPreview(
     })),
     excludedSql,
     fromSql: opportunityPreviewFromSql(fields),
-    matchSql: `((${requiredSql}) AND NOT (${excludedSql}))`,
-    requiredGroups: requiredGroupSql.map((entry) => ({
-      groupId: entry.group.id,
-      label: entry.group.label,
-      matchSql: entry.sql,
-    })),
+    matchSql: `((${contentSafetyReadinessSql}) AND (${requiredSql}) AND NOT (${excludedSql}))`,
+    requiredGroups: [
+      {
+        groupId: CONTENT_SAFETY_READINESS_GROUP_ID,
+        label: CONTENT_SAFETY_READINESS_LABEL,
+        matchSql: contentSafetyReadinessSql,
+      },
+      ...requiredGroupSql.map((entry) => ({
+        groupId: entry.group.id,
+        label: entry.group.label,
+        matchSql: entry.sql,
+      })),
+    ],
     requiredStages,
     values: context.values,
   };

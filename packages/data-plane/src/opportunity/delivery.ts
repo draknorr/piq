@@ -21,6 +21,7 @@ import {
   opportunityChangeSummary,
 } from "./intelligence.js";
 import { presentOpportunityChanges } from "./repository.js";
+import { opportunityPersistedResultContentSafetySql } from "./sql-compiler.js";
 import {
   DISABLED_OPPORTUNITY_WORKSPACE_FEATURE_CONTROL,
   isOpportunityWorkspaceFeatureEnabled,
@@ -262,6 +263,14 @@ export class OpportunityDeliveryRepository {
             FROM selected_deliveries delivery
             CROSS JOIN LATERAL unnest(delivery.result_ids)
               WITH ORDINALITY AS selected(result_id, position)
+            JOIN opportunity.results result
+              ON result.id = selected.result_id
+            JOIN legacy.apps content_safety_app
+              ON content_safety_app.appid = result.appid
+              AND ${opportunityPersistedResultContentSafetySql(
+                "result",
+                "content_safety_app",
+              )}
             WHERE selected.position <= 100
           ),
           profile_matches AS MATERIALIZED (

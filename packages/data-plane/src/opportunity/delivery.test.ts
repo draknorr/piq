@@ -142,6 +142,14 @@ describe("opportunity delivery hydration", () => {
         ).length,
         1,
       );
+      assert.ok(
+        fixture.statements.some(
+          (sql) =>
+            sql.includes("result.missing_evidence") &&
+            sql.includes("? 'content_descriptors'") &&
+            sql.includes('@ == "3" || @ == "adult"'),
+        ),
+      );
     });
   }
 

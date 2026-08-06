@@ -66,6 +66,54 @@ const V1_FIELDS = new Set<OpportunityRuleField>(
   ),
 );
 
+export const OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES = {
+  "1": "some_nudity_or_sexual_content",
+  "2": "frequent_violence_or_gore",
+  "3": "adult",
+  "4": "frequent_nudity_or_sexual_content",
+  "5": "general_mature_content",
+} as const;
+
+function rawContentDescriptorValues(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (isRecord(value)) {
+    return Object.values(value);
+  }
+  if (typeof value === "string") {
+    try {
+      return rawContentDescriptorValues(JSON.parse(value) as unknown);
+    } catch {
+      return value.split(/[,|]/).map((item) => item.trim());
+    }
+  }
+  return value === null || value === undefined ? [] : [value];
+}
+
+/**
+ * Converts the numeric values Steam PICS stores in content_descriptors into
+ * stable rule tokens. Descriptor 3 intentionally maps to the existing
+ * `adult` preset value.
+ */
+export function normalizeOpportunityContentDescriptors(
+  value: unknown,
+): string[] {
+  return Array.from(
+    new Set(
+      rawContentDescriptorValues(value)
+        .map((descriptor) => String(descriptor).trim())
+        .filter(Boolean)
+        .map(
+          (descriptor) =>
+            OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES[
+              descriptor as keyof typeof OPPORTUNITY_CONTENT_DESCRIPTOR_RULE_VALUES
+            ] ?? descriptor,
+        ),
+    ),
+  );
+}
+
 function clauseRequiresUnreleasedGame(clause: OpportunityRuleClause): boolean {
   return (
     clause.field === "is_released" &&
@@ -396,24 +444,34 @@ export function evaluateOpportunityProfile(
   const preferredOutcomes = rules.preferred.map((group) =>
     evaluatePreferredGroup(group, input, totalPreferenceWeight, context),
   );
-  const excluded = excludedOutcomes.some((outcome) => outcome.state === "true");
   const requiredState = combineStates(
     requiredOutcomes.map((outcome) => outcome.state),
     "all",
   );
+  const contentDescriptorsReady =
+    input.fields.content_descriptors?.state === "known";
+  const adultContent =
+    contentDescriptorsReady &&
+    normalizeOpportunityContentDescriptors(
+      input.fields.content_descriptors?.value,
+    ).some((descriptor) => descriptor.toLocaleLowerCase() === "adult");
+  const excluded =
+    adultContent ||
+    excludedOutcomes.some((outcome) => outcome.state === "true");
   const missingRequiredFields = Array.from(
-    new Set(
-      requiredOutcomes.flatMap((outcome) =>
+    new Set([
+      ...requiredOutcomes.flatMap((outcome) =>
         outcome.clauseOutcomes
           .filter((clause) => clause.state === "unknown")
           .map((clause) => clause.field),
       ),
-    ),
+      ...(contentDescriptorsReady ? [] : (["content_descriptors"] as const)),
+    ]),
   );
   const outcome: OpportunityProfileEvaluation["outcome"] =
     excluded || requiredState === "false"
       ? "ineligible"
-      : requiredState === "unknown"
+      : requiredState === "unknown" || !contentDescriptorsReady
         ? "pending"
         : "eligible";
 

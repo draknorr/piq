@@ -181,8 +181,11 @@ describe("opportunity preview date context", () => {
         compiledValues = compiled.values;
         return {
           aggregate: {
-            coverage: { publisheriq_added_at: 1 },
-            stageCounts: { added: 1 },
+            coverage: {
+              content_descriptors: 1,
+              publisheriq_added_at: 1,
+            },
+            stageCounts: { added: 1, "content-safety-readiness": 1 },
             totalCatalog: 1,
             totalMatches: 1,
           },
@@ -190,6 +193,14 @@ describe("opportunity preview date context", () => {
             {
               appid: 10,
               fields: {
+                content_descriptors: {
+                  confidence: "high" as const,
+                  evidenceClass: "observed_fact" as const,
+                  source: "steam_pics",
+                  sourceAt: "2026-03-08T20:00:00.000Z",
+                  state: "known" as const,
+                  value: [],
+                },
                 publisheriq_added_at: {
                   confidence: "high" as const,
                   evidenceClass: "observed_fact" as const,
