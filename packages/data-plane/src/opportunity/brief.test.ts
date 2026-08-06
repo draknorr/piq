@@ -94,6 +94,30 @@ describe("opportunity Daily Brief composition", () => {
     );
   });
 
+  it("uses persisted rank before score for the Daily Brief reading order", () => {
+    const games = dedupeOpportunityBriefGames([
+      result({
+        appid: 10,
+        id: "rank-eight",
+        name: "Score leader",
+        rank: 8,
+        score: 99,
+      }),
+      result({
+        appid: 20,
+        id: "rank-one",
+        name: "Priority leader",
+        rank: 1,
+        score: 72,
+      }),
+    ]);
+
+    assert.deepEqual(
+      games.map((game) => game.id),
+      ["rank-one", "rank-eight"],
+    );
+  });
+
   it("accounts for active, quiet, and paused profiles", () => {
     const eventCounts = emptyOpportunityEventCounts();
     eventCounts.newly_qualified = 2;
@@ -135,7 +159,7 @@ describe("opportunity Daily Brief composition", () => {
     );
   });
 
-  it("uses singular editorial copy for one profile event", () => {
+  it("uses singular neutral profile copy for one result", () => {
     const eventCounts = emptyOpportunityEventCounts();
     eventCounts.newly_qualified = 1;
     const issue = buildOpportunityDailyBriefIssue({
@@ -162,6 +186,9 @@ describe("opportunity Daily Brief composition", () => {
       windowStart: "2026-08-02T17:00:00.000Z",
     });
 
-    assert.match(issue.profileDispatches[0]?.summary ?? "", /1 new match,/);
+    assert.equal(
+      issue.profileDispatches[0]?.summary,
+      "1 game matched, led by Lead.",
+    );
   });
 });

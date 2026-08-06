@@ -49,36 +49,13 @@ import {
   type OpportunityWorkspaceTab,
 } from "./lib/workspace-query";
 import { isOpportunityPriorityV2PresentationEnabled } from "./lib/feature-controls";
+import {
+  opportunityPriorityLabel,
+  opportunityResultDescription,
+  opportunityResultSections,
+} from "./lib/review-priority-presentation";
 
 type ProfilesView = "catalog" | "loading" | "editor";
-
-const RESULT_SECTIONS: Array<{
-  key: keyof OpportunityBootstrap["dailyOverview"]["groups"];
-  kicker: string;
-  title: string;
-}> = [
-  {
-    key: "newlyDiscovered",
-    kicker: "New to your search",
-    title: "New discoveries",
-  },
-  {
-    key: "newlyReleased",
-    kicker: "Just launched",
-    title: "Newly released",
-  },
-  {
-    key: "newlyQualified",
-    kicker: "New match",
-    title: "Newly qualified",
-  },
-  {
-    key: "materiallyChanged",
-    kicker: "Commercial change",
-    title: "Material changes",
-  },
-  { key: "trackedUpdates", kicker: "You follow", title: "Tracked updates" },
-];
 
 function presetMarketLabel(state: string | null): string {
   const labels: Record<string, string> = {
@@ -494,8 +471,9 @@ export function OpportunityWorkspace() {
       </div>
     );
   }
-  const presentReviewPriorityV2 =
-    isOpportunityPriorityV2PresentationEnabled(data.workspace.id);
+  const presentReviewPriorityV2 = isOpportunityPriorityV2PresentationEnabled(
+    data.workspace.id,
+  );
 
   return (
     <div className="-m-4 min-h-screen bg-surface md:-m-6 lg:-m-8">
@@ -584,6 +562,7 @@ export function OpportunityWorkspace() {
             issue={brief}
             loading={briefLoading}
             onRetry={() => void loadBrief()}
+            presentReviewPriorityV2={presentReviewPriorityV2}
           />
         )}
         {tab === "profile-lists" && (
@@ -740,6 +719,11 @@ function ProfileLists({
       (result) => result.eventLabel === "tracked_update",
     ),
   };
+  const resultSections = opportunityResultSections({
+    groups,
+    presentReviewPriorityV2,
+    results,
+  });
   const selectedProfile = data.profiles.find(
     (profile) => profile.id === profileId,
   );
@@ -873,18 +857,15 @@ function ProfileLists({
           </div>
         ) : (
           <div className="mt-8 space-y-10">
-            {RESULT_SECTIONS.map((section) => {
-              const sectionResults = groups[section.key];
-              return sectionResults.length > 0 ? (
-                <ResultSection
-                  key={section.key}
-                  kicker={section.kicker}
-                  presentReviewPriorityV2={presentReviewPriorityV2}
-                  results={sectionResults}
-                  title={section.title}
-                />
-              ) : null;
-            })}
+            {resultSections.map((section) => (
+              <ResultSection
+                key={section.key}
+                kicker={section.kicker}
+                presentReviewPriorityV2={presentReviewPriorityV2}
+                results={section.results}
+                title={section.title}
+              />
+            ))}
             {hasMore && (
               <button
                 className="flex min-h-11 w-full items-center justify-center gap-2 border-y border-border-muted py-3 text-sm font-semibold text-text-secondary transition hover:bg-surface-elevated/50 hover:text-accent-primary disabled:opacity-50"
@@ -936,13 +917,13 @@ function ResultSection({
         </span>
       </div>
       <div className="divide-y divide-border-subtle">
-        {results.map((result) => (
+        {results.map((result) =>
           presentReviewPriorityV2 ? (
             <OpportunityResultCard key={result.id} result={result} />
           ) : (
             <LegacyOpportunityResultCard key={result.id} result={result} />
-          )
-        ))}
+          ),
+        )}
       </div>
     </section>
   );
@@ -997,7 +978,8 @@ function LegacyOpportunityResultCard({
         </div>
         <div>
           <p className="text-xs font-semibold text-text-secondary">
-            Market potential: {opportunityPotentialLabel(result.marketPotential)}
+            Market potential:{" "}
+            {opportunityPotentialLabel(result.marketPotential)}
           </p>
           <p
             className="mt-0.5 text-xs text-text-tertiary"
@@ -1013,21 +995,6 @@ function LegacyOpportunityResultCard({
       />
     </Link>
   );
-}
-
-function priorityLabel(result: OpportunityResultSummary): string {
-  if (!result.reviewPriority) return "Legacy result";
-  const lane = {
-    material_change: "Material change",
-    new_game: "New discovery",
-    traction: "Traction",
-  }[result.reviewPriority.lane];
-  const band = {
-    monitor: "Monitor",
-    review_now: "Review now",
-    review_soon: "Review soon",
-  }[result.reviewPriority.priorityBand];
-  return `${lane} — ${band}`;
 }
 
 function OpportunityResultCard({
@@ -1069,8 +1036,7 @@ function OpportunityResultCard({
           )}
         </div>
         <p className="mt-2 line-clamp-2 max-w-3xl text-sm leading-6 text-text-secondary">
-          {result.gameDescription?.text ??
-            "Steam has not provided a short description for this game yet."}
+          {opportunityResultDescription(result)}
         </p>
         {result.reviewPriority ? (
           <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs font-medium text-text-primary">
@@ -1100,10 +1066,10 @@ function OpportunityResultCard({
       <div className="relative z-[2] clear-both flex flex-wrap gap-x-5 gap-y-2 pt-3 sm:col-start-2 sm:pt-0 xl:col-start-auto xl:block xl:space-y-3 xl:text-right">
         <div className="pointer-events-none">
           <p className="text-sm font-semibold text-text-primary">
-            {priorityLabel(result)}
+            {opportunityPriorityLabel(result)}
           </p>
           <p className="mt-1 text-xs text-text-tertiary">
-            {opportunityPotentialLabel(result.marketPotential)} market
+            {opportunityPotentialLabel(result.marketPotential)}
           </p>
         </div>
         <OpportunityConfidenceDisclosure result={result} />
@@ -1172,11 +1138,9 @@ function OpportunityConfidenceDisclosure({
             : opportunityConfidenceExplanation(result.confidence)}
           {confidence && (
             <p className="mt-2 text-text-muted">
-              {confidence.presentCount}/{confidence.applicableCount}{" "}
-              applicable inputs present
-              {confidence.staleCount
-                ? ` · ${confidence.staleCount} stale`
-                : ""}
+              {confidence.presentCount}/{confidence.applicableCount} applicable
+              inputs present
+              {confidence.staleCount ? ` · ${confidence.staleCount} stale` : ""}
             </p>
           )}
         </div>

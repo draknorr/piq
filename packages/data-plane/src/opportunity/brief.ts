@@ -7,31 +7,6 @@ import type {
   OpportunityResultSummary,
 } from "./types.js";
 
-const EVENT_LABELS: OpportunityResultLabel[] = [
-  "newly_qualified",
-  "materially_changed",
-  "newly_discovered",
-  "newly_released",
-  "tracked_update",
-];
-
-const EVENT_NOUNS: Record<
-  OpportunityResultLabel,
-  { plural: string; singular: string }
-> = {
-  materially_changed: {
-    plural: "material changes",
-    singular: "material change",
-  },
-  newly_discovered: {
-    plural: "new discoveries",
-    singular: "new discovery",
-  },
-  newly_qualified: { plural: "new matches", singular: "new match" },
-  newly_released: { plural: "new releases", singular: "new release" },
-  tracked_update: { plural: "tracked updates", singular: "tracked update" },
-};
-
 export function emptyOpportunityEventCounts(): Record<
   OpportunityResultLabel,
   number
@@ -49,6 +24,18 @@ function compareResults(
   left: OpportunityResultSummary,
   right: OpportunityResultSummary,
 ): number {
+  const leftRank =
+    Number.isInteger(left.rank) && (left.rank ?? 0) > 0
+      ? (left.rank as number)
+      : Number.POSITIVE_INFINITY;
+  const rightRank =
+    Number.isInteger(right.rank) && (right.rank ?? 0) > 0
+      ? (right.rank as number)
+      : Number.POSITIVE_INFINITY;
+  const rankDifference = leftRank - rightRank;
+  if (rankDifference !== 0) {
+    return rankDifference;
+  }
   const scoreDifference = (right.score ?? -1) - (left.score ?? -1);
   if (scoreDifference !== 0) {
     return scoreDifference;
@@ -86,23 +73,6 @@ export function dedupeOpportunityBriefGames(
   return Array.from(byAppid.values()).sort(compareResults);
 }
 
-function dominantEventLabel(
-  counts: Record<OpportunityResultLabel, number>,
-): OpportunityResultLabel | null {
-  return EVENT_LABELS.reduce<OpportunityResultLabel | null>(
-    (selected, label) => {
-      if (counts[label] <= 0) {
-        return selected;
-      }
-      if (!selected || counts[label] > counts[selected]) {
-        return label;
-      }
-      return selected;
-    },
-    null,
-  );
-}
-
 function profileSummary(
   profile: OpportunityProfileSummary,
   stats: OpportunityBriefProfileStats,
@@ -113,13 +83,8 @@ function profileSummary(
   if (stats.resultCount === 0) {
     return "No game crossed this profile’s sourcing criteria in this issue.";
   }
-  const eventLabel = dominantEventLabel(stats.eventCounts);
-  const eventCount = eventLabel ? stats.eventCounts[eventLabel] : 0;
-  const movement = eventLabel
-    ? `${eventCount} ${eventCount === 1 ? EVENT_NOUNS[eventLabel].singular : EVENT_NOUNS[eventLabel].plural}`
-    : `${stats.resultCount} matching games`;
   const lead = stats.topResult ? `, led by ${stats.topResult.name}` : "";
-  return `${stats.resultCount} ${stats.resultCount === 1 ? "game matched" : "games matched"}; ${movement}${lead}.`;
+  return `${stats.resultCount} ${stats.resultCount === 1 ? "game matched" : "games matched"}${lead}.`;
 }
 
 function buildProfileDispatches(params: {

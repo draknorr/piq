@@ -278,8 +278,9 @@ export function OpportunityGameRecordClient({
   const researching = record.userState.researching;
   const canSeeCoverage =
     record.workspace.role === "owner" || record.workspace.role === "admin";
-  const presentReviewPriorityV2 =
-    isOpportunityPriorityV2PresentationEnabled(record.workspace.id);
+  const presentReviewPriorityV2 = isOpportunityPriorityV2PresentationEnabled(
+    record.workspace.id,
+  );
   const currentMetrics = Object.entries(record.currentMetrics).filter(
     ([name, value]) => metricKind(name) !== null && value !== null,
   );
@@ -483,8 +484,7 @@ export function OpportunityGameRecordClient({
                         : "The available evidence supports triage, while some applicable context is still developing."}
                   </p>
                   <p className="mt-5 text-xs font-semibold text-text-secondary">
-                    {opportunityPotentialLabel(record.result.marketPotential)}{" "}
-                    market
+                    {opportunityPotentialLabel(record.result.marketPotential)}
                   </p>
                 </div>
               </>
@@ -571,92 +571,94 @@ export function OpportunityGameRecordClient({
           />
           {presentReviewPriorityV2 ? (
             record.matchedProfiles.some((profile) => profile.reviewPriority) ? (
-            <div className="space-y-4 border-y border-border-muted py-5">
-              {record.matchedProfiles.map((profile) =>
-                profile.reviewPriority ? (
-                  <details key={profile.profileVersionId} className="group">
-                    <summary className="cursor-pointer list-none text-sm font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
-                      {profile.name} ·{" "}
-                      {profile.reviewPriority.policy.replaceAll("_", " ")}
-                      {profile.id === priority?.winningProfileId
-                        ? " · Winning match"
-                        : ""}
-                    </summary>
-                    <p className="mt-3 text-xs leading-5 text-text-tertiary">
-                      Internal ordering value — not a success forecast:{" "}
-                      {profile.reviewPriority.internalScore === null
-                        ? "Unavailable"
-                        : `${Math.round(profile.reviewPriority.internalScore * 100)}%`}
-                      {" · "}
-                      {profile.reviewPriority.confidence.presentCount}/
-                      {profile.reviewPriority.confidence.applicableCount}{" "}
-                      applicable inputs present
-                    </p>
-                    <div className="mt-4 grid gap-px overflow-hidden bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
-                      {profile.reviewPriority.components.map((component) => (
-                        <div
-                          key={component.key}
-                          className="bg-surface-raised px-4 py-4"
-                        >
-                          <p className="text-xs font-semibold capitalize text-text-secondary">
-                            {component.key.replaceAll("_", " ")}
-                          </p>
-                          <p className="mt-2 text-lg font-semibold text-accent-primary">
-                            {component.value === null
-                              ? "Unavailable"
-                              : `${Math.round(component.value * 100)}%`}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="w-full min-w-[620px] text-left text-xs">
-                        <thead className="text-text-muted">
-                          <tr>
-                            <th className="px-3 py-2 font-semibold">Input</th>
-                            <th className="px-3 py-2 font-semibold">State</th>
-                            <th className="px-3 py-2 font-semibold">
-                              Assessment
-                            </th>
-                            <th className="px-3 py-2 font-semibold">Source</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border-subtle">
-                          {profile.reviewPriority.inputs.map((input) => (
-                            <tr key={input.key}>
-                              <td className="px-3 py-2 font-medium text-text-primary">
-                                {input.key.replaceAll("_", " ")}
-                              </td>
-                              <td className="px-3 py-2 text-text-secondary">
-                                {input.availability === "not_applicable"
-                                  ? "Not applicable"
-                                  : input.availability === "unavailable"
-                                    ? "Unavailable"
-                                    : "Available"}
-                              </td>
-                              <td className="px-3 py-2 capitalize text-text-secondary">
-                                {input.assessment.replaceAll("_", " ")}
-                              </td>
-                              <td className="px-3 py-2 text-text-tertiary">
-                                {input.source}
-                                {input.sourceAt
-                                  ? ` · ${formatOpportunityDate(input.sourceAt)}`
-                                  : ""}
-                              </td>
+              <div className="space-y-4 border-y border-border-muted py-5">
+                {record.matchedProfiles.map((profile) =>
+                  profile.reviewPriority ? (
+                    <details key={profile.profileVersionId} className="group">
+                      <summary className="cursor-pointer list-none text-sm font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+                        {profile.name} ·{" "}
+                        {profile.reviewPriority.policy.replaceAll("_", " ")}
+                        {profile.id === priority?.winningProfileId
+                          ? " · Winning match"
+                          : ""}
+                      </summary>
+                      <p className="mt-3 text-xs leading-5 text-text-tertiary">
+                        Internal ordering value — not a success forecast:{" "}
+                        {profile.reviewPriority.internalScore === null
+                          ? "Unavailable"
+                          : `${Math.round(profile.reviewPriority.internalScore * 100)}%`}
+                        {" · "}
+                        {profile.reviewPriority.confidence.presentCount}/
+                        {profile.reviewPriority.confidence.applicableCount}{" "}
+                        applicable inputs present
+                      </p>
+                      <div className="mt-4 grid gap-px overflow-hidden bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
+                        {profile.reviewPriority.components.map((component) => (
+                          <div
+                            key={component.key}
+                            className="bg-surface-raised px-4 py-4"
+                          >
+                            <p className="text-xs font-semibold capitalize text-text-secondary">
+                              {component.key.replaceAll("_", " ")}
+                            </p>
+                            <p className="mt-2 text-lg font-semibold text-accent-primary">
+                              {component.value === null
+                                ? "Unavailable"
+                                : `${Math.round(component.value * 100)}%`}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full min-w-[620px] text-left text-xs">
+                          <thead className="text-text-muted">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold">Input</th>
+                              <th className="px-3 py-2 font-semibold">State</th>
+                              <th className="px-3 py-2 font-semibold">
+                                Assessment
+                              </th>
+                              <th className="px-3 py-2 font-semibold">
+                                Source
+                              </th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </details>
-                ) : null,
-              )}
-            </div>
-          ) : (
-            <p className="border-y border-border-muted py-5 text-sm text-text-tertiary">
-              Detailed priority evidence is not available for this legacy
-              result.
-            </p>
+                          </thead>
+                          <tbody className="divide-y divide-border-subtle">
+                            {profile.reviewPriority.inputs.map((input) => (
+                              <tr key={input.key}>
+                                <td className="px-3 py-2 font-medium text-text-primary">
+                                  {input.key.replaceAll("_", " ")}
+                                </td>
+                                <td className="px-3 py-2 text-text-secondary">
+                                  {input.availability === "not_applicable"
+                                    ? "Not applicable"
+                                    : input.availability === "unavailable"
+                                      ? "Unavailable"
+                                      : "Available"}
+                                </td>
+                                <td className="px-3 py-2 capitalize text-text-secondary">
+                                  {input.assessment.replaceAll("_", " ")}
+                                </td>
+                                <td className="px-3 py-2 text-text-tertiary">
+                                  {input.source}
+                                  {input.sourceAt
+                                    ? ` · ${formatOpportunityDate(input.sourceAt)}`
+                                    : ""}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  ) : null,
+                )}
+              </div>
+            ) : (
+              <p className="border-y border-border-muted py-5 text-sm text-text-tertiary">
+                Detailed priority evidence is not available for this legacy
+                result.
+              </p>
             )
           ) : (
             <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-5">
@@ -665,7 +667,10 @@ export function OpportunityGameRecordClient({
                   const presentation = OPPORTUNITY_COMPONENTS[component];
                   if (typeof value !== "number" || !presentation) return null;
                   return (
-                    <div key={component} className="bg-surface-raised px-4 py-5">
+                    <div
+                      key={component}
+                      className="bg-surface-raised px-4 py-5"
+                    >
                       <p className="text-sm font-semibold text-text-primary">
                         {presentation.label}
                       </p>
