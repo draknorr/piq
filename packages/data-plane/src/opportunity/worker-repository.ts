@@ -44,6 +44,7 @@ import {
   OpportunityRepository,
   presentOpportunityChanges,
 } from "./repository.js";
+import { opportunityPersistedResultContentSafetySql } from "./sql-compiler.js";
 import {
   encodeOpportunityReviewPriorityDecision,
   OPPORTUNITY_REVIEW_PRIORITY_STORAGE_VERSION,
@@ -1565,6 +1566,7 @@ export class OpportunityWorkerRepository {
             WHERE result.workspace_id = $1
               AND result.user_id = $2
               AND result.appid = app.appid
+              AND ${opportunityPersistedResultContentSafetySql("result")}
             ORDER BY result.created_at DESC, result.id DESC
             LIMIT 1
           ) latest
@@ -1576,6 +1578,7 @@ export class OpportunityWorkerRepository {
             WHERE result.workspace_id = $1
               AND result.user_id = $2
               AND result.appid = app.appid
+              AND ${opportunityPersistedResultContentSafetySql("result")}
           ) history
         ) prior ON true
       `,
@@ -3304,9 +3307,10 @@ export class OpportunityWorkerRepository {
               row_number() OVER (
                 ORDER BY score DESC NULLS LAST, appid, id
               ) AS rank
-            FROM opportunity.results
-            WHERE run_id = $1
-              AND user_id = $2
+            FROM opportunity.results result
+            WHERE result.run_id = $1
+              AND result.user_id = $2
+              AND ${opportunityPersistedResultContentSafetySql("result")}
           )
           UPDATE opportunity.results result
           SET rank = ranked.rank
@@ -3329,6 +3333,7 @@ export class OpportunityWorkerRepository {
             result.rank_components->'v2' AS v2
           FROM opportunity.results result
           WHERE result.user_id = $2
+            AND ${opportunityPersistedResultContentSafetySql("result")}
             AND (
               result.run_id = $1
               OR (
@@ -3893,6 +3898,7 @@ export class OpportunityWorkerRepository {
             SELECT result.*
             FROM opportunity.results result
             WHERE result.user_id = $2
+              AND ${opportunityPersistedResultContentSafetySql("result")}
               AND (
                 result.run_id = $1
                 OR (
@@ -4217,6 +4223,7 @@ export class OpportunityWorkerRepository {
             SELECT result.*
             FROM opportunity.results result
             WHERE result.user_id = $2
+              AND ${opportunityPersistedResultContentSafetySql("result")}
               AND (
                 result.run_id = $1
                 OR (

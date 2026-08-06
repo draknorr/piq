@@ -321,6 +321,11 @@ describe("opportunity customer response contracts", () => {
       /raw\.change_type IN \('screenshot_added', 'trailer_added'\)/,
     );
     assert.match(resultQuery, /media\.id = trigger_media\.media_version_id/);
+    assert.match(
+      resultQuery,
+      /result\.missing_evidence[\s\S]*\? 'content_descriptors'/,
+    );
+    assert.match(resultQuery, /@ == "3" \|\| @ == "adult"/);
   });
 
   for (const role of ["owner", "admin", "member"] as const) {
@@ -493,6 +498,11 @@ describe("opportunity customer response contracts", () => {
         gameRecordQuery,
         /media\.id = trigger_media\.media_version_id/,
       );
+      assert.match(
+        gameRecordQuery,
+        /canonical\.missing_evidence[\s\S]*\? 'content_descriptors'/,
+      );
+      assert.match(gameRecordQuery, /@ == "3" \|\| @ == "adult"/);
     });
   }
 });
@@ -819,6 +829,14 @@ describe("opportunity rule-input provenance", () => {
               categories: [],
               content_descriptors: [],
               developers: [],
+              field_evidence: {
+                content_descriptors: {
+                  source: "pics",
+                  sourceAt: picsSourceAt.toISOString(),
+                  state: "known",
+                  value: { 0: "1", 1: "3" },
+                },
+              },
               genres: [],
               has_demo: true,
               has_purchase_packages: false,
@@ -887,6 +905,10 @@ describe("opportunity rule-input provenance", () => {
     assert.equal(inputs[0]?.fields.app_type?.value, "game");
     assert.equal(inputs[0]?.fields.has_demo?.source, "steam_storefront");
     assert.equal(inputs[0]?.fields.demo_only?.value, true);
+    assert.deepEqual(inputs[0]?.fields.content_descriptors?.value, [
+      "some_nudity_or_sexual_content",
+      "adult",
+    ]);
     assert.equal(
       inputs[0]?.fields.publisheriq_added_at?.value,
       "2026-07-27T10:00:00.000Z",

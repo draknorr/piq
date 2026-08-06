@@ -15,6 +15,7 @@ import {
   evaluateOpportunityClause,
   evaluateOpportunityGroup,
   evaluateOpportunityProfile,
+  normalizeOpportunityContentDescriptors,
   supportsReleasedMarketHealth,
 } from "./rules.js";
 import { OPPORTUNITY_RULE_INPUT_FIELD_SOURCES } from "./repository.js";
@@ -111,10 +112,27 @@ const RULES: OpportunityRuleSet = {
   schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
 };
 
+describe("opportunity content descriptors", () => {
+  it("normalizes PICS descriptor objects to stable rule values", () => {
+    assert.deepEqual(
+      normalizeOpportunityContentDescriptors({ 0: "1", 1: "3" }),
+      ["some_nudity_or_sexual_content", "adult"],
+    );
+    assert.deepEqual(normalizeOpportunityContentDescriptors('["3","5"]'), [
+      "adult",
+      "general_mature_content",
+    ]);
+  });
+});
+
 function input(
   fields: OpportunityEvaluationInput["fields"],
 ): OpportunityEvaluationInput {
-  return { appid: 10, fields, name: "Test Game" };
+  return {
+    appid: 10,
+    fields: { content_descriptors: known([]), ...fields },
+    name: "Test Game",
+  };
 }
 
 describe("opportunity rule engine", () => {
@@ -462,7 +480,7 @@ describe("opportunity rule engine", () => {
     assert.deepEqual(result.missingRequiredFields, ["tags"]);
   });
 
-  it("does not exclude on an unknown exclusion", () => {
+  it("holds an otherwise eligible game until content descriptors are known", () => {
     const result = evaluateOpportunityProfile(
       RULES,
       input({
@@ -473,9 +491,44 @@ describe("opportunity rule engine", () => {
       }),
     );
 
-    assert.equal(result.outcome, "eligible");
+    assert.equal(result.outcome, "pending");
     assert.equal(result.excluded, false);
+    assert.deepEqual(result.missingRequiredFields, ["content_descriptors"]);
     assert.equal(result.preferenceContribution, 0);
+  });
+
+  it("requires content-descriptor readiness even when a profile has no content rule", () => {
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: [],
+        required: [],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input({
+        content_descriptors: unknown("Content descriptors unavailable."),
+      }),
+    );
+
+    assert.equal(result.outcome, "pending");
+    assert.deepEqual(result.missingRequiredFields, ["content_descriptors"]);
+  });
+
+  it("excludes adult content even when a profile has no content rule", () => {
+    const result = evaluateOpportunityProfile(
+      {
+        excluded: [],
+        preferred: [],
+        required: [],
+        schemaVersion: OPPORTUNITY_RULE_SCHEMA_VERSION,
+      },
+      input({
+        content_descriptors: known({ 0: "3" }),
+      }),
+    );
+
+    assert.equal(result.outcome, "ineligible");
+    assert.equal(result.excluded, true);
   });
 
   it("excludes on any positively matched exclusion", () => {

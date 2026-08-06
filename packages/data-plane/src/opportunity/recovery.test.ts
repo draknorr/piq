@@ -217,6 +217,19 @@ describe("opportunity failure recovery and preservation contracts", () => {
     assert.doesNotMatch(reappearanceUpdate, /ignored_at = NULL/);
   });
 
+  test("unsafe historical results are not reused by new evaluations", () => {
+    const priorStateLookup = repositorySource.match(
+      /async getPriorUserStates\([\s\S]*?return new Map\(/,
+    )?.[0];
+    assert.ok(priorStateLookup);
+    assert.equal(
+      priorStateLookup.match(
+        /opportunityPersistedResultContentSafetySql\("result"\)/g,
+      )?.length,
+      2,
+    );
+  });
+
   test("the schema remains additive and evidence-preserving", () => {
     assert.doesNotMatch(migration, /\bDROP\s+(?:TABLE|SCHEMA|COLUMN)\b/i);
     assert.doesNotMatch(migration, /\bTRUNCATE\b/i);

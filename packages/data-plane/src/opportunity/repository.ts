@@ -52,10 +52,12 @@ import {
 } from "./result-cursor.js";
 import {
   compileOpportunityPreview,
+  opportunityPersistedResultContentSafetySql,
   type OpportunityCompiledPreview,
 } from "./sql-compiler.js";
 import {
   describeOpportunityRuleSet,
+  normalizeOpportunityContentDescriptors,
   supportsReleasedMarketHealth,
 } from "./rules.js";
 import { decodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
@@ -653,7 +655,13 @@ function resolvedFieldEvidence(
   const sourceAt =
     typeof record.sourceAt === "string" ? iso(record.sourceAt) : null;
   if (record.state === "known") {
-    return knownField(record.value, source, sourceAt);
+    return knownField(
+      field === "content_descriptors"
+        ? normalizeOpportunityContentDescriptors(record.value)
+        : record.value,
+      source,
+      sourceAt,
+    );
   }
   if (record.state === "missing") {
     if (
@@ -813,7 +821,10 @@ function buildOpportunityRuleInput(
   setPics("controller_support", row.controller_support);
   setPics("steam_deck", row.steam_deck);
   setResolved("languages", normalizeStringArray(row.languages));
-  setPics("content_descriptors", normalizeStringArray(row.content_descriptors));
+  setResolved(
+    "content_descriptors",
+    normalizeOpportunityContentDescriptors(row.content_descriptors),
+  );
   setStorefront("has_demo", row.has_demo);
   fields.demo_only =
     storefrontReady &&
@@ -1652,6 +1663,7 @@ export class OpportunityRepository {
         LEFT JOIN opportunity.profiles profile
           ON profile.id = match.profile_id
         WHERE result.user_id = $2
+          AND ${opportunityPersistedResultContentSafetySql("result", "app")}
           AND (
             result.run_id = $1
             OR (
@@ -1736,6 +1748,7 @@ export class OpportunityRepository {
           SELECT candidate.*
           FROM opportunity.results candidate
           WHERE candidate.user_id = $2
+            AND ${opportunityPersistedResultContentSafetySql("candidate")}
             AND (
               candidate.run_id = $1
               OR (
@@ -1932,6 +1945,7 @@ export class OpportunityRepository {
             ) AS high_confidence_count
           FROM opportunity.results result
           WHERE result.user_id = $2
+            AND ${opportunityPersistedResultContentSafetySql("result")}
             AND (
               result.run_id = $1
               OR (
@@ -1950,6 +1964,7 @@ export class OpportunityRepository {
             SELECT result.*
             FROM opportunity.results result
             WHERE result.user_id = $2
+              AND ${opportunityPersistedResultContentSafetySql("result")}
               AND (
                 result.run_id = $1
                 OR (
@@ -2409,6 +2424,7 @@ export class OpportunityRepository {
         LEFT JOIN opportunity.profiles profile
           ON profile.id = match.profile_id
         WHERE result.user_id = $2
+          AND ${opportunityPersistedResultContentSafetySql("result", "app")}
           AND (
             result.run_id = $1
             OR (
@@ -3800,6 +3816,7 @@ export class OpportunityRepository {
           JOIN opportunity.results result ON result.id = match.result_id
           WHERE match.profile_id = $1
             AND result.user_id = $2
+            AND ${opportunityPersistedResultContentSafetySql("result")}
           GROUP BY match.profile_id, result.run_id
           ORDER BY MAX(result.created_at) DESC
           LIMIT 30
@@ -4105,6 +4122,7 @@ export class OpportunityRepository {
             WHERE prior.user_id = canonical.user_id
               AND prior.appid = canonical.appid
               AND prior.id <> canonical.id
+              AND ${opportunityPersistedResultContentSafetySql("prior", "app")}
           ), '[]'::jsonb) AS previous_appearances,
           COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -4268,6 +4286,7 @@ export class OpportunityRepository {
           AND canonical.appid = $2
           AND canonical.workspace_id = $3
           AND canonical.user_id = $4
+          AND ${opportunityPersistedResultContentSafetySql("canonical", "app")}
         LIMIT 1
       `,
       [params.resultId, params.appid, workspace.id, params.identity.userId],
