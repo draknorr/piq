@@ -839,6 +839,7 @@ export interface OpportunityGameRecord {
     }>;
   };
   workspace: {
+    id: string;
     name: string;
     role: "owner" | "admin" | "member";
   };

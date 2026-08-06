@@ -48,11 +48,9 @@ import {
   parseOpportunityWorkspaceTab,
   type OpportunityWorkspaceTab,
 } from "./lib/workspace-query";
+import { isOpportunityPriorityV2PresentationEnabled } from "./lib/feature-controls";
 
 type ProfilesView = "catalog" | "loading" | "editor";
-
-const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
-  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
 
 const RESULT_SECTIONS: Array<{
   key: keyof OpportunityBootstrap["dailyOverview"]["groups"];
@@ -496,6 +494,8 @@ export function OpportunityWorkspace() {
       </div>
     );
   }
+  const presentReviewPriorityV2 =
+    isOpportunityPriorityV2PresentationEnabled(data.workspace.id);
 
   return (
     <div className="-m-4 min-h-screen bg-surface md:-m-6 lg:-m-8">
@@ -602,6 +602,7 @@ export function OpportunityWorkspace() {
               replaceQuery({ profile: value, tab: "profile-lists" })
             }
             onRetry={() => void loadResultPage(false)}
+            presentReviewPriorityV2={presentReviewPriorityV2}
             profileId={selectedProfileId}
             results={listResults}
           />
@@ -626,6 +627,7 @@ export function OpportunityWorkspace() {
             onClose={closeProfileEditor}
             onSaved={saved}
             onStatusChanged={profileStatusChanged}
+            presentReviewPriorityV2={presentReviewPriorityV2}
           />
         )}
         {tab === "delivery" && <DeliveryDesk data={data} onChanged={load} />}
@@ -703,6 +705,7 @@ function ProfileLists({
   onLoadMore,
   onProfileChanged,
   onRetry,
+  presentReviewPriorityV2,
   profileId,
   results,
 }: {
@@ -716,6 +719,7 @@ function ProfileLists({
   onLoadMore: () => void;
   onProfileChanged: (value: string | null) => void;
   onRetry: () => void;
+  presentReviewPriorityV2: boolean;
   profileId: string | null;
   results: OpportunityResultSummary[];
 }) {
@@ -875,6 +879,7 @@ function ProfileLists({
                 <ResultSection
                   key={section.key}
                   kicker={section.kicker}
+                  presentReviewPriorityV2={presentReviewPriorityV2}
                   results={sectionResults}
                   title={section.title}
                 />
@@ -906,10 +911,12 @@ function ProfileLists({
 
 function ResultSection({
   kicker,
+  presentReviewPriorityV2,
   results,
   title,
 }: {
   kicker: string;
+  presentReviewPriorityV2: boolean;
   results: OpportunityResultSummary[];
   title: string;
 }) {
@@ -930,7 +937,7 @@ function ResultSection({
       </div>
       <div className="divide-y divide-border-subtle">
         {results.map((result) => (
-          OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+          presentReviewPriorityV2 ? (
             <OpportunityResultCard key={result.id} result={result} />
           ) : (
             <LegacyOpportunityResultCard key={result.id} result={result} />

@@ -21,6 +21,11 @@ import {
   opportunityChangeSummary,
 } from "./intelligence.js";
 import { presentOpportunityChanges } from "./repository.js";
+import {
+  DISABLED_OPPORTUNITY_WORKSPACE_FEATURE_CONTROL,
+  isOpportunityWorkspaceFeatureEnabled,
+  type OpportunityWorkspaceFeatureControl,
+} from "./feature-controls.js";
 
 export interface OpportunityDeliveryResult {
   appid: number;
@@ -54,6 +59,7 @@ export interface OpportunityDeliveryWork {
   results: OpportunityDeliveryResult[];
   windowEnd?: string | null;
   windowStart?: string | null;
+  workspaceId: string;
 }
 
 export interface OpportunityDeliveryProvider {
@@ -463,6 +469,7 @@ export class OpportunityDeliveryRepository {
           }),
           windowEnd: row.rendered_payload.windowEnd ?? null,
           windowStart: row.rendered_payload.windowStart ?? null,
+          workspaceId: row.workspace_id,
         };
       });
     });
@@ -868,9 +875,10 @@ function renderOpportunityDeliveryV2(
               "Steam has not provided a short description for this game yet.")
           : result.changeSummary,
       );
-      const reasons = presentReviewPriorityV2 && source.reviewPriority?.reasons.length
-        ? source.reviewPriority.reasons.join(" · ")
-        : decodeOpportunityText(source.whyNow);
+      const reasons =
+        presentReviewPriorityV2 && source.reviewPriority?.reasons.length
+          ? source.reviewPriority.reasons.join(" · ")
+          : decodeOpportunityText(source.whyNow);
       return `
         <article style="border-top:1px solid #dfd8ce;padding:24px 0">
           ${image ? `<a href="${escapeHtml(link)}"><img src="${escapeHtml(image)}" width="632" alt="${escapeHtml(decodeOpportunityText(result.name))} Steam artwork" style="display:block;width:100%;height:auto;border-radius:8px;margin-bottom:16px" /></a>` : `<div style="display:block;background:#f1ebe3;border:1px solid #dfd8ce;border-radius:8px;color:#8b7468;font-size:11px;font-weight:700;letter-spacing:.12em;margin-bottom:16px;padding:42px 16px;text-align:center;text-transform:uppercase">PublisherIQ watch desk · Artwork unavailable</div>`}
@@ -963,9 +971,10 @@ function renderOpportunityDeliveryV2(
               "Steam has not provided a short description for this game yet.")
           : result.changeSummary,
       );
-      const reasons = presentReviewPriorityV2 && source.reviewPriority?.reasons.length
-        ? source.reviewPriority.reasons.join(" · ")
-        : decodeOpportunityText(source.whyNow);
+      const reasons =
+        presentReviewPriorityV2 && source.reviewPriority?.reasons.length
+          ? source.reviewPriority.reasons.join(" · ")
+          : decodeOpportunityText(source.whyNow);
       return {
         type: "section",
         text: {
@@ -1130,7 +1139,7 @@ export class OpportunityDeliveryDispatcher {
     private readonly cipher: OpportunityDestinationCipher,
     private readonly provider: OpportunityDeliveryProvider,
     private readonly workerId: string,
-    private readonly presentReviewPriorityV2 = false,
+    private readonly presentationControl: OpportunityWorkspaceFeatureControl = DISABLED_OPPORTUNITY_WORKSPACE_FEATURE_CONTROL,
   ) {}
 
   async runOnce(limit = 10): Promise<number> {
@@ -1139,7 +1148,10 @@ export class OpportunityDeliveryDispatcher {
       try {
         const destination = this.cipher.decrypt(delivery.destinationCiphertext);
         const rendered = renderOpportunityDelivery(delivery, {
-          presentReviewPriorityV2: this.presentReviewPriorityV2,
+          presentReviewPriorityV2: isOpportunityWorkspaceFeatureEnabled(
+            this.presentationControl,
+            delivery.workspaceId,
+          ),
         });
         const providerMessageId =
           delivery.channel === "email"

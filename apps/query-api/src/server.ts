@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   type CompareEntitiesRequest,
+  createOpportunityPriorityV2OrderControl,
   ContractRuntimeUnavailableError,
   type DiscoverChangePatternsRequest,
   type DiscoverMomentumRequest,
@@ -731,7 +732,15 @@ export function createQueryApiServer(params?: {
     ?? (
       config?.source === 'tiger'
         ? new OpportunityService(
-          new OpportunityRepository(getDataPlanePool(config)),
+          new OpportunityRepository(
+            getDataPlanePool(config),
+            createOpportunityPriorityV2OrderControl({
+              discovery: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY,
+              materialChanges: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL,
+              traction: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION,
+              workspaceIds: process.env.OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS,
+            })
+          ),
           loadOpportunityDestinationCipher()
         )
         : null

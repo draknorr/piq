@@ -11,6 +11,7 @@ import type { OpportunityResultSummary } from "./types.js";
 const result = {
   appid: 42,
   id: "00000000-0000-0000-0000-000000000042",
+  rank: 7,
   score: 91.5,
 } as OpportunityResultSummary;
 
@@ -29,6 +30,31 @@ describe("opportunity result cursors", () => {
       id: "00000000-0000-0000-0000-000000000042",
       score: 91.5,
     });
+  });
+
+  it("round-trips a versioned v2 rank cursor without mixing score order", () => {
+    const filterKey = "run-a:all:all";
+    const cursor = encodeOpportunityResultCursor(
+      result,
+      filterKey,
+      "review_priority_v2",
+    );
+
+    assert.deepEqual(
+      decodeOpportunityResultCursor(cursor, filterKey, "review_priority_v2"),
+      {
+        appid: 42,
+        filterKey,
+        id: "00000000-0000-0000-0000-000000000042",
+        order: "review_priority_v2",
+        rank: 7,
+        score: 91.5,
+      },
+    );
+    assert.throws(
+      () => decodeOpportunityResultCursor(cursor, filterKey, "score"),
+      /invalid for these filters/,
+    );
   });
 
   it("rejects cursors reused with another run or filter identity", () => {

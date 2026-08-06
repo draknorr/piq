@@ -15,6 +15,10 @@ import {
   supportsReleasedMarketHealth,
 } from "./rules.js";
 import { encodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
+import {
+  isOpportunityWorkspaceFeatureEnabled,
+  type OpportunityPriorityV2OrderControl,
+} from "./feature-controls.js";
 import type {
   OpportunityEvaluationInput,
   OpportunityFieldValue,
@@ -49,6 +53,7 @@ const EVALUATION_SIGNAL_REFRESH_BATCH_SIZE = 500;
 export interface OpportunityWorkerOptions {
   claimLimit?: number;
   computeReviewPriorityV2?: boolean;
+  orderReviewPriorityV2?: OpportunityPriorityV2OrderControl;
   websiteBaseUrl: string;
   workerId?: string;
 }
@@ -354,6 +359,7 @@ function fieldExplanation(
 export class OpportunityWorker {
   private readonly claimLimit: number;
   private readonly computeReviewPriorityV2: boolean;
+  private readonly orderReviewPriorityV2?: OpportunityPriorityV2OrderControl;
   private readonly websiteBaseUrl: string;
   readonly workerId: string;
 
@@ -363,6 +369,7 @@ export class OpportunityWorker {
   ) {
     this.claimLimit = Math.max(1, Math.min(50, options.claimLimit ?? 8));
     this.computeReviewPriorityV2 = options.computeReviewPriorityV2 ?? false;
+    this.orderReviewPriorityV2 = options.orderReviewPriorityV2;
     this.websiteBaseUrl = options.websiteBaseUrl;
     this.workerId = options.workerId ?? `opportunity-${randomUUID()}`;
   }
@@ -754,6 +761,12 @@ export class OpportunityWorker {
         >,
         results,
         run,
+        orderReviewPriorityV2:
+          this.orderReviewPriorityV2?.allPolicies === true &&
+          isOpportunityWorkspaceFeatureEnabled(
+            this.orderReviewPriorityV2,
+            item.workspaceId,
+          ),
         userId: item.userId,
         websiteBaseUrl: this.websiteBaseUrl,
         workId: item.id,

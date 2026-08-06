@@ -669,6 +669,15 @@ class RecordingDatabase {
 
     if (
       sql.startsWith("WITH scoped AS MATERIALIZED") &&
+      sql.includes("eligible_slots AS MATERIALIZED") &&
+      sql.includes("UPDATE opportunity.results result")
+    ) {
+      this.state.rankingUpdates += 1;
+      return { rows: [] };
+    }
+
+    if (
+      sql.startsWith("WITH scoped AS MATERIALIZED") &&
       sql.includes("matched_profiles AS") &&
       sql.includes("SELECT ranked.id")
     ) {
@@ -909,4 +918,53 @@ describe("opportunity bulk persistence golden parity", () => {
       );
     });
   }
+
+  it("preserves bulk/legacy parity with slot-preserving v2 rank SQL", async () => {
+    const legacyDatabase = new RecordingDatabase();
+    const bulkDatabase = new RecordingDatabase();
+    const legacyRepository = new OpportunityWorkerRepository(
+      legacyDatabase.pool,
+    );
+    const bulkRepository = new OpportunityWorkerRepository(bulkDatabase.pool);
+    const params = {
+      ...fixture("daily"),
+      orderReviewPriorityV2: true,
+      userId: USER_ID,
+      websiteBaseUrl: "https://publisheriq.example/",
+      workId: 97,
+      workerId: "opportunity-worker-parity",
+      workspaceId: WORKSPACE_ID,
+    };
+
+    await legacyRepository.persistRunOutcomeLegacy(params);
+    await bulkRepository.persistRunOutcome({
+      ...params,
+      phaseTimings: {
+        cohortResolutionMs: 12,
+        inputPreparationMs: 11,
+        marketCalculationMs: 14,
+        profileEvaluationMs: 13,
+      },
+    });
+
+    assert.deepEqual(
+      canonicalState(bulkDatabase.state),
+      canonicalState(legacyDatabase.state),
+    );
+    const rankQuery = bulkDatabase.state.queries.find((query) =>
+      query.includes("eligible_slots AS MATERIALIZED"),
+    );
+    assert.ok(rankQuery);
+    assert.match(rankQuery, /calculation_versions->>'reviewPriority'/);
+    assert.match(
+      rankQuery,
+      /COALESCE\(eligible_slots\.v1_slot, scoped\.v1_slot\)/,
+    );
+    assert.match(rankQuery, /internal_score DESC NULLS LAST/);
+    const deliveryQuery = bulkDatabase.state.queries.find((query) =>
+      query.includes("matched_profiles AS"),
+    );
+    assert.match(deliveryQuery ?? "", /scoped\.rank ASC NULLS LAST/);
+    assert.match(deliveryQuery ?? "", /ranked\.rank ASC NULLS LAST/);
+  });
 });

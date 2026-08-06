@@ -138,27 +138,32 @@ pnpm --filter @publisheriq/data-plane opportunity-worker
 
 Do not configure an HTTP health check; this is a process worker.
 
-| Variable                              | Default                            | Purpose                                                           |
-| ------------------------------------- | ---------------------------------- | ----------------------------------------------------------------- |
-| `TIGER_PRIMARY_URL`                   | required                           | Tiger connection                                                  |
-| `OPPORTUNITY_WEBSITE_BASE_URL`        | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                            |
-| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY` | required for external delivery     | Enables encrypted email/Slack destinations                        |
-| `RESEND_API_KEY`                      | required before enabling email     | Enables email provider calls                                      |
-| `OPPORTUNITY_EMAIL_FROM`              | PublisherIQ default                | Verified Resend sender                                            |
-| `WORKER_ID`                           | generated UUID                     | Lease owner identity                                              |
-| `CLAIM_LIMIT`                         | `8`                                | Fair queue claims per poll, clamped by the repository             |
-| `DELIVERY_CLAIM_LIMIT`                | `10`                               | Delivery claims per poll                                          |
-| `POLL_INTERVAL_MS`                    | `5000`                             | Delay between idle polls                                          |
-| `MAX_IDLE_POLLS`                      | `0`                                | `0` runs continuously; positive values are for bounded local runs |
-| `OPPORTUNITY_PRIORITY_V2_COMPUTE`     | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering   |
-| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`| `0`                                | Use canonical v2 copy in deliveries after the presentation gate   |
+| Variable                                             | Default                            | Purpose                                                               |
+| ---------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `TIGER_PRIMARY_URL`                                  | required                           | Tiger connection                                                      |
+| `OPPORTUNITY_WEBSITE_BASE_URL`                       | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                                |
+| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY`                | required for external delivery     | Enables encrypted email/Slack destinations                            |
+| `RESEND_API_KEY`                                     | required before enabling email     | Enables email provider calls                                          |
+| `OPPORTUNITY_EMAIL_FROM`                             | PublisherIQ default                | Verified Resend sender                                                |
+| `WORKER_ID`                                          | generated UUID                     | Lease owner identity                                                  |
+| `CLAIM_LIMIT`                                        | `8`                                | Fair queue claims per poll, clamped by the repository                 |
+| `DELIVERY_CLAIM_LIMIT`                               | `10`                               | Delivery claims per poll                                              |
+| `POLL_INTERVAL_MS`                                   | `5000`                             | Delay between idle polls                                              |
+| `MAX_IDLE_POLLS`                                     | `0`                                | `0` runs continuously; positive values are for bounded local runs     |
+| `OPPORTUNITY_PRIORITY_V2_COMPUTE`                    | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering       |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`               | `0`                                | Permit canonical v2 copy for an explicit workspace scope              |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS` | empty                              | Comma-separated workspace UUID canary scope; `*` is general rollout   |
+| `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS`        | empty                              | Comma-separated workspace UUID ordering scope; `*` is general rollout |
 
 The three policy-order controls are
 `OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY`,
 `OPPORTUNITY_PRIORITY_V2_ORDER_TRACTION`, and
-`OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL`. They fail startup closed while the
-required policy calibration artifacts and canary gates remain unapproved; do
-not set them during dual-write rollout.
+`OPPORTUNITY_PRIORITY_V2_ORDER_MATERIAL`. The first live canary requires all
+three to be `1` or all three to be off; a partial combination fails startup.
+When enabled, `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS` must contain an
+explicit UUID allowlist or standalone `*`. The worker and Query API must use the
+same values so persisted rank, list pagination, Daily Brief, and delivery order
+remain identical.
 
 If the encryption key is absent, evaluations and website results still run, but
 delivery configuration and dispatch remain unavailable.

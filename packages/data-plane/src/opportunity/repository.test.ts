@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import type { Pool } from "pg";
 
+import { createOpportunityPriorityV2OrderControl } from "./feature-controls.js";
 import { OpportunityRepository } from "./repository.js";
 import { encodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
 import { compileOpportunityPreview } from "./sql-compiler.js";
@@ -455,6 +456,7 @@ describe("opportunity customer response contracts", () => {
       });
 
       assert.deepEqual(record.workspace, {
+        id: "workspace-1",
         name: "PublisherIQ research",
         role,
       });
@@ -1232,7 +1234,7 @@ describe("opportunity Daily Brief repository", () => {
       listProfiles: () => Promise<[]>;
     };
     mutable.ensureWorkspace = async () => ({
-      id: "00000000-0000-0000-0000-000000000002",
+      id: "00000000-0000-4000-8000-000000000002",
       name: "Editorial",
       role: "owner",
     });
@@ -1278,7 +1280,7 @@ describe("opportunity Daily Brief repository", () => {
     );
     assert.match(runCall?.text ?? "", /run\.status = 'completed'/);
     assert.deepEqual(runCall?.values, [
-      "00000000-0000-0000-0000-000000000002",
+      "00000000-0000-4000-8000-000000000002",
       identity.userId,
     ]);
     const featuredCall = calls.find((call) =>
@@ -1351,6 +1353,67 @@ describe("opportunity Daily Brief repository", () => {
       "00000000-0000-0000-0000-000000000025",
     );
     assert.doesNotMatch(pageCalls[0]?.text ?? "", /LIMIT 500/);
+  });
+
+  it("paginates a scoped v2 feed by persisted rank", async () => {
+    const resultRows = Array.from({ length: 26 }, (_, index) => ({
+      appid: 100 + index,
+      change: null,
+      confidence: "high",
+      created_at: "2026-08-03T17:00:00.000Z",
+      event_fingerprint: `event-${index}`,
+      event_label: "newly_qualified",
+      header_image_url: null,
+      id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
+      market_potential: "meaningful",
+      matched_profiles: [],
+      name: `Game ${index + 1}`,
+      rank: index + 1,
+      rank_components: {},
+      score: index,
+      screenshot_thumbnail_url: null,
+      strongest_evidence: [],
+      triggered_by_media_addition: false,
+      why_now: "Matched.",
+    }));
+    const pageCalls: QueryCall[] = [];
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (text.includes("FROM opportunity.runs run")) {
+          return { rows: [run] };
+        }
+        if (text.includes("ORDER BY result.rank ASC")) {
+          pageCalls.push({ text, values });
+          return { rows: values[7] ? [resultRows[25]] : resultRows };
+        }
+        throw new Error(`Unexpected v2 pagination query: ${text}`);
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(
+      pool,
+      createOpportunityPriorityV2OrderControl({
+        discovery: "1",
+        materialChanges: "1",
+        traction: "1",
+        workspaceIds: "00000000-0000-4000-8000-000000000002",
+      }),
+    );
+    bypassWorkspace(repository);
+
+    const first = await repository.listResults(identity, { runId: run.id });
+    const second = await repository.listResults(identity, {
+      cursor: first.nextCursor,
+      runId: run.id,
+    });
+
+    assert.equal(first.results.length, 25);
+    assert.equal(second.results.length, 1);
+    assert.match(pageCalls[0]?.text ?? "", /result\.rank > \$9::integer/);
+    assert.equal(pageCalls[1]?.values[8], 25);
+    assert.equal(pageCalls[1]?.values[9], 124);
   });
 
   it("rejects malformed cursors before querying a result page", async () => {

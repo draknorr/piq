@@ -41,6 +41,11 @@ import {
 } from "./brief.js";
 import { OpportunityNotFoundError } from "./errors.js";
 import {
+  DISABLED_OPPORTUNITY_WORKSPACE_FEATURE_CONTROL,
+  isOpportunityWorkspaceFeatureEnabled,
+  type OpportunityPriorityV2OrderControl,
+} from "./feature-controls.js";
+import {
   decodeOpportunityResultCursor,
   encodeOpportunityResultCursor,
   opportunityCursorFilterKey,
@@ -1205,7 +1210,13 @@ const RULE_INPUT_BATCH_SELECT = `
 `;
 
 export class OpportunityRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly orderReviewPriorityV2: OpportunityPriorityV2OrderControl = {
+      ...DISABLED_OPPORTUNITY_WORKSPACE_FEATURE_CONTROL,
+      allPolicies: false,
+    },
+  ) {}
 
   private async transaction<T>(
     callback: (client: PoolClient) => Promise<T>,
@@ -1500,6 +1511,7 @@ export class OpportunityRepository {
     cursor?: string | null;
     eventLabel?: OpportunityResultLabel | null;
     limit: number;
+    orderReviewPriorityV2: boolean;
     profileId?: string | null;
     run: LatestRunRow;
     userId: string;
@@ -1514,8 +1526,51 @@ export class OpportunityRepository {
     const cursor = decodeOpportunityResultCursor(
       params.cursor ?? null,
       filterKey,
+      params.orderReviewPriorityV2 ? "review_priority_v2" : "score",
     );
     const boundedLimit = Math.max(1, Math.min(100, Math.floor(params.limit)));
+    const cursorPredicateSql = params.orderReviewPriorityV2
+      ? `
+          AND (
+            NOT $8::boolean
+            OR result.rank > $9::integer
+            OR (
+              result.rank = $9::integer
+              AND (
+                result.appid > $10
+                OR (result.appid = $10 AND result.id > $11::uuid)
+              )
+            )
+          )`
+      : `
+          AND (
+            NOT $8::boolean
+            OR (
+              $9::numeric IS NOT NULL
+              AND (
+                result.score < $9
+                OR result.score IS NULL
+                OR (
+                  result.score = $9
+                  AND (
+                    result.appid > $10
+                    OR (result.appid = $10 AND result.id > $11::uuid)
+                  )
+                )
+              )
+            )
+            OR (
+              $9::numeric IS NULL
+              AND result.score IS NULL
+              AND (
+                result.appid > $10
+                OR (result.appid = $10 AND result.id > $11::uuid)
+              )
+            )
+          )`;
+    const resultOrderSql = params.orderReviewPriorityV2
+      ? "result.rank ASC, result.appid, result.id"
+      : "result.score DESC NULLS LAST, result.appid, result.id";
     const result = await this.pool.query<ResultRow>(
       `
         SELECT
@@ -1615,31 +1670,7 @@ export class OpportunityRepository {
             )
           )
           AND ($7::text IS NULL OR result.event_label = $7)
-          AND (
-            NOT $8::boolean
-            OR (
-              $9::numeric IS NOT NULL
-              AND (
-                result.score < $9
-                OR result.score IS NULL
-                OR (
-                  result.score = $9
-                  AND (
-                    result.appid > $10
-                    OR (result.appid = $10 AND result.id > $11::uuid)
-                  )
-                )
-              )
-            )
-            OR (
-              $9::numeric IS NULL
-              AND result.score IS NULL
-              AND (
-                result.appid > $10
-                OR (result.appid = $10 AND result.id > $11::uuid)
-              )
-            )
-          )
+          ${cursorPredicateSql}
         GROUP BY
           result.id,
           app.name,
@@ -1648,7 +1679,7 @@ export class OpportunityRepository {
           selected_media.hero_assets,
           selected_media.screenshots,
           trigger_media.media_addition
-        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+        ORDER BY ${resultOrderSql}
         LIMIT $12
       `,
       [
@@ -1660,7 +1691,9 @@ export class OpportunityRepository {
         profileId,
         eventLabel,
         cursor !== null,
-        cursor?.score ?? null,
+        params.orderReviewPriorityV2
+          ? (cursor?.rank ?? 0)
+          : (cursor?.score ?? null),
         cursor?.appid ?? 0,
         cursor?.id ?? "00000000-0000-0000-0000-000000000000",
         boundedLimit + 1,
@@ -1683,10 +1716,20 @@ export class OpportunityRepository {
 
   private async queryBriefFeaturedRows(params: {
     limit: number;
+    orderReviewPriorityV2: boolean;
     run: LatestRunRow;
     userId: string;
   }): Promise<OpportunityResultSummary[]> {
     const boundedLimit = Math.max(1, Math.min(10, Math.floor(params.limit)));
+    const scopedOrderSql = params.orderReviewPriorityV2
+      ? "scoped.rank ASC NULLS LAST,"
+      : "scoped.score DESC NULLS LAST,";
+    const rankedOrderSql = params.orderReviewPriorityV2
+      ? "ranked.rank ASC NULLS LAST, ranked.appid, ranked.id"
+      : "ranked.score DESC NULLS LAST, ranked.appid, ranked.id";
+    const resultOrderSql = params.orderReviewPriorityV2
+      ? "result.rank ASC NULLS LAST, result.appid, result.id"
+      : "result.score DESC NULLS LAST, result.appid, result.id";
     const result = await this.pool.query<ResultRow>(
       `
         WITH scoped AS MATERIALIZED (
@@ -1708,7 +1751,7 @@ export class OpportunityRepository {
             row_number() OVER (
               PARTITION BY scoped.appid
               ORDER BY
-                scoped.score DESC NULLS LAST,
+                ${scopedOrderSql}
                 scoped.created_at DESC,
                 scoped.id
             ) AS editorial_rank
@@ -1718,7 +1761,7 @@ export class OpportunityRepository {
           SELECT ranked.*
           FROM ranked
           WHERE ranked.editorial_rank = 1
-          ORDER BY ranked.score DESC NULLS LAST, ranked.appid, ranked.id
+          ORDER BY ${rankedOrderSql}
           LIMIT $6
         )
         SELECT
@@ -1804,7 +1847,7 @@ export class OpportunityRepository {
           WHERE related.appid = result.appid
             AND profile.status <> 'archived'
         ) profile_matches ON true
-        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+        ORDER BY ${resultOrderSql}
         LIMIT $6
       `,
       [
@@ -1856,6 +1899,15 @@ export class OpportunityRepository {
         windowStart: null,
       });
     }
+    const orderReviewPriorityV2 =
+      this.orderReviewPriorityV2.allPolicies &&
+      isOpportunityWorkspaceFeatureEnabled(
+        this.orderReviewPriorityV2,
+        workspace.id,
+      );
+    const profileTopResultOrderSql = orderReviewPriorityV2
+      ? "scoped.rank ASC NULLS LAST, scoped.appid, scoped.id"
+      : "scoped.score DESC NULLS LAST, scoped.appid, scoped.id";
 
     const scopeParams = [
       run.id,
@@ -1934,7 +1986,7 @@ export class OpportunityRepository {
                 'name', app.name,
                 'resultId', scoped.id
               )
-              ORDER BY scoped.score DESC NULLS LAST, scoped.appid, scoped.id
+              ORDER BY ${profileTopResultOrderSql}
             ) FILTER (WHERE scoped.id IS NOT NULL))[1] AS top_result
           FROM opportunity.profiles profile
           LEFT JOIN opportunity.result_profile_matches match
@@ -1952,6 +2004,7 @@ export class OpportunityRepository {
         ),
         this.queryBriefFeaturedRows({
           limit: 10,
+          orderReviewPriorityV2,
           run,
           userId: identity.userId,
         }),
@@ -2062,10 +2115,17 @@ export class OpportunityRepository {
         );
       }
     }
+    const orderReviewPriorityV2 =
+      this.orderReviewPriorityV2.allPolicies &&
+      isOpportunityWorkspaceFeatureEnabled(
+        this.orderReviewPriorityV2,
+        workspace.id,
+      );
     const page = await this.queryBriefResultRows({
       cursor: params.cursor,
       eventLabel: params.eventLabel,
       limit: 25,
+      orderReviewPriorityV2,
       profileId: params.profileId,
       run,
       userId: identity.userId,
@@ -2080,7 +2140,11 @@ export class OpportunityRepository {
       hasMore: page.hasMore,
       nextCursor:
         page.hasMore && lastResult
-          ? encodeOpportunityResultCursor(lastResult, filterKey)
+          ? encodeOpportunityResultCursor(
+              lastResult,
+              filterKey,
+              orderReviewPriorityV2 ? "review_priority_v2" : "score",
+            )
           : null,
       pageSize: 25,
       results: page.results,
@@ -2092,6 +2156,20 @@ export class OpportunityRepository {
     workspaceId: string,
     userId: string,
   ): Promise<OpportunityDailyOverview> {
+    const orderReviewPriorityV2 =
+      this.orderReviewPriorityV2.allPolicies &&
+      isOpportunityWorkspaceFeatureEnabled(
+        this.orderReviewPriorityV2,
+        workspaceId,
+      );
+    const resultRankSql = orderReviewPriorityV2
+      ? "result.rank::integer AS rank"
+      : `row_number() OVER (
+            ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+          )::integer AS rank`;
+    const resultOrderSql = orderReviewPriorityV2
+      ? "result.rank ASC NULLS LAST, result.appid, result.id"
+      : "result.score DESC NULLS LAST, result.appid, result.id";
     const healthChanges = await this.pool.query<
       QueryResultRow & {
         as_of_date: Date | string;
@@ -2239,9 +2317,7 @@ export class OpportunityRepository {
           selected_media.hero_assets->>'header' AS header_image_url,
           COALESCE(trigger_media.media_addition, false)
             AS triggered_by_media_addition,
-          row_number() OVER (
-            ORDER BY result.score DESC NULLS LAST, result.appid, result.id
-          )::integer AS rank,
+          ${resultRankSql},
           result.score,
           result.rank_components,
           result.evidence_summary->'gameDescription' AS game_description,
@@ -2348,7 +2424,7 @@ export class OpportunityRepository {
           material.id,
           selected_media.hero_assets,
           trigger_media.media_addition
-        ORDER BY result.score DESC NULLS LAST, result.appid, result.id
+        ORDER BY ${resultOrderSql}
         LIMIT 500
       `,
       [run.id, userId, run.window_start, run.window_end, run.run_kind],
@@ -4343,6 +4419,7 @@ export class OpportunityRepository {
       },
       youtubeEvidence: decodeOpportunityValue(row.youtube_evidence),
       workspace: {
+        id: workspace.id,
         name: decodeOpportunityText(workspace.name),
         role: workspace.role,
       },

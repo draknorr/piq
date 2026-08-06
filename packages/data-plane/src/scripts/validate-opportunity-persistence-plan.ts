@@ -237,6 +237,13 @@ function statementName(sql: string): string {
     return "result ranking";
   }
   if (
+    sql.startsWith("WITH scoped AS MATERIALIZED") &&
+    sql.includes("eligible_slots AS MATERIALIZED") &&
+    sql.includes("UPDATE opportunity.results result")
+  ) {
+    return "result ranking";
+  }
+  if (
     sql.startsWith("SELECT result.id") &&
     sql.includes("LEFT JOIN opportunity.result_profile_matches")
   ) {
@@ -370,6 +377,7 @@ async function main(): Promise<void> {
         windowEnd: "2026-07-29T00:00:00.000Z",
         windowStart: "2026-07-28T00:00:00.000Z",
       },
+      orderReviewPriorityV2: process.env.OPPORTUNITY_PLAN_V2_ORDER === "1",
       userId: USER_ID,
       websiteBaseUrl: "https://publisheriq.com",
       workId: 97,

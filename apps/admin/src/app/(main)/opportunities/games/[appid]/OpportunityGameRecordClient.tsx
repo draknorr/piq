@@ -47,10 +47,8 @@ import type {
   OpportunityRuleField,
   OpportunityRuleOperator,
 } from "../../lib/types";
+import { isOpportunityPriorityV2PresentationEnabled } from "../../lib/feature-controls";
 import { OpportunityMediaLightbox } from "./OpportunityMediaLightbox";
-
-const OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED =
-  process.env.NEXT_PUBLIC_OPPORTUNITY_PRIORITY_V2_PRESENTATION === "1";
 
 function metricToken(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -280,6 +278,8 @@ export function OpportunityGameRecordClient({
   const researching = record.userState.researching;
   const canSeeCoverage =
     record.workspace.role === "owner" || record.workspace.role === "admin";
+  const presentReviewPriorityV2 =
+    isOpportunityPriorityV2PresentationEnabled(record.workspace.id);
   const currentMetrics = Object.entries(record.currentMetrics).filter(
     ([name, value]) => metricKind(name) !== null && value !== null,
   );
@@ -350,7 +350,7 @@ export function OpportunityGameRecordClient({
                   View on Steam <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED && (
+              {presentReviewPriorityV2 && (
                 <p className="mt-4 max-w-3xl text-sm leading-6 text-text-secondary">
                   {record.result.gameDescription?.text ??
                     "Steam has not provided a short description for this game yet."}
@@ -416,7 +416,7 @@ export function OpportunityGameRecordClient({
       <main className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_350px]">
         <div className="min-w-0 px-5 py-8 md:px-8 md:py-10">
           <section className="grid gap-8 border-b border-border-muted pb-10 md:grid-cols-[minmax(0,1fr)_280px]">
-            {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+            {presentReviewPriorityV2 ? (
               <>
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
@@ -559,17 +559,17 @@ export function OpportunityGameRecordClient({
           <SectionHeader
             icon={BarChart3}
             kicker={
-              OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+              presentReviewPriorityV2
                 ? "Decision audit"
                 : "Opportunity strength"
             }
             title={
-              OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+              presentReviewPriorityV2
                 ? "How review priority was decided"
                 : "What drives this opportunity score"
             }
           />
-          {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED ? (
+          {presentReviewPriorityV2 ? (
             record.matchedProfiles.some((profile) => profile.reviewPriority) ? (
             <div className="space-y-4 border-y border-border-muted py-5">
               {record.matchedProfiles.map((profile) =>
@@ -690,7 +690,7 @@ export function OpportunityGameRecordClient({
           <div className="grid gap-px overflow-hidden border-y border-border-muted bg-border-muted sm:grid-cols-2 xl:grid-cols-4">
             {currentMetrics.length === 0 ? (
               <p className="col-span-full bg-surface-raised px-4 py-5 text-sm text-text-tertiary">
-                {OPPORTUNITY_PRIORITY_V2_PRESENTATION_ENABLED
+                {presentReviewPriorityV2
                   ? priority?.lane === "new_game" ||
                     record.app.releaseState?.toLowerCase() !== "released"
                     ? "This game is unreleased, so post-release traction is not available yet."

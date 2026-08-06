@@ -279,6 +279,7 @@ describe("opportunity option-enabled report generation", () => {
         strongestEvidence: result.strongestEvidence,
         whyNow: result.whyNow,
       })),
+      workspaceId: "00000000-0000-4000-8000-000000000300",
     };
     const rendered = renderOpportunityDelivery(work);
     const slack = JSON.stringify(rendered.slackBlocks);
