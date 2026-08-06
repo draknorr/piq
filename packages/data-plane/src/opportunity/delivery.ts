@@ -569,6 +569,25 @@ function potentialLabel(value: OpportunityPotentialBand): string {
   }[value];
 }
 
+function normalizedDeliveryPresentationText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function distinctReviewReasons(
+  reasons: string[],
+  marketPotential: OpportunityPotentialBand,
+): string[] {
+  const marketLabel = normalizedDeliveryPresentationText(
+    potentialLabel(marketPotential),
+  );
+  return reasons.filter(
+    (reason) => normalizedDeliveryPresentationText(reason) !== marketLabel,
+  );
+}
+
 function renderOpportunityDeliveryV1(work: OpportunityDeliveryWork): {
   html: string;
   slackBlocks: Array<Record<string, unknown>>;
@@ -831,6 +850,12 @@ function renderOpportunityDeliveryV2(
     const source = work.results.find(
       (candidate) => candidate.id === result.id,
     )!;
+    const v2Reasons = source.reviewPriority
+      ? distinctReviewReasons(
+          source.reviewPriority.reasons,
+          result.marketPotential,
+        )
+      : [];
     return [
       `${index + 1}. ${decodeOpportunityText(result.name)} — ${resultLabel(result.eventLabel)}`,
       decodeOpportunityText(
@@ -839,8 +864,8 @@ function renderOpportunityDeliveryV2(
               "Steam has not provided a short description for this game yet.")
           : result.changeSummary,
       ),
-      ...(presentReviewPriorityV2 && source.reviewPriority?.reasons.length
-        ? [source.reviewPriority.reasons.join(" · ")]
+      ...(presentReviewPriorityV2 && v2Reasons.length
+        ? [v2Reasons.join(" · ")]
         : [decodeOpportunityText(source.whyNow)]),
       `Market potential: ${potentialLabel(result.marketPotential)}`,
       deliveryGameUrl(work, source),
@@ -876,9 +901,15 @@ function renderOpportunityDeliveryV2(
               "Steam has not provided a short description for this game yet.")
           : result.changeSummary,
       );
+      const v2Reasons = source.reviewPriority
+        ? distinctReviewReasons(
+            source.reviewPriority.reasons,
+            result.marketPotential,
+          )
+        : [];
       const reasons =
-        presentReviewPriorityV2 && source.reviewPriority?.reasons.length
-          ? source.reviewPriority.reasons.join(" · ")
+        presentReviewPriorityV2 && v2Reasons.length
+          ? v2Reasons.join(" · ")
           : decodeOpportunityText(source.whyNow);
       return `
         <article style="border-top:1px solid #dfd8ce;padding:24px 0">
@@ -887,6 +918,7 @@ function renderOpportunityDeliveryV2(
           <h2 style="font-size:${index === 0 ? "26px" : "20px"};line-height:1.2;margin:0 0 8px;color:#211d1a">${escapeHtml(decodeOpportunityText(result.name))}</h2>
           <p style="font-size:16px;line-height:1.6;margin:0 0 8px;color:#3f3a35">${escapeHtml(description)}</p>
           <p style="font-size:13px;line-height:1.5;margin:0 0 12px;color:#6b625a">${escapeHtml(reasons)}</p>
+          <p style="font-size:12px;line-height:1.5;margin:0 0 12px;color:#6b625a">Market potential: ${escapeHtml(potentialLabel(result.marketPotential))}</p>
           <a href="${escapeHtml(link)}" style="color:#c4513f;font-weight:700;text-decoration:none">Read the full game profile →</a>
         </article>`;
     })
@@ -972,15 +1004,21 @@ function renderOpportunityDeliveryV2(
               "Steam has not provided a short description for this game yet.")
           : result.changeSummary,
       );
+      const v2Reasons = source.reviewPriority
+        ? distinctReviewReasons(
+            source.reviewPriority.reasons,
+            result.marketPotential,
+          )
+        : [];
       const reasons =
-        presentReviewPriorityV2 && source.reviewPriority?.reasons.length
-          ? source.reviewPriority.reasons.join(" · ")
+        presentReviewPriorityV2 && v2Reasons.length
+          ? v2Reasons.join(" · ")
           : decodeOpportunityText(source.whyNow);
       return {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*<${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(description)}\n_${escapeSlackMrkdwn(reasons)}_`,
+          text: `*<${deliveryGameUrl(work, source)}|${escapeSlackMrkdwn(decodeOpportunityText(result.name))}>* · ${resultLabel(result.eventLabel)}\n${escapeSlackMrkdwn(description)}\n_${escapeSlackMrkdwn(reasons)}_\nMarket potential: ${escapeSlackMrkdwn(potentialLabel(result.marketPotential))}`,
         },
         ...(image
           ? {
