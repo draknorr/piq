@@ -12,6 +12,7 @@ import {
   compareOpportunityReviewPriority,
   decodeOpportunityText,
   describeOpportunityChange,
+  resolveOpportunityPriorityLane,
 } from "./intelligence.js";
 import type {
   OpportunityCohortMember,
@@ -174,6 +175,45 @@ function reviewPriorityParams(
 }
 
 describe("opportunity review priority v2", () => {
+  it("keeps material changes in the new-game lane through the inclusive 72-hour grace", () => {
+    const firstObservedAt = "2026-08-05T15:24:39.229Z";
+    const lane = (effectiveAt: string) =>
+      resolveOpportunityPriorityLane({
+        effectiveAt,
+        eventType: "taxonomy_repositioned",
+        firstObservedAt,
+        hasApplicableTraction: false,
+        isReleased: false,
+        signalFamily: "taxonomy",
+      });
+
+    assert.equal(lane("2026-08-06T02:02:17.662Z"), "new_game");
+    assert.equal(lane("2026-08-08T15:24:39.229Z"), "new_game");
+    assert.equal(lane("2026-08-08T15:24:39.230Z"), "material_change");
+  });
+
+  it("does not apply discovery grace to invalid or pre-observation timestamps", () => {
+    const resolve = (effectiveAt: string, firstObservedAt: string | null) =>
+      resolveOpportunityPriorityLane({
+        effectiveAt,
+        eventType: "taxonomy_repositioned",
+        firstObservedAt,
+        hasApplicableTraction: false,
+        isReleased: false,
+        signalFamily: "taxonomy",
+      });
+
+    assert.equal(
+      resolve("invalid", "2026-08-05T15:24:39.229Z"),
+      "material_change",
+    );
+    assert.equal(
+      resolve("2026-08-05T15:24:39.228Z", "2026-08-05T15:24:39.229Z"),
+      "material_change",
+    );
+    assert.equal(resolve("2026-08-06T02:02:17.662Z", null), "material_change");
+  });
+
   it("keeps Swords & Slippers reviewable without post-release traction", () => {
     const result = calculateOpportunityReviewPriority(reviewPriorityParams());
     const tractionInputs = result.inputs.filter((input) =>
@@ -191,9 +231,7 @@ describe("opportunity review priority v2", () => {
     assert.notEqual(result.internalScore, null);
     assert.ok(result.reasons.includes("Self-published"));
     assert.ok(
-      tractionInputs.every(
-        (input) => input.availability === "not_applicable",
-      ),
+      tractionInputs.every((input) => input.availability === "not_applicable"),
     );
     assert.notEqual(result.confidence.label, "limited");
   });

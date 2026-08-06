@@ -114,11 +114,23 @@ export function resolveOpportunityPriorityLane(params: {
   ) {
     return "new_game";
   }
+  const effectiveAtMs = Date.parse(params.effectiveAt);
+  const firstObservedAtMs = params.firstObservedAt
+    ? Date.parse(params.firstObservedAt)
+    : Number.NaN;
+  const firstObservedAgeMs = effectiveAtMs - firstObservedAtMs;
+  if (
+    Number.isFinite(firstObservedAgeMs) &&
+    firstObservedAgeMs >= 0 &&
+    firstObservedAgeMs <= 72 * 3_600_000
+  ) {
+    return "new_game";
+  }
   if (
     params.eventType === "store_readiness_improved" &&
-    params.firstObservedAt &&
-    Date.parse(params.effectiveAt) - Date.parse(params.firstObservedAt) <=
-      30 * 86_400_000
+    Number.isFinite(firstObservedAgeMs) &&
+    firstObservedAgeMs >= 0 &&
+    firstObservedAgeMs <= 30 * 86_400_000
   ) {
     return "new_game";
   }
