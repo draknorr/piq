@@ -28,6 +28,13 @@ async function main(): Promise<void> {
   const pollIntervalMs = positiveInteger(process.env.POLL_INTERVAL_MS, 5_000);
   const claimLimit = positiveInteger(process.env.CLAIM_LIMIT, 8);
   const deliveryLimit = positiveInteger(process.env.DELIVERY_CLAIM_LIMIT, 10);
+  const cohortFeatureSnapshotMaxAgeHours = Math.min(
+    7 * 24,
+    positiveInteger(
+      process.env.OPPORTUNITY_COHORT_FEATURE_SNAPSHOT_MAX_AGE_HOURS,
+      0,
+    ),
+  );
   const maxIdlePolls = Math.max(
     0,
     Number.parseInt(process.env.MAX_IDLE_POLLS ?? "0", 10) || 0,
@@ -47,14 +54,20 @@ async function main(): Promise<void> {
     process.env.OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS,
   );
   const pool = getDataPlanePool();
-  const worker = new OpportunityWorker(new OpportunityWorkerRepository(pool), {
-    claimLimit,
-    computeReviewPriorityV2:
-      process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
-    orderReviewPriorityV2,
-    websiteBaseUrl,
-    workerId,
-  });
+  const worker = new OpportunityWorker(
+    new OpportunityWorkerRepository(pool, {
+      cohortFeatureSnapshotMaxAgeMs:
+        cohortFeatureSnapshotMaxAgeHours * 60 * 60 * 1_000,
+    }),
+    {
+      claimLimit,
+      computeReviewPriorityV2:
+        process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
+      orderReviewPriorityV2,
+      websiteBaseUrl,
+      workerId,
+    },
+  );
   const cipher = loadOpportunityDestinationCipher();
   const deliveryDispatcher = cipher
     ? new OpportunityDeliveryDispatcher(
@@ -81,6 +94,7 @@ async function main(): Promise<void> {
 
   log.info("Starting Steam opportunity worker", {
     claimLimit,
+    cohortFeatureSnapshotMaxAgeHours,
     computeReviewPriorityV2:
       process.env.OPPORTUNITY_PRIORITY_V2_COMPUTE === "1",
     deliveryEnabled: Boolean(deliveryDispatcher),

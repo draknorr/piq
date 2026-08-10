@@ -146,6 +146,7 @@ export function OpportunityWorkspace() {
   const requestedRunId = searchParams.get("run");
   const selectedProfileId = searchParams.get("profile");
   const selectedEvent = parseOpportunityEventFilter(searchParams.get("event"));
+  const sharedAccess = brief?.access?.scope === "team" ? brief.access : null;
 
   const replaceQuery = (updates: Record<string, string | null>) => {
     const query = new URLSearchParams(searchParams.toString());
@@ -221,6 +222,14 @@ export function OpportunityWorkspace() {
     setTab(parseOpportunityWorkspaceTab(searchParams.get("tab")));
   }, [searchParams]);
 
+  useEffect(() => {
+    if (!sharedAccess || tab === "daily-brief" || tab === "profile-lists") {
+      return;
+    }
+    setTab("daily-brief");
+    replaceQuery({ profile: null, tab: "daily-brief" });
+  }, [sharedAccess, tab]);
+
   const loadResultPage = async (append: boolean) => {
     const runId = brief?.runId;
     if (!runId) {
@@ -236,7 +245,7 @@ export function OpportunityWorkspace() {
         {
           cursor: append ? listCursor : null,
           eventLabel: selectedEvent,
-          profileId: selectedProfileId,
+          profileId: sharedAccess ? null : selectedProfileId,
           runId,
         },
       );
@@ -493,8 +502,12 @@ export function OpportunityWorkspace() {
             <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-border-muted bg-border-muted">
               <DispatchMetric label="Today" value={String(resultCount)} />
               <DispatchMetric
-                label="Live profiles"
-                value={String(activeProfiles)}
+                label={sharedAccess ? "Shared by" : "Live profiles"}
+                value={
+                  sharedAccess
+                    ? sharedAccess.sourceUserDisplay?.split(" ")[0] || "Team"
+                    : String(activeProfiles)
+                }
               />
               <DispatchMetric
                 label="High confidence"
@@ -502,6 +515,27 @@ export function OpportunityWorkspace() {
               />
             </div>
           </div>
+
+          {sharedAccess && (
+            <div className="mt-6 flex flex-col gap-3 border-l-2 border-accent-primary bg-accent-primary-muted/35 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-text-primary">
+                  Shared by {sharedAccess.sourceUserDisplay ?? "a teammate"} · {sharedAccess.team?.name ?? "your team"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-text-tertiary">
+                  This is the exact shared report. Your tracking, dismissal, and ignore choices remain personal.
+                </p>
+              </div>
+              <Link
+                href="/opportunities"
+                prefetch={false}
+                className="inline-flex shrink-0 items-center gap-2 text-xs font-semibold text-accent-primary hover:text-accent-primary-hover"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                My tracker
+              </Link>
+            </div>
+          )}
 
           <div className="mt-8 flex items-center justify-between gap-4">
             <nav
@@ -515,7 +549,13 @@ export function OpportunityWorkspace() {
                   ["profiles", "Profiles & presets", Filter],
                   ["delivery", "Delivery", Bell],
                 ] as const
-              ).map(([value, label, Icon]) => (
+              )
+                .filter(([value]) =>
+                  sharedAccess
+                    ? value === "daily-brief" || value === "profile-lists"
+                    : true,
+                )
+                .map(([value, label, Icon]) => (
                 <button
                   key={value}
                   type="button"
@@ -534,9 +574,9 @@ export function OpportunityWorkspace() {
                     <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-accent-primary" />
                   )}
                 </button>
-              ))}
+                ))}
             </nav>
-            {profilesView === "catalog" && (
+            {!sharedAccess && profilesView === "catalog" && (
               <button
                 type="button"
                 onClick={startProfile}
@@ -585,9 +625,10 @@ export function OpportunityWorkspace() {
             presentReviewPriorityV2={presentReviewPriorityV2}
             profileId={selectedProfileId}
             results={listResults}
+            sharedAccess={sharedAccess}
           />
         )}
-        {tab === "profiles" && profilesView === "catalog" && (
+        {!sharedAccess && tab === "profiles" && profilesView === "catalog" && (
           <ProfilesDesk
             data={data}
             onClone={clonePreset}
@@ -595,10 +636,10 @@ export function OpportunityWorkspace() {
             onOpen={openProfile}
           />
         )}
-        {tab === "profiles" && profilesView === "loading" && (
+        {!sharedAccess && tab === "profiles" && profilesView === "loading" && (
           <ProfileWorkshopLoading onBack={closeProfileEditor} />
         )}
-        {tab === "profiles" && profilesView === "editor" && (
+        {!sharedAccess && tab === "profiles" && profilesView === "editor" && (
           <ProfileBuilder
             key={profileDetail?.currentVersionDetail.id ?? "new"}
             defaultLocalDeliveryTime={data.profiles[0]?.localDeliveryTime}
@@ -610,7 +651,9 @@ export function OpportunityWorkspace() {
             presentReviewPriorityV2={presentReviewPriorityV2}
           />
         )}
-        {tab === "delivery" && <DeliveryDesk data={data} onChanged={load} />}
+        {!sharedAccess && tab === "delivery" && (
+          <DeliveryDesk data={data} onChanged={load} />
+        )}
       </main>
     </div>
   );
@@ -688,6 +731,7 @@ function ProfileLists({
   presentReviewPriorityV2,
   profileId,
   results,
+  sharedAccess,
 }: {
   data: OpportunityBootstrap;
   error: string | null;
@@ -702,6 +746,7 @@ function ProfileLists({
   presentReviewPriorityV2: boolean;
   profileId: string | null;
   results: OpportunityResultSummary[];
+  sharedAccess: NonNullable<OpportunityDailyBriefIssue["access"]> | null;
 }) {
   const groups: OpportunityBootstrap["dailyOverview"]["groups"] = {
     materiallyChanged: results.filter(
@@ -762,8 +807,10 @@ function ProfileLists({
           </div>
         </div>
 
-        <div className="grid gap-4 border-b border-border-subtle py-5 sm:grid-cols-2">
-          <label>
+        <div
+          className={`grid gap-4 border-b border-border-subtle py-5 ${sharedAccess ? "" : "sm:grid-cols-2"}`}
+        >
+          {!sharedAccess && <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
               Profile
             </span>
@@ -783,7 +830,7 @@ function ProfileLists({
                   </option>
                 ))}
             </select>
-          </label>
+          </label>}
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
               Event
@@ -886,8 +933,40 @@ function ProfileLists({
           </div>
         )}
       </div>
-      <BriefRail data={data} />
+      {sharedAccess ? (
+        <SharedBriefRail access={sharedAccess} />
+      ) : (
+        <BriefRail data={data} />
+      )}
     </div>
+  );
+}
+
+function SharedBriefRail({
+  access,
+}: {
+  access: NonNullable<OpportunityDailyBriefIssue["access"]>;
+}) {
+  return (
+    <aside className="border-t border-border-subtle bg-surface-sunken px-5 py-7 lg:border-l lg:border-t-0 lg:px-6 lg:py-10">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">
+        Team report
+      </p>
+      <h3 className="mt-3 text-lg font-semibold text-text-primary">
+        {access.team?.name ?? "Your team"}
+      </h3>
+      <p className="mt-2 text-sm leading-6 text-text-secondary">
+        Shared by {access.sourceUserDisplay ?? "a teammate"}. This view includes the report’s game analysis while keeping personal profile and delivery details private.
+      </p>
+      <Link
+        href="/opportunities"
+        prefetch={false}
+        className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-accent-primary hover:text-accent-primary-hover"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Return to my tracker
+      </Link>
+    </aside>
   );
 }
 

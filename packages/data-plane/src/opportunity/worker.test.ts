@@ -257,7 +257,7 @@ describe("opportunity evaluation recovery", () => {
           appids,
           events.map((candidate) => candidate.appid),
         );
-        assert.equal(options.batchSize, 500);
+        assert.equal(options.batchSize, 100);
         await options.onBatch?.();
         return appids.length;
       },
@@ -271,7 +271,7 @@ describe("opportunity evaluation recovery", () => {
     });
 
     assert.deepEqual(await worker.runOnce(), { claimed: 1, scheduled: 0 });
-    assert.equal(heartbeatCount, 8);
+    assert.equal(heartbeatCount, 9);
     assert.equal(persisted, true);
   });
 
@@ -481,7 +481,7 @@ describe("opportunity preset health refresh", () => {
         options: { batchSize?: number; onBatch?: () => Promise<void> },
       ): Promise<number> {
         refreshCalls.push(appids);
-        assert.equal(options.batchSize, 500);
+        assert.equal(options.batchSize, 100);
         await options.onBatch?.();
         return appids.length;
       },
@@ -550,12 +550,12 @@ describe("opportunity preset health refresh", () => {
 
     assert.deepEqual(
       batches.map((batch) => batch.length),
-      [500, 500, 200],
+      Array.from({ length: 12 }, () => 100),
     );
     assert.equal(new Set(batches.flat()).size, 1_200);
     assert.equal(refreshed, 1_200);
-    assert.equal(progressCalls, 3);
-    assert.equal(stalenessChecks, 1);
+    assert.equal(progressCalls, 12);
+    assert.equal(stalenessChecks, 2);
   });
 
   it("does not recompute current signal windows", async () => {
@@ -811,7 +811,7 @@ describe("released opportunity cohort lookup", () => {
           _values: readonly unknown[] = [],
         ): Promise<{ rows: unknown[] }> => {
           if (sql.includes("cohort_feature_projection_state_v1")) {
-            return { rows: [{ ready: true }] };
+            return { rows: [{ exact: true, usable: true }] };
           }
           if (sql.includes("CURRENT_DATE AS source_date")) {
             return {
@@ -889,7 +889,7 @@ describe("released opportunity cohort lookup", () => {
         _values: readonly unknown[] = [],
       ): Promise<{ rows: unknown[] }> => {
         if (sql.includes("cohort_feature_projection_state_v1")) {
-          return { rows: [{ ready: refreshed }] };
+          return { rows: [{ exact: true, usable: refreshed }] };
         }
         if (sql.includes("CURRENT_DATE AS source_date")) {
           return {
@@ -973,6 +973,134 @@ describe("released opportunity cohort lookup", () => {
     assert.equal(released, true);
   });
 
+  it("reuses a bounded fresh cohort snapshot without triggering a full refresh", async () => {
+    const projectedFeatureRevisions = {
+      "legacy.apps": 10,
+      "legacy.app_genres": 11,
+      "legacy.app_steam_tags": 12,
+      "legacy.latest_daily_metrics": 13,
+      "legacy.steam_genres": 14,
+      "legacy.steam_tags": 15,
+    };
+    const currentSourceRevisions = {
+      "legacy.apps": 20,
+      "legacy.app_genres": 21,
+      "legacy.app_steam_tags": 22,
+      "legacy.latest_daily_metrics": 23,
+      "legacy.steam_genres": 24,
+      "legacy.steam_tags": 25,
+      "metrics.app_signal_windows_v1": 30,
+      "ops.app_data_readiness": 31,
+    };
+    let refreshCalls = 0;
+    const persistedWatermarks: Array<Record<string, unknown>> = [];
+    const pool = poolWithSnapshotClients(
+      async (
+        sql: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        if (sql.includes("cohort_feature_projection_state_v1")) {
+          assert.equal(values[1], 24 * 60 * 60);
+          return {
+            rows: [
+              {
+                exact: false,
+                refreshed_at: "2026-07-28T08:00:00.000Z",
+                source_revisions: projectedFeatureRevisions,
+                usable: true,
+              },
+            ],
+          };
+        }
+        if (sql.includes("CURRENT_DATE AS source_date")) {
+          return {
+            rows: [
+              {
+                source_date: "2026-07-28",
+                source_watermark: {
+                  sourceRevisions: currentSourceRevisions,
+                },
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_cache_v1") &&
+          sql.includes("SELECT cache_key, cohort")
+        ) {
+          return { rows: [] };
+        }
+        if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+          return { rows: cohortTaxonomyRows() };
+        }
+        if (
+          sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+        ) {
+          return { rows: cohortFeatureRows([cohortRow(2)]) };
+        }
+        if (sql.includes("INSERT INTO opportunity.released_cohort_cache_v1")) {
+          const cached = JSON.parse(String(values[0])) as Array<{
+            source_watermark: Record<string, unknown>;
+          }>;
+          if (cached[0]?.source_watermark) {
+            persistedWatermarks.push(cached[0].source_watermark);
+          }
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected bounded snapshot query: ${sql}`);
+      },
+      {
+        onClientQuery: async (sql) => {
+          if (
+            sql.includes(
+              "CALL opportunity.refresh_released_cohort_features_v2()",
+            )
+          ) {
+            refreshCalls += 1;
+          }
+          return null;
+        },
+      },
+    );
+    const repository = new OpportunityWorkerRepository(pool, {
+      cohortFeatureSnapshotMaxAgeMs: 24 * 60 * 60 * 1_000,
+    });
+
+    const cohorts = await repository.getReleasedCohorts([
+      {
+        appid: 1,
+        fields: {
+          genres: knownField(["Indie"]),
+          is_free: knownField(false),
+          price_cents: knownField(1_999),
+          tags: knownField(["Roguelike"]),
+        },
+        name: "Bounded snapshot subject",
+      },
+    ]);
+
+    assert.equal(cohorts.get(1)?.members[0]?.appid, 2);
+    assert.equal(refreshCalls, 0);
+    const persistedWatermark = persistedWatermarks[0];
+    assert.ok(persistedWatermark);
+    assert.deepEqual(
+      (persistedWatermark?.sourceRevisions as Record<string, number>)[
+        "legacy.apps"
+      ],
+      projectedFeatureRevisions["legacy.apps"],
+    );
+    assert.deepEqual(
+      (persistedWatermark?.sourceRevisions as Record<string, number>)[
+        "metrics.app_signal_windows_v1"
+      ],
+      currentSourceRevisions["metrics.app_signal_windows_v1"],
+    );
+    assert.deepEqual(persistedWatermark.cohortFeatureProjection, {
+      freshnessPolicy: "bounded_snapshot",
+      refreshedAt: "2026-07-28T08:00:00.000Z",
+    });
+  });
+
   it("fails closed when the feature projection misses the fenced snapshot", async () => {
     let readinessCalls = 0;
     let watermarkCalls = 0;
@@ -985,7 +1113,7 @@ describe("released opportunity cohort lookup", () => {
       ): Promise<{ rows: unknown[] }> => {
         if (sql.includes("cohort_feature_projection_state_v1")) {
           readinessCalls += 1;
-          return { rows: [{ ready: false }] };
+          return { rows: [{ exact: false, usable: false }] };
         }
         if (sql.includes("CURRENT_DATE AS source_date")) {
           watermarkCalls += 1;
@@ -1054,7 +1182,7 @@ describe("released opportunity cohort lookup", () => {
       /did not match the fenced exported source snapshot/,
     );
     assert.equal(readinessCalls, 2);
-    assert.equal(watermarkCalls, 2);
+    assert.equal(watermarkCalls, 0);
     assert.equal(resolverCalls, 0);
     assert.equal(cacheWrites, 0);
   });
@@ -1080,7 +1208,7 @@ describe("released opportunity cohort lookup", () => {
         values: readonly unknown[] = [],
       ): Promise<{ rows: unknown[] }> => {
         if (sql.includes("cohort_feature_projection_state_v1")) {
-          return { rows: [{ ready: true }] };
+          return { rows: [{ exact: true, usable: true }] };
         }
         if (sql.includes("CURRENT_DATE AS source_date")) {
           return {
@@ -1188,7 +1316,7 @@ describe("released opportunity cohort lookup", () => {
         values: readonly unknown[] = [],
       ): Promise<{ rows: unknown[] }> => {
         if (sql.includes("cohort_feature_projection_state_v1")) {
-          return { rows: [{ ready: true }] };
+          return { rows: [{ exact: true, usable: true }] };
         }
         if (sql.includes("CURRENT_DATE AS source_date")) {
           return {

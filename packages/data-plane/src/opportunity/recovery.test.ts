@@ -65,6 +65,10 @@ describe("opportunity failure recovery and preservation contracts", () => {
     );
     assert.match(
       workerSource,
+      /getRelativeDateTransitionAppids\([\s\S]*?previousAsOf: run\.windowStart/,
+    );
+    assert.match(
+      workerSource,
       /index % EVALUATION_HEARTBEAT_GAME_INTERVAL === 0[\s\S]*?heartbeatWork\(item\.id, this\.workerId\)/,
     );
     assert.match(repositorySource, /tag_matches AS MATERIALIZED/);
@@ -104,6 +108,33 @@ describe("opportunity failure recovery and preservation contracts", () => {
     );
     assert.match(repositorySource, /POWER\(2, LEAST\(attempts, 8\)\)/);
     assert.match(repositorySource, /last_error_message = left\(\$4, 2000\)/);
+  });
+
+  test("dead-lettered daily work advances the next attempt without advancing the successful cursor", () => {
+    const failureRecovery = repositorySource.match(
+      /async failWork\([\s\S]*?async materializeEvents/,
+    )?.[0];
+    assert.ok(failureRecovery);
+    assert.match(failureRecovery, /row\?\.kind !== "daily_evaluation"/);
+    assert.match(failureRecovery, /row\.state !== "dead_letter"/);
+    assert.match(
+      failureRecovery,
+      /next_evaluation_at = opportunity\.next_profile_evaluation_v1\(/,
+    );
+    assert.doesNotMatch(failureRecovery, /last_successful_run_at\s*=/);
+  });
+
+  test("the scheduler creates one idempotent recovery item for a stuck daily dead letter", () => {
+    assert.match(repositorySource, /existing\.state = 'dead_letter'/);
+    assert.match(
+      repositorySource,
+      /'daily-recovery:' \|\| scheduled\.dead_letter_id/,
+    );
+    assert.match(repositorySource, /'dead_letter_recovery'/);
+    assert.match(
+      repositorySource,
+      /ON CONFLICT \(idempotency_key\) DO NOTHING/,
+    );
   });
 
   test("canonical results and deliveries have database idempotency keys", () => {
@@ -219,7 +250,7 @@ describe("opportunity failure recovery and preservation contracts", () => {
 
   test("unsafe historical results are not reused by new evaluations", () => {
     const priorStateLookup = repositorySource.match(
-      /async getPriorUserStates\([\s\S]*?return new Map\(/,
+      /async getPriorUserStates\([\s\S]*?return states;/,
     )?.[0];
     assert.ok(priorStateLookup);
     assert.equal(

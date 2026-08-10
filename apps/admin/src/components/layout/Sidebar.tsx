@@ -23,6 +23,7 @@ import {
   Sparkles,
   Youtube,
   Target,
+  UsersRound,
   type LucideIcon,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts';
@@ -56,6 +57,7 @@ const mainNavItems: NavItem[] = [
 const adminNavItems: NavItem[] = [
   { href: '/admin', label: 'System Status', icon: Shield },
   { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/teams', label: 'Teams', icon: UsersRound },
   { href: '/admin/waitlist', label: 'Waitlist', icon: ClipboardList },
   { href: '/admin/usage', label: 'Usage', icon: BarChart3 },
   { href: '/admin/chat-smoke', label: 'Chat Smoke', icon: MessageSquare },

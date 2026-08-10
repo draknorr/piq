@@ -39,8 +39,10 @@ import {
 } from '@publisheriq/data-plane';
 import { logger, PublisherIQError } from '@publisheriq/shared';
 import {
+  loadOpportunityAdminAuthorizer,
   loadOpportunityIdentityVerifier,
   tryHandleOpportunityRequest,
+  type OpportunityAdminAuthorizer,
   type OpportunityIdentityVerifier,
 } from './opportunity-routes.js';
 
@@ -324,6 +326,7 @@ function applyRelatedEntitiesFallbackSourceContext(params: {
 }
 
 export function createQueryApiRequestHandler(params: {
+  adminAuthorizer?: OpportunityAdminAuthorizer | null;
   bearerToken: string | null;
   dataPlane: QueryApiService;
   identityVerifier?: OpportunityIdentityVerifier | null;
@@ -332,6 +335,7 @@ export function createQueryApiRequestHandler(params: {
   sourceFallback?: QueryApiService | null;
 }): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   const {
+    adminAuthorizer = null,
     bearerToken,
     dataPlane,
     identityVerifier = null,
@@ -664,6 +668,7 @@ export function createQueryApiRequestHandler(params: {
 
       if (
         await tryHandleOpportunityRequest({
+          adminAuthorizer,
           identityVerifier,
           opportunityService,
           request,
@@ -710,6 +715,7 @@ export function createQueryApiRequestHandler(params: {
 }
 
 export function createQueryApiServer(params?: {
+  adminAuthorizer?: OpportunityAdminAuthorizer | null;
   bearerToken?: string | null;
   config?: ReturnType<typeof loadQueryApiConfig> | null;
   dataPlane?: QueryApiService;
@@ -747,6 +753,8 @@ export function createQueryApiServer(params?: {
     );
   const identityVerifier =
     params?.identityVerifier ?? loadOpportunityIdentityVerifier();
+  const adminAuthorizer =
+    params?.adminAuthorizer ?? loadOpportunityAdminAuthorizer();
   const relatedEntitiesFallback =
     params?.relatedEntitiesFallback
     ?? (
@@ -764,6 +772,7 @@ export function createQueryApiServer(params?: {
 
   return createServer(
     createQueryApiRequestHandler({
+      adminAuthorizer,
       bearerToken: params?.bearerToken ?? config?.bearerToken ?? null,
       dataPlane,
       identityVerifier,

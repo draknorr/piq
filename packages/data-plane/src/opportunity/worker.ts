@@ -46,9 +46,9 @@ import { OpportunityWorkerRepository } from "./worker-repository.js";
 
 const PRESET_HEALTH_MAX_EVALUATED_GAMES = 5_000;
 const PRESET_HEALTH_MAX_REFRESHED_GAMES = 20_000;
-const PRESET_HEALTH_REFRESH_BATCH_SIZE = 500;
+const PRESET_HEALTH_REFRESH_BATCH_SIZE = 100;
 const EVALUATION_HEARTBEAT_GAME_INTERVAL = 10;
-const EVALUATION_SIGNAL_REFRESH_BATCH_SIZE = 500;
+const EVALUATION_SIGNAL_REFRESH_BATCH_SIZE = 100;
 
 export interface OpportunityWorkerOptions {
   claimLimit?: number;
@@ -602,19 +602,24 @@ export class OpportunityWorker {
         item.userId,
         { immediateOnly: item.kind === "immediate_evaluation" },
       );
-      const [events, dateTransitionAppids] = await Promise.all([
-        this.repository.getRunMaterialEvents(
-          run,
-          item.appid,
-          item.materialEventId,
-        ),
+      const events = await this.repository.getRunMaterialEvents(
+        run,
+        item.appid,
+        item.materialEventId,
+      );
+      await this.repository.heartbeatWork(item.id, this.workerId);
+      const dateTransitionAppids =
         item.kind === "daily_evaluation"
-          ? this.repository.productRepository.getRelativeDateTransitionAppids(
+          ? await this.repository.productRepository.getRelativeDateTransitionAppids(
               profiles,
               run.windowEnd,
+              {
+                onBatch: () =>
+                  this.repository.heartbeatWork(item.id, this.workerId),
+                previousAsOf: run.windowStart,
+              },
             )
-          : Promise.resolve([]),
-      ]);
+          : [];
       const selectedByAppid = new Map<number, OpportunityWorkerMaterialEvent>();
       for (const event of events) {
         if (!selectedByAppid.has(event.appid)) {
@@ -651,19 +656,30 @@ export class OpportunityWorker {
       }
       const selectedEvents = Array.from(selectedByAppid.values());
       const appids = selectedEvents.map((event) => event.appid);
-      const [inputs, priorStates, candidateOutcomes] = await Promise.all([
-        this.repository.productRepository.getRuleInputs(appids),
-        this.repository.getPriorUserStates(
-          item.workspaceId,
-          item.userId,
-          appids,
-        ),
-        this.repository.getCandidateOutcomes({
+      const inputs = await this.repository.productRepository.getRuleInputs(
+        appids,
+        {
+          onBatch: () => this.repository.heartbeatWork(item.id, this.workerId),
+        },
+      );
+      const priorStates = await this.repository.getPriorUserStates(
+        item.workspaceId,
+        item.userId,
+        appids,
+        {
+          onBatch: () => this.repository.heartbeatWork(item.id, this.workerId),
+        },
+      );
+      const candidateOutcomes = await this.repository.getCandidateOutcomes(
+        {
           appids,
           profileVersionIds: profiles.map((profile) => profile.versionId),
           userId: item.userId,
-        }),
-      ]);
+        },
+        {
+          onBatch: () => this.repository.heartbeatWork(item.id, this.workerId),
+        },
+      );
       await this.repository.heartbeatWork(item.id, this.workerId);
       const refreshedSignalWindows = await this.repository.refreshSignalWindows(
         appids,
@@ -674,7 +690,10 @@ export class OpportunityWorker {
       );
       const refreshedInputs =
         refreshedSignalWindows > 0
-          ? await this.repository.productRepository.getRuleInputs(appids)
+          ? await this.repository.productRepository.getRuleInputs(appids, {
+              onBatch: () =>
+                this.repository.heartbeatWork(item.id, this.workerId),
+            })
           : inputs;
       const inputByApp = new Map(
         refreshedInputs.map((input) => [input.appid, input]),

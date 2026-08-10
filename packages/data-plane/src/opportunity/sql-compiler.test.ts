@@ -16,9 +16,13 @@ describe("opportunity SQL compiler", () => {
 
     assert.doesNotMatch(sql, /result\.missing_evidence/);
     assert.match(sql, /app\.content_descriptors/);
-    assert.match(sql, /descriptor_evidence\.evidence_state = 'known'/);
-    assert.match(sql, /tag_evidence\.field_name = 'tags'/);
-    assert.match(sql, /tag_evidence\.evidence_state = 'known'/);
+    assert.match(sql, /content_evidence\.descriptor_known/);
+    assert.match(sql, /content_evidence_row\.field_name = 'tags'/);
+    assert.match(sql, /content_evidence_row\.evidence_state = 'known'/);
+    assert.equal(
+      sql.match(/FROM ops\.app_field_evidence content_evidence_row/g)?.length,
+      1,
+    );
     assert.match(sql, /'hentai', 'mature', 'nsfw', 'nudity', 'sexual content'/);
     assert.match(sql, /@ == "3" \|\| @ == "adult"/);
     assert.throws(

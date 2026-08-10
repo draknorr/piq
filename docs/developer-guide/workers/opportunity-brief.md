@@ -24,7 +24,8 @@ Steam catalog/lifecycle/change events
 
 - Supabase owns authentication, sessions, and the verified email identity.
 - Tiger owns workspaces, memberships, presets, profile versions, material
-  events, runs, results, evidence, team/personal state, and deliveries.
+  events, runs, results, evidence, collaboration teams, team/personal state,
+  and deliveries.
 - The query API is the only browser-facing Tiger boundary.
 - Railway continuously schedules, leases, evaluates, retries, and dispatches.
 - GitHub Actions can run only the bounded event reconciliation fallback. It does
@@ -48,6 +49,19 @@ The browser contract is additive and customer-facing:
 - owner/admin users can open operational data status, while member users see
   customer intelligence without source-pipeline or calculation diagnostics.
 
+An authenticated user may also open an exact run or result owned by another
+user when both users have active memberships in the same active Opportunity
+team. Shared responses include the owner display name and team identity, but
+remove matched profile names and rules, profile versions, delivery provenance,
+prior personal appearances, owner tracker state, and owner-only coverage data.
+Tracking, dismissing, and ignoring always read and write the viewer's personal
+state. Team Activity is scoped by `team_id`. Users without an active team keep
+the original personal-workspace behavior.
+
+Opportunity teams are independent of `user_profiles.organization`. Only global
+PublisherIQ admins can manage them through `/admin/teams`; the Next.js proxy and
+query API each verify the actor's Supabase `user_profiles.role`.
+
 Presentation code must format only what the stored evidence supports. Null,
 sparse, or malformed before/after payloads receive a truthful fallback and must
 never produce an invented comparison. Historical `why_now` rows are not
@@ -60,6 +74,10 @@ Apply in this order only after a separately approved production-write window:
 1. `packages/data-plane/sql/tiger-bootstrap/0097_opportunity_mvp.sql`
 2. `packages/data-plane/sql/tiger-bootstrap/0098_opportunity_preset_seed.sql`
 3. `packages/data-plane/sql/tiger-bootstrap/0099_opportunity_evaluation_performance_v1.sql`
+4. `packages/data-plane/sql/tiger-bootstrap/0100_opportunity_field_sources_token_pics.sql`
+5. `packages/data-plane/sql/tiger-bootstrap/0101_public_storefront_tag_evidence.sql`
+6. `packages/data-plane/sql/tiger-bootstrap/0102_opportunity_review_priority_v2.sql`
+7. `packages/data-plane/sql/tiger-bootstrap/0103_opportunity_teams.sql`
 
 `0097` creates the additive `opportunity` schema and its versioned control,
 event, run, result, state, queue, outbox, audit, cohort, market, and health
@@ -68,11 +86,15 @@ tables plus the timezone-aware `next_profile_evaluation_v1` scheduler.
 rerun safely. `0099` adds the versioned evaluation-input and cohort projections,
 exact persistent cohort cache, source-revision fences, bounded bulk persistence,
 and per-run phase timings.
+`0103` adds admin-managed teams and soft membership history, then adds nullable
+`team_id` scopes to activity, researching state, and audit history. It does not
+move or backfill personal activity, so every new team starts with a fresh Team
+Activity timeline.
 
 No checked-in command applies these files automatically. Before a production
 write, record:
 
-- the exact two files and commit SHA;
+- the exact files and commit SHA;
 - why the feature needs them;
 - risk level and a current backup/PITR proof;
 - the approval reference; and
@@ -106,8 +128,36 @@ SELECT slug, current_version_id, editorial_status
 FROM opportunity.presets
 ORDER BY slug
 LIMIT 20;
+
+SELECT id, slug, name, status, created_at
+FROM opportunity.teams
+ORDER BY created_at DESC
+LIMIT 20;
+
+SELECT team_id, user_id, identity_email, display_name, status, joined_at, removed_at
+FROM opportunity.team_memberships
+ORDER BY joined_at DESC
+LIMIT 100;
 COMMIT;
 ```
+
+Creating the initial team and memberships is a separate production data write
+from applying `0103` and requires its own approval. Archiving a team or softly
+removing its memberships immediately revokes teammate access without changing
+personal workspaces, reports, profiles, or deliveries.
+
+### Opportunity team production state
+
+On August 10, 2026, approved production writes applied `0103` to Tiger from
+SHA-256 `5759a7c4a11f2750502c589544cfc55e2ff970cfdc361be174889fed003e8925`,
+then created the active `Tenon` team (`d70a1b06-71db-40a2-ac82-17b503bc67d8`)
+with Ryan Bohmann, Christopher Wyatt, and Steve Kim as equal active members.
+The write recorded one `team.created` and three `team.member_added` audit rows.
+Post-write verification found no team activity or research rows, so the Tenon
+timeline is fresh, and confirmed that personal workspace, profile, run, and
+result counts were unchanged. Steve remains without a personal Opportunity
+workspace. The matching query-api and admin application revision must still be
+deployed before the shared-link and admin-management behavior is live.
 
 ## Query API configuration
 
@@ -138,22 +188,23 @@ pnpm --filter @publisheriq/data-plane opportunity-worker
 
 Do not configure an HTTP health check; this is a process worker.
 
-| Variable                                             | Default                            | Purpose                                                               |
-| ---------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------- |
-| `TIGER_PRIMARY_URL`                                  | required                           | Tiger connection                                                      |
-| `OPPORTUNITY_WEBSITE_BASE_URL`                       | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                                |
-| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY`                | required for external delivery     | Enables encrypted email/Slack destinations                            |
-| `RESEND_API_KEY`                                     | required before enabling email     | Enables email provider calls                                          |
-| `OPPORTUNITY_EMAIL_FROM`                             | PublisherIQ default                | Verified Resend sender                                                |
-| `WORKER_ID`                                          | generated UUID                     | Lease owner identity                                                  |
-| `CLAIM_LIMIT`                                        | `8`                                | Fair queue claims per poll, clamped by the repository                 |
-| `DELIVERY_CLAIM_LIMIT`                               | `10`                               | Delivery claims per poll                                              |
-| `POLL_INTERVAL_MS`                                   | `5000`                             | Delay between idle polls                                              |
-| `MAX_IDLE_POLLS`                                     | `0`                                | `0` runs continuously; positive values are for bounded local runs     |
-| `OPPORTUNITY_PRIORITY_V2_COMPUTE`                    | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering       |
-| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`               | `0`                                | Permit canonical v2 copy for an explicit workspace scope              |
-| `OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS` | empty                              | Comma-separated workspace UUID canary scope; `*` is general rollout   |
-| `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS`        | empty                              | Comma-separated workspace UUID ordering scope; `*` is general rollout |
+| Variable                                             | Default                            | Purpose                                                                                                           |
+| ---------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `TIGER_PRIMARY_URL`                                  | required                           | Tiger connection                                                                                                  |
+| `OPPORTUNITY_WEBSITE_BASE_URL`                       | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                                                                            |
+| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY`                | required for external delivery     | Enables encrypted email/Slack destinations                                                                        |
+| `RESEND_API_KEY`                                     | required before enabling email     | Enables email provider calls                                                                                      |
+| `OPPORTUNITY_EMAIL_FROM`                             | PublisherIQ default                | Verified Resend sender                                                                                            |
+| `WORKER_ID`                                          | generated UUID                     | Lease owner identity                                                                                              |
+| `CLAIM_LIMIT`                                        | `8`                                | Fair queue claims per poll, clamped by the repository                                                             |
+| `DELIVERY_CLAIM_LIMIT`                               | `10`                               | Delivery claims per poll                                                                                          |
+| `POLL_INTERVAL_MS`                                   | `5000`                             | Delay between idle polls                                                                                          |
+| `MAX_IDLE_POLLS`                                     | `0`                                | `0` runs continuously; positive values are for bounded local runs                                                 |
+| `OPPORTUNITY_COHORT_FEATURE_SNAPSHOT_MAX_AGE_HOURS`  | `0`                                | Reuse a populated peer-feature snapshot for this bounded age (max 168 hours); `0` requires exact source revisions |
+| `OPPORTUNITY_PRIORITY_V2_COMPUTE`                    | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering                                                   |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`               | `0`                                | Permit canonical v2 copy for an explicit workspace scope                                                          |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS` | empty                              | Comma-separated workspace UUID canary scope; `*` is general rollout                                               |
+| `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS`        | empty                              | Comma-separated workspace UUID ordering scope; `*` is general rollout                                             |
 
 The three policy-order controls are
 `OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY`,
@@ -280,7 +331,31 @@ Investigate:
 
 Queue failures use exponential backoff and dead-letter after the configured
 attempt ceiling. A failed run does not advance the user’s successful daily
-window.
+window. When daily work reaches the attempt ceiling, the worker moves enabled
+profiles to their next timezone-aware attempt so one failed date cannot wedge
+the scheduler indefinitely. The scheduler also recognizes a previously stuck
+daily dead letter and creates exactly one idempotent `daily-recovery:<work-id>`
+item. A successful recovery still evaluates from the last successful daily
+window, preserving missed-day coverage.
+
+Daily evaluation keeps every database statement bounded. Relative-date rules
+read only the indexed dates entering or leaving a profile window, in pages of
+500, instead of comparing two full-catalog result sets. Rule-input hydration
+uses batches of 100, prior-result lookups use batches of 250, signal-window
+refreshes use batches of 100, and released-cohort feature scans use pages of
+5,000. The heavy phases run sequentially and renew the queue lease after each
+batch. These limits trade a small amount of additional round-trip overhead for
+predictable statement time, memory, and database concurrency.
+
+Peer-comparison feature snapshots may be reused for a bounded age by setting
+`OPPORTUNITY_COHORT_FEATURE_SNAPSHOT_MAX_AGE_HOURS`. Rule matching, material
+events, metrics, and signal windows still use the run's current source
+snapshot. Only the released-market peer features (taxonomy, business model,
+and effective price) use the bounded snapshot. Cache provenance records the
+feature snapshot's stored source revisions and refresh timestamp instead of
+claiming the current feature revisions. Leave the value at `0` when exact
+feature-source parity is required; that mode can invoke the full materialized
+view refresh whenever any feature source revision moves.
 
 Readiness runs are deliberately separate from daily/manual/replay runs. They
 retain the original material-event ID, never advance the durable daily cursor,

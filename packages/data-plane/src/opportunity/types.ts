@@ -545,6 +545,33 @@ export type OpportunityResultLabel =
   | "materially_changed"
   | "tracked_update";
 
+export interface OpportunityTeamIdentity {
+  id: string;
+  name: string;
+}
+
+export interface OpportunityAccessContext {
+  scope: "owner" | "team";
+  sourceUserDisplay: string | null;
+  team: OpportunityTeamIdentity | null;
+}
+
+export interface OpportunityTeamMemberSummary {
+  displayName: string | null;
+  email: string;
+  joinedAt: string;
+  status: "active" | "removed";
+  userId: string;
+}
+
+export interface OpportunityTeamSummary extends OpportunityTeamIdentity {
+  createdAt: string;
+  members: OpportunityTeamMemberSummary[];
+  slug: string;
+  status: "active" | "archived";
+  updatedAt: string;
+}
+
 export interface OpportunityObservedChange {
   affectedRuleFields: OpportunityRuleField[];
   after: unknown;
@@ -607,6 +634,7 @@ export interface OpportunityBriefProfileDispatch {
 }
 
 export interface OpportunityDailyBriefIssue {
+  access?: OpportunityAccessContext;
   availableResultCount: number;
   coverageWarnings: string[];
   dek: string;
@@ -624,6 +652,7 @@ export interface OpportunityDailyBriefIssue {
 }
 
 export interface OpportunityResultPage {
+  access?: OpportunityAccessContext;
   hasMore: boolean;
   nextCursor: string | null;
   pageSize: 25;
@@ -716,6 +745,7 @@ export interface OpportunityChannelPreferenceSummary {
 }
 
 export interface OpportunityGameRecord {
+  access: OpportunityAccessContext;
   app: {
     appid: number;
     developers: string[];
