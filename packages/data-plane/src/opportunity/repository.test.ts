@@ -9,6 +9,7 @@ import { encodeOpportunityReviewPriorityDecision } from "./review-priority-stora
 import { compileOpportunityPreview } from "./sql-compiler.js";
 import {
   OPPORTUNITY_RULE_SCHEMA_VERSION,
+  type OpportunityEvaluationInput,
   type OpportunityObservedChange,
   type OpportunityReviewPriorityDecision,
   type OpportunityRuleSet,
@@ -325,7 +326,7 @@ describe("opportunity customer response contracts", () => {
       resultQuery,
       /COALESCE\(result\.missing_evidence, '\[\]'::jsonb\)\s+\? 'content_descriptors'/,
     );
-    assert.match(resultQuery, /tag_evidence\.evidence_state = 'known'/);
+    assert.match(resultQuery, /content_evidence_row\.evidence_state = 'known'/);
     assert.match(resultQuery, /@ == "3" \|\| @ == "adult"/);
   });
 
@@ -503,7 +504,10 @@ describe("opportunity customer response contracts", () => {
         gameRecordQuery,
         /COALESCE\(canonical\.missing_evidence, '\[\]'::jsonb\)\s+\? 'content_descriptors'/,
       );
-      assert.match(gameRecordQuery, /tag_evidence\.evidence_state = 'known'/);
+      assert.match(
+        gameRecordQuery,
+        /content_evidence_row\.evidence_state = 'known'/,
+      );
       assert.match(gameRecordQuery, /@ == "3" \|\| @ == "adult"/);
     });
   }
@@ -937,6 +941,39 @@ describe("opportunity rule-input provenance", () => {
     assert.match(calls[0]?.text ?? "", /readiness_catalog\.source = 'catalog'/);
     assert.match(calls[0]?.text ?? "", /a\.type IN \('game', 'Game'\)/);
   });
+
+  it("hydrates large input sets in bounded query batches", async () => {
+    const calls: QueryCall[] = [];
+    let heartbeatCount = 0;
+    const pool = {
+      query: async (
+        text: string,
+        values: readonly unknown[] = [],
+      ): Promise<{ rows: unknown[] }> => {
+        calls.push({ text, values });
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    await repository.getRuleInputs(
+      Array.from({ length: 501 }, (_, index) => index + 1),
+      {
+        onBatch: async () => {
+          heartbeatCount += 1;
+        },
+      },
+    );
+
+    const inputQueries = calls.filter((call) =>
+      call.text.includes("WITH input_appids AS MATERIALIZED"),
+    );
+    assert.deepEqual(
+      inputQueries.map((call) => (call.values[0] as number[]).length),
+      [100, 100, 100, 100, 100, 1],
+    );
+    assert.equal(heartbeatCount, 6);
+  });
 });
 
 describe("opportunity preview query pipeline", () => {
@@ -1156,18 +1193,74 @@ describe("opportunity personal game state", () => {
 });
 
 describe("opportunity relative-date transitions", () => {
-  it("compares current and prior local-day match sets without metric-history scans", async () => {
+  it("hydrates only indexed date-boundary candidates without catalog scans", async () => {
     const calls: QueryCall[] = [];
     const pool = {
       query: async (
         text: string,
         values: readonly unknown[] = [],
-      ): Promise<{ rows: Array<{ appid: number }> }> => {
+      ): Promise<{
+        rows: Array<{ appid: number; boundary_value: string }>;
+      }> => {
         calls.push({ text, values });
-        return { rows: [{ appid: 10 }, { appid: 20 }] };
+        return {
+          rows: [
+            calls.length === 1
+              ? { appid: 10, boundary_value: "2026-07-30" }
+              : { appid: 20, boundary_value: "2026-08-06" },
+          ],
+        };
       },
     } as unknown as Pool;
     const repository = new OpportunityRepository(pool);
+    repository.getRuleInputsShadow = async (): Promise<
+      OpportunityEvaluationInput[]
+    > => [
+      {
+        appid: 10,
+        fields: {
+          content_descriptors: {
+            confidence: "high",
+            evidenceClass: "observed_fact",
+            source: "pics",
+            sourceAt: "2026-07-30T18:00:00.000Z",
+            state: "known",
+            value: [],
+          },
+          release_date: {
+            confidence: "high",
+            evidenceClass: "observed_fact",
+            source: "steam_storefront",
+            sourceAt: "2026-07-30T18:00:00.000Z",
+            state: "known",
+            value: "2026-07-30",
+          },
+        },
+        name: "Previous boundary",
+      },
+      {
+        appid: 20,
+        fields: {
+          content_descriptors: {
+            confidence: "high",
+            evidenceClass: "observed_fact",
+            source: "pics",
+            sourceAt: "2026-07-30T18:00:00.000Z",
+            state: "known",
+            value: [],
+          },
+          release_date: {
+            confidence: "high",
+            evidenceClass: "observed_fact",
+            source: "steam_storefront",
+            sourceAt: "2026-07-30T18:00:00.000Z",
+            state: "known",
+            value: "2026-08-06",
+          },
+        },
+        name: "Current boundary",
+      },
+    ];
     const rules: OpportunityRuleSet = {
       excluded: [],
       preferred: [],
@@ -1192,16 +1285,26 @@ describe("opportunity relative-date transitions", () => {
     const appids = await repository.getRelativeDateTransitionAppids(
       [{ rules, timezone: "America/Los_Angeles" }],
       "2026-07-30T18:00:00.000Z",
+      { previousAsOf: "2026-07-27T18:00:00.000Z" },
     );
 
     assert.deepEqual(appids, [10, 20]);
-    assert.equal(calls.length, 1);
-    assert.match(calls[0]!.text, /current_matches AS MATERIALIZED/);
-    assert.match(calls[0]!.text, /previous_matches AS MATERIALIZED/);
-    assert.match(calls[0]!.text, /FULL OUTER JOIN/);
-    assert.match(calls[0]!.text, /a\.type IN \('game', 'Game'\)/);
+    assert.equal(calls.length, 2);
+    assert.ok(
+      calls.every((call) => /app\.release_date >= \$1::date/.test(call.text)),
+    );
+    assert.ok(
+      calls.every((call) =>
+        /\(app\.release_date, app\.appid\) < \(\$3::date, \$4\)/.test(
+          call.text,
+        ),
+      ),
+    );
+    assert.ok(calls.every((call) => /LIMIT \$5/.test(call.text)));
+    assert.doesNotMatch(calls[0]!.text, /current_matches AS MATERIALIZED/);
+    assert.doesNotMatch(calls[0]!.text, /FULL OUTER JOIN/);
     assert.doesNotMatch(calls[0]!.text, /legacy\.daily_metrics/);
-    assert.equal(calls[0]!.values.length, 4);
+    assert.equal(calls[0]!.values.length, 5);
   });
 
   it("does no catalog work for absolute-only profiles", async () => {

@@ -51,11 +51,19 @@ import {
   type OpportunityReviewPriorityStorageV1,
 } from "./review-priority-storage.js";
 
-const COHORT_FEATURE_PAGE_SIZE = 25_000;
+const COHORT_FEATURE_PAGE_SIZE = 5_000;
 const COHORT_FEATURE_MAX_ROWS = 250_000;
 const COHORT_CACHE_WRITE_BATCH_SIZE = 250;
+const OPPORTUNITY_LOOKUP_BATCH_SIZE = 250;
 const RESULT_PERSISTENCE_BATCH_SIZE = 100;
 const CANDIDATE_PERSISTENCE_BATCH_SIZE = 500;
+const SIGNAL_REFRESH_MAX_BATCH_SIZE = 100;
+const SIGNAL_STALENESS_BATCH_SIZE = 1_000;
+const COHORT_FEATURE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+
+export interface OpportunityWorkerRepositoryOptions {
+  cohortFeatureSnapshotMaxAgeMs?: number;
+}
 
 export interface OpportunityWorkItem {
   appid: number | null;
@@ -229,6 +237,20 @@ interface OpportunityCohortSourceWatermark {
   hash: string;
   sourceDate: string;
   value: Record<string, unknown>;
+}
+
+interface OpportunityCohortFeatureProjectionStatus {
+  exact: boolean;
+  refreshedAt: string | null;
+  sourceRevisions: Record<string, number> | null;
+  usable: boolean;
+}
+
+interface OpportunityCohortFeatureProjectionStatusRow extends QueryResultRow {
+  exact: boolean;
+  refreshed_at: Date | string | null;
+  source_revisions: Record<string, unknown> | string | null;
+  usable: boolean;
 }
 
 interface OpportunityCohortCacheRow extends QueryResultRow {
@@ -612,9 +634,24 @@ export function assignOpportunityDeliveryResults(
 
 export class OpportunityWorkerRepository {
   readonly productRepository: OpportunityRepository;
+  private readonly cohortFeatureSnapshotMaxAgeMs: number;
 
-  constructor(private readonly pool: Pool) {
+  constructor(
+    private readonly pool: Pool,
+    options: OpportunityWorkerRepositoryOptions = {},
+  ) {
     this.productRepository = new OpportunityRepository(pool);
+    const requestedSnapshotMaxAgeMs =
+      options.cohortFeatureSnapshotMaxAgeMs ?? 0;
+    this.cohortFeatureSnapshotMaxAgeMs = Math.max(
+      0,
+      Math.min(
+        COHORT_FEATURE_SNAPSHOT_MAX_AGE_MS,
+        Number.isFinite(requestedSnapshotMaxAgeMs)
+          ? Math.floor(requestedSnapshotMaxAgeMs)
+          : 0,
+      ),
+    );
   }
 
   private async transaction<T>(
@@ -662,6 +699,37 @@ export class OpportunityWorkerRepository {
       );
       const daily = await client.query(
         `
+          WITH due AS MATERIALIZED (
+            SELECT
+              profile.workspace_id,
+              profile.owner_user_id,
+              MIN(profile.next_evaluation_at) AS next_evaluation_at
+            FROM opportunity.profiles profile
+            WHERE profile.status = 'enabled'
+              AND profile.next_evaluation_at <= now()
+            GROUP BY profile.workspace_id, profile.owner_user_id
+            LIMIT 1000
+          ),
+          scheduled AS MATERIALIZED (
+            SELECT
+              due.*,
+              existing.id AS dead_letter_id,
+              'daily:' || due.workspace_id || ':' || due.owner_user_id || ':' ||
+                to_char(
+                  due.next_evaluation_at AT TIME ZONE 'UTC',
+                  'YYYYMMDDHH24MI'
+                ) AS scheduled_key
+            FROM due
+            LEFT JOIN opportunity.work_queue existing
+              ON existing.idempotency_key =
+                'daily:' || due.workspace_id || ':' || due.owner_user_id || ':' ||
+                to_char(
+                  due.next_evaluation_at AT TIME ZONE 'UTC',
+                  'YYYYMMDDHH24MI'
+                )
+             AND existing.kind = 'daily_evaluation'
+             AND existing.state = 'dead_letter'
+          )
           INSERT INTO opportunity.work_queue (
             kind,
             lane,
@@ -675,24 +743,28 @@ export class OpportunityWorkerRepository {
           SELECT
             'daily_evaluation',
             'daily',
-            due.workspace_id,
-            due.owner_user_id,
-            due.next_evaluation_at,
-            100,
-            'daily:' || due.workspace_id || ':' || due.owner_user_id || ':' ||
-              to_char(due.next_evaluation_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI'),
-            jsonb_build_object('reason', 'schedule_due')
-          FROM (
-            SELECT
-              profile.workspace_id,
-              profile.owner_user_id,
-              MIN(profile.next_evaluation_at) AS next_evaluation_at
-            FROM opportunity.profiles profile
-            WHERE profile.status = 'enabled'
-              AND profile.next_evaluation_at <= now()
-            GROUP BY profile.workspace_id, profile.owner_user_id
-            LIMIT 1000
-          ) due
+            scheduled.workspace_id,
+            scheduled.owner_user_id,
+            CASE
+              WHEN scheduled.dead_letter_id IS NULL
+                THEN scheduled.next_evaluation_at
+              ELSE now()
+            END,
+            CASE WHEN scheduled.dead_letter_id IS NULL THEN 100 ELSE 110 END,
+            CASE
+              WHEN scheduled.dead_letter_id IS NULL THEN scheduled.scheduled_key
+              ELSE 'daily-recovery:' || scheduled.dead_letter_id
+            END,
+            jsonb_build_object(
+              'reason',
+              CASE
+                WHEN scheduled.dead_letter_id IS NULL THEN 'schedule_due'
+                ELSE 'dead_letter_recovery'
+              END,
+              'recoveredWorkId',
+              scheduled.dead_letter_id
+            )
+          FROM scheduled
           ON CONFLICT (idempotency_key) DO NOTHING
           RETURNING id
         `,
@@ -879,34 +951,80 @@ export class OpportunityWorkerRepository {
     workId: number;
     workerId: string;
   }): Promise<void> {
-    await this.pool.query(
-      `
-        UPDATE opportunity.work_queue
-        SET state = CASE
-              WHEN $5 THEN 'source_blocked'
-              WHEN attempts >= max_attempts THEN 'dead_letter'
-              ELSE 'retrying'
-            END,
-            next_attempt_at = now() + (
-              LEAST(360, POWER(2, LEAST(attempts, 8))) * interval '1 minute'
-            ),
-            last_error_code = $3,
-            last_error_message = left($4, 2000),
-            claim_expires_at = NULL,
-            worker_id = NULL,
-            updated_at = now()
-        WHERE id = $1
-          AND worker_id = $2
-          AND state = 'claimed'
-      `,
-      [
-        params.workId,
-        params.workerId,
-        params.code,
-        params.error,
-        params.sourceBlocked ?? false,
-      ],
-    );
+    await this.transaction(async (client) => {
+      const failed = await client.query<
+        QueryResultRow & {
+          kind: OpportunityWorkItem["kind"];
+          state: string;
+          user_id: string | null;
+          workspace_id: string | null;
+        }
+      >(
+        `
+          UPDATE opportunity.work_queue
+          SET state = CASE
+                WHEN $5 THEN 'source_blocked'
+                WHEN attempts >= max_attempts THEN 'dead_letter'
+                ELSE 'retrying'
+              END,
+              next_attempt_at = now() + (
+                LEAST(360, POWER(2, LEAST(attempts, 8))) * interval '1 minute'
+              ),
+              last_error_code = $3,
+              last_error_message = left($4, 2000),
+              claim_expires_at = NULL,
+              worker_id = NULL,
+              updated_at = now()
+          WHERE id = $1
+            AND worker_id = $2
+            AND state = 'claimed'
+          RETURNING kind, state, workspace_id, user_id
+        `,
+        [
+          params.workId,
+          params.workerId,
+          params.code,
+          params.error,
+          params.sourceBlocked ?? false,
+        ],
+      );
+      const row = failed.rows[0];
+      if (
+        row?.kind !== "daily_evaluation" ||
+        row.state !== "dead_letter" ||
+        !row.workspace_id ||
+        !row.user_id
+      ) {
+        return;
+      }
+      await client.query(
+        `
+          WITH personal_schedule AS (
+            SELECT timezone, local_delivery_time
+            FROM opportunity.profiles
+            WHERE workspace_id = $1
+              AND owner_user_id = $2
+              AND status = 'enabled'
+            ORDER BY next_evaluation_at NULLS LAST, id
+            LIMIT 1
+          )
+          UPDATE opportunity.profiles profile
+          SET timezone = personal_schedule.timezone,
+              local_delivery_time = personal_schedule.local_delivery_time,
+              next_evaluation_at = opportunity.next_profile_evaluation_v1(
+                personal_schedule.timezone,
+                personal_schedule.local_delivery_time,
+                now()
+              ),
+              updated_at = now()
+          FROM personal_schedule
+          WHERE profile.workspace_id = $1
+            AND profile.owner_user_id = $2
+            AND profile.status = 'enabled'
+        `,
+        [row.workspace_id, row.user_id],
+      );
+    });
   }
 
   async materializeEvents(onProgress?: () => Promise<void>): Promise<number> {
@@ -1532,108 +1650,146 @@ export class OpportunityWorkerRepository {
     workspaceId: string,
     userId: string,
     appids: number[],
+    options: { onBatch?: () => Promise<void> } = {},
   ): Promise<Map<number, OpportunityPriorUserState>> {
-    const result = await this.pool.query<
-      QueryResultRow & {
-        appid: number;
-        dismissed_event_fingerprint: string | null;
-        event_fingerprints: string[] | null;
-        ignored: boolean;
-        prior_result_id: string | null;
-        tracked: boolean;
-      }
-    >(
-      `
-        SELECT
-          app.appid,
-          state.dismissed_event_fingerprint,
-          state.ignored_at IS NOT NULL AS ignored,
-          state.tracked_at IS NOT NULL AS tracked,
-          prior.id AS prior_result_id,
-          prior.event_fingerprints
-        FROM unnest($3::integer[]) AS app(appid)
-        LEFT JOIN opportunity.user_game_state state
-          ON state.workspace_id = $1
-          AND state.user_id = $2
-          AND state.appid = app.appid
-        LEFT JOIN LATERAL (
+    const bounded = Array.from(
+      new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
+    ).slice(0, 10_000);
+    const states = new Map<number, OpportunityPriorUserState>();
+    for (
+      let offset = 0;
+      offset < bounded.length;
+      offset += OPPORTUNITY_LOOKUP_BATCH_SIZE
+    ) {
+      const result = await this.pool.query<
+        QueryResultRow & {
+          appid: number;
+          dismissed_event_fingerprint: string | null;
+          event_fingerprints: string[] | null;
+          ignored: boolean;
+          prior_result_id: string | null;
+          tracked: boolean;
+        }
+      >(
+        `
           SELECT
-            latest.id,
-            history.event_fingerprints
-          FROM (
-            SELECT result.id
-            FROM opportunity.results result
-            WHERE result.workspace_id = $1
-              AND result.user_id = $2
-              AND result.appid = app.appid
-              AND ${opportunityPersistedResultContentSafetySql("result")}
-            ORDER BY result.created_at DESC, result.id DESC
-            LIMIT 1
-          ) latest
-          CROSS JOIN LATERAL (
+            app.appid,
+            state.dismissed_event_fingerprint,
+            state.ignored_at IS NOT NULL AS ignored,
+            state.tracked_at IS NOT NULL AS tracked,
+            prior.id AS prior_result_id,
+            prior.event_fingerprints
+          FROM unnest($3::integer[]) AS app(appid)
+          LEFT JOIN opportunity.user_game_state state
+            ON state.workspace_id = $1
+            AND state.user_id = $2
+            AND state.appid = app.appid
+          LEFT JOIN LATERAL (
             SELECT
-              array_agg(DISTINCT result.event_fingerprint)
-                AS event_fingerprints
-            FROM opportunity.results result
-            WHERE result.workspace_id = $1
-              AND result.user_id = $2
-              AND result.appid = app.appid
-              AND ${opportunityPersistedResultContentSafetySql("result")}
-          ) history
-        ) prior ON true
-      `,
-      [workspaceId, userId, appids],
-    );
-    return new Map(
-      result.rows.map((row) => [
-        row.appid,
-        {
+              latest.id,
+              history.event_fingerprints
+            FROM (
+              SELECT result.id
+              FROM opportunity.results result
+              WHERE result.workspace_id = $1
+                AND result.user_id = $2
+                AND result.appid = app.appid
+                AND ${opportunityPersistedResultContentSafetySql("result")}
+              ORDER BY result.created_at DESC, result.id DESC
+              LIMIT 1
+            ) latest
+            CROSS JOIN LATERAL (
+              SELECT
+                array_agg(DISTINCT result.event_fingerprint)
+                  AS event_fingerprints
+              FROM opportunity.results result
+              WHERE result.workspace_id = $1
+                AND result.user_id = $2
+                AND result.appid = app.appid
+                AND ${opportunityPersistedResultContentSafetySql("result")}
+            ) history
+          ) prior ON true
+        `,
+        [
+          workspaceId,
+          userId,
+          bounded.slice(offset, offset + OPPORTUNITY_LOOKUP_BATCH_SIZE),
+        ],
+      );
+      for (const row of result.rows) {
+        states.set(row.appid, {
           dismissedEventFingerprint: row.dismissed_event_fingerprint,
           ignored: row.ignored,
           priorEventFingerprints: new Set(row.event_fingerprints ?? []),
           priorResultId: row.prior_result_id,
           tracked: row.tracked,
-        },
-      ]),
-    );
+        });
+      }
+      await options.onBatch?.();
+    }
+    return states;
   }
 
-  async getCandidateOutcomes(params: {
-    appids: number[];
-    profileVersionIds: string[];
-    userId: string;
-  }): Promise<Map<string, "eligible" | "ineligible" | "pending" | "expired">> {
+  async getCandidateOutcomes(
+    params: {
+      appids: number[];
+      profileVersionIds: string[];
+      userId: string;
+    },
+    options: { onBatch?: () => Promise<void> } = {},
+  ): Promise<Map<string, "eligible" | "ineligible" | "pending" | "expired">> {
     if (params.appids.length === 0 || params.profileVersionIds.length === 0) {
       return new Map();
     }
-    const result = await this.pool.query<
-      QueryResultRow & {
-        appid: number;
-        profile_version_id: string;
-        state: string;
+    const appids = Array.from(
+      new Set(
+        params.appids.filter((appid) => Number.isInteger(appid) && appid > 0),
+      ),
+    ).slice(0, 10_000);
+    const outcomes = new Map<
+      string,
+      "eligible" | "ineligible" | "pending" | "expired"
+    >();
+    for (
+      let offset = 0;
+      offset < appids.length;
+      offset += OPPORTUNITY_LOOKUP_BATCH_SIZE
+    ) {
+      const result = await this.pool.query<
+        QueryResultRow & {
+          appid: number;
+          profile_version_id: string;
+          state: string;
+        }
+      >(
+        `
+          SELECT appid, profile_version_id, state
+          FROM opportunity.candidate_state
+          WHERE user_id = $1
+            AND appid = ANY($2::integer[])
+            AND profile_version_id = ANY($3::uuid[])
+        `,
+        [
+          params.userId,
+          appids.slice(offset, offset + OPPORTUNITY_LOOKUP_BATCH_SIZE),
+          params.profileVersionIds,
+        ],
+      );
+      for (const row of result.rows) {
+        outcomes.set(
+          `${row.appid}:${row.profile_version_id}`,
+          row.state === "eligible"
+            ? "eligible"
+            : row.state === "ineligible"
+              ? "ineligible"
+              : row.state === "readiness_expired"
+                ? "expired"
+                : "pending",
+        );
       }
-    >(
-      `
-        SELECT appid, profile_version_id, state
-        FROM opportunity.candidate_state
-        WHERE user_id = $1
-          AND appid = ANY($2::integer[])
-          AND profile_version_id = ANY($3::uuid[])
-      `,
-      [params.userId, params.appids, params.profileVersionIds],
-    );
-    return new Map(
-      result.rows.map((row) => [
-        `${row.appid}:${row.profile_version_id}`,
-        row.state === "eligible"
-          ? "eligible"
-          : row.state === "ineligible"
-            ? "ineligible"
-            : row.state === "readiness_expired"
-              ? "expired"
-              : "pending",
-      ]),
-    );
+      await options.onBatch?.();
+    }
+    return outcomes;
   }
 
   createReleasedCohortCache(): OpportunityReleasedCohortCache {
@@ -1821,10 +1977,9 @@ export class OpportunityWorkerRepository {
     }
   }
 
-  private async cohortFeatureProjectionReady(
-    expectedSourceRevisions: Record<string, number> | null = null,
+  private async getCohortFeatureProjectionStatus(
     client: PoolClient | null = null,
-  ): Promise<boolean> {
+  ): Promise<OpportunityCohortFeatureProjectionStatus> {
     const sql = `
         WITH current_revisions AS (
           SELECT jsonb_object_agg(
@@ -1842,32 +1997,64 @@ export class OpportunityWorkerRepository {
             'legacy.latest_daily_metrics'
           )
         )
-        SELECT EXISTS (
-          SELECT 1
-          FROM opportunity.cohort_feature_projection_state_v1 state
-          CROSS JOIN current_revisions
-          JOIN pg_class relation
-            ON relation.oid =
-              'opportunity.released_cohort_features_v2'::regclass
-          WHERE state.singleton
-            AND relation.relispopulated
+        SELECT
+          state.source_revisions,
+          state.refreshed_at,
+          state.source_revisions = current_revisions.value AS exact,
+          (
+            relation.relispopulated
             AND state.row_count > 0
             AND state.feature_projection_version = $1
-            AND state.source_revisions = current_revisions.value
             AND (
-              $2::jsonb IS NULL
-              OR state.source_revisions = $2::jsonb
+              state.source_revisions = current_revisions.value
+              OR (
+                $2::double precision > 0
+                AND state.refreshed_at >= clock_timestamp() -
+                  make_interval(secs => $2::double precision)
+              )
             )
-        ) AS ready
+          ) AS usable
+        FROM opportunity.cohort_feature_projection_state_v1 state
+        CROSS JOIN current_revisions
+        JOIN pg_class relation
+          ON relation.oid =
+            'opportunity.released_cohort_features_v2'::regclass
+        WHERE state.singleton
+        LIMIT 1
       `;
     const values = [
       OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
-      expectedSourceRevisions ? JSON.stringify(expectedSourceRevisions) : null,
+      this.cohortFeatureSnapshotMaxAgeMs / 1_000,
     ];
     const result = client
-      ? await client.query<QueryResultRow & { ready: boolean }>(sql, values)
-      : await this.pool.query<QueryResultRow & { ready: boolean }>(sql, values);
-    return result.rows[0]?.ready === true;
+      ? await client.query<OpportunityCohortFeatureProjectionStatusRow>(
+          sql,
+          values,
+        )
+      : await this.pool.query<OpportunityCohortFeatureProjectionStatusRow>(
+          sql,
+          values,
+        );
+    const row = result.rows[0];
+    const rawSourceRevisions = asRecord(row?.source_revisions) ?? null;
+    const sourceRevisions = rawSourceRevisions
+      ? Object.fromEntries(
+          Object.entries(rawSourceRevisions)
+            .filter(
+              (entry): entry is [string, number] =>
+                typeof entry[1] === "number" &&
+                Number.isSafeInteger(entry[1]) &&
+                entry[1] >= 0,
+            )
+            .map(([key, revision]) => [key, revision]),
+        )
+      : null;
+    return {
+      exact: row?.exact ?? true,
+      refreshedAt: row?.refreshed_at ? iso(row.refreshed_at) : null,
+      sourceRevisions,
+      usable: row?.usable ?? false,
+    };
   }
 
   private async refreshCohortFeatureProjection(): Promise<void> {
@@ -1913,6 +2100,10 @@ export class OpportunityWorkerRepository {
 
   private async getCohortSourceWatermark(
     client: PoolClient | null = null,
+    featureSnapshot: {
+      refreshedAt: string;
+      sourceRevisions: Record<string, number>;
+    } | null = null,
   ): Promise<OpportunityCohortSourceWatermark> {
     const sql = `
         WITH expected(source_key) AS (
@@ -1946,8 +2137,24 @@ export class OpportunityWorkerRepository {
       ? await client.query<OpportunityCohortSourceWatermarkRow>(sql)
       : await this.pool.query<OpportunityCohortSourceWatermarkRow>(sql);
     const row = result.rows[0];
-    const value = asRecord(row?.source_watermark) ?? {};
-    const sourceRevisions = asRecord(value.sourceRevisions) ?? {};
+    const currentValue = asRecord(row?.source_watermark) ?? {};
+    const currentSourceRevisions = asRecord(currentValue.sourceRevisions) ?? {};
+    const sourceRevisions = featureSnapshot
+      ? {
+          ...currentSourceRevisions,
+          ...featureSnapshot.sourceRevisions,
+        }
+      : currentSourceRevisions;
+    const value = featureSnapshot
+      ? {
+          ...currentValue,
+          cohortFeatureProjection: {
+            freshnessPolicy: "bounded_snapshot",
+            refreshedAt: featureSnapshot.refreshedAt,
+          },
+          sourceRevisions,
+        }
+      : currentValue;
     const sourceDate = row?.source_date
       ? row.source_date instanceof Date
         ? row.source_date.toISOString().slice(0, 10)
@@ -2002,14 +2209,30 @@ export class OpportunityWorkerRepository {
       await client.query(
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
-      const watermark = await this.getCohortSourceWatermark(client);
-      if (
-        !watermark.featureSourceRevisions ||
-        !(await this.cohortFeatureProjectionReady(
-          watermark.featureSourceRevisions,
-          client,
-        ))
-      ) {
+      const projection = await this.getCohortFeatureProjectionStatus(client);
+      if (!projection.usable) {
+        await client.query("ROLLBACK");
+        client.release();
+        return null;
+      }
+      const featureSnapshot = projection.exact
+        ? null
+        : projection.refreshedAt && projection.sourceRevisions
+          ? {
+              refreshedAt: projection.refreshedAt,
+              sourceRevisions: projection.sourceRevisions,
+            }
+          : null;
+      if (!projection.exact && !featureSnapshot) {
+        await client.query("ROLLBACK");
+        client.release();
+        return null;
+      }
+      const watermark = await this.getCohortSourceWatermark(
+        client,
+        featureSnapshot,
+      );
+      if (!watermark.featureSourceRevisions) {
         await client.query("ROLLBACK");
         client.release();
         return null;
@@ -2605,43 +2828,53 @@ export class OpportunityWorkerRepository {
     if (bounded.length === 0) {
       return 0;
     }
-    const stale = await this.pool.query<
-      QueryResultRow & {
-        appid: number;
-      }
-    >(
-      `
-        WITH input AS (
-          SELECT DISTINCT ON (candidate.appid)
-            candidate.appid,
-            candidate.ordinality
-          FROM unnest($1::integer[]) WITH ORDINALITY
-            AS candidate(appid, ordinality)
-          ORDER BY candidate.appid, candidate.ordinality
-        )
-        SELECT input.appid
-        FROM input
-        LEFT JOIN metrics.app_signal_windows_v1 signal
-          ON signal.appid = input.appid
-        LEFT JOIN ops.app_data_readiness readiness
-          ON readiness.appid = input.appid
-          AND readiness.source = 'market_metrics'
-        WHERE signal.appid IS NULL
-          OR signal.as_of_date < CURRENT_DATE - 1
-          OR signal.calculation_version IS DISTINCT FROM 'signal-windows/v1'
-          OR readiness.appid IS NULL
-          OR readiness.version IS DISTINCT FROM 'signal-windows/v1'
-        ORDER BY input.ordinality
-      `,
-      [bounded],
-    );
-    const staleAppids = stale.rows.map((row) => row.appid);
+    const staleAppids: number[] = [];
+    for (
+      let offset = 0;
+      offset < bounded.length;
+      offset += SIGNAL_STALENESS_BATCH_SIZE
+    ) {
+      const stale = await this.pool.query<
+        QueryResultRow & {
+          appid: number;
+        }
+      >(
+        `
+          WITH input AS (
+            SELECT DISTINCT ON (candidate.appid)
+              candidate.appid,
+              candidate.ordinality
+            FROM unnest($1::integer[]) WITH ORDINALITY
+              AS candidate(appid, ordinality)
+            ORDER BY candidate.appid, candidate.ordinality
+          )
+          SELECT input.appid
+          FROM input
+          LEFT JOIN metrics.app_signal_windows_v1 signal
+            ON signal.appid = input.appid
+          LEFT JOIN ops.app_data_readiness readiness
+            ON readiness.appid = input.appid
+            AND readiness.source = 'market_metrics'
+          WHERE signal.appid IS NULL
+            OR signal.as_of_date < CURRENT_DATE - 1
+            OR signal.calculation_version IS DISTINCT FROM 'signal-windows/v1'
+            OR readiness.appid IS NULL
+            OR readiness.version IS DISTINCT FROM 'signal-windows/v1'
+          ORDER BY input.ordinality
+        `,
+        [bounded.slice(offset, offset + SIGNAL_STALENESS_BATCH_SIZE)],
+      );
+      staleAppids.push(...stale.rows.map((row) => row.appid));
+    }
     if (staleAppids.length === 0) {
       return 0;
     }
     const batchSize = Math.max(
       1,
-      Math.min(5_000, Math.floor(options.batchSize ?? 5_000)),
+      Math.min(
+        SIGNAL_REFRESH_MAX_BATCH_SIZE,
+        Math.floor(options.batchSize ?? SIGNAL_REFRESH_MAX_BATCH_SIZE),
+      ),
     );
     for (let offset = 0; offset < staleAppids.length; offset += batchSize) {
       await this.pool.query(

@@ -257,7 +257,7 @@ describe("opportunity evaluation performance migration", () => {
   });
 
   it("uses bounded set-based resolution and persistence contracts", () => {
-    assert.match(workerRepository, /COHORT_FEATURE_PAGE_SIZE = 25_000/);
+    assert.match(workerRepository, /COHORT_FEATURE_PAGE_SIZE = 5_000/);
     assert.match(workerRepository, /COHORT_FEATURE_MAX_ROWS = 250_000/);
     assert.match(workerRepository, /RESULT_PERSISTENCE_BATCH_SIZE = 100/);
     assert.match(workerRepository, /CANDIDATE_PERSISTENCE_BATCH_SIZE = 500/);

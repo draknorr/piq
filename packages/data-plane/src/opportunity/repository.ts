@@ -57,12 +57,15 @@ import {
 } from "./sql-compiler.js";
 import {
   describeOpportunityRuleSet,
+  evaluateOpportunityProfile,
   normalizeOpportunityContentDescriptors,
   supportsReleasedMarketHealth,
 } from "./rules.js";
 import { decodeOpportunityReviewPriorityDecision } from "./review-priority-storage.js";
 import {
   isOpportunityDateOperand,
+  localDateStartUtc,
+  opportunityDateRangeForOperand,
   previousLocalDayEvaluationContext,
 } from "./date-rules.js";
 import {
@@ -334,7 +337,81 @@ export const OPPORTUNITY_RULE_INPUT_FIELD_SOURCES: Record<
   total_reviews: "market_metrics",
 };
 
+const DATE_TRANSITION_CANDIDATE_BATCH_SIZE = 500;
 const RULE_INPUT_PROJECTION_BATCH_SIZE = 500;
+const RULE_INPUT_QUERY_BATCH_SIZE = 100;
+
+interface OpportunityDateBoundary {
+  endDateExclusive: string;
+  field: "publisheriq_added_at" | "release_date";
+  startDate: string;
+}
+
+function opportunityDateRangeSymmetricDifference(
+  current: { endDateExclusive: string; startDate: string },
+  previous: { endDateExclusive: string; startDate: string },
+): Array<{ endDateExclusive: string; startDate: string }> {
+  const points = Array.from(
+    new Set([
+      current.startDate,
+      current.endDateExclusive,
+      previous.startDate,
+      previous.endDateExclusive,
+    ]),
+  ).sort();
+  const ranges: Array<{ endDateExclusive: string; startDate: string }> = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const startDate = points[index]!;
+    const endDateExclusive = points[index + 1]!;
+    const inCurrent =
+      startDate >= current.startDate && startDate < current.endDateExclusive;
+    const inPrevious =
+      startDate >= previous.startDate && startDate < previous.endDateExclusive;
+    if (inCurrent !== inPrevious) {
+      ranges.push({ endDateExclusive, startDate });
+    }
+  }
+  return ranges;
+}
+
+function opportunityRelativeDateBoundaries(
+  rules: OpportunityRuleSet,
+  current: OpportunityEvaluationContext,
+  previous: OpportunityEvaluationContext,
+): OpportunityDateBoundary[] {
+  const boundaries = new Map<string, OpportunityDateBoundary>();
+  for (const group of [...rules.required, ...rules.excluded]) {
+    for (const clause of group.clauses) {
+      if (
+        (clause.field !== "publisheriq_added_at" &&
+          clause.field !== "release_date") ||
+        !isOpportunityDateOperand(clause.value) ||
+        clause.value.kind !== "relative_window"
+      ) {
+        continue;
+      }
+      const currentRange = opportunityDateRangeForOperand(
+        clause.value,
+        current,
+      );
+      const previousRange = opportunityDateRangeForOperand(
+        clause.value,
+        previous,
+      );
+      for (const range of opportunityDateRangeSymmetricDifference(
+        currentRange,
+        previousRange,
+      )) {
+        const boundary = { field: clause.field, ...range };
+        boundaries.set(
+          `${boundary.field}:${boundary.startDate}:${boundary.endDateExclusive}`,
+          boundary,
+        );
+      }
+    }
+  }
+  return Array.from(boundaries.values());
+}
 
 interface ProfileRow extends QueryResultRow {
   current_version: number | null;
@@ -3738,19 +3815,34 @@ export class OpportunityRepository {
     return result.rows.map(buildOpportunityRuleInput);
   }
 
-  async getRuleInputs(appids: number[]): Promise<OpportunityEvaluationInput[]> {
+  async getRuleInputs(
+    appids: number[],
+    options: { onBatch?: () => Promise<void> } = {},
+  ): Promise<OpportunityEvaluationInput[]> {
     const bounded = Array.from(
       new Set(appids.filter((appid) => Number.isInteger(appid) && appid > 0)),
-    ).slice(0, 5_000);
+    )
+      .sort((left, right) => left - right)
+      .slice(0, 5_000);
     if (bounded.length === 0) {
       return [];
     }
-    const result = await this.pool.query<RuleInputRow>(
-      RULE_INPUT_BATCH_SELECT,
-      [bounded],
-    );
-    const inputs = result.rows.map(buildOpportunityRuleInput);
-    await this.persistRuleInputProjection(inputs);
+    const inputs: OpportunityEvaluationInput[] = [];
+    for (
+      let offset = 0;
+      offset < bounded.length;
+      offset += RULE_INPUT_QUERY_BATCH_SIZE
+    ) {
+      const batch = bounded.slice(offset, offset + RULE_INPUT_QUERY_BATCH_SIZE);
+      const result = await this.pool.query<RuleInputRow>(
+        RULE_INPUT_BATCH_SELECT,
+        [batch],
+      );
+      const batchInputs = result.rows.map(buildOpportunityRuleInput);
+      inputs.push(...batchInputs);
+      await this.persistRuleInputProjection(batchInputs);
+      await options.onBatch?.();
+    }
     return inputs;
   }
 
@@ -3842,25 +3934,19 @@ export class OpportunityRepository {
       timezone: string;
     }>,
     asOf: string,
-    limit = 10_000,
+    options: {
+      limit?: number;
+      onBatch?: () => Promise<void>;
+      previousAsOf?: string;
+    } = {},
   ): Promise<number[]> {
-    const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
-    const relativeProfiles = profiles.filter((profile) =>
-      [
-        ...profile.rules.required,
-        ...profile.rules.preferred,
-        ...profile.rules.excluded,
-      ].some((group) =>
-        group.clauses.some(
-          (clause) =>
-            isOpportunityDateOperand(clause.value) &&
-            clause.value.kind === "relative_window",
-        ),
-      ),
+    const boundedLimit = Math.max(
+      1,
+      Math.min(10_000, Math.floor(options.limit ?? 10_000)),
     );
     const changed = new Set<number>();
 
-    for (const profile of relativeProfiles) {
+    for (const profile of profiles) {
       if (changed.size >= boundedLimit) {
         break;
       }
@@ -3868,40 +3954,138 @@ export class OpportunityRepository {
         asOf,
         timezone: profile.timezone,
       };
-      const previousContext = previousLocalDayEvaluationContext(currentContext);
-      const current = compileOpportunityPreview(profile.rules, currentContext);
-      const previous = compileOpportunityPreview(
+      const previousContext = options.previousAsOf
+        ? {
+            asOf: options.previousAsOf,
+            timezone: profile.timezone,
+          }
+        : previousLocalDayEvaluationContext(currentContext);
+      const boundaries = opportunityRelativeDateBoundaries(
         profile.rules,
+        currentContext,
         previousContext,
       );
-      const previousSql = previous.matchSql.replace(
-        /\$(\d+)/g,
-        (_, index: string) => `$${Number(index) + current.values.length}`,
-      );
-      const remaining = boundedLimit - changed.size;
-      const result = await this.pool.query<QueryResultRow & { appid: number }>(
-        `
-          WITH current_matches AS MATERIALIZED (
-            SELECT a.appid
-            ${current.fromSql}
-              AND ${current.matchSql}
-          ),
-          previous_matches AS MATERIALIZED (
-            SELECT a.appid
-            ${previous.fromSql}
-              AND ${previousSql}
-          )
-          SELECT COALESCE(current.appid, previous.appid) AS appid
-          FROM current_matches current
-          FULL OUTER JOIN previous_matches previous USING (appid)
-          WHERE current.appid IS NULL OR previous.appid IS NULL
-          ORDER BY appid
-          LIMIT ${remaining}
-        `,
-        [...current.values, ...previous.values],
-      );
-      for (const row of result.rows) {
-        changed.add(row.appid);
+      if (boundaries.length === 0) {
+        continue;
+      }
+      const seenCandidateAppids = new Set<number>();
+      for (const boundary of boundaries) {
+        let startValue = boundary.startDate;
+        let endValue = boundary.endDateExclusive;
+        if (boundary.field === "publisheriq_added_at") {
+          startValue = localDateStartUtc(startValue, profile.timezone);
+          endValue = localDateStartUtc(endValue, profile.timezone);
+        }
+        let cursorValue = endValue;
+        let cursorAppid = 2_147_483_647;
+        while (changed.size < boundedLimit) {
+          const result = await this.pool.query<
+            QueryResultRow & {
+              appid: number;
+              boundary_value: Date | string;
+            }
+          >(
+            boundary.field === "release_date"
+              ? `
+                  SELECT
+                    app.appid,
+                    app.release_date AS boundary_value
+                  FROM legacy.apps app
+                  WHERE app.release_date >= $1::date
+                    AND app.release_date < $2::date
+                    AND (app.release_date, app.appid) < ($3::date, $4)
+                    AND app.type IN ('game', 'Game')
+                    AND COALESCE(app.is_delisted, false) = false
+                  ORDER BY app.release_date DESC, app.appid DESC
+                  LIMIT $5
+                `
+              : `
+                  SELECT
+                    catalog.appid,
+                    catalog.first_observed_at AS boundary_value
+                  FROM ops.app_catalog_state catalog
+                  JOIN legacy.apps app ON app.appid = catalog.appid
+                  WHERE catalog.first_observed_at >= $1::timestamptz
+                    AND catalog.first_observed_at < $2::timestamptz
+                    AND (catalog.first_observed_at, catalog.appid) <
+                      ($3::timestamptz, $4)
+                    AND catalog.first_observation_kind = 'new'
+                    AND app.type IN ('game', 'Game')
+                    AND COALESCE(app.is_delisted, false) = false
+                  ORDER BY catalog.first_observed_at DESC, catalog.appid DESC
+                  LIMIT $5
+                `,
+            [
+              startValue,
+              endValue,
+              cursorValue,
+              cursorAppid,
+              DATE_TRANSITION_CANDIDATE_BATCH_SIZE,
+            ],
+          );
+          await options.onBatch?.();
+          if (result.rows.length === 0) {
+            break;
+          }
+          const candidateAppids = result.rows
+            .map((row) => row.appid)
+            .filter((appid) => {
+              if (seenCandidateAppids.has(appid)) {
+                return false;
+              }
+              seenCandidateAppids.add(appid);
+              return true;
+            });
+          if (candidateAppids.length > 0) {
+            for (
+              let offset = 0;
+              offset < candidateAppids.length;
+              offset += RULE_INPUT_QUERY_BATCH_SIZE
+            ) {
+              const inputs = await this.getRuleInputsShadow(
+                candidateAppids.slice(
+                  offset,
+                  offset + RULE_INPUT_QUERY_BATCH_SIZE,
+                ),
+              );
+              for (const input of inputs) {
+                const currentEligible =
+                  evaluateOpportunityProfile(
+                    profile.rules,
+                    input,
+                    currentContext,
+                  ).outcome === "eligible";
+                const previousEligible =
+                  evaluateOpportunityProfile(
+                    profile.rules,
+                    input,
+                    previousContext,
+                  ).outcome === "eligible";
+                if (currentEligible !== previousEligible) {
+                  changed.add(input.appid);
+                  if (changed.size >= boundedLimit) {
+                    break;
+                  }
+                }
+              }
+              await options.onBatch?.();
+              if (changed.size >= boundedLimit) {
+                break;
+              }
+            }
+          }
+          const cursorRow = result.rows.at(-1)!;
+          cursorValue =
+            boundary.field === "release_date"
+              ? cursorRow.boundary_value instanceof Date
+                ? cursorRow.boundary_value.toISOString().slice(0, 10)
+                : String(cursorRow.boundary_value)
+              : iso(cursorRow.boundary_value)!;
+          cursorAppid = cursorRow.appid;
+          if (result.rows.length < DATE_TRANSITION_CANDIDATE_BATCH_SIZE) {
+            break;
+          }
+        }
       }
     }
 

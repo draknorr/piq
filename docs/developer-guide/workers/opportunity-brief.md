@@ -138,22 +138,23 @@ pnpm --filter @publisheriq/data-plane opportunity-worker
 
 Do not configure an HTTP health check; this is a process worker.
 
-| Variable                                             | Default                            | Purpose                                                               |
-| ---------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------- |
-| `TIGER_PRIMARY_URL`                                  | required                           | Tiger connection                                                      |
-| `OPPORTUNITY_WEBSITE_BASE_URL`                       | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                                |
-| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY`                | required for external delivery     | Enables encrypted email/Slack destinations                            |
-| `RESEND_API_KEY`                                     | required before enabling email     | Enables email provider calls                                          |
-| `OPPORTUNITY_EMAIL_FROM`                             | PublisherIQ default                | Verified Resend sender                                                |
-| `WORKER_ID`                                          | generated UUID                     | Lease owner identity                                                  |
-| `CLAIM_LIMIT`                                        | `8`                                | Fair queue claims per poll, clamped by the repository                 |
-| `DELIVERY_CLAIM_LIMIT`                               | `10`                               | Delivery claims per poll                                              |
-| `POLL_INTERVAL_MS`                                   | `5000`                             | Delay between idle polls                                              |
-| `MAX_IDLE_POLLS`                                     | `0`                                | `0` runs continuously; positive values are for bounded local runs     |
-| `OPPORTUNITY_PRIORITY_V2_COMPUTE`                    | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering       |
-| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`               | `0`                                | Permit canonical v2 copy for an explicit workspace scope              |
-| `OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS` | empty                              | Comma-separated workspace UUID canary scope; `*` is general rollout   |
-| `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS`        | empty                              | Comma-separated workspace UUID ordering scope; `*` is general rollout |
+| Variable                                             | Default                            | Purpose                                                                                                           |
+| ---------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `TIGER_PRIMARY_URL`                                  | required                           | Tiger connection                                                                                                  |
+| `OPPORTUNITY_WEBSITE_BASE_URL`                       | `NEXT_PUBLIC_APP_URL` or localhost | Canonical result links                                                                                            |
+| `OPPORTUNITY_DELIVERY_ENCRYPTION_KEY`                | required for external delivery     | Enables encrypted email/Slack destinations                                                                        |
+| `RESEND_API_KEY`                                     | required before enabling email     | Enables email provider calls                                                                                      |
+| `OPPORTUNITY_EMAIL_FROM`                             | PublisherIQ default                | Verified Resend sender                                                                                            |
+| `WORKER_ID`                                          | generated UUID                     | Lease owner identity                                                                                              |
+| `CLAIM_LIMIT`                                        | `8`                                | Fair queue claims per poll, clamped by the repository                                                             |
+| `DELIVERY_CLAIM_LIMIT`                               | `10`                               | Delivery claims per poll                                                                                          |
+| `POLL_INTERVAL_MS`                                   | `5000`                             | Delay between idle polls                                                                                          |
+| `MAX_IDLE_POLLS`                                     | `0`                                | `0` runs continuously; positive values are for bounded local runs                                                 |
+| `OPPORTUNITY_COHORT_FEATURE_SNAPSHOT_MAX_AGE_HOURS`  | `0`                                | Reuse a populated peer-feature snapshot for this bounded age (max 168 hours); `0` requires exact source revisions |
+| `OPPORTUNITY_PRIORITY_V2_COMPUTE`                    | `0`                                | Dual-write v2 audit JSON while preserving v1 score and ordering                                                   |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION`               | `0`                                | Permit canonical v2 copy for an explicit workspace scope                                                          |
+| `OPPORTUNITY_PRIORITY_V2_PRESENTATION_WORKSPACE_IDS` | empty                              | Comma-separated workspace UUID canary scope; `*` is general rollout                                               |
+| `OPPORTUNITY_PRIORITY_V2_ORDER_WORKSPACE_IDS`        | empty                              | Comma-separated workspace UUID ordering scope; `*` is general rollout                                             |
 
 The three policy-order controls are
 `OPPORTUNITY_PRIORITY_V2_ORDER_DISCOVERY`,
@@ -280,7 +281,31 @@ Investigate:
 
 Queue failures use exponential backoff and dead-letter after the configured
 attempt ceiling. A failed run does not advance the user’s successful daily
-window.
+window. When daily work reaches the attempt ceiling, the worker moves enabled
+profiles to their next timezone-aware attempt so one failed date cannot wedge
+the scheduler indefinitely. The scheduler also recognizes a previously stuck
+daily dead letter and creates exactly one idempotent `daily-recovery:<work-id>`
+item. A successful recovery still evaluates from the last successful daily
+window, preserving missed-day coverage.
+
+Daily evaluation keeps every database statement bounded. Relative-date rules
+read only the indexed dates entering or leaving a profile window, in pages of
+500, instead of comparing two full-catalog result sets. Rule-input hydration
+uses batches of 100, prior-result lookups use batches of 250, signal-window
+refreshes use batches of 100, and released-cohort feature scans use pages of
+5,000. The heavy phases run sequentially and renew the queue lease after each
+batch. These limits trade a small amount of additional round-trip overhead for
+predictable statement time, memory, and database concurrency.
+
+Peer-comparison feature snapshots may be reused for a bounded age by setting
+`OPPORTUNITY_COHORT_FEATURE_SNAPSHOT_MAX_AGE_HOURS`. Rule matching, material
+events, metrics, and signal windows still use the run's current source
+snapshot. Only the released-market peer features (taxonomy, business model,
+and effective price) use the bounded snapshot. Cache provenance records the
+feature snapshot's stored source revisions and refresh timestamp instead of
+claiming the current feature revisions. Leave the value at `0` when exact
+feature-source parity is required; that mode can invoke the full materialized
+view refresh whenever any feature source revision moves.
 
 Readiness runs are deliberately separate from daily/manual/replay runs. They
 retain the original material-event ID, never advance the durable daily cursor,

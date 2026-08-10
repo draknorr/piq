@@ -119,100 +119,86 @@ export function opportunityPersistedResultContentSafetySql(
   if (appAlias) {
     assertSqlIdentifier(appAlias);
   }
-  const descriptorEvidenceKnownSql = `EXISTS (
+  const appRelation = appAlias
+    ? `(VALUES (1)) AS content_safety_anchor(present)`
+    : `legacy.apps content_safety_app`;
+  const descriptorValueSql = appAlias
+    ? `${appAlias}.content_descriptors`
+    : `content_safety_app.content_descriptors`;
+  const appPredicate = appAlias
+    ? "TRUE"
+    : `content_safety_app.appid = ${resultAlias}.appid`;
+  const evidenceArraySql = `CASE
+    WHEN jsonb_typeof(content_evidence_row.value) = 'array'
+      THEN content_evidence_row.value
+    ELSE '[]'::jsonb
+  END`;
+
+  return `EXISTS (
     SELECT 1
-    FROM ops.app_field_evidence descriptor_evidence
-    WHERE descriptor_evidence.appid = ${resultAlias}.appid
-      AND descriptor_evidence.field_name = 'content_descriptors'
-      AND descriptor_evidence.source = 'pics'
-      AND descriptor_evidence.evidence_state = 'known'
-  )`;
-  const tagEvidenceKnownSql = `EXISTS (
-    SELECT 1
-    FROM ops.app_field_evidence tag_evidence
-    WHERE tag_evidence.appid = ${resultAlias}.appid
-      AND tag_evidence.field_name = 'tags'
-      AND tag_evidence.source = 'storefront'
-      AND tag_evidence.evidence_state = 'known'
-      AND jsonb_array_length(
-        CASE
-          WHEN jsonb_typeof(tag_evidence.value) = 'array' THEN tag_evidence.value
-          ELSE '[]'::jsonb
-        END
-      ) > 0
-  )`;
-  const legacyDescriptorReadySql = appAlias
-    ? `(
-      NOT EXISTS (
-        SELECT 1
-        FROM ops.app_field_evidence descriptor_evidence_any
-        WHERE descriptor_evidence_any.appid = ${resultAlias}.appid
-          AND descriptor_evidence_any.field_name = 'content_descriptors'
-          AND descriptor_evidence_any.source = 'pics'
-      )
-      AND EXISTS (
-        SELECT 1
-        FROM ops.app_data_readiness pics_readiness
-        WHERE pics_readiness.appid = ${resultAlias}.appid
-          AND pics_readiness.source = 'pics'
-          AND pics_readiness.status = 'ready'
-      )
-      AND ${appAlias}.content_descriptors IS NOT NULL
-    )`
-    : `EXISTS (
-      SELECT 1
-      FROM legacy.apps content_safety_ready_app
-      JOIN ops.app_data_readiness pics_readiness
-        ON pics_readiness.appid = content_safety_ready_app.appid
-       AND pics_readiness.source = 'pics'
-       AND pics_readiness.status = 'ready'
-      WHERE content_safety_ready_app.appid = ${resultAlias}.appid
-        AND content_safety_ready_app.content_descriptors IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM ops.app_field_evidence descriptor_evidence_any
-          WHERE descriptor_evidence_any.appid = content_safety_ready_app.appid
-            AND descriptor_evidence_any.field_name = 'content_descriptors'
-            AND descriptor_evidence_any.source = 'pics'
+    FROM ${appRelation}
+    LEFT JOIN ops.app_data_readiness content_safety_readiness
+      ON content_safety_readiness.appid = ${resultAlias}.appid
+     AND content_safety_readiness.source = 'pics'
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (
+          WHERE content_evidence_row.field_name = 'content_descriptors'
+            AND content_evidence_row.source = 'pics'
+        ) > 0 AS descriptor_recorded,
+        COUNT(*) FILTER (
+          WHERE content_evidence_row.field_name = 'content_descriptors'
+            AND content_evidence_row.source = 'pics'
+            AND content_evidence_row.evidence_state = 'known'
+        ) > 0 AS descriptor_known,
+        COUNT(*) FILTER (
+          WHERE content_evidence_row.field_name = 'tags'
+            AND content_evidence_row.source = 'storefront'
+            AND content_evidence_row.evidence_state = 'known'
+            AND jsonb_array_length(${evidenceArraySql}) > 0
+        ) > 0 AS tag_known,
+        COUNT(*) FILTER (
+          WHERE content_evidence_row.field_name = 'tags'
+            AND content_evidence_row.source = 'storefront'
+            AND content_evidence_row.evidence_state = 'known'
+            AND EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(${evidenceArraySql})
+                AS adult_tag(value)
+              WHERE lower(btrim(adult_tag.value)) = ANY (
+                ARRAY[${ADULT_CONTENT_TAG_VALUES_SQL}]::text[]
+              )
+            )
+        ) > 0 AS adult_tag
+      FROM ops.app_field_evidence content_evidence_row
+      WHERE content_evidence_row.appid = ${resultAlias}.appid
+        AND (
+          (
+            content_evidence_row.field_name = 'content_descriptors'
+            AND content_evidence_row.source = 'pics'
+          )
+          OR (
+            content_evidence_row.field_name = 'tags'
+            AND content_evidence_row.source = 'storefront'
+          )
         )
-    )`;
-  const adultDescriptorSql = appAlias
-    ? `jsonb_path_exists(
-      COALESCE(${appAlias}.content_descriptors, '{}'::jsonb),
-      '${ADULT_CONTENT_JSONPATH}'
-    )`
-    : `EXISTS (
-      SELECT 1
-      FROM legacy.apps content_safety_app
-      WHERE content_safety_app.appid = ${resultAlias}.appid
-        AND jsonb_path_exists(
-          COALESCE(content_safety_app.content_descriptors, '{}'::jsonb),
-          '${ADULT_CONTENT_JSONPATH}'
+    ) content_evidence ON true
+    WHERE ${appPredicate}
+      AND (
+        content_evidence.descriptor_known
+        OR content_evidence.tag_known
+        OR (
+          NOT content_evidence.descriptor_recorded
+          AND content_safety_readiness.status = 'ready'
+          AND ${descriptorValueSql} IS NOT NULL
         )
-    )`;
-  const adultTagSql = `EXISTS (
-    SELECT 1
-    FROM ops.app_field_evidence adult_tag_evidence
-    CROSS JOIN LATERAL jsonb_array_elements_text(
-      CASE
-        WHEN jsonb_typeof(adult_tag_evidence.value) = 'array'
-          THEN adult_tag_evidence.value
-        ELSE '[]'::jsonb
-      END
-    ) AS adult_tag(value)
-    WHERE adult_tag_evidence.appid = ${resultAlias}.appid
-      AND adult_tag_evidence.field_name = 'tags'
-      AND adult_tag_evidence.source = 'storefront'
-      AND adult_tag_evidence.evidence_state = 'known'
-      AND lower(btrim(adult_tag.value)) = ANY (
-        ARRAY[${ADULT_CONTENT_TAG_VALUES_SQL}]::text[]
       )
+      AND NOT jsonb_path_exists(
+        COALESCE(${descriptorValueSql}, '{}'::jsonb),
+        '${ADULT_CONTENT_JSONPATH}'
+      )
+      AND NOT content_evidence.adult_tag
   )`;
-  return `((
-    ${descriptorEvidenceKnownSql}
-    OR ${tagEvidenceKnownSql}
-    OR ${legacyDescriptorReadySql}
-  ) AND NOT (${adultDescriptorSql}) AND NOT (${adultTagSql}))`;
 }
 
 function fieldEvidenceKnownSql(
