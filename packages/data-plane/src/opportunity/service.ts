@@ -30,6 +30,7 @@ import type {
   OpportunityRuleField,
   OpportunityRuleSet,
   OpportunitySignalFamily,
+  OpportunityTeamSummary,
   OpportunityTrailerStreamsResponse,
 } from "./types.js";
 
@@ -70,6 +71,24 @@ function assertProfileName(name: string): void {
   if (trimmed.length < 2 || trimmed.length > 120) {
     throw new Error("Profile name must contain between 2 and 120 characters.");
   }
+}
+
+function assertUuid(value: string, label: string): void {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
+    throw new Error(`A valid ${label} is required.`);
+  }
+}
+
+function normalizeTeamName(name: string): string {
+  const normalized = name.trim().replace(/\s+/g, " ");
+  if (normalized.length < 2 || normalized.length > 80) {
+    throw new Error("Team name must contain between 2 and 80 characters.");
+  }
+  return normalized;
 }
 
 function assertSignalFamilies(
@@ -543,15 +562,78 @@ export class OpportunityService {
       activityType: "researching_started" | "researching_cleared";
       appid: number;
       note?: string | null;
+      resultId: string;
     },
   ): Promise<void> {
     if (!Number.isInteger(params.appid) || params.appid <= 0) {
       throw new Error("A positive integer appid is required.");
     }
+    assertUuid(params.resultId, "opportunity result ID");
     return this.repository.recordTeamActivity({
       ...params,
       identity,
       note: params.note ?? null,
+    });
+  }
+
+  listTeams(): Promise<OpportunityTeamSummary[]> {
+    return this.repository.listTeams();
+  }
+
+  createTeam(
+    actor: OpportunityIdentity,
+    params: { name: string },
+  ): Promise<OpportunityTeamSummary> {
+    return this.repository.createTeam({
+      actorUserId: actor.userId,
+      name: normalizeTeamName(params.name),
+    });
+  }
+
+  updateTeam(
+    actor: OpportunityIdentity,
+    params: {
+      name?: string;
+      status?: "active" | "archived";
+      teamId: string;
+    },
+  ): Promise<OpportunityTeamSummary> {
+    assertUuid(params.teamId, "team ID");
+    if (params.status && !["active", "archived"].includes(params.status)) {
+      throw new Error("Team status must be active or archived.");
+    }
+    return this.repository.updateTeam({
+      actorUserId: actor.userId,
+      name:
+        params.name === undefined ? undefined : normalizeTeamName(params.name),
+      status: params.status,
+      teamId: params.teamId,
+    });
+  }
+
+  setTeamMembership(
+    actor: OpportunityIdentity,
+    params: {
+      active: boolean;
+      displayName?: string | null;
+      email: string;
+      teamId: string;
+      userId: string;
+    },
+  ): Promise<void> {
+    assertUuid(params.teamId, "team ID");
+    assertUuid(params.userId, "user ID");
+    const email = params.email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      throw new Error("A valid verified user email is required.");
+    }
+    return this.repository.setTeamMembership({
+      active: params.active,
+      actorUserId: actor.userId,
+      displayName: params.displayName?.trim().slice(0, 160) || null,
+      email,
+      teamId: params.teamId,
+      userId: params.userId,
     });
   }
 

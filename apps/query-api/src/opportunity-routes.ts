@@ -15,9 +15,28 @@ export interface OpportunityIdentityVerifier {
   verify(accessToken: string): Promise<OpportunityIdentity | null>;
 }
 
+export interface OpportunityAdminAuthorizer {
+  authorize(accessToken: string, userId: string): Promise<boolean>;
+  findUser(
+    accessToken: string,
+    userId: string,
+  ): Promise<{
+    displayName: string | null;
+    email: string;
+    userId: string;
+  } | null>;
+}
+
 interface SupabaseUserPayload {
   email?: unknown;
   id?: unknown;
+}
+
+interface SupabaseProfilePayload {
+  email?: unknown;
+  full_name?: unknown;
+  id?: unknown;
+  role?: unknown;
 }
 
 function sendJson(
@@ -84,6 +103,69 @@ export class SupabaseOpportunityIdentityVerifier implements OpportunityIdentityV
   }
 }
 
+export class SupabaseOpportunityAdminAuthorizer implements OpportunityAdminAuthorizer {
+  constructor(
+    private readonly supabaseUrl: string,
+    private readonly supabaseAnonKey: string,
+    private readonly fetchImplementation: typeof fetch = fetch,
+  ) {}
+
+  async authorize(accessToken: string, userId: string): Promise<boolean> {
+    const url = new URL("/rest/v1/user_profiles", this.supabaseUrl);
+    url.searchParams.set("id", `eq.${userId}`);
+    url.searchParams.set("select", "role");
+    url.searchParams.set("limit", "1");
+    const response = await this.fetchImplementation(url, {
+      headers: {
+        apikey: this.supabaseAnonKey,
+        authorization: `Bearer ${accessToken}`,
+      },
+      method: "GET",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const payload = (await response.json()) as SupabaseProfilePayload[];
+    return payload[0]?.role === "admin";
+  }
+
+  async findUser(
+    accessToken: string,
+    userId: string,
+  ): Promise<{
+    displayName: string | null;
+    email: string;
+    userId: string;
+  } | null> {
+    const url = new URL("/rest/v1/user_profiles", this.supabaseUrl);
+    url.searchParams.set("id", `eq.${userId}`);
+    url.searchParams.set("select", "id,email,full_name");
+    url.searchParams.set("limit", "1");
+    const response = await this.fetchImplementation(url, {
+      headers: {
+        apikey: this.supabaseAnonKey,
+        authorization: `Bearer ${accessToken}`,
+      },
+      method: "GET",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const profile = ((await response.json()) as SupabaseProfilePayload[])[0];
+    if (typeof profile?.id !== "string" || typeof profile.email !== "string") {
+      return null;
+    }
+    return {
+      displayName:
+        typeof profile.full_name === "string" ? profile.full_name : null,
+      email: profile.email,
+      userId: profile.id,
+    };
+  }
+}
+
 export function loadOpportunityIdentityVerifier(
   env: NodeJS.ProcessEnv = process.env,
 ): OpportunityIdentityVerifier | null {
@@ -96,8 +178,24 @@ export function loadOpportunityIdentityVerifier(
   return new SupabaseOpportunityIdentityVerifier(supabaseUrl, supabaseAnonKey);
 }
 
+export function loadOpportunityAdminAuthorizer(
+  env: NodeJS.ProcessEnv = process.env,
+): OpportunityAdminAuthorizer | null {
+  const supabaseUrl = env.SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey =
+    env.SUPABASE_ANON_KEY ?? env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+  return new SupabaseOpportunityAdminAuthorizer(supabaseUrl, supabaseAnonKey);
+}
+
 function isOpportunityPath(pathname: string): boolean {
   return pathname.startsWith("/v1/opportunities/");
+}
+
+function isOpportunityAdminPath(pathname: string): boolean {
+  return pathname.startsWith("/v1/opportunities/admin/");
 }
 
 function isOpportunityQueryTimeout(error: unknown): boolean {
@@ -115,6 +213,7 @@ function isOpportunityQueryTimeout(error: unknown): boolean {
 }
 
 export async function tryHandleOpportunityRequest(params: {
+  adminAuthorizer?: OpportunityAdminAuthorizer | null;
   identityVerifier: OpportunityIdentityVerifier | null;
   opportunityService: OpportunityService | null;
   request: IncomingMessage;
@@ -150,9 +249,79 @@ export async function tryHandleOpportunityRequest(params: {
     });
     return true;
   }
+  if (isOpportunityAdminPath(params.url.pathname)) {
+    if (
+      !params.adminAuthorizer ||
+      !(await params.adminAuthorizer.authorize(accessToken, identity.userId))
+    ) {
+      sendJson(params.response, 403, {
+        code: "OPPORTUNITY_ADMIN_REQUIRED",
+        error: "PublisherIQ admin role required.",
+      });
+      return true;
+    }
+  }
 
   try {
     switch (params.url.pathname) {
+      case "/v1/opportunities/admin/list-teams": {
+        sendJson(
+          params.response,
+          200,
+          await params.opportunityService.listTeams(),
+        );
+        return true;
+      }
+      case "/v1/opportunities/admin/create-team": {
+        const body = await readJsonBody<{ name: string }>(params.request);
+        sendJson(
+          params.response,
+          201,
+          await params.opportunityService.createTeam(identity, body),
+        );
+        return true;
+      }
+      case "/v1/opportunities/admin/update-team": {
+        const body = await readJsonBody<{
+          name?: string;
+          status?: "active" | "archived";
+          teamId: string;
+        }>(params.request);
+        sendJson(
+          params.response,
+          200,
+          await params.opportunityService.updateTeam(identity, body),
+        );
+        return true;
+      }
+      case "/v1/opportunities/admin/set-team-membership": {
+        const body = await readJsonBody<{
+          active: boolean;
+          displayName?: string | null;
+          email: string;
+          teamId: string;
+          userId: string;
+        }>(params.request);
+        const target = body.active
+          ? await params.adminAuthorizer?.findUser(accessToken, body.userId)
+          : null;
+        if (body.active && !target) {
+          sendJson(params.response, 404, {
+            code: "OPPORTUNITY_TEAM_USER_NOT_FOUND",
+            error:
+              "No PublisherIQ account uses this identity. Invite the user first, then add them to the team.",
+          });
+          return true;
+        }
+        await params.opportunityService.setTeamMembership(identity, {
+          ...body,
+          displayName: target?.displayName ?? body.displayName,
+          email: target?.email ?? body.email,
+          userId: target?.userId ?? body.userId,
+        });
+        sendJson(params.response, 200, { ok: true });
+        return true;
+      }
       case "/v1/opportunities/bootstrap": {
         sendJson(
           params.response,
@@ -306,6 +475,7 @@ export async function tryHandleOpportunityRequest(params: {
           activityType: "researching_started" | "researching_cleared";
           appid: number;
           note?: string | null;
+          resultId: string;
         }>(params.request);
         await params.opportunityService.recordTeamActivity(identity, body);
         sendJson(params.response, 200, { ok: true });

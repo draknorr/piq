@@ -57,6 +57,15 @@ const reviewPriorityMigration = readFileSync(
   ),
   "utf8",
 );
+const teamsMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../sql/tiger-bootstrap/0103_opportunity_teams.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const workerRepository = readFileSync(
   fileURLToPath(new URL("./worker-repository.ts", import.meta.url)),
   "utf8",
@@ -137,6 +146,52 @@ describe("opportunity review priority v2 migration", () => {
     assert.doesNotMatch(reviewPriorityMigration, /\bCREATE INDEX\b/i);
     assert.doesNotMatch(reviewPriorityMigration, /^\s*UPDATE\s/gim);
     assert.doesNotMatch(reviewPriorityMigration, /\b(?:DELETE|TRUNCATE)\b/i);
+  });
+});
+
+describe("opportunity teams migration", () => {
+  it("adds collaboration state without rewriting personal opportunity data", () => {
+    assert.match(
+      teamsMigration,
+      /CREATE TABLE IF NOT EXISTS opportunity\.teams/,
+    );
+    assert.match(
+      teamsMigration,
+      /CREATE TABLE IF NOT EXISTS opportunity\.team_memberships/,
+    );
+    assert.match(
+      teamsMigration,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_opportunity_teams_name_unique\s+ON opportunity\.teams \(lower\(name\)\)/s,
+    );
+    assert.match(
+      teamsMigration,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_opportunity_team_memberships_one_active\s+ON opportunity\.team_memberships \(user_id\)\s+WHERE status = 'active'/s,
+    );
+    for (const table of ["team_activity", "team_research_state", "audit_log"]) {
+      assert.match(
+        teamsMigration,
+        new RegExp(
+          `ALTER TABLE opportunity\\.${table}\\s+ADD COLUMN IF NOT EXISTS team_id uuid`,
+          "s",
+        ),
+      );
+    }
+    assert.doesNotMatch(teamsMigration, /^\s*(?:DELETE\s+FROM|TRUNCATE\b)/gim);
+    assert.doesNotMatch(
+      teamsMigration,
+      /\bDROP\s+(?:TABLE|SCHEMA|COLUMN|CONSTRAINT)\b/i,
+    );
+    assert.doesNotMatch(teamsMigration, /^\s*(?:INSERT|UPDATE)\s/gim);
+  });
+
+  it("retains soft-removal attribution and team audit history", () => {
+    assert.match(teamsMigration, /status IN \('active', 'removed'\)/);
+    assert.match(teamsMigration, /identity_email text NOT NULL/);
+    assert.match(teamsMigration, /display_name text/);
+    assert.match(
+      teamsMigration,
+      /CREATE INDEX IF NOT EXISTS idx_opportunity_audit_team/,
+    );
   });
 });
 

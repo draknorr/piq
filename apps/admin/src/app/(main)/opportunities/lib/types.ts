@@ -80,6 +80,12 @@ export type OpportunityResultLabel =
   | "materially_changed"
   | "tracked_update";
 
+export interface OpportunityAccessContext {
+  scope: "owner" | "team";
+  sourceUserDisplay: string | null;
+  team: { id: string; name: string } | null;
+}
+
 export type OpportunityRankingPolicy =
   | "discover_new_games"
   | "find_emerging_traction"
@@ -234,6 +240,7 @@ export interface OpportunityBriefProfileDispatch {
 }
 
 export interface OpportunityDailyBriefIssue {
+  access?: OpportunityAccessContext;
   availableResultCount: number;
   coverageWarnings: string[];
   dek: string;
@@ -251,6 +258,7 @@ export interface OpportunityDailyBriefIssue {
 }
 
 export interface OpportunityResultPage {
+  access?: OpportunityAccessContext;
   hasMore: boolean;
   nextCursor: string | null;
   pageSize: 25;
@@ -440,6 +448,7 @@ export interface OpportunityPreview {
 }
 
 export interface OpportunityGameRecord {
+  access: OpportunityAccessContext;
   app: {
     appid: number;
     developers: string[];

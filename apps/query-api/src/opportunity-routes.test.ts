@@ -10,8 +10,10 @@ import {
 } from "@publisheriq/data-plane";
 
 import {
+  SupabaseOpportunityAdminAuthorizer,
   SupabaseOpportunityIdentityVerifier,
   tryHandleOpportunityRequest,
+  type OpportunityAdminAuthorizer,
   type OpportunityIdentityVerifier,
 } from "./opportunity-routes.js";
 
@@ -26,6 +28,8 @@ const verifier: OpportunityIdentityVerifier = {
     return accessToken === "token" ? identity : null;
   },
 };
+
+let recordedTeamActivity: unknown = null;
 
 const service = {
   async getDailyBrief(
@@ -53,6 +57,10 @@ const service = {
     return { received, request };
   },
   async resolveTrailerStreams(received: OpportunityIdentity, request: unknown) {
+    return { received, request };
+  },
+  async recordTeamActivity(received: OpportunityIdentity, request: unknown) {
+    recordedTeamActivity = { received, request };
     return { received, request };
   },
 } as unknown as OpportunityService;
@@ -260,6 +268,192 @@ describe("opportunity query-api routes", () => {
     assert.equal(response.status, 401);
   });
 
+  it("requires result context when forwarding team activity", async () => {
+    const request = {
+      activityType: "researching_started",
+      appid: 4672300,
+      resultId: "00000000-0000-0000-0000-000000000020",
+    };
+    const response = await fetch(`${baseUrl}/v1/opportunities/team-activity`, {
+      body: JSON.stringify(request),
+      headers: {
+        "content-type": "application/json",
+        "x-supabase-access-token": "token",
+      },
+      method: "POST",
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(recordedTeamActivity, { received: identity, request });
+  });
+
+  it("rejects team administration for non-admin identities", async () => {
+    let listed = false;
+    const adminService = {
+      async listTeams() {
+        listed = true;
+        return [];
+      },
+    } as unknown as OpportunityService;
+    const adminAuthorizer: OpportunityAdminAuthorizer = {
+      async authorize() {
+        return false;
+      },
+      async findUser() {
+        return null;
+      },
+    };
+    const adminServer = createServer(async (request, response) => {
+      await tryHandleOpportunityRequest({
+        adminAuthorizer,
+        identityVerifier: verifier,
+        opportunityService: adminService,
+        request,
+        response,
+        url: new URL(request.url ?? "/", "http://localhost"),
+      });
+    });
+    await new Promise<void>((resolve) =>
+      adminServer.listen(0, "127.0.0.1", resolve),
+    );
+    const adminAddress = adminServer.address();
+    if (!adminAddress || typeof adminAddress === "string") {
+      throw new Error("Admin authorization test server did not bind.");
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${adminAddress.port}/v1/opportunities/admin/list-teams`,
+        {
+          headers: { "x-supabase-access-token": "token" },
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as { code: string };
+
+      assert.equal(response.status, 403);
+      assert.equal(payload.code, "OPPORTUNITY_ADMIN_REQUIRED");
+      assert.equal(listed, false);
+    } finally {
+      adminServer.close();
+      await once(adminServer, "close");
+    }
+  });
+
+  it("allows an admin to list teams through the protected route", async () => {
+    const adminService = {
+      async listTeams() {
+        return [{ id: "team", members: [], name: "Tenon", status: "active" }];
+      },
+    } as unknown as OpportunityService;
+    const adminAuthorizer: OpportunityAdminAuthorizer = {
+      async authorize(accessToken, userId) {
+        assert.equal(accessToken, "token");
+        assert.equal(userId, identity.userId);
+        return true;
+      },
+      async findUser() {
+        return null;
+      },
+    };
+    const adminServer = createServer(async (request, response) => {
+      await tryHandleOpportunityRequest({
+        adminAuthorizer,
+        identityVerifier: verifier,
+        opportunityService: adminService,
+        request,
+        response,
+        url: new URL(request.url ?? "/", "http://localhost"),
+      });
+    });
+    await new Promise<void>((resolve) =>
+      adminServer.listen(0, "127.0.0.1", resolve),
+    );
+    const adminAddress = adminServer.address();
+    if (!adminAddress || typeof adminAddress === "string") {
+      throw new Error("Admin team test server did not bind.");
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${adminAddress.port}/v1/opportunities/admin/list-teams`,
+        {
+          headers: { "x-supabase-access-token": "token" },
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as Array<{ name: string }>;
+
+      assert.equal(response.status, 200);
+      assert.equal(payload[0]?.name, "Tenon");
+    } finally {
+      adminServer.close();
+      await once(adminServer, "close");
+    }
+  });
+
+  it("rejects unknown users before creating a team membership", async () => {
+    let membershipChanged = false;
+    const adminService = {
+      async setTeamMembership() {
+        membershipChanged = true;
+      },
+    } as unknown as OpportunityService;
+    const adminAuthorizer: OpportunityAdminAuthorizer = {
+      async authorize() {
+        return true;
+      },
+      async findUser() {
+        return null;
+      },
+    };
+    const adminServer = createServer(async (request, response) => {
+      await tryHandleOpportunityRequest({
+        adminAuthorizer,
+        identityVerifier: verifier,
+        opportunityService: adminService,
+        request,
+        response,
+        url: new URL(request.url ?? "/", "http://localhost"),
+      });
+    });
+    await new Promise<void>((resolve) =>
+      adminServer.listen(0, "127.0.0.1", resolve),
+    );
+    const adminAddress = adminServer.address();
+    if (!adminAddress || typeof adminAddress === "string") {
+      throw new Error("Unknown team user test server did not bind.");
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${adminAddress.port}/v1/opportunities/admin/set-team-membership`,
+        {
+          body: JSON.stringify({
+            active: true,
+            email: "unknown@example.com",
+            teamId: "00000000-0000-0000-0000-000000000010",
+            userId: "00000000-0000-0000-0000-000000000099",
+          }),
+          headers: {
+            "content-type": "application/json",
+            "x-supabase-access-token": "token",
+          },
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as {
+        code: string;
+        error: string;
+      };
+
+      assert.equal(response.status, 404);
+      assert.equal(payload.code, "OPPORTUNITY_TEAM_USER_NOT_FOUND");
+      assert.match(payload.error, /Invite the user first/);
+      assert.equal(membershipChanged, false);
+    } finally {
+      adminServer.close();
+      await once(adminServer, "close");
+    }
+  });
+
   it("returns a bounded error response when Steam resolution fails", async () => {
     const failingService = {
       async resolveTrailerStreams() {
@@ -384,6 +578,50 @@ describe("opportunity query-api routes", () => {
     assert.equal(
       new Headers(calls[0]?.init?.headers).get("authorization"),
       "Bearer access-token",
+    );
+  });
+
+  it("validates the PublisherIQ admin role through Supabase", async () => {
+    const calls: Array<{ input: string; init?: RequestInit }> = [];
+    const authorizer = new SupabaseOpportunityAdminAuthorizer(
+      "https://example.supabase.co",
+      "anon-key",
+      (async (input, init) => {
+        calls.push({ input: String(input), init });
+        return new Response(
+          JSON.stringify([
+            {
+              email: "admin@example.com",
+              full_name: "Admin User",
+              id: identity.userId,
+              role: "admin",
+            },
+          ]),
+          {
+            status: 200,
+          },
+        );
+      }) as typeof fetch,
+    );
+
+    assert.equal(
+      await authorizer.authorize("access-token", identity.userId),
+      true,
+    );
+    const url = new URL(calls[0]!.input);
+    assert.equal(url.pathname, "/rest/v1/user_profiles");
+    assert.equal(url.searchParams.get("id"), `eq.${identity.userId}`);
+    assert.equal(
+      new Headers(calls[0]?.init?.headers).get("authorization"),
+      "Bearer access-token",
+    );
+    assert.deepEqual(
+      await authorizer.findUser("access-token", identity.userId),
+      {
+        displayName: "Admin User",
+        email: "admin@example.com",
+        userId: identity.userId,
+      },
     );
   });
 });

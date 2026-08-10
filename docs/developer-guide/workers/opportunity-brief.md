@@ -24,7 +24,8 @@ Steam catalog/lifecycle/change events
 
 - Supabase owns authentication, sessions, and the verified email identity.
 - Tiger owns workspaces, memberships, presets, profile versions, material
-  events, runs, results, evidence, team/personal state, and deliveries.
+  events, runs, results, evidence, collaboration teams, team/personal state,
+  and deliveries.
 - The query API is the only browser-facing Tiger boundary.
 - Railway continuously schedules, leases, evaluates, retries, and dispatches.
 - GitHub Actions can run only the bounded event reconciliation fallback. It does
@@ -48,6 +49,19 @@ The browser contract is additive and customer-facing:
 - owner/admin users can open operational data status, while member users see
   customer intelligence without source-pipeline or calculation diagnostics.
 
+An authenticated user may also open an exact run or result owned by another
+user when both users have active memberships in the same active Opportunity
+team. Shared responses include the owner display name and team identity, but
+remove matched profile names and rules, profile versions, delivery provenance,
+prior personal appearances, owner tracker state, and owner-only coverage data.
+Tracking, dismissing, and ignoring always read and write the viewer's personal
+state. Team Activity is scoped by `team_id`. Users without an active team keep
+the original personal-workspace behavior.
+
+Opportunity teams are independent of `user_profiles.organization`. Only global
+PublisherIQ admins can manage them through `/admin/teams`; the Next.js proxy and
+query API each verify the actor's Supabase `user_profiles.role`.
+
 Presentation code must format only what the stored evidence supports. Null,
 sparse, or malformed before/after payloads receive a truthful fallback and must
 never produce an invented comparison. Historical `why_now` rows are not
@@ -60,6 +74,10 @@ Apply in this order only after a separately approved production-write window:
 1. `packages/data-plane/sql/tiger-bootstrap/0097_opportunity_mvp.sql`
 2. `packages/data-plane/sql/tiger-bootstrap/0098_opportunity_preset_seed.sql`
 3. `packages/data-plane/sql/tiger-bootstrap/0099_opportunity_evaluation_performance_v1.sql`
+4. `packages/data-plane/sql/tiger-bootstrap/0100_opportunity_field_sources_token_pics.sql`
+5. `packages/data-plane/sql/tiger-bootstrap/0101_public_storefront_tag_evidence.sql`
+6. `packages/data-plane/sql/tiger-bootstrap/0102_opportunity_review_priority_v2.sql`
+7. `packages/data-plane/sql/tiger-bootstrap/0103_opportunity_teams.sql`
 
 `0097` creates the additive `opportunity` schema and its versioned control,
 event, run, result, state, queue, outbox, audit, cohort, market, and health
@@ -68,11 +86,15 @@ tables plus the timezone-aware `next_profile_evaluation_v1` scheduler.
 rerun safely. `0099` adds the versioned evaluation-input and cohort projections,
 exact persistent cohort cache, source-revision fences, bounded bulk persistence,
 and per-run phase timings.
+`0103` adds admin-managed teams and soft membership history, then adds nullable
+`team_id` scopes to activity, researching state, and audit history. It does not
+move or backfill personal activity, so every new team starts with a fresh Team
+Activity timeline.
 
 No checked-in command applies these files automatically. Before a production
 write, record:
 
-- the exact two files and commit SHA;
+- the exact files and commit SHA;
 - why the feature needs them;
 - risk level and a current backup/PITR proof;
 - the approval reference; and
@@ -106,8 +128,36 @@ SELECT slug, current_version_id, editorial_status
 FROM opportunity.presets
 ORDER BY slug
 LIMIT 20;
+
+SELECT id, slug, name, status, created_at
+FROM opportunity.teams
+ORDER BY created_at DESC
+LIMIT 20;
+
+SELECT team_id, user_id, identity_email, display_name, status, joined_at, removed_at
+FROM opportunity.team_memberships
+ORDER BY joined_at DESC
+LIMIT 100;
 COMMIT;
 ```
+
+Creating the initial team and memberships is a separate production data write
+from applying `0103` and requires its own approval. Archiving a team or softly
+removing its memberships immediately revokes teammate access without changing
+personal workspaces, reports, profiles, or deliveries.
+
+### Opportunity team production state
+
+On August 10, 2026, approved production writes applied `0103` to Tiger from
+SHA-256 `5759a7c4a11f2750502c589544cfc55e2ff970cfdc361be174889fed003e8925`,
+then created the active `Tenon` team (`d70a1b06-71db-40a2-ac82-17b503bc67d8`)
+with Ryan Bohmann, Christopher Wyatt, and Steve Kim as equal active members.
+The write recorded one `team.created` and three `team.member_added` audit rows.
+Post-write verification found no team activity or research rows, so the Tenon
+timeline is fresh, and confirmed that personal workspace, profile, run, and
+result counts were unchanged. Steve remains without a personal Opportunity
+workspace. The matching query-api and admin application revision must still be
+deployed before the shared-link and admin-management behavior is live.
 
 ## Query API configuration
 

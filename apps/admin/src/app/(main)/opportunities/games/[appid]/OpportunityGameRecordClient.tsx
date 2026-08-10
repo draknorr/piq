@@ -235,6 +235,7 @@ export function OpportunityGameRecordClient({
       await opportunityPost("team-activity", {
         activityType: active ? "researching_started" : "researching_cleared",
         appid,
+        resultId,
       });
       await load();
     } catch {
@@ -281,8 +282,10 @@ export function OpportunityGameRecordClient({
   const media = record.media ?? EMPTY_OPPORTUNITY_MEDIA;
   const tracked = Boolean(record.userState.trackedAt);
   const researching = record.userState.researching;
+  const sharedRecord = record.access.scope === "team";
   const canSeeCoverage =
-    record.workspace.role === "owner" || record.workspace.role === "admin";
+    !sharedRecord &&
+    (record.workspace.role === "owner" || record.workspace.role === "admin");
   const presentReviewPriorityV2 = isOpportunityPriorityV2PresentationEnabled(
     record.workspace.id,
   );
@@ -323,6 +326,28 @@ export function OpportunityGameRecordClient({
             <ArrowLeft className="h-3.5 w-3.5" />
             Daily Intelligence Desk
           </Link>
+          {sharedRecord && record.access.team && (
+            <div className="mt-4 flex flex-col gap-3 border-l-2 border-accent-primary bg-accent-primary-muted/35 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-text-primary">
+                  Shared by {record.access.sourceUserDisplay ?? "a teammate"} ·{" "}
+                  {record.access.team.name}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-text-tertiary">
+                  Team Activity is shared. Tracking, dismissal, and ignore
+                  choices apply only to your account.
+                </p>
+              </div>
+              <Link
+                href="/opportunities"
+                prefetch={false}
+                className="inline-flex shrink-0 items-center gap-2 text-xs font-semibold text-accent-primary hover:text-accent-primary-hover"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                My tracker
+              </Link>
+            </div>
+          )}
           <div className="mt-4 grid gap-5 md:grid-cols-[220px_minmax(0,1fr)] md:items-center xl:grid-cols-[250px_minmax(0,1fr)]">
             <OpportunityHeaderImage
               name={record.app.name}
@@ -479,22 +504,36 @@ export function OpportunityGameRecordClient({
                 </div>
                 <div className="md:border-l md:border-border-muted md:pl-6">
                   <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                    Evidence confidence
+                    {sharedRecord ? "Shared context" : "Evidence confidence"}
                   </p>
-                  <p className="mt-2 text-lg font-semibold text-text-primary">
-                    {priority?.confidence.label === "high"
-                      ? "High confidence"
-                      : priority?.confidence.label === "limited"
-                        ? "Limited evidence"
-                        : "Directional evidence"}
-                  </p>
-                  <p className="mt-4 text-xs leading-5 text-text-tertiary">
-                    {priority?.confidence.label === "high"
-                      ? "Applicable profile, market, and game evidence is complete and current."
-                      : priority?.confidence.label === "limited"
-                        ? "One or more applicable inputs are unavailable, stale, or conflicting."
-                        : "The available evidence supports triage, while some applicable context is still developing."}
-                  </p>
+                  {sharedRecord ? (
+                    <>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">
+                        Team analysis
+                      </p>
+                      <p className="mt-4 text-xs leading-5 text-text-tertiary">
+                        Game and market evidence is shared. The source
+                        member&apos;s profile fit and coverage remain private.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">
+                        {priority?.confidence.label === "high"
+                          ? "High confidence"
+                          : priority?.confidence.label === "limited"
+                            ? "Limited evidence"
+                            : "Directional evidence"}
+                      </p>
+                      <p className="mt-4 text-xs leading-5 text-text-tertiary">
+                        {priority?.confidence.label === "high"
+                          ? "Applicable profile, market, and game evidence is complete and current."
+                          : priority?.confidence.label === "limited"
+                            ? "One or more applicable inputs are unavailable, stale, or conflicting."
+                            : "The available evidence supports triage, while some applicable context is still developing."}
+                      </p>
+                    </>
+                  )}
                   <p className="mt-5 text-xs font-semibold text-text-secondary">
                     {opportunityPotentialLabel(record.result.marketPotential)}
                   </p>
@@ -533,6 +572,8 @@ export function OpportunityGameRecordClient({
             )}
           </section>
 
+          {!sharedRecord && (
+            <>
           <SectionHeader
             icon={ShieldCheck}
             kicker="Your sourcing strategy"
@@ -697,6 +738,8 @@ export function OpportunityGameRecordClient({
                 },
               )}
             </div>
+          )}
+            </>
           )}
 
           <SectionHeader
@@ -1005,6 +1048,7 @@ export function OpportunityGameRecordClient({
             </div>
           </section>
 
+          {!sharedRecord && (
           <section className="mt-9 border-t border-border-muted pt-7">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-accent-primary" />
@@ -1035,6 +1079,7 @@ export function OpportunityGameRecordClient({
               )}
             </div>
           </section>
+          )}
 
           {record.missingEvidence.length > 0 && (
             <section className="mt-9 border-t border-border-muted pt-7">

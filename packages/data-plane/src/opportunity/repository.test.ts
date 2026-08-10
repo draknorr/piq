@@ -330,8 +330,14 @@ describe("opportunity customer response contracts", () => {
     assert.match(resultQuery, /@ == "3" \|\| @ == "adult"/);
   });
 
-  for (const role of ["owner", "admin", "member"] as const) {
-    it(`returns workspace role ${role} and reuses the observed-change contract`, async () => {
+  for (const scenario of [
+    { label: "owner", role: "owner", shared: false },
+    { label: "admin", role: "admin", shared: false },
+    { label: "member", role: "member", shared: false },
+    { label: "shared team", role: "owner", shared: true },
+  ] as const) {
+    it(`returns workspace role ${scenario.label} and reuses the observed-change contract`, async () => {
+      const { role, shared } = scenario;
       let gameRecordQuery = "";
       const recentChange = {
         ...observedChange,
@@ -427,10 +433,37 @@ describe("opportunity customer response contracts", () => {
                   matchedProfiles: [],
                   name: "Lanterns at Low Tide",
                   rank: 1,
-                  rankComponents: {},
+                  rankComponents: {
+                    evidenceQuality: 0.9,
+                    marketMomentum: 0.8,
+                    peerPosition: 0.7,
+                    reasons: ["1 profile matched all required rules."],
+                    signalStrength: 0.8,
+                    userFit: 1,
+                    v2: { winningProfileId: "profile-1" },
+                  },
+                  reviewPriority: {
+                    confidence: {
+                      applicableCount: 2,
+                      conflictingCount: 0,
+                      label: "high",
+                      presentCount: 2,
+                      reasons: ["private_profile_coverage"],
+                      score: 1,
+                      staleCount: 0,
+                      version: "opportunity-confidence/v2",
+                    },
+                    internalScore: 0.8,
+                    lane: "material_change",
+                    policy: "monitor_material_changes",
+                    priorityBand: "review_now",
+                    reasons: ["Material Steam change", "Cozy preference"],
+                    version: "opportunity-ranking/v2",
+                    winningProfileId: "profile-1",
+                  },
                   score: 82.5,
-                  strongestEvidence: [],
-                  whyNow: "The price changed.",
+                  strongestEvidence: ["Cozy preference"],
+                  whyNow: "Material Steam change · Cozy preference",
                 },
                 team_activity: [],
                 user_state: null,
@@ -449,6 +482,29 @@ describe("opportunity customer response contracts", () => {
         id: "workspace-1",
         name: "PublisherIQ research",
         role,
+      });
+      (
+        repository as unknown as {
+          resolveResultAccess: () => Promise<{
+            access: {
+              scope: "owner" | "team";
+              sourceUserDisplay: string | null;
+              team: { id: string; name: string } | null;
+            };
+            ownerUserId: string;
+            ownerWorkspaceId: string;
+          }>;
+        }
+      ).resolveResultAccess = async () => ({
+        access: shared
+          ? {
+              scope: "team",
+              sourceUserDisplay: "Ryan Bohmann",
+              team: { id: "team-1", name: "Tenon" },
+            }
+          : { scope: "owner", sourceUserDisplay: null, team: null },
+        ownerUserId: shared ? "owner-1" : "user-1",
+        ownerWorkspaceId: "workspace-1",
       });
       repository.recordTeamActivity = async () => undefined;
 
@@ -469,26 +525,57 @@ describe("opportunity customer response contracts", () => {
       });
       assert.deepEqual(record.result.change, observedChange);
       assert.deepEqual(record.recentChanges, [recentChange]);
-      assert.deepEqual(
-        record.matchedProfiles[0]?.reviewPriority,
-        detailReviewPriority,
-      );
+      assert.equal(record.access.scope, shared ? "team" : "owner");
+      if (shared) {
+        assert.deepEqual(record.access.team, { id: "team-1", name: "Tenon" });
+        assert.equal(record.access.sourceUserDisplay, "Ryan Bohmann");
+        assert.deepEqual(record.matchedProfiles, []);
+        assert.deepEqual(record.result.matchedProfiles, []);
+        assert.deepEqual(record.previousAppearances, []);
+        assert.deepEqual(record.provenance.deliveries, []);
+        assert.deepEqual(record.provenance.run.activeProfileVersions, []);
+        assert.deepEqual(record.missingEvidence, []);
+        assert.deepEqual(
+          record.evidenceResolution.previouslyMissingNowAvailable,
+          [],
+        );
+        assert.deepEqual(record.rank.reasons, []);
+        assert.deepEqual(record.result.reviewPriority?.reasons, [
+          "Material Steam change",
+        ]);
+        assert.deepEqual(record.result.reviewPriority?.confidence.reasons, []);
+        assert.equal(record.result.reviewPriority?.winningProfileId, "");
+        assert.equal("v2" in record.result.rankComponents, false);
+        assert.equal("reasons" in record.result.rankComponents, false);
+        assert.deepEqual(record.result.strongestEvidence, [
+          "Price lowered from $19.99 to $14.99.",
+          "Material Steam change",
+        ]);
+        assert.equal(record.result.whyNow, "Material Steam change");
+      } else {
+        assert.deepEqual(
+          record.matchedProfiles[0]?.reviewPriority,
+          detailReviewPriority,
+        );
+      }
       assert.equal(
         record.evidenceResolution.evaluatedAt,
         "2026-07-27T08:00:00.000Z",
       );
-      assert.deepEqual(record.missingEvidence, ["genres"]);
-      assert.deepEqual(
-        record.evidenceResolution.previouslyMissingNowAvailable,
-        [
-          {
-            field: "genres",
-            source: "steam_storefront",
-            sourceAt: "2026-07-28T09:00:00.000Z",
-            value: ["Strategy"],
-          },
-        ],
-      );
+      if (!shared) {
+        assert.deepEqual(record.missingEvidence, ["genres"]);
+        assert.deepEqual(
+          record.evidenceResolution.previouslyMissingNowAvailable,
+          [
+            {
+              field: "genres",
+              source: "steam_storefront",
+              sourceAt: "2026-07-28T09:00:00.000Z",
+              value: ["Strategy"],
+            },
+          ],
+        );
+      }
       assert.equal(record.media.trailers[0]?.hlsUrl, null);
       assert.match(gameRecordQuery, /'change', CASE/);
       assert.match(gameRecordQuery, /'affectedRuleFields'/);
@@ -1359,6 +1446,17 @@ describe("opportunity Daily Brief repository", () => {
         role: "owner";
       }>;
       listProfiles: () => Promise<[]>;
+      resolveRunAccess: () => Promise<
+        typeof run & {
+          access: {
+            scope: "owner";
+            sourceUserDisplay: null;
+            team: null;
+          };
+          ownerUserId: string;
+          ownerWorkspaceId: string;
+        }
+      >;
     };
     mutable.ensureWorkspace = async () => ({
       id: "00000000-0000-4000-8000-000000000002",
@@ -1366,7 +1464,79 @@ describe("opportunity Daily Brief repository", () => {
       role: "owner",
     });
     mutable.listProfiles = async () => [];
+    mutable.resolveRunAccess = async () => ({
+      ...run,
+      access: { scope: "owner", sourceUserDisplay: null, team: null },
+      ownerUserId: identity.userId,
+      ownerWorkspaceId: "00000000-0000-4000-8000-000000000002",
+    });
   }
+
+  it("resolves exact records only through active shared-team membership", async () => {
+    let accessQuery = "";
+    const pool = {
+      query: async (text: string): Promise<{ rows: unknown[] }> => {
+        accessQuery = text;
+        return {
+          rows: [
+            {
+              owner_user_id: "owner-1",
+              owner_workspace_id: "workspace-owner-1",
+              source_user_display: "Ryan Bohmann",
+              team_id: "team-1",
+              team_name: "Tenon",
+            },
+          ],
+        };
+      },
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+    const access = await (
+      repository as unknown as {
+        resolveResultAccess: (params: {
+          appid: number;
+          identity: typeof identity;
+          resultId: string;
+        }) => Promise<{
+          access: {
+            scope: "owner" | "team";
+            sourceUserDisplay: string | null;
+            team: { id: string; name: string } | null;
+          };
+        }>;
+      }
+    ).resolveResultAccess({ appid: 10, identity, resultId: "result-1" });
+
+    assert.equal(access.access.scope, "team");
+    assert.deepEqual(access.access.team, { id: "team-1", name: "Tenon" });
+    assert.equal(access.access.sourceUserDisplay, "Ryan Bohmann");
+    assert.match(accessQuery, /team\.status = 'active'/);
+    assert.match(accessQuery, /viewer_membership\.status = 'active'/);
+    assert.match(
+      accessQuery,
+      /canonical\.user_id = \$3\s+OR viewer_membership\.user_id = \$3/s,
+    );
+  });
+
+  it("returns not-found semantics when an exact result is inaccessible", async () => {
+    const pool = {
+      query: async (): Promise<{ rows: unknown[] }> => ({ rows: [] }),
+    } as unknown as Pool;
+    const repository = new OpportunityRepository(pool);
+
+    await assert.rejects(
+      (
+        repository as unknown as {
+          resolveResultAccess: (params: {
+            appid: number;
+            identity: typeof identity;
+            resultId: string;
+          }) => Promise<unknown>;
+        }
+      ).resolveResultAccess({ appid: 10, identity, resultId: "result-404" }),
+      /not found/i,
+    );
+  });
 
   it("uses the latest completed owned run and selects one canonical row per game", async () => {
     const calls: QueryCall[] = [];
@@ -1432,7 +1602,7 @@ describe("opportunity Daily Brief repository", () => {
       header_image_url: null,
       id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
       market_potential: "meaningful",
-      matched_profiles: [],
+      matched_profiles: [{ id: "profile-1", name: "Private profile" }],
       name: `Game ${index + 1}`,
       rank: index + 1,
       rank_components: {},
@@ -1473,6 +1643,7 @@ describe("opportunity Daily Brief repository", () => {
     assert.equal(second.hasMore, false);
     assert.equal(first.results.at(-1)?.appid, 124);
     assert.equal(second.results[0]?.appid, 125);
+    assert.equal(first.results[0]?.matchedProfiles[0]?.name, "Private profile");
     assert.equal(pageCalls[1]?.values[8], 76);
     assert.equal(pageCalls[1]?.values[9], 124);
     assert.equal(
@@ -1480,6 +1651,39 @@ describe("opportunity Daily Brief repository", () => {
       "00000000-0000-0000-0000-000000000025",
     );
     assert.doesNotMatch(pageCalls[0]?.text ?? "", /LIMIT 500/);
+
+    const sharedRepository = new OpportunityRepository(pool);
+    bypassWorkspace(sharedRepository);
+    (
+      sharedRepository as unknown as {
+        resolveRunAccess: () => Promise<
+          typeof run & {
+            access: {
+              scope: "team";
+              sourceUserDisplay: string;
+              team: { id: string; name: string };
+            };
+            ownerUserId: string;
+            ownerWorkspaceId: string;
+          }
+        >;
+      }
+    ).resolveRunAccess = async () => ({
+      ...run,
+      access: {
+        scope: "team",
+        sourceUserDisplay: "Ryan Bohmann",
+        team: { id: "team-1", name: "Tenon" },
+      },
+      ownerUserId: "owner-1",
+      ownerWorkspaceId: "owner-workspace-1",
+    });
+
+    const sharedPage = await sharedRepository.listResults(identity, {
+      runId: run.id,
+    });
+    assert.equal(sharedPage.access?.scope, "team");
+    assert.deepEqual(sharedPage.results[0]?.matchedProfiles, []);
   });
 
   it("paginates a scoped v2 feed by persisted rank", async () => {

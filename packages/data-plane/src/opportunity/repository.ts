@@ -11,6 +11,7 @@ import {
   OPPORTUNITY_RULE_FIELDS,
   OPPORTUNITY_RULE_INPUT_PROJECTION_VERSION,
   type OpportunityBootstrapResponse,
+  type OpportunityAccessContext,
   type OpportunityChannelPreferenceSummary,
   type OpportunityDailyOverview,
   type OpportunityDailyBriefIssue,
@@ -34,6 +35,7 @@ import {
   type OpportunityRuleSet,
   type OpportunityRankingPolicy,
   type OpportunitySignalFamily,
+  type OpportunityTeamSummary,
 } from "./types.js";
 import {
   buildOpportunityDailyBriefIssue,
@@ -85,6 +87,12 @@ interface WorkspaceContext {
   id: string;
   name: string;
   role: "owner" | "admin" | "member";
+}
+
+interface OpportunityRecordAccess {
+  access: OpportunityAccessContext;
+  ownerUserId: string;
+  ownerWorkspaceId: string;
 }
 
 interface PreviewAggregateRow extends QueryResultRow {
@@ -532,6 +540,60 @@ function integerArrayValue(value: number[] | string | undefined): number[] {
 
 function stableSlug(userId: string): string {
   return `personal-${userId.toLowerCase()}`;
+}
+
+function teamSlug(name: string): string {
+  const base =
+    name
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "team";
+  return `${base}-${stableHash(name.trim().toLowerCase()).slice(0, 8)}`;
+}
+
+const PROFILE_INDEPENDENT_REVIEW_REASONS = new Set([
+  "Early traction is moving",
+  "Large, competitive market",
+  "Material Steam change",
+  "New on Steam",
+  "Self-published",
+]);
+
+function redactOpportunityResult(
+  result: OpportunityResultSummary,
+): OpportunityResultSummary {
+  const reviewReasons = (result.reviewPriority?.reasons ?? []).filter(
+    (reason) => PROFILE_INDEPENDENT_REVIEW_REASONS.has(reason),
+  );
+  return {
+    ...result,
+    matchedProfiles: [],
+    rankComponents: {
+      evidenceQuality: result.rankComponents.evidenceQuality,
+      marketMomentum: result.rankComponents.marketMomentum,
+      peerPosition: result.rankComponents.peerPosition,
+      signalStrength: result.rankComponents.signalStrength,
+      userFit: result.rankComponents.userFit,
+    },
+    reviewPriority: result.reviewPriority
+      ? {
+          ...result.reviewPriority,
+          confidence: {
+            ...result.reviewPriority.confidence,
+            reasons: [],
+          },
+          reasons: reviewReasons,
+          winningProfileId: "",
+        }
+      : null,
+    strongestEvidence: Array.from(
+      new Set([result.changeSummary, ...reviewReasons]),
+    ),
+    whyNow: reviewReasons.join(" · ") || result.changeSummary,
+  };
 }
 
 function stableHash(value: unknown): string {
@@ -1445,6 +1507,475 @@ export class OpportunityRepository {
     });
   }
 
+  private async getActiveTeamForUser(
+    userId: string,
+  ): Promise<{ id: string; name: string } | null> {
+    const result = await this.pool.query<
+      QueryResultRow & { id: string; name: string }
+    >(
+      `
+        SELECT team.id, team.name
+        FROM opportunity.team_memberships membership
+        JOIN opportunity.teams team ON team.id = membership.team_id
+        WHERE membership.user_id = $1
+          AND membership.status = 'active'
+          AND team.status = 'active'
+        LIMIT 1
+      `,
+      [userId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async resolveRunAccess(
+    identity: OpportunityIdentity,
+    runId: string,
+  ): Promise<LatestRunRow & OpportunityRecordAccess> {
+    const result = await this.pool.query<
+      LatestRunRow &
+        QueryResultRow & {
+          owner_user_id: string;
+          owner_workspace_id: string;
+          source_user_display: string | null;
+          team_id: string | null;
+          team_name: string | null;
+        }
+    >(
+      `
+        SELECT
+          run.id,
+          run.run_kind,
+          run.status,
+          run.window_start,
+          run.window_end,
+          run.started_at,
+          run.completed_at,
+          run.result_count,
+          run.coverage_warnings,
+          cardinality(run.active_profile_versions) AS profiles_evaluated,
+          run.user_id AS owner_user_id,
+          run.workspace_id AS owner_workspace_id,
+          owner_membership.team_id,
+          team.name AS team_name,
+          COALESCE(
+            owner_membership.display_name,
+            owner_membership.identity_email
+          ) AS source_user_display
+        FROM opportunity.runs run
+        LEFT JOIN opportunity.team_memberships owner_membership
+          ON owner_membership.user_id = run.user_id
+          AND owner_membership.status = 'active'
+        LEFT JOIN opportunity.teams team
+          ON team.id = owner_membership.team_id
+          AND team.status = 'active'
+        LEFT JOIN opportunity.team_memberships viewer_membership
+          ON viewer_membership.team_id = team.id
+          AND viewer_membership.user_id = $2
+          AND viewer_membership.status = 'active'
+        WHERE run.id = $1
+          AND run.run_kind IN ('daily', 'manual', 'replay')
+          AND (
+            run.user_id = $2
+            OR viewer_membership.user_id = $2
+          )
+        LIMIT 1
+      `,
+      [runId, identity.userId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new OpportunityNotFoundError(
+        "The requested opportunity brief was not found.",
+      );
+    }
+    const shared = row.owner_user_id !== identity.userId;
+    return {
+      ...row,
+      access: {
+        scope: shared ? "team" : "owner",
+        sourceUserDisplay: shared ? row.source_user_display : null,
+        team:
+          row.team_id && row.team_name
+            ? { id: row.team_id, name: decodeOpportunityText(row.team_name) }
+            : null,
+      },
+      ownerUserId: row.owner_user_id,
+      ownerWorkspaceId: row.owner_workspace_id,
+    };
+  }
+
+  private async resolveResultAccess(params: {
+    appid: number;
+    identity: OpportunityIdentity;
+    resultId: string;
+  }): Promise<OpportunityRecordAccess> {
+    const result = await this.pool.query<
+      QueryResultRow & {
+        owner_user_id: string;
+        owner_workspace_id: string;
+        source_user_display: string | null;
+        team_id: string | null;
+        team_name: string | null;
+      }
+    >(
+      `
+        SELECT
+          canonical.user_id AS owner_user_id,
+          canonical.workspace_id AS owner_workspace_id,
+          owner_membership.team_id,
+          team.name AS team_name,
+          COALESCE(
+            owner_membership.display_name,
+            owner_membership.identity_email
+          ) AS source_user_display
+        FROM opportunity.results canonical
+        LEFT JOIN opportunity.team_memberships owner_membership
+          ON owner_membership.user_id = canonical.user_id
+          AND owner_membership.status = 'active'
+        LEFT JOIN opportunity.teams team
+          ON team.id = owner_membership.team_id
+          AND team.status = 'active'
+        LEFT JOIN opportunity.team_memberships viewer_membership
+          ON viewer_membership.team_id = team.id
+          AND viewer_membership.user_id = $3
+          AND viewer_membership.status = 'active'
+        WHERE canonical.id = $1
+          AND canonical.appid = $2
+          AND (
+            canonical.user_id = $3
+            OR viewer_membership.user_id = $3
+          )
+        LIMIT 1
+      `,
+      [params.resultId, params.appid, params.identity.userId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new OpportunityNotFoundError("Opportunity result not found.");
+    }
+    const shared = row.owner_user_id !== params.identity.userId;
+    return {
+      access: {
+        scope: shared ? "team" : "owner",
+        sourceUserDisplay: shared ? row.source_user_display : null,
+        team:
+          row.team_id && row.team_name
+            ? { id: row.team_id, name: decodeOpportunityText(row.team_name) }
+            : null,
+      },
+      ownerUserId: row.owner_user_id,
+      ownerWorkspaceId: row.owner_workspace_id,
+    };
+  }
+
+  async listTeams(): Promise<OpportunityTeamSummary[]> {
+    const [teams, members] = await Promise.all([
+      this.pool.query<
+        QueryResultRow & {
+          created_at: Date | string;
+          id: string;
+          name: string;
+          slug: string;
+          status: "active" | "archived";
+          updated_at: Date | string;
+        }
+      >(
+        `
+          SELECT id, slug, name, status, created_at, updated_at
+          FROM opportunity.teams
+          ORDER BY status, lower(name), id
+          LIMIT 100
+        `,
+      ),
+      this.pool.query<
+        QueryResultRow & {
+          display_name: string | null;
+          identity_email: string;
+          joined_at: Date | string;
+          status: "active" | "removed";
+          team_id: string;
+          user_id: string;
+        }
+      >(
+        `
+          SELECT
+            team_id,
+            user_id,
+            identity_email,
+            display_name,
+            status,
+            joined_at
+          FROM opportunity.team_memberships
+          ORDER BY team_id, status, lower(identity_email), user_id
+          LIMIT 1000
+        `,
+      ),
+    ]);
+    return teams.rows.map((team) => ({
+      createdAt: iso(team.created_at)!,
+      id: team.id,
+      members: members.rows
+        .filter((member) => member.team_id === team.id)
+        .map((member) => ({
+          displayName: cleanOpportunityUserText(member.display_name),
+          email: member.identity_email,
+          joinedAt: iso(member.joined_at)!,
+          status: member.status,
+          userId: member.user_id,
+        })),
+      name: decodeOpportunityText(team.name),
+      slug: team.slug,
+      status: team.status,
+      updatedAt: iso(team.updated_at)!,
+    }));
+  }
+
+  async createTeam(params: {
+    actorUserId: string;
+    name: string;
+  }): Promise<OpportunityTeamSummary> {
+    const normalizedName = params.name.trim();
+    try {
+      await this.transaction(async (client) => {
+        const created = await client.query<QueryResultRow & { id: string }>(
+          `
+            INSERT INTO opportunity.teams (slug, name, created_by)
+            VALUES ($1, $2, $3)
+            RETURNING id
+          `,
+          [teamSlug(normalizedName), normalizedName, params.actorUserId],
+        );
+        const teamId = created.rows[0]!.id;
+        await client.query(
+          `
+            INSERT INTO opportunity.audit_log (
+              team_id,
+              actor_user_id,
+              action,
+              object_type,
+              object_id,
+              after_state
+            )
+            VALUES ($1, $2, 'team.created', 'team', $1::text, $3::jsonb)
+          `,
+          [
+            teamId,
+            params.actorUserId,
+            JSON.stringify({ name: normalizedName }),
+          ],
+        );
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new Error("A team with this name already exists.");
+      }
+      throw error;
+    }
+    const team = (await this.listTeams()).find(
+      (candidate) =>
+        candidate.name.toLowerCase() === normalizedName.toLowerCase(),
+    );
+    if (!team) {
+      throw new Error("The team was created but could not be reloaded.");
+    }
+    return team;
+  }
+
+  async updateTeam(params: {
+    actorUserId: string;
+    name?: string;
+    status?: "active" | "archived";
+    teamId: string;
+  }): Promise<OpportunityTeamSummary> {
+    try {
+      await this.transaction(async (client) => {
+        const current = await client.query<
+          QueryResultRow & { name: string; status: string }
+        >(
+          `
+            SELECT name, status
+            FROM opportunity.teams
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [params.teamId],
+        );
+        const row = current.rows[0];
+        if (!row) {
+          throw new OpportunityNotFoundError("Team not found.");
+        }
+        const nextName = params.name?.trim() || row.name;
+        const nextStatus = params.status ?? row.status;
+        await client.query(
+          `
+            UPDATE opportunity.teams
+            SET name = $2,
+                slug = CASE WHEN name IS DISTINCT FROM $2 THEN $3 ELSE slug END,
+                status = $4,
+                updated_at = now()
+            WHERE id = $1
+          `,
+          [params.teamId, nextName, teamSlug(nextName), nextStatus],
+        );
+        await client.query(
+          `
+            INSERT INTO opportunity.audit_log (
+              team_id,
+              actor_user_id,
+              action,
+              object_type,
+              object_id,
+              before_state,
+              after_state
+            )
+            VALUES (
+              $1,
+              $2,
+              'team.updated',
+              'team',
+              $1::text,
+              $3::jsonb,
+              $4::jsonb
+            )
+          `,
+          [
+            params.teamId,
+            params.actorUserId,
+            JSON.stringify({ name: row.name, status: row.status }),
+            JSON.stringify({ name: nextName, status: nextStatus }),
+          ],
+        );
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new Error("A team with this name already exists.");
+      }
+      throw error;
+    }
+    const team = (await this.listTeams()).find(
+      (candidate) => candidate.id === params.teamId,
+    );
+    if (!team) {
+      throw new OpportunityNotFoundError("Team not found.");
+    }
+    return team;
+  }
+
+  async setTeamMembership(params: {
+    active: boolean;
+    actorUserId: string;
+    displayName: string | null;
+    email: string;
+    teamId: string;
+    userId: string;
+  }): Promise<void> {
+    try {
+      await this.transaction(async (client) => {
+        const team = await client.query<
+          QueryResultRow & { status: "active" | "archived" }
+        >(
+          `
+            SELECT status
+            FROM opportunity.teams
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [params.teamId],
+        );
+        if (!team.rows[0]) {
+          throw new OpportunityNotFoundError("Team not found.");
+        }
+        if (params.active && team.rows[0].status !== "active") {
+          throw new Error("Members cannot be added to an archived team.");
+        }
+        if (params.active) {
+          await client.query(
+            `
+              INSERT INTO opportunity.team_memberships (
+                team_id,
+                user_id,
+                identity_email,
+                display_name,
+                status,
+                added_by,
+                removed_at
+              )
+              VALUES ($1, $2, $3, $4, 'active', $5, NULL)
+              ON CONFLICT (team_id, user_id)
+              DO UPDATE SET
+                identity_email = EXCLUDED.identity_email,
+                display_name = EXCLUDED.display_name,
+                status = 'active',
+                added_by = EXCLUDED.added_by,
+                removed_at = NULL,
+                updated_at = now()
+            `,
+            [
+              params.teamId,
+              params.userId,
+              params.email,
+              params.displayName,
+              params.actorUserId,
+            ],
+          );
+        } else {
+          const removed = await client.query(
+            `
+              UPDATE opportunity.team_memberships
+              SET status = 'removed',
+                  removed_at = now(),
+                  updated_at = now()
+              WHERE team_id = $1
+                AND user_id = $2
+                AND status = 'active'
+            `,
+            [params.teamId, params.userId],
+          );
+          if ((removed.rowCount ?? 0) === 0) {
+            throw new OpportunityNotFoundError("Active team member not found.");
+          }
+          await client.query(
+            `
+              UPDATE opportunity.team_research_state
+              SET is_researching = false,
+                  cleared_at = now(),
+                  updated_at = now()
+              WHERE team_id = $1
+                AND user_id = $2
+                AND is_researching
+            `,
+            [params.teamId, params.userId],
+          );
+        }
+        await client.query(
+          `
+            INSERT INTO opportunity.audit_log (
+              team_id,
+              actor_user_id,
+              action,
+              object_type,
+              object_id,
+              after_state
+            )
+            VALUES ($1, $2, $3, 'team_membership', $4, $5::jsonb)
+          `,
+          [
+            params.teamId,
+            params.actorUserId,
+            params.active ? "team.member_added" : "team.member_removed",
+            params.userId,
+            JSON.stringify({ active: params.active, email: params.email }),
+          ],
+        );
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new Error("This user already belongs to an active team.");
+      }
+      throw error;
+    }
+  }
+
   async listPresets(): Promise<OpportunityPresetSummary[]> {
     const result = await this.pool.query<PresetRow>(`
       SELECT
@@ -1964,36 +2495,53 @@ export class OpportunityRepository {
     params: { runId?: string | null } = {},
   ): Promise<OpportunityDailyBriefIssue> {
     const workspace = await this.ensureWorkspace(identity);
+    const explicitRun = params.runId
+      ? await this.resolveRunAccess(identity, params.runId)
+      : null;
+    const access: OpportunityAccessContext = explicitRun?.access ?? {
+      scope: "owner",
+      sourceUserDisplay: null,
+      team: null,
+    };
+    const ownerUserId = explicitRun?.ownerUserId ?? identity.userId;
+    const ownerWorkspaceId = explicitRun?.ownerWorkspaceId ?? workspace.id;
+    const shared = access.scope === "team";
     const [profiles, run] = await Promise.all([
-      this.listProfiles(workspace.id, identity.userId),
-      this.getBriefRun({
-        runId: params.runId,
-        userId: identity.userId,
-        workspaceId: workspace.id,
-      }),
+      shared
+        ? Promise.resolve([] as OpportunityProfileSummary[])
+        : this.listProfiles(ownerWorkspaceId, ownerUserId),
+      explicitRun
+        ? Promise.resolve(explicitRun)
+        : this.getBriefRun({
+            userId: identity.userId,
+            workspaceId: workspace.id,
+          }),
     ]);
     if (!run) {
-      return buildOpportunityDailyBriefIssue({
-        availableResultCount: 0,
-        coverageWarnings: [],
-        featuredCandidates: [],
-        highConfidenceCount: 0,
-        issueDate: null,
-        newerRunUpdating: false,
-        profiles,
-        profilesEvaluated: 0,
-        profileStats: [],
-        runId: null,
-        status: "not_run",
-        windowEnd: null,
-        windowStart: null,
-      });
+      return {
+        ...buildOpportunityDailyBriefIssue({
+          availableResultCount: 0,
+          coverageWarnings: [],
+          featuredCandidates: [],
+          highConfidenceCount: 0,
+          issueDate: null,
+          newerRunUpdating: false,
+          profiles,
+          profilesEvaluated: 0,
+          profileStats: [],
+          runId: null,
+          status: "not_run",
+          windowEnd: null,
+          windowStart: null,
+        }),
+        access,
+      };
     }
     const orderReviewPriorityV2 =
       this.orderReviewPriorityV2.allPolicies &&
       isOpportunityWorkspaceFeatureEnabled(
         this.orderReviewPriorityV2,
-        workspace.id,
+        ownerWorkspaceId,
       );
     const profileTopResultOrderSql = orderReviewPriorityV2
       ? "scoped.rank ASC NULLS LAST, scoped.appid, scoped.id"
@@ -2001,7 +2549,7 @@ export class OpportunityRepository {
 
     const scopeParams = [
       run.id,
-      identity.userId,
+      ownerUserId,
       run.window_start,
       run.window_end,
       run.run_kind,
@@ -2035,8 +2583,10 @@ export class OpportunityRepository {
         `,
           scopeParams,
         ),
-        this.pool.query<BriefProfileStatsRow>(
-          `
+        shared
+          ? Promise.resolve({ rows: [] } as { rows: BriefProfileStatsRow[] })
+          : this.pool.query<BriefProfileStatsRow>(
+              `
           WITH scoped AS (
             SELECT result.*
             FROM opportunity.results result
@@ -2091,17 +2641,19 @@ export class OpportunityRepository {
           GROUP BY profile.id
           ORDER BY profile.updated_at DESC, profile.id
           LIMIT 100
-        `,
-          [...scopeParams, workspace.id],
-        ),
+              `,
+              [...scopeParams, ownerWorkspaceId],
+            ),
         this.queryBriefFeaturedRows({
           limit: 10,
           orderReviewPriorityV2,
           run,
-          userId: identity.userId,
+          userId: ownerUserId,
         }),
-        this.pool.query(
-          `
+        shared
+          ? Promise.resolve({ rowCount: 0 })
+          : this.pool.query(
+              `
           SELECT 1
           FROM opportunity.runs newer
           WHERE newer.workspace_id = $1
@@ -2113,14 +2665,14 @@ export class OpportunityRepository {
               OR newer.started_at > $4
             )
           LIMIT 1
-        `,
-          [
-            workspace.id,
-            identity.userId,
-            run.window_end,
-            run.completed_at ?? run.started_at,
-          ],
-        ),
+              `,
+              [
+                ownerWorkspaceId,
+                ownerUserId,
+                run.window_end,
+                run.completed_at ?? run.started_at,
+              ],
+            ),
       ],
     );
     const summaryRow = summary.rows[0];
@@ -2141,16 +2693,18 @@ export class OpportunityRepository {
       }));
     const availableResultCount = Number(summaryRow?.result_count ?? 0);
 
-    return buildOpportunityDailyBriefIssue({
+    const issue = buildOpportunityDailyBriefIssue({
       availableResultCount,
-      coverageWarnings: (run.coverage_warnings ?? []).map(
-        cleanOpportunityCoverageWarning,
-      ),
-      featuredCandidates: featured,
+      coverageWarnings: shared
+        ? []
+        : (run.coverage_warnings ?? []).map(cleanOpportunityCoverageWarning),
+      featuredCandidates: shared
+        ? featured.map(redactOpportunityResult)
+        : featured,
       highConfidenceCount: Number(summaryRow?.high_confidence_count ?? 0),
       issueDate: iso(run.completed_at ?? run.window_end),
       newerRunUpdating:
-        (newerRun.rowCount ?? 0) > 0 || run.status === "running",
+        !shared && ((newerRun.rowCount ?? 0) > 0 || run.status === "running"),
       profiles,
       profilesEvaluated: run.profiles_evaluated,
       profileStats,
@@ -2166,6 +2720,12 @@ export class OpportunityRepository {
       windowEnd: iso(run.window_end),
       windowStart: iso(run.window_start),
     });
+    return {
+      ...issue,
+      access,
+      profileDispatches: shared ? [] : issue.profileDispatches,
+      profilesEvaluated: shared ? 0 : issue.profilesEvaluated,
+    };
   }
 
   async listResults(
@@ -2177,18 +2737,15 @@ export class OpportunityRepository {
       runId: string;
     },
   ): Promise<OpportunityResultPage> {
-    const workspace = await this.ensureWorkspace(identity);
-    const run = await this.getBriefRun({
-      runId: params.runId,
-      userId: identity.userId,
-      workspaceId: workspace.id,
-    });
-    if (!run) {
-      throw new OpportunityNotFoundError(
-        "The requested opportunity brief was not found.",
-      );
-    }
+    await this.ensureWorkspace(identity);
+    const run = await this.resolveRunAccess(identity, params.runId);
+    const shared = run.access.scope === "team";
     if (params.profileId) {
+      if (shared) {
+        throw new OpportunityNotFoundError(
+          "The requested opportunity profile was not found.",
+        );
+      }
       const profile = await this.pool.query(
         `
           SELECT 1
@@ -2199,7 +2756,7 @@ export class OpportunityRepository {
             AND status <> 'archived'
           LIMIT 1
         `,
-        [params.profileId, workspace.id, identity.userId],
+        [params.profileId, run.ownerWorkspaceId, run.ownerUserId],
       );
       if (!profile.rows[0]) {
         throw new OpportunityNotFoundError(
@@ -2211,7 +2768,7 @@ export class OpportunityRepository {
       this.orderReviewPriorityV2.allPolicies &&
       isOpportunityWorkspaceFeatureEnabled(
         this.orderReviewPriorityV2,
-        workspace.id,
+        run.ownerWorkspaceId,
       );
     const page = await this.queryBriefResultRows({
       cursor: params.cursor,
@@ -2220,7 +2777,7 @@ export class OpportunityRepository {
       orderReviewPriorityV2,
       profileId: params.profileId,
       run,
-      userId: identity.userId,
+      userId: run.ownerUserId,
     });
     const lastResult = page.results.at(-1) ?? null;
     const filterKey = opportunityCursorFilterKey({
@@ -2239,7 +2796,10 @@ export class OpportunityRepository {
             )
           : null,
       pageSize: 25,
-      results: page.results,
+      access: run.access,
+      results: shared
+        ? page.results.map(redactOpportunityResult)
+        : page.results,
       runId: run.id,
     };
   }
@@ -4098,6 +4658,8 @@ export class OpportunityRepository {
     resultId: string;
   }): Promise<OpportunityGameRecord> {
     const workspace = await this.ensureWorkspace(params.identity);
+    const recordAccess = await this.resolveResultAccess(params);
+    const teamId = recordAccess.access.team?.id ?? null;
     const result = await this.pool.query<
       QueryResultRow & {
         app: OpportunityGameRecord["app"];
@@ -4335,19 +4897,34 @@ export class OpportunityRepository {
             SELECT jsonb_agg(jsonb_build_object(
               'activityType', activity.activity_type,
               'occurredAt', activity.occurred_at,
-              'userDisplay', COALESCE(membership.identity_email, 'Team member')
+              'userDisplay', COALESCE(
+                team_membership.display_name,
+                team_membership.identity_email,
+                workspace_membership.identity_email,
+                'Team member'
+              )
             ) ORDER BY activity.occurred_at DESC)
             FROM (
               SELECT recent.*
               FROM opportunity.team_activity recent
-              WHERE recent.workspace_id = canonical.workspace_id
+              WHERE (
+                  ($7::uuid IS NOT NULL AND recent.team_id = $7)
+                  OR (
+                    $7::uuid IS NULL
+                    AND recent.team_id IS NULL
+                    AND recent.workspace_id = canonical.workspace_id
+                  )
+                )
                 AND recent.appid = canonical.appid
               ORDER BY recent.occurred_at DESC
               LIMIT 100
             ) activity
-            LEFT JOIN opportunity.workspace_memberships membership
-              ON membership.workspace_id = activity.workspace_id
-              AND membership.user_id = activity.user_id
+            LEFT JOIN opportunity.team_memberships team_membership
+              ON team_membership.team_id = activity.team_id
+              AND team_membership.user_id = activity.user_id
+            LEFT JOIN opportunity.workspace_memberships workspace_membership
+              ON workspace_membership.workspace_id = activity.workspace_id
+              AND workspace_membership.user_id = activity.user_id
           ), '[]'::jsonb) AS team_activity,
           jsonb_build_object(
             'dismissedAt', game_state.dismissed_at,
@@ -4459,13 +5036,20 @@ export class OpportunityRepository {
         LEFT JOIN opportunity.market_context_snapshots market
           ON market.id = canonical.market_context_snapshot_id
         LEFT JOIN opportunity.user_game_state game_state
-          ON game_state.workspace_id = canonical.workspace_id
-          AND game_state.user_id = canonical.user_id
+          ON game_state.workspace_id = $5
+          AND game_state.user_id = $6
           AND game_state.appid = canonical.appid
         LEFT JOIN opportunity.team_research_state research_state
-          ON research_state.workspace_id = canonical.workspace_id
-          AND research_state.user_id = canonical.user_id
+          ON research_state.user_id = $6
           AND research_state.appid = canonical.appid
+          AND (
+            ($7::uuid IS NOT NULL AND research_state.team_id = $7)
+            OR (
+              $7::uuid IS NULL
+              AND research_state.team_id IS NULL
+              AND research_state.workspace_id = $5
+            )
+          )
         WHERE canonical.id = $1
           AND canonical.appid = $2
           AND canonical.workspace_id = $3
@@ -4473,11 +5057,19 @@ export class OpportunityRepository {
           AND ${opportunityPersistedResultContentSafetySql("canonical", "app")}
         LIMIT 1
       `,
-      [params.resultId, params.appid, workspace.id, params.identity.userId],
+      [
+        params.resultId,
+        params.appid,
+        recordAccess.ownerWorkspaceId,
+        recordAccess.ownerUserId,
+        workspace.id,
+        params.identity.userId,
+        teamId,
+      ],
     );
     const row = result.rows[0];
     if (!row) {
-      throw new Error("Opportunity result not found.");
+      throw new OpportunityNotFoundError("Opportunity result not found.");
     }
     const presentedChanges = await presentOpportunityChanges(
       this.pool,
@@ -4562,6 +5154,8 @@ export class OpportunityRepository {
       appid: params.appid,
       identity: params.identity,
       note: null,
+      resolvedTeamId: teamId,
+      resultId: params.resultId,
     });
     const matchedProfiles = decodeOpportunityValue(row.matched_profiles)
       .map((profile) => ({
@@ -4577,7 +5171,23 @@ export class OpportunityRepository {
         if (right.id === winner) return 1;
         return left.name.localeCompare(right.name);
       });
+    const shared = recordAccess.access.scope === "team";
+    const visibleResultSummary = shared
+      ? redactOpportunityResult(resultSummary)
+      : resultSummary;
+    const provenance = shared
+      ? {
+          ...row.provenance,
+          deliveries: [],
+          run: {
+            ...row.provenance.run,
+            activeProfileVersions: [],
+          },
+        }
+      : row.provenance;
+    const rank = decodeOpportunityValue(row.rank);
     return {
+      access: recordAccess.access,
       app: decodeOpportunityValue(row.app),
       cohort: decodeOpportunityValue(row.cohort),
       currentMetrics: decodeOpportunityValue(row.current_metrics ?? {}),
@@ -4585,7 +5195,9 @@ export class OpportunityRepository {
       evidenceResolution: {
         currentResolvedAt: new Date().toISOString(),
         evaluatedAt,
-        previouslyMissingNowAvailable,
+        previouslyMissingNowAvailable: shared
+          ? []
+          : previouslyMissingNowAvailable,
       },
       marketContext: decodeOpportunityValue(row.market_context),
       media: {
@@ -4600,19 +5212,21 @@ export class OpportunityRepository {
           webmUrl: trailer.webmUrl ?? null,
         })),
       },
-      matchedProfiles,
-      missingEvidence: row.missing_evidence ?? [],
+      matchedProfiles: shared ? [] : matchedProfiles,
+      missingEvidence: shared ? [] : (row.missing_evidence ?? []),
       officialNews: decodeOpportunityValue(row.official_news),
-      previousAppearances: decodeOpportunityValue(row.previous_appearances).map(
-        (appearance) => ({
-          ...appearance,
-          whyNow: opportunityChangeSummary(null, appearance.eventLabel),
-        }),
-      ),
-      provenance: row.provenance,
+      previousAppearances: shared
+        ? []
+        : decodeOpportunityValue(row.previous_appearances).map(
+            (appearance) => ({
+              ...appearance,
+              whyNow: opportunityChangeSummary(null, appearance.eventLabel),
+            }),
+          ),
+      provenance,
       recentChanges,
-      rank: decodeOpportunityValue(row.rank),
-      result: resultSummary,
+      rank: shared ? { ...rank, reasons: [] } : rank,
+      result: visibleResultSummary,
       teamActivity: decodeOpportunityValue(row.team_activity),
       userState: row.user_state ?? {
         dismissedAt: null,
@@ -4711,24 +5325,47 @@ export class OpportunityRepository {
     appid: number;
     identity: OpportunityIdentity;
     note: string | null;
+    resolvedTeamId?: string | null;
+    resultId?: string;
   }): Promise<void> {
     const workspace = await this.ensureWorkspace(params.identity);
+    const teamId =
+      params.resolvedTeamId !== undefined
+        ? params.resolvedTeamId
+        : params.resultId
+          ? ((
+              await this.resolveResultAccess({
+                appid: params.appid,
+                identity: params.identity,
+                resultId: params.resultId,
+              })
+            ).access.team?.id ?? null)
+          : ((await this.getActiveTeamForUser(params.identity.userId))?.id ??
+            null);
     await this.transaction(async (client) => {
       await client.query(
         `
           INSERT INTO opportunity.team_activity (
             workspace_id,
+            team_id,
             user_id,
             appid,
             activity_type,
             note
           )
-          SELECT $1, $2, $3, $4, $5
+          SELECT $1, $6, $2, $3, $4, $5
           WHERE $4 <> 'viewed'
             OR NOT EXISTS (
               SELECT 1
               FROM opportunity.team_activity recent
-              WHERE recent.workspace_id = $1
+              WHERE (
+                  ($6::uuid IS NOT NULL AND recent.team_id = $6)
+                  OR (
+                    $6::uuid IS NULL
+                    AND recent.team_id IS NULL
+                    AND recent.workspace_id = $1
+                  )
+                )
                 AND recent.user_id = $2
                 AND recent.appid = $3
                 AND recent.activity_type = 'viewed'
@@ -4741,6 +5378,7 @@ export class OpportunityRepository {
           params.appid,
           params.activityType,
           params.note?.slice(0, 500) ?? null,
+          teamId,
         ],
       );
       if (params.activityType !== "viewed") {
@@ -4748,6 +5386,7 @@ export class OpportunityRepository {
           `
             INSERT INTO opportunity.team_research_state (
               workspace_id,
+              team_id,
               user_id,
               appid,
               is_researching,
@@ -4757,6 +5396,7 @@ export class OpportunityRepository {
             )
             VALUES (
               $1,
+              $6,
               $2,
               $3,
               $4,
@@ -4767,6 +5407,7 @@ export class OpportunityRepository {
             ON CONFLICT (workspace_id, user_id, appid)
             DO UPDATE SET
               is_researching = EXCLUDED.is_researching,
+              team_id = EXCLUDED.team_id,
               note = EXCLUDED.note,
               started_at = CASE
                 WHEN EXCLUDED.is_researching THEN now()
@@ -4784,6 +5425,7 @@ export class OpportunityRepository {
             params.appid,
             params.activityType === "researching_started",
             params.note?.slice(0, 500) ?? null,
+            teamId,
           ],
         );
       }
