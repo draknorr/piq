@@ -9,7 +9,11 @@ import pytest
 
 from src.database.durable_payload import validate_pics_product_payload
 from src.database.durable_promotion import TigerPICSDurablePromoter
-from src.database.durable_work import PICSWorkClaim, TigerPICSDurableWorkStore
+from src.database.durable_work import (
+    PICSHeavyPhaseBusyError,
+    PICSWorkClaim,
+    TigerPICSDurableWorkStore,
+)
 from src.database.tiger_change_history import ArchivePointer
 from src.database.tiger_latest_state import (
     TigerPICSLatestStateStore,
@@ -194,6 +198,7 @@ class FakeCursor(AbstractContextManager):
         franchise_insert_id=None,
         franchise_post_conflict_id=None,
         tag_names=(),
+        gate_available=True,
     ):
         self.fail_on = fail_on
         self.franchise_exact_id = franchise_exact_id
@@ -202,6 +207,7 @@ class FakeCursor(AbstractContextManager):
         self.franchise_post_conflict_id = franchise_post_conflict_id
         self.franchise_insert_attempted = False
         self.tag_names = tuple(tag_names)
+        self.gate_available = gate_available
         self.events = []
         self.rowcount = 0
         self._row = None
@@ -219,7 +225,9 @@ class FakeCursor(AbstractContextManager):
             raise RuntimeError("injected promotion failure")
         self.rowcount = 0
         self._row = None
-        if normalized.startswith("SELECT attempts, max_attempts"):
+        if normalized.startswith("SELECT pg_try_advisory_xact_lock_shared"):
+            self._row = (self.gate_available,)
+        elif normalized.startswith("SELECT attempts, max_attempts"):
             self._row = (1, 8)
         elif normalized.startswith("SELECT id, content_hash"):
             self._row = None
@@ -639,3 +647,37 @@ def test_every_promotion_failure_boundary_rolls_back(failure_boundary):
 
     assert connection.committed is False
     assert connection.rolled_back is True
+
+
+def test_catchup_gate_busy_rolls_back_before_any_claim_or_product_write():
+    cursor = FakeCursor(gate_available=False)
+    promoter, connection = make_promoter(cursor)
+    with pytest.raises(PICSHeavyPhaseBusyError):
+        promoter.promote(
+            claim=make_reconciliation_claim(),
+            worker_id="worker-1",
+            payload=make_reconciliation_payload(),
+            previous_pointer=None,
+            previous_snapshot=None,
+            archive=archive_pointer(),
+        )
+    assert connection.rolled_back
+    assert not any(
+        sql.startswith(("SELECT attempts", "INSERT", "UPDATE", "DELETE"))
+        for sql, _ in cursor.events
+    )
+
+
+def test_live_promotion_does_not_acquire_catchup_gate():
+    cursor = FakeCursor(gate_available=False)
+    promoter, _ = make_promoter(cursor)
+    result = promoter.promote(
+        claim=make_claim(),
+        worker_id="worker-1",
+        payload=make_payload(),
+        previous_pointer=None,
+        previous_snapshot=None,
+        archive=archive_pointer(),
+    )
+    assert result.next_work_state == "completed"
+    assert not any("advisory" in sql for sql, _ in cursor.events)

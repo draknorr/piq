@@ -6,6 +6,8 @@ from types import ModuleType, SimpleNamespace
 from uuid import UUID
 
 import pytest
+import gevent
+from gevent.event import Event
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -134,6 +136,57 @@ def make_worker(store, archive_store=None):
     worker._archive_store = archive_store or FakeArchiveStore()
     worker._last_committed_batch = None
     return worker
+
+
+def test_intake_commits_while_one_processing_pass_waits_without_starting_another():
+    store = FakeStore()
+    worker = make_worker(store)
+    gate = Event()
+    calls = []
+
+    def process_once(fetcher):
+        calls.append(fetcher)
+        gate.wait()
+        return "settled"
+
+    worker._processor = SimpleNamespace(process_once=process_once)
+    worker._processing_job = None
+    worker._next_processing_at_monotonic = 0
+    worker._consecutive_processing_failures = 0
+    worker._last_processing_error = None
+    worker._process_once_if_due()
+    assert worker._processing_job is not None and not worker._processing_job.ready()
+    worker._next_processing_at_monotonic = 0
+    worker._process_once_if_due()
+    assert worker.poll_once(10) == 20
+    assert len(store.calls) == 1 and len(calls) == 1
+    gate.set()
+    worker._processing_job.join(timeout=1)
+    worker._process_once_if_due()
+    assert worker._last_processing_stats == "settled"
+    assert worker._processing_job is None
+
+
+def test_native_archive_wait_yields_without_advancing_cursor_before_persistence():
+    import time
+
+    store = FakeStore()
+    archive = FakeArchiveStore()
+    original = archive.write_json
+    ticks = []
+
+    def slow_archive(**kwargs):
+        time.sleep(0.03)
+        assert store.calls == []
+        return original(**kwargs)
+
+    archive.write_json = slow_archive
+    worker = make_worker(store, archive)
+    ticker = gevent.spawn_later(0.005, lambda: ticks.append("hub progressed"))
+    assert worker.poll_once(10) == 20
+    ticker.join(timeout=1)
+    assert ticks == ["hub progressed"]
+    assert len(store.calls) == 1
 
 
 def test_poll_once_returns_later_cursor_only_after_store_commit():
@@ -320,6 +373,7 @@ def test_run_processes_due_work_while_incremental_intake_is_source_blocked(monke
     worker._last_processing_started_at = None
     worker._next_processing_at_monotonic = 0.0
     worker._last_intake_phase_seconds = {}
+    worker._processing_job = None
 
     fetcher = object()
     monkeypatch.setattr(

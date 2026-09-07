@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from threading import Lock, Semaphore
 from typing import Any, Callable, Optional
@@ -24,6 +25,10 @@ class SteamCircuitOpenError(RuntimeError):
     """Steam requests are paused after repeated upstream failures."""
 
 
+class SteamRequestDeadlineError(TimeoutError):
+    """The entire queued request, including pacing and retries, timed out."""
+
+
 @dataclass(frozen=True)
 class SteamRequestPolicy:
     min_interval_seconds: float = 0.5
@@ -34,6 +39,7 @@ class SteamRequestPolicy:
     backoff_jitter_ratio: float = 0.25
     circuit_failure_threshold: int = 5
     circuit_cooldown_seconds: float = 60.0
+    deadline_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if not 0 < float(self.min_interval_seconds) <= 60:
@@ -52,6 +58,8 @@ class SteamRequestPolicy:
             raise ValueError("Steam circuit threshold must be between 1 and 100")
         if not 1 <= float(self.circuit_cooldown_seconds) <= 900:
             raise ValueError("Steam circuit cooldown must be between 1 and 900 seconds")
+        if not 0 < float(self.deadline_seconds) <= 900:
+            raise ValueError("Steam request deadline must be between 0 and 900 seconds")
 
 
 class SteamRequestScheduler:
@@ -86,14 +94,27 @@ class SteamRequestScheduler:
                 )
             self._pending += 1
 
+        timeout = float(self._policy.deadline_seconds)
+        deadline = self._monotonic() + timeout
+        deadline_error = SteamRequestDeadlineError(
+            f"Steam {request_name} exceeded its request deadline"
+        )
+        acquired = False
         try:
-            with self._slot:
-                return self._execute_locked(request_name, operation)
+            with gevent.Timeout(timeout, deadline_error) if gevent is not None else nullcontext():
+                acquired = self._slot.acquire(timeout=timeout)
+                if not acquired:
+                    raise deadline_error
+                return self._execute_locked(request_name, operation, deadline)
         finally:
+            if acquired:
+                self._slot.release()
             with self._queue_lock:
                 self._pending -= 1
 
-    def _execute_locked(self, request_name: str, operation: Callable[[], Any]) -> Any:
+    def _execute_locked(
+        self, request_name: str, operation: Callable[[], Any], deadline: float
+    ) -> Any:
         now = self._monotonic()
         if now < self._circuit_open_until:
             raise SteamCircuitOpenError(f"Steam request circuit is open for {request_name}")
@@ -101,13 +122,18 @@ class SteamRequestScheduler:
         attempts = max(1, int(self._policy.max_attempts))
         last_error: Optional[BaseException] = None
         for attempt in range(attempts):
+            self._check_deadline(request_name, deadline)
             self._wait_for_governor_slot()
+            self._check_deadline(request_name, deadline)
             try:
                 result = operation()
+                self._check_deadline(request_name, deadline)
                 self._consecutive_failures = 0
                 self._circuit_open_until = 0.0
                 return result
             except Exception as error:
+                if isinstance(error, SteamRequestDeadlineError):
+                    raise
                 last_error = error
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= max(
@@ -127,6 +153,10 @@ class SteamRequestScheduler:
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"Steam request {request_name} did not execute")
+
+    def _check_deadline(self, request_name: str, deadline: float) -> None:
+        if self._monotonic() >= deadline:
+            raise SteamRequestDeadlineError(f"Steam {request_name} exceeded its request deadline")
 
     def _wait_for_governor_slot(self) -> None:
         now = self._monotonic()

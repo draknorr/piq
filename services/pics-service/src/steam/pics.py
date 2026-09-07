@@ -1,12 +1,15 @@
 """PICS-specific operations for fetching Steam app data."""
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional
 
 import gevent
 
+from ..config.settings import settings
 from .client import PICSSteamClient
+from .request_scheduler import SteamRequestDeadlineError
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,7 @@ class PICSFetcher:
         timeout: int = None,
         max_retries: int = None,
         change_poll_timeout: float | None = None,
+        product_fetch_deadline_seconds: float | None = None,
     ):
         self._client = client
         self.batch_size = batch_size or self.BATCH_SIZE
@@ -65,6 +69,13 @@ class PICSFetcher:
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
         self.change_poll_timeout = change_poll_timeout or self.timeout
+        self.product_fetch_deadline_seconds = float(
+            settings.steam_request_deadline_seconds
+            if product_fetch_deadline_seconds is None
+            else product_fetch_deadline_seconds
+        )
+        if not 0 < self.product_fetch_deadline_seconds <= 900:
+            raise ValueError("Product fetch deadline must be between 0 and 900 seconds")
         self.last_product_info_attempts = 0
         self.last_change_poll_attempts = 0
         self.last_token_evidence_by_appid: Dict[int, Dict[str, Any]] = {}
@@ -79,7 +90,24 @@ class PICSFetcher:
 
         raise RuntimeError("Failed to reconnect to Steam")
 
+    def _bounded_product_fetch(
+        self, operation: Callable[[], Dict[int, Dict[str, Any]]]
+    ) -> Dict[int, Dict[str, Any]]:
+        started = time.monotonic()
+        failure = SteamRequestDeadlineError("PICS product fetch exceeded its total deadline")
+        with gevent.Timeout(self.product_fetch_deadline_seconds, failure):
+            result = operation()
+        # Cooperative timeout cannot interrupt a native stall; reject a late
+        # return and keep the independently gated watchdog for that case.
+        if time.monotonic() - started >= self.product_fetch_deadline_seconds:
+            raise failure
+        return result
+
     def fetch_apps_batch(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Bound connection recovery, pacing, retries and product fetch together."""
+        return self._bounded_product_fetch(lambda: self._fetch_apps_batch(appids))
+
+    def _fetch_apps_batch(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
         """
         Fetch PICS data for a batch of apps with retry logic.
 
@@ -113,6 +141,8 @@ class PICSFetcher:
                     return {}
 
                 return response.get("apps", {})
+            except SteamRequestDeadlineError:
+                raise
             except BaseException as e:
                 # gevent.timeout.Timeout does not extend Exception.
                 age = self._client.connection_age_seconds
@@ -133,6 +163,10 @@ class PICSFetcher:
                     raise
 
     def fetch_token_required_apps(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Keep token acquisition, refresh and product calls within one deadline."""
+        return self._bounded_product_fetch(lambda: self._fetch_token_required_apps(appids))
+
+    def _fetch_token_required_apps(self, appids: List[int]) -> Dict[int, Dict[str, Any]]:
         """Fetch only needs_token apps with explicit, cached access tokens."""
 
         bounded = sorted({int(appid) for appid in appids if int(appid) > 0})
@@ -320,11 +354,11 @@ class PICSFetcher:
         for attempt in range(request_attempts):
             self.last_change_poll_attempts = attempt + 1
             try:
-                self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
                 timeout_error = TimeoutError(
                     f"PICS change poll timed out after {self.change_poll_timeout}s"
                 )
                 with gevent.Timeout(self.change_poll_timeout, timeout_error):
+                    self._ensure_connection(wait_timeout=self.AUTO_RECONNECT_WAIT_TIMEOUT)
                     response = (
                         governed_request(
                             change_number,

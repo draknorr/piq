@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 from uuid import UUID
 
+from .connection_pool import PICSConnectionPool
+
 
 class PICSWorkStateError(RuntimeError):
     """A durable work claim no longer matches Tiger state."""
+
+
+class PICSHeavyPhaseBusyError(RuntimeError):
+    """A catch-up promotion yielded to an exclusive database phase."""
 
 
 @dataclass(frozen=True)
@@ -99,6 +106,13 @@ class TigerPICSDurableWorkStore:
         self._statement_timeout_seconds = max(1, int(statement_timeout_seconds))
         self._lock_timeout_seconds = max(1, int(lock_timeout_seconds))
         self._connection_factory = connection_factory
+        self._pool = PICSConnectionPool(
+            database_url,
+            application_name="publisheriq-pics-durable-work",
+            max_size=2,
+            statement_timeout_seconds=self._statement_timeout_seconds,
+            lock_timeout_seconds=self._lock_timeout_seconds,
+        )
 
     @classmethod
     def from_settings(cls, settings: Any) -> "TigerPICSDurableWorkStore":
@@ -117,17 +131,54 @@ class TigerPICSDurableWorkStore:
         if self._connection_factory is not None:
             return self._connection_factory()
 
-        try:
-            import psycopg
-        except ImportError as error:
-            raise RuntimeError(
-                "Durable PICS processing requires psycopg. Install pics-service dependencies."
-            ) from error
+        return self._pool.connection()
 
-        return psycopg.connect(
-            self._database_url,
-            application_name="publisheriq-pics-durable-work",
-        )
+    def close(self) -> None:
+        self._pool.close()
+
+    def get_pool_stats(self) -> dict[str, int]:
+        return self._pool.get_stats()
+
+    @contextmanager
+    def catchup_gate(self):
+        """Hold one shared session lock through catch-up settlement, without a transaction.
+
+        Heavy refreshes use the same (1886417008, 3) key exclusively. A busy
+        gate defers new catch-up claims without attempts, leases or queue edits.
+        One connection is reserved for this gate in the PICS capacity budget.
+        """
+        with self._connect() as connection:
+            original_autocommit = connection.autocommit
+            connection.autocommit = True
+            acquired = False
+            try:
+                acquired = bool(
+                    connection.execute(
+                        "SELECT pg_try_advisory_lock_shared(1886417008, 3)"
+                    ).fetchone()[0]
+                )
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute("SELECT pg_advisory_unlock_shared(1886417008, 3)")
+                connection.autocommit = original_autocommit
+
+    def feed_successor_backlog(self, *, limit: int) -> Dict[str, Any]:
+        """Admit at most one catch-up pass within a two-pass durable window."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("PICS recovery admission limit must be between 1 and 100")
+        with self._connect() as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL statement_timeout = '15s'")
+                    cursor.execute(
+                        "SELECT ops.feed_pics_successor_backlog(%s, %s)",
+                        (limit, limit * 2),
+                    )
+                    row = cursor.fetchone()
+                    if row is None or not isinstance(row[0], dict):
+                        raise PICSWorkStateError("Missing recovery admission result")
+                    return row[0]
 
     def claim_work(
         self,
@@ -187,6 +238,13 @@ class TigerPICSDurableWorkStore:
                                 FROM ops.pics_reconciliation_runs reconciliation
                                 WHERE reconciliation.id = work.reconciliation_run_id
                                   AND reconciliation.status = 'active'
+                                  AND (
+                                    work.lane IN ('new', 'live') OR NOT EXISTS (
+                                      SELECT 1 FROM ops.pics_reconciliation_successors successor
+                                      WHERE successor.run_id = reconciliation.id
+                                        AND successor.catchup_paused
+                                    )
+                                  )
                               )
                             )
                           ORDER BY
@@ -378,6 +436,43 @@ class TigerPICSDurableWorkStore:
                     )
                     return next_state
 
+    def defer_catchup_claim(self, *, claim: PICSWorkClaim, worker_id: str) -> None:
+        """Refund a promotion deferred by the heavy-phase gate, including a final attempt.
+
+        The exact owned lease is locked first, so a stale or repeated deferral
+        cannot refund another worker's attempt. Reconciliation remains pending;
+        this is capacity contention, not failed source evidence.
+        """
+        if claim.lane != "catchup":
+            raise ValueError("Only catch-up claims can be deferred by the heavy-phase gate")
+        with self._connect() as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    self._configure_transaction(cursor)
+                    self._lock_claim(
+                        cursor, claim=claim, worker_id=self._normalize_worker(worker_id)
+                    )
+                    cursor.execute(
+                        """
+                        UPDATE ops.pics_work_state
+                        SET state = 'retrying',
+                            attempts = GREATEST(0, attempts - 1),
+                            claimed_through_change_number = NULL,
+                            claimed_needs_token = NULL,
+                            claimed_at = NULL,
+                            claim_expires_at = NULL,
+                            heartbeat_at = NULL,
+                            worker_id = NULL,
+                            next_attempt_at = clock_timestamp() + interval '30 seconds',
+                            last_error_code = 'heavy_phase_deferred',
+                            last_error_message = 'Catch-up yielded to a heavy database phase',
+                            dead_lettered_at = NULL,
+                            updated_at = clock_timestamp()
+                        WHERE id = %s
+                        """,
+                        (claim.id,),
+                    )
+
     def block_claim(
         self,
         *,
@@ -526,8 +621,11 @@ class TigerPICSDurableWorkStore:
                     self._configure_transaction(cursor)
                     cursor.execute(
                         """
+                        WITH metric_clock AS MATERIALIZED (
+                          SELECT clock_timestamp() AS observed_at
+                        )
                         SELECT
-                          clock_timestamp(),
+                          (SELECT observed_at FROM metric_clock),
                           count(*) FILTER (
                             WHERE lane IN ('new', 'live')
                               AND state IN ('pending', 'retrying', 'claimed')
@@ -546,17 +644,30 @@ class TigerPICSDurableWorkStore:
                           count(*) FILTER (
                             WHERE lane = 'catchup'
                               AND (
-                                last_completed_at >= clock_timestamp() - interval '1 hour'
+                                last_completed_at >=
+                                  (SELECT observed_at FROM metric_clock) - interval '1 hour'
                                 OR (
                                   state = 'source_blocked'
-                                  AND updated_at >= clock_timestamp() - interval '1 hour'
+                                  AND updated_at >=
+                                    (SELECT observed_at FROM metric_clock) - interval '1 hour'
                                 )
                                 OR dead_lettered_at
-                                  >= clock_timestamp() - interval '1 hour'
+                                  >= (SELECT observed_at FROM metric_clock) - interval '1 hour'
                               )
                           )
                         FROM ops.pics_work_state
-                        WHERE work_mode = %s
+                        WHERE (
+                          state IN ('pending', 'retrying', 'claimed', 'dead_letter')
+                          OR (state = 'source_blocked' AND last_error_code = 'missing_access_token')
+                          OR (lane = 'catchup' AND (
+                            last_completed_at >=
+                              (SELECT observed_at FROM metric_clock) - interval '1 hour'
+                            OR (state = 'source_blocked' AND updated_at >=
+                              (SELECT observed_at FROM metric_clock) - interval '1 hour')
+                            OR dead_lettered_at >=
+                              (SELECT observed_at FROM metric_clock) - interval '1 hour'
+                          ))
+                        ) AND work_mode = %s
                           AND stream_key = %s
                         LIMIT 1
                         """,
@@ -959,6 +1070,8 @@ class TigerPICSDurableWorkStore:
               AND work.state = 'dead_letter'
               AND work.last_error_code = 'lease_expired'
               AND items.status IN ('pending', 'completed')
+              AND EXISTS (SELECT 1 FROM ops.pics_reconciliation_runs run
+                          WHERE run.id = items.run_id AND run.status = 'active')
             """,
             (work_mode, stream_key),
         )
@@ -998,6 +1111,13 @@ class TigerPICSDurableWorkStore:
             WHERE work_id = %s
               AND appid = %s
               AND status IN ('pending', 'completed')
+              AND run_id = (
+                SELECT work.reconciliation_run_id
+                FROM ops.pics_work_state work
+                JOIN ops.pics_reconciliation_runs run
+                  ON run.id = work.reconciliation_run_id AND run.status = 'active'
+                WHERE work.id = ops.pics_reconciliation_items.work_id
+              )
             """,
             (
                 next_state,
@@ -1039,6 +1159,13 @@ class TigerPICSDurableWorkStore:
             WHERE work_id = %s
               AND appid = %s
               AND status IN ('pending', 'completed')
+              AND run_id = (
+                SELECT work.reconciliation_run_id
+                FROM ops.pics_work_state work
+                JOIN ops.pics_reconciliation_runs run
+                  ON run.id = work.reconciliation_run_id AND run.status = 'active'
+                WHERE work.id = ops.pics_reconciliation_items.work_id
+              )
             """,
             (
                 blocking_reason,
@@ -1095,6 +1222,13 @@ class TigerPICSDurableWorkStore:
             WHERE work_id = %s
               AND appid = %s
               AND status IN ('pending', 'completed')
+              AND run_id = (
+                SELECT work.reconciliation_run_id
+                FROM ops.pics_work_state work
+                JOIN ops.pics_reconciliation_runs run
+                  ON run.id = work.reconciliation_run_id AND run.status = 'active'
+                WHERE work.id = ops.pics_reconciliation_items.work_id
+              )
             """,
             (
                 snapshot_id,

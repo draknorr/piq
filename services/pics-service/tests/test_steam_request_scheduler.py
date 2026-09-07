@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.steam.request_scheduler import (  # noqa: E402
     SteamCircuitOpenError,
+    SteamRequestDeadlineError,
     SteamRequestPolicy,
     SteamRequestQueueFullError,
     SteamRequestScheduler,
@@ -112,3 +113,60 @@ def test_scheduler_rejects_unbounded_or_disabled_policy_values():
         SteamRequestPolicy(queue_capacity=10_001)
     with pytest.raises(ValueError, match="attempts"):
         SteamRequestPolicy(max_attempts=11)
+
+
+def test_deadline_includes_retry_wait_and_releases_queue_slot():
+    clock = FakeClock()
+    scheduler = SteamRequestScheduler(
+        SteamRequestPolicy(
+            deadline_seconds=1,
+            backoff_base_seconds=2,
+            backoff_jitter_ratio=0,
+            circuit_failure_threshold=10,
+        ),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    calls = []
+
+    def failing():
+        calls.append(clock.now)
+        raise RuntimeError("transient")
+
+    with pytest.raises(SteamRequestDeadlineError):
+        scheduler.execute("slow", failing)
+    assert len(calls) == 1
+    assert scheduler.pending == 0
+    assert scheduler.execute("next", lambda: "ok") == "ok"
+
+
+def test_hung_cooperative_request_is_not_retried_and_releases_owner():
+    import gevent
+
+    scheduler = SteamRequestScheduler(SteamRequestPolicy(deadline_seconds=0.01))
+    calls = []
+
+    def hanging():
+        calls.append(1)
+        gevent.sleep(0.1)
+
+    with pytest.raises(SteamRequestDeadlineError):
+        scheduler.execute("hung", hanging)
+    assert calls == [1]
+    assert scheduler.pending == 0
+    # Retain pacing: this call may itself expire rather than skipping the governor.
+    assert scheduler._slot.acquire(blocking=False)
+    scheduler._slot.release()
+
+
+def test_deadline_bounds_waiting_for_the_shared_owner():
+
+    scheduler = SteamRequestScheduler(SteamRequestPolicy(deadline_seconds=0.02))
+    scheduler._slot.acquire()
+    try:
+        with pytest.raises(SteamRequestDeadlineError):
+            scheduler.execute("queued", lambda: pytest.fail("owner is still busy"))
+        assert scheduler.pending == 0
+        assert not scheduler._slot.acquire(blocking=False)
+    finally:
+        scheduler._slot.release()

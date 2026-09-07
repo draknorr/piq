@@ -629,6 +629,58 @@ def test_incomplete_source_response_is_retained_without_work_or_cursor_advance(
     assert connection.committed is True
 
 
+@pytest.mark.parametrize("blocked", [False, True])
+def test_empty_batch_keeps_archive_and_manifest_without_staging(blocked):
+    cursor = FakeCursor(primary_cursor=10)
+    store, connection = make_store(cursor)
+    result = store.persist_batch(
+        archive=ARCHIVE,
+        from_change_number=10,
+        to_change_number=20,
+        response_since_change_number=10,
+        app_changes=[],
+        force_full_update=False,
+        force_full_app_update=blocked,
+        force_full_package_update=False,
+        work_mode="durable",
+        stream_key="primary",
+    )
+    statements = [query for query, _ in cursor.events]
+    assert result.durable_app_count == 0
+    assert result.app_changes_sha256 == hash_pics_app_changes([])
+    assert result.primary_cursor_advanced is (not blocked)
+    assert connection.committed
+    assert any(query.startswith("INSERT INTO ops.pics_change_batches") for query in statements)
+    assert any("FROM ops.pics_change_batch_apps" in query for query in statements)
+    assert not any("pics_batch_stage" in query for query in statements)
+    assert not any(
+        query.startswith("INSERT INTO ops.pics_change_batch_apps") for query in statements
+    )
+    assert not any(query.startswith("WITH incoming AS") for query in statements)
+    assert not any(query.startswith("INSERT INTO ops.app_data_readiness") for query in statements)
+    assert cursor.copy_types == []
+
+
+def test_empty_batch_with_corrupt_durable_manifest_rolls_back_without_cursor_advance():
+    cursor = FakeCursor(primary_cursor=10, manifest_override=(0, 0, "0" * 64))
+    store, connection = make_store(cursor)
+    with pytest.raises(PICSBatchReconciliationError):
+        store.persist_batch(
+            archive=ARCHIVE,
+            from_change_number=10,
+            to_change_number=20,
+            response_since_change_number=10,
+            app_changes=[],
+            force_full_update=False,
+            force_full_app_update=False,
+            force_full_package_update=False,
+            work_mode="durable",
+            stream_key="primary",
+        )
+    assert connection.rolled_back
+    assert not any(query.startswith("UPDATE ops.pics_sync_state") for query, _ in cursor.events)
+
+
 def test_package_only_force_full_does_not_block_app_cursor():
     cursor = FakeCursor(primary_cursor=10)
     store, _connection = make_store(cursor)

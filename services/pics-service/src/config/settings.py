@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     pics_consumer_worker_id: Optional[str] = None
     pics_consumer_live_batch_size: int = 40
     pics_consumer_catchup_batch_size: int = 10
+    # Enable only for an audited active successor and approved catch-up canary.
+    # Admission is durable, bounded to two passes, and respects database pause.
+    pics_successor_feeder_enabled: bool = False
+    # Opt-in lane borrowing keeps the same combined app cap and Steam cadence.
+    # Reserve catch-up capacity to avoid starvation when the database permits it.
+    pics_consumer_live_borrowing_enabled: bool = False
+    pics_consumer_catchup_min_batch_size: int = 10
     pics_consumer_lease_seconds: int = 300
     pics_consumer_concurrency: int = 4
     pics_consumer_heartbeat_interval_seconds: int = 60
@@ -75,6 +82,11 @@ class Settings(BaseSettings):
     pics_product_info_min_interval_seconds: int = 215
     pics_consumer_retry_base_seconds: int = 30
     pics_consumer_retry_max_seconds: int = 3600
+    # Liveness is independent of source completeness. A responsive source-blocked
+    # worker must keep reporting status without being restarted for the gap.
+    pics_progress_timeout_seconds: int = 900
+    # Enable only after approving the deployment and checking normal phase times.
+    pics_watchdog_enabled: bool = False
 
     # Steam connection settings
     steam_heartbeat_interval: int = 300  # Existing cadence; calls use the shared scheduler
@@ -87,6 +99,7 @@ class Settings(BaseSettings):
     steam_request_backoff_jitter_ratio: float = 0.25
     steam_request_circuit_failure_threshold: int = 5
     steam_request_circuit_cooldown_seconds: float = 60.0
+    steam_request_deadline_seconds: float = 300.0
     steam_access_token_ttl_seconds: int = 3600
 
     # Logging

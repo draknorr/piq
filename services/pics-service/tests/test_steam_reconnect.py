@@ -292,3 +292,35 @@ def test_token_unavailable_is_explicit_source_block_evidence():
         "_missing_token": True,
         "_token_request": {"needsToken": True, "status": "unavailable"},
     }
+
+
+@pytest.mark.parametrize("method", ["fetch_apps_batch", "fetch_token_required_apps"])
+def test_product_deadline_includes_connection_recovery(method):
+    from src.steam.request_scheduler import SteamRequestDeadlineError
+
+    client = FakeClient()
+    client.ensure_connected = lambda **kwargs: gevent.sleep(0.1)
+    fetcher = PICSFetcher(client, product_fetch_deadline_seconds=0.01)
+    with pytest.raises(SteamRequestDeadlineError):
+        getattr(fetcher, method)([7])
+    assert client.client.calls == 0
+
+
+def test_product_deadline_bounds_combined_token_and_payload_waits():
+    from src.steam.request_scheduler import SteamRequestDeadlineError
+
+    client = FakeTokenClient(token_responses=[], product_responses=[])
+
+    def tokens(appids, force_refresh=False):
+        gevent.sleep(0.02)
+        return {7: 123}, {7: {"status": "available"}}
+
+    def product(apps, timeout):
+        gevent.sleep(0.02)
+        return {"apps": {7: {"appid": 7}}}
+
+    client.acquire_access_tokens = tokens
+    client.request_product_info = product
+    fetcher = PICSFetcher(client, product_fetch_deadline_seconds=0.03)
+    with pytest.raises(SteamRequestDeadlineError):
+        fetcher.fetch_token_required_apps([7])
