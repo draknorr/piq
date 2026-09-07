@@ -50,6 +50,7 @@ class PICSSteamClient:
                 backoff_jitter_ratio=settings.steam_request_backoff_jitter_ratio,
                 circuit_failure_threshold=(settings.steam_request_circuit_failure_threshold),
                 circuit_cooldown_seconds=(settings.steam_request_circuit_cooldown_seconds),
+                deadline_seconds=settings.steam_request_deadline_seconds,
             )
         )
         self._access_token_ttl_seconds = min(
@@ -61,6 +62,13 @@ class PICSSteamClient:
 
     def connect(self) -> bool:
         """Establish anonymous connection to Steam with heartbeat."""
+        with gevent.Timeout(
+            settings.steam_request_deadline_seconds,
+            TimeoutError("Steam connection exceeded its deadline"),
+        ):
+            return self._connect_once()
+
+    def _connect_once(self) -> bool:
         try:
             self._client = SteamClient()
 

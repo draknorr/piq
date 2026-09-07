@@ -631,6 +631,9 @@ describe("released opportunity cohort lookup", () => {
               ],
             };
           }
+          if (normalized === "SELECT ops.acquire_heavy_phase_gate(120)") {
+            return { rows: [] };
+          }
           if (
             /^(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE SAVEPOINT|SET LOCAL|SET TRANSACTION|LOCK TABLE)/.test(
               normalized,
@@ -969,6 +972,18 @@ describe("released opportunity cohort lookup", () => {
       ),
     );
     assert.ok(refreshQueries.includes("SET LOCAL statement_timeout = '5min'"));
+    const gateIndex = refreshQueries.indexOf(
+      "SELECT ops.acquire_heavy_phase_gate(120)",
+    );
+    const fenceIndex = refreshQueries.findIndex((query) =>
+      query.startsWith("LOCK TABLE legacy.apps"),
+    );
+    const refreshIndex = refreshQueries.indexOf(
+      "CALL opportunity.refresh_released_cohort_features_v2()",
+    );
+    assert.ok(
+      gateIndex >= 0 && gateIndex < fenceIndex && fenceIndex < refreshIndex,
+    );
     assert.equal(refreshed, true);
     assert.equal(released, true);
   });
@@ -1291,6 +1306,109 @@ describe("released opportunity cohort lookup", () => {
     assert.equal(cohorts.get(1)?.members[0]?.appid, 2);
     assert.equal(resolverCalls, 1);
     assert.equal(cacheWrites, 1);
+  });
+
+  it("reuses bounded cohort rows only for the exact validated snapshot", async () => {
+    const revisions: Record<string, number> = Object.fromEntries(
+      [
+        "legacy.apps",
+        "legacy.app_genres",
+        "legacy.app_steam_tags",
+        "legacy.latest_daily_metrics",
+        "legacy.steam_genres",
+        "legacy.steam_tags",
+        "metrics.app_signal_windows_v1",
+        "ops.app_data_readiness",
+      ].map((key) => [key, 1]),
+    );
+    const projectionRevisions = { ...revisions };
+    let sourceDate = "2026-07-28";
+    let refreshedAt = "2026-07-28T00:00:00.000Z";
+    let featureReads = 0;
+    let taxonomyReads = 0;
+    let oversized = false;
+    let failRead = false;
+    const pool = poolWithSnapshotClients(async (sql) => {
+      if (sql.includes("cohort_feature_projection_state_v1")) {
+        return {
+          rows: [
+            {
+              exact: false,
+              usable: true,
+              refreshed_at: refreshedAt,
+              source_revisions: projectionRevisions,
+            },
+          ],
+        };
+      }
+      if (sql.includes("CURRENT_DATE AS source_date"))
+        return {
+          rows: [
+            {
+              source_date: sourceDate,
+              source_watermark: { sourceRevisions: revisions },
+            },
+          ],
+        };
+      // Force persistent misses to exercise feature reuse for new signatures.
+      if (sql.includes("released_cohort_cache_v1")) return { rows: [] };
+      if (sql.includes("cohort_taxonomy_positions_v1 position")) {
+        taxonomyReads += 1;
+        return { rows: cohortTaxonomyRows() };
+      }
+      if (
+        sql.includes("FROM opportunity.released_cohort_features_v2 feature")
+      ) {
+        featureReads += 1;
+        if (failRead) throw new Error("fixture read failure");
+        const rows = cohortFeatureRows([cohortRow(1), cohortRow(2)]);
+        if (oversized) rows[0]!.name = "x".repeat(16 * 1024 * 1024);
+        return { rows };
+      }
+      throw new Error(`Unexpected cohort cache query: ${sql}`);
+    });
+    const repository = new OpportunityWorkerRepository(pool);
+    const input: OpportunityEvaluationInput = {
+      appid: 1,
+      name: "Subject",
+      fields: {
+        genres: knownField(["Indie"]),
+        tags: knownField(["Roguelike"]),
+        is_free: knownField(false),
+        price_cents: knownField(1_999),
+      },
+    };
+    const cold = await repository.getReleasedCohorts([input]);
+    const expected = structuredClone(cold);
+    cold.get(1)!.members[0]!.name = "caller mutation";
+    assert.deepEqual(await repository.getReleasedCohorts([input]), expected);
+    assert.equal(featureReads, 1);
+    assert.equal(taxonomyReads, 1);
+    // Current joined rows must invalidate even when the permitted projection
+    // snapshot keeps its older source revisions and identical refreshed_at.
+    revisions["legacy.latest_daily_metrics"]! += 1;
+    await repository.getReleasedCohorts([input]);
+    assert.equal(featureReads, 2);
+    sourceDate = "2026-07-29";
+    await repository.getReleasedCohorts([input]);
+    assert.equal(featureReads, 3);
+    refreshedAt = "2026-07-29T01:00:00.000Z";
+    await repository.getReleasedCohorts([input]);
+    assert.equal(featureReads, 4);
+    revisions["legacy.apps"]! += 1;
+    failRead = true;
+    await assert.rejects(
+      repository.getReleasedCohorts([input]),
+      /fixture read failure/,
+    );
+    failRead = false;
+    await repository.getReleasedCohorts([input]);
+    assert.equal(featureReads, 6);
+    revisions["legacy.apps"]! += 1;
+    oversized = true;
+    await repository.getReleasedCohorts([input]);
+    await repository.getReleasedCohorts([input]);
+    assert.equal(featureReads, 8, "oversize snapshot must never be retained");
   });
 
   it("resolves cohort signatures in one batch and reuses exact persistent entries", async () => {

@@ -73,6 +73,7 @@ class DurableChangeIntakeWorker:
                 work_mode=self._work_mode,
                 stream_key=self._stream_key,
                 archive_store=self._archive_store,
+                on_progress=self._mark_processing_progress,
             )
             if settings.pics_processing_enabled
             else None
@@ -91,6 +92,17 @@ class DurableChangeIntakeWorker:
         self._last_processing_started_at: Optional[str] = None
         self._next_processing_at_monotonic = 0.0
         self._last_intake_phase_seconds: dict[str, float | int] = {}
+        self._processing_job: Optional[gevent.Greenlet] = None
+        self._last_processing_progress_at: Optional[str] = None
+
+    def _mark_processing_progress(self) -> None:
+        self._last_processing_progress_at = datetime.now(timezone.utc).isoformat()
+
+    def close(self) -> None:
+        """Release idle database backends after run() has drained processing."""
+        if self._processor is not None:
+            self._processor.close()
+        self._store.close()
 
     def run(self) -> None:
         """Run the durable intake leader continuously."""
@@ -188,7 +200,14 @@ class DurableChangeIntakeWorker:
                 self._update_health_status(last_change)
                 gevent.sleep(sleep_seconds)
         finally:
-            self._steam.disconnect()
+            # Keep the Steam session owned by this hub until the current pass
+            # settles. Process termination still leaves committed work durable
+            # and uncommitted work subject to the existing lease/replay rules.
+            try:
+                if self._processing_job is not None:
+                    self._processing_job.get()
+            finally:
+                self._steam.disconnect()
 
     def poll_once(self, last_change: int) -> int:
         """Poll once, returning a later cursor only after the batch commits."""
@@ -211,6 +230,9 @@ class DurableChangeIntakeWorker:
                     separators=(",", ":"),
                 ),
             )
+            pool_stats = getattr(self._store, "get_pool_stats", None)
+            if pool_stats is not None:
+                logger.info("PICS intake pool cumulative metrics %s", json.dumps(pool_stats()))
 
     def _poll_once(
         self,
@@ -243,32 +265,38 @@ class DurableChangeIntakeWorker:
         ]
         phase_started = time.perf_counter()
         try:
-            archive = self._archive_change_response(
-                from_change_number=last_change,
-                to_change_number=changes.change_number,
-                response_since_change_number=changes.since_change_number,
-                app_changes=source_app_changes,
-                package_changes=changes.package_changes,
-                force_full_update=changes.force_full_update,
-                force_full_app_update=changes.force_full_app_update,
-                force_full_package_update=changes.force_full_package_update,
+            archive = gevent.get_hub().threadpool.apply(
+                self._archive_change_response,
+                kwds=dict(
+                    from_change_number=last_change,
+                    to_change_number=changes.change_number,
+                    response_since_change_number=changes.since_change_number,
+                    app_changes=source_app_changes,
+                    package_changes=changes.package_changes,
+                    force_full_update=changes.force_full_update,
+                    force_full_app_update=changes.force_full_app_update,
+                    force_full_package_update=changes.force_full_package_update,
+                ),
             )
         finally:
             phase_seconds["r2_change_archive"] = time.perf_counter() - phase_started
         phase_started = time.perf_counter()
         try:
-            committed = self._store.persist_batch(
-                archive=archive,
-                from_change_number=last_change,
-                to_change_number=changes.change_number,
-                response_since_change_number=changes.since_change_number,
-                app_changes=source_app_changes,
-                force_full_update=changes.force_full_update,
-                force_full_app_update=changes.force_full_app_update,
-                force_full_package_update=changes.force_full_package_update,
-                work_mode=self._work_mode,
-                stream_key=self._stream_key,
-                lane=self._lane,
+            committed = gevent.get_hub().threadpool.apply(
+                self._store.persist_batch,
+                kwds=dict(
+                    archive=archive,
+                    from_change_number=last_change,
+                    to_change_number=changes.change_number,
+                    response_since_change_number=changes.since_change_number,
+                    app_changes=source_app_changes,
+                    force_full_update=changes.force_full_update,
+                    force_full_app_update=changes.force_full_app_update,
+                    force_full_package_update=changes.force_full_package_update,
+                    work_mode=self._work_mode,
+                    stream_key=self._stream_key,
+                    lane=self._lane,
+                ),
             )
         finally:
             phase_seconds["tiger_batch_persist"] = time.perf_counter() - phase_started
@@ -302,6 +330,14 @@ class DurableChangeIntakeWorker:
         return now >= self._next_processing_at_monotonic
 
     def _process_once_if_due(self) -> None:
+        if self._processing_job is not None:
+            if not self._processing_job.ready():
+                return
+            job, self._processing_job = self._processing_job, None
+            self._last_processing_stats = job.get()
+            self._consecutive_processing_failures = 0
+            self._last_processing_error = None
+            return
         if self._processor is None or not self._processing_due():
             return
         if self._fetcher is None:
@@ -312,9 +348,14 @@ class DurableChangeIntakeWorker:
             settings.pics_product_info_min_interval_seconds
         )
         self._last_processing_started_at = datetime.now(timezone.utc).isoformat()
-        self._last_processing_stats = self._processor.process_once(self._fetcher)
-        self._consecutive_processing_failures = 0
-        self._last_processing_error = None
+        self._mark_processing_progress()
+        # Same gevent hub and same Steam request governor; no second Steam
+        # session or overlapping processing pass. Intake may run while native
+        # downstream I/O yields, retaining its own archive-before-cursor order.
+        self._processing_job = gevent.spawn(self._processor.process_once, self._fetcher)
+        gevent.sleep(0)
+        if self._processing_job.ready():
+            self._process_once_if_due()
 
     @staticmethod
     def _failure_backoff_seconds(consecutive_failures: int) -> float:
@@ -416,6 +457,8 @@ class DurableChangeIntakeWorker:
                 "intake_lane": self._lane,
                 "intake_only": self._processor is None,
                 "processing_enabled": self._processor is not None,
+                "processing_in_flight": self._processing_job is not None,
+                "last_processing_progress_at": self._last_processing_progress_at,
                 "processing_worker_id": (
                     self._processor.worker_id if self._processor is not None else None
                 ),
@@ -440,6 +483,7 @@ class DurableChangeIntakeWorker:
                 ),
                 "last_processing_started_at": self._last_processing_started_at,
                 "last_processing_claimed": processing.claimed if processing else None,
+                "last_processing_recovery_feed": processing.recovery_feed if processing else None,
                 "last_processing_live_claimed": (processing.live_claimed if processing else None),
                 "last_processing_catchup_claimed": (
                     processing.catchup_claimed if processing else None

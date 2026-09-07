@@ -10,11 +10,13 @@ import os
 import re
 import socket
 import time
-from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from contextlib import ExitStack
+from dataclasses import asdict, dataclass, field, replace
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import gevent
+from gevent.event import Event
 
 from ..config.settings import settings
 from ..database.durable_payload import (
@@ -24,6 +26,7 @@ from ..database.durable_payload import (
 )
 from ..database.durable_promotion import TigerPICSDurablePromoter
 from ..database.durable_work import (
+    PICSHeavyPhaseBusyError,
     PICSLatestSnapshot,
     PICSWorkClaim,
     TigerPICSDurableWorkStore,
@@ -48,6 +51,8 @@ class PICSProcessingStats:
     events_created: int
     live_claimed: int = 0
     catchup_claimed: int = 0
+    capacity_deferred: int = 0
+    recovery_feed: Optional[Dict[str, Any]] = None
     duration_seconds: float = 0.0
     product_info_requests: int = 0
     heartbeat_transactions: int = 0
@@ -68,12 +73,21 @@ class PICSClaimOutcome:
     retried: int = 0
     dead_lettered: int = 0
     source_blocked: int = 0
+    capacity_deferred: int = 0
     snapshot_changed: int = 0
     event_count: int = 0
     tiger_transactions: int = 0
     r2_reads: int = 0
     r2_writes: int = 0
     phase_seconds: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class _LeaseRenewal:
+    claims: Dict[int, PICSWorkClaim] = field(default_factory=dict)
+    transactions: int = 0
+    seconds: float = 0.0
+    error: Optional[Exception] = None
 
 
 class DurablePICSProcessor:
@@ -90,6 +104,7 @@ class DurablePICSProcessor:
         promoter: Optional[TigerPICSDurablePromoter] = None,
         archive_store: Optional[S3ArchiveStore] = None,
         worker_id: Optional[str] = None,
+        on_progress: Optional[Callable[[], None]] = None,
     ):
         if work_mode not in {"shadow", "durable"}:
             raise ValueError("DurablePICSProcessor requires shadow or durable mode")
@@ -105,6 +120,8 @@ class DurablePICSProcessor:
         catchup_batch_size = int(settings.pics_consumer_catchup_batch_size)
         if live_batch_size < 0 or catchup_batch_size < 0:
             raise ValueError("PICS consumer batch sizes cannot be negative")
+        if settings.pics_consumer_catchup_min_batch_size < 0:
+            raise ValueError("PICS catch-up minimum cannot be negative")
         if live_batch_size + catchup_batch_size > self.MAX_PRODUCT_INFO_BATCH_SIZE:
             raise ValueError(
                 "Combined PICS consumer batch size cannot exceed "
@@ -127,13 +144,97 @@ class DurablePICSProcessor:
         self._archive_store = archive_store or S3ArchiveStore.from_env()
         self._worker_id = worker_id or self._default_worker_id()
         self._extractor = PICSExtractor()
+        self._on_progress = on_progress or (lambda: None)
 
     @property
     def worker_id(self) -> str:
         return self._worker_id
 
+    def close(self) -> None:
+        """Close owned pools after the intake owner has drained its current pass."""
+        if self._promoter is not None:
+            self._promoter.close()
+        self._work_store.close()
+
     def process_once(self, fetcher: PICSFetcher) -> PICSProcessingStats:
         """Process protected live/new capacity plus a separate catch-up quota."""
+        started = time.perf_counter()
+        resources = ExitStack()
+        renewal = _LeaseRenewal()
+        stopped = Event()
+        heartbeat = gevent.spawn(self._renew_pass_leases, renewal, stopped)
+        try:
+            stats = self._process_once(fetcher, resources, renewal)
+        finally:
+            stopped.set()
+            # Let an already-running native heartbeat finish; never return its
+            # connection while another thread can still be using it.
+            heartbeat.join()
+            # Gate connection I/O must yield the Steam-owning hub as well.
+            gevent.get_hub().threadpool.apply(resources.close)
+        if renewal.error is not None:
+            raise renewal.error
+        transactions = stats.tiger_transactions + renewal.transactions
+        phases = dict(stats.phase_seconds)
+        phases["lease_heartbeat"] = phases.get("lease_heartbeat", 0) + renewal.seconds
+        phases["total"] = time.perf_counter() - started
+        stats = replace(
+            stats,
+            duration_seconds=phases["total"],
+            tiger_transactions=transactions,
+            heartbeat_transactions=stats.heartbeat_transactions + renewal.transactions,
+            tiger_transactions_per_settlement=self._transactions_per_settlement(
+                transactions,
+                stats.completed
+                + stats.retried
+                + stats.dead_lettered
+                + stats.source_blocked
+                + stats.capacity_deferred,
+            ),
+            phase_seconds=self._rounded_phases(phases),
+        )
+        self._log_processing_metrics(stats)
+        for role, store in (("work", self._work_store), ("promotion", self._promoter)):
+            pool_stats = getattr(store, "get_pool_stats", None)
+            if pool_stats is not None:
+                logger.info("PICS %s pool cumulative metrics %s", role, json.dumps(pool_stats()))
+        return stats
+
+    def _renew_pass_leases(self, renewal: _LeaseRenewal, stopped: Event) -> None:
+        interval = max(
+            10,
+            min(
+                int(settings.pics_consumer_heartbeat_interval_seconds),
+                int(settings.pics_consumer_lease_seconds) // 3,
+            ),
+        )
+        while not stopped.wait(timeout=interval):
+            claims = list(renewal.claims.values())
+            if not claims:
+                continue
+            started = time.perf_counter()
+            try:
+                gevent.get_hub().threadpool.apply(
+                    self._work_store.heartbeat_claims,
+                    kwds=dict(
+                        claims=claims,
+                        worker_id=self._worker_id,
+                        lease_seconds=settings.pics_consumer_lease_seconds,
+                    ),
+                )
+                # Settlements can commit during this heartbeat. A smaller count
+                # is normal; promotion and barrier heartbeats still enforce
+                # exact unexpired ownership. This timer never marks progress.
+            except Exception as error:
+                renewal.error = error
+                return
+            finally:
+                renewal.transactions += 1
+                renewal.seconds += time.perf_counter() - started
+
+    def _process_once(
+        self, fetcher: PICSFetcher, resources: ExitStack, renewal: _LeaseRenewal
+    ) -> PICSProcessingStats:
 
         pass_started = time.perf_counter()
         phase_seconds: Dict[str, float] = {}
@@ -141,31 +242,87 @@ class DurablePICSProcessor:
         heartbeat_transactions = 0
         tiger_transactions = 0
 
+        live_limit = int(settings.pics_consumer_live_batch_size)
+        catchup_limit = int(settings.pics_consumer_catchup_batch_size)
+        total_limit = live_limit + catchup_limit
+        borrowing = settings.pics_consumer_live_borrowing_enabled and live_limit > 0
+        if borrowing:
+            # One slot minimum protects recovery when it is enabled; setting
+            # catchup_batch_size=0 remains an explicit recovery pause.
+            reserve = min(catchup_limit, max(1, int(settings.pics_consumer_catchup_min_batch_size)))
+            live_limit = total_limit - reserve
+
         phase_started = time.perf_counter()
-        live_claims = self._work_store.claim_work(
-            work_mode=self._work_mode,
-            stream_key=self._stream_key,
-            worker_id=self._worker_id,
-            lane_group="live",
-            limit=settings.pics_consumer_live_batch_size,
-            lease_seconds=settings.pics_consumer_lease_seconds,
+        live_claims = gevent.get_hub().threadpool.apply(
+            self._work_store.claim_work,
+            kwds=dict(
+                work_mode=self._work_mode,
+                stream_key=self._stream_key,
+                worker_id=self._worker_id,
+                lane_group="live",
+                limit=live_limit,
+                lease_seconds=settings.pics_consumer_lease_seconds,
+            ),
         )
         phase_seconds["claim_live"] = time.perf_counter() - phase_started
-        tiger_transactions += int(settings.pics_consumer_live_batch_size > 0)
+        self._on_progress()
+        tiger_transactions += int(live_limit > 0)
+        if borrowing and catchup_limit > 0:
+            catchup_limit = total_limit - len(live_claims)
+
+        gate = getattr(self._work_store, "catchup_gate", None)
+        if catchup_limit > 0 and gate is not None:
+            phase_started = time.perf_counter()
+            allowed = gevent.get_hub().threadpool.apply(resources.enter_context, args=(gate(),))
+            phase_seconds["catchup_gate"] = time.perf_counter() - phase_started
+            tiger_transactions += 2 if allowed else 1
+            if not allowed:
+                catchup_limit = 0
+                logger.info("PICS catch-up deferred while a heavy database phase owns the gate")
+
+        recovery_feed = None
+        if (
+            settings.pics_successor_feeder_enabled
+            and self._work_mode == "durable"
+            and catchup_limit > 0
+        ):
+            phase_started = time.perf_counter()
+            try:
+                recovery_feed = gevent.get_hub().threadpool.apply(
+                    self._work_store.feed_successor_backlog,
+                    kwds=dict(limit=min(catchup_limit, 100)),
+                )
+            except Exception:
+                # An uncertain admission commit is reconciled by durable links
+                # and the open-window bound next pass. Never blindly replay it
+                # or abandon live claims already owned by this pass.
+                logger.exception("PICS recovery admission failed; continuing owned live work")
+                recovery_feed = {"status": "error", "enqueued": None}
+                catchup_limit = 0
+            finally:
+                tiger_transactions += 1
+                phase_seconds["recovery_feed"] = time.perf_counter() - phase_started
 
         phase_started = time.perf_counter()
-        catchup_claims = self._work_store.claim_work(
-            work_mode=self._work_mode,
-            stream_key=self._stream_key,
-            worker_id=self._worker_id,
-            lane_group="catchup",
-            limit=settings.pics_consumer_catchup_batch_size,
-            lease_seconds=settings.pics_consumer_lease_seconds,
+        catchup_claims = gevent.get_hub().threadpool.apply(
+            self._work_store.claim_work,
+            kwds=dict(
+                work_mode=self._work_mode,
+                stream_key=self._stream_key,
+                worker_id=self._worker_id,
+                lane_group="catchup",
+                limit=catchup_limit,
+                lease_seconds=settings.pics_consumer_lease_seconds,
+            ),
         )
         phase_seconds["claim_catchup"] = time.perf_counter() - phase_started
-        tiger_transactions += int(settings.pics_consumer_catchup_batch_size > 0)
+        self._on_progress()
+        tiger_transactions += int(catchup_limit > 0)
+        if not catchup_claims:
+            gevent.get_hub().threadpool.apply(resources.close)
 
         claims = [*live_claims, *catchup_claims]
+        renewal.claims.update((claim.id, claim) for claim in claims)
         if not claims:
             queue_metrics, queue_duration, queue_transactions = self._queue_metrics()
             phase_seconds["queue_metrics"] = queue_duration
@@ -180,12 +337,12 @@ class DurablePICSProcessor:
                 events_created=0,
                 live_claimed=0,
                 catchup_claimed=0,
+                recovery_feed=recovery_feed,
                 duration_seconds=phase_seconds["total"],
                 tiger_transactions=tiger_transactions + queue_transactions,
                 phase_seconds=self._rounded_phases(phase_seconds),
                 queue_metrics=queue_metrics,
             )
-            self._log_processing_metrics(stats)
             return stats
 
         phase_started = time.perf_counter()
@@ -225,10 +382,15 @@ class DurablePICSProcessor:
                     archive_written = 0
                     archive_started = time.perf_counter()
                     try:
-                        failure_archive = self._archive_request_failure(
-                            claim=claim,
-                            error=error,
-                            request_kind=("token_required" if claim.needs_token else "anonymous"),
+                        failure_archive = gevent.get_hub().threadpool.apply(
+                            self._archive_request_failure,
+                            kwds=dict(
+                                claim=claim,
+                                error=error,
+                                request_kind=(
+                                    "token_required" if claim.needs_token else "anonymous"
+                                ),
+                            ),
                         )
                         failure_message = (
                             f"{failure_message}; evidence="
@@ -246,11 +408,14 @@ class DurablePICSProcessor:
                             f"{type(archive_error).__name__}"
                         )
                     settlement_started = time.perf_counter()
-                    state = self._fail_claim(
-                        claim,
-                        "product_fetch_failed",
-                        failure_message,
-                        True,
+                    state = gevent.get_hub().threadpool.apply(
+                        self._fail_claim,
+                        args=(
+                            claim,
+                            "product_fetch_failed",
+                            failure_message,
+                            True,
+                        ),
                     )
                     outcomes.append(
                         PICSClaimOutcome(
@@ -267,16 +432,23 @@ class DurablePICSProcessor:
                         )
                     )
                     failed_claim_ids.add(claim.id)
+                    renewal.claims.pop(claim.id, None)
+                    self._on_progress()
+            self._on_progress()
         phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
         process_claims = [claim for claim in claims if claim.id not in failed_claim_ids]
 
         phase_started = time.perf_counter()
         latest_by_appid = (
-            self._work_store.get_latest_snapshots([claim.appid for claim in process_claims])
+            gevent.get_hub().threadpool.apply(
+                self._work_store.get_latest_snapshots,
+                args=([claim.appid for claim in process_claims],),
+            )
             if process_claims
             else {}
         )
         phase_seconds["latest_snapshot_lookup"] = time.perf_counter() - phase_started
+        self._on_progress()
         tiger_transactions += int(bool(process_claims))
 
         phase_started = time.perf_counter()
@@ -298,6 +470,8 @@ class DurablePICSProcessor:
         downstream_started = time.perf_counter()
         thread_pool = gevent.get_hub().threadpool
         for wave_start in range(0, len(process_claims), concurrency):
+            if renewal.error is not None:
+                raise renewal.error
             remaining_claims = process_claims[wave_start:]
             if time.monotonic() - last_heartbeat_at >= heartbeat_interval:
                 phase_started = time.perf_counter()
@@ -318,14 +492,17 @@ class DurablePICSProcessor:
                 for claim in wave
             ]
             first_error: Optional[Exception] = None
-            for job in jobs:
+            for claim, job in zip(wave, jobs):
                 try:
                     outcomes.append(job.get())
                 except Exception as error:
                     if first_error is None:
                         first_error = error
+                finally:
+                    renewal.claims.pop(claim.id, None)
             if first_error is not None:
                 raise first_error
+            self._on_progress()
         phase_seconds["downstream"] = time.perf_counter() - downstream_started
 
         for outcome in outcomes:
@@ -343,7 +520,8 @@ class DurablePICSProcessor:
         retried = sum(outcome.retried for outcome in outcomes)
         dead_lettered = sum(outcome.dead_lettered for outcome in outcomes)
         source_blocked = sum(outcome.source_blocked for outcome in outcomes)
-        settlements = completed + retried + dead_lettered + source_blocked
+        capacity_deferred = sum(outcome.capacity_deferred for outcome in outcomes)
+        settlements = completed + retried + dead_lettered + source_blocked + capacity_deferred
         stats = PICSProcessingStats(
             claimed=len(claims),
             completed=completed,
@@ -354,6 +532,8 @@ class DurablePICSProcessor:
             events_created=sum(outcome.event_count for outcome in outcomes),
             live_claimed=len(live_claims),
             catchup_claimed=len(catchup_claims),
+            capacity_deferred=capacity_deferred,
+            recovery_feed=recovery_feed,
             duration_seconds=phase_seconds["total"],
             product_info_requests=int(getattr(fetcher, "last_product_info_attempts", 1)),
             heartbeat_transactions=heartbeat_transactions,
@@ -368,7 +548,6 @@ class DurablePICSProcessor:
             phase_latency_seconds=self._summarize_phase_samples(phase_samples),
             queue_metrics=queue_metrics,
         )
-        self._log_processing_metrics(stats)
         return stats
 
     def _process_and_settle_claim(
@@ -393,6 +572,18 @@ class DurablePICSProcessor:
                 tiger_transactions=1,
                 r2_reads=int(previous_pointer is not None),
                 r2_writes=int(result["archive_written"]),
+                phase_seconds=phase_seconds,
+            )
+        except PICSHeavyPhaseBusyError:
+            phase_started = time.perf_counter()
+            self._work_store.defer_catchup_claim(claim=claim, worker_id=self._worker_id)
+            phase_seconds["tiger_capacity_deferral"] = time.perf_counter() - phase_started
+            return PICSClaimOutcome(
+                capacity_deferred=1,
+                tiger_transactions=2,
+                r2_reads=int(previous_pointer is not None),
+                r2_writes=int("r2_write" in phase_seconds)
+                + int(self._has_token_evidence_archive(raw_payload)),
                 phase_seconds=phase_seconds,
             )
         except PICSPayloadValidationError as error:
@@ -756,9 +947,12 @@ class DurablePICSProcessor:
         started = time.perf_counter()
         try:
             metrics = asdict(
-                get_metrics(
-                    work_mode=self._work_mode,
-                    stream_key=self._stream_key,
+                gevent.get_hub().threadpool.apply(
+                    get_metrics,
+                    kwds=dict(
+                        work_mode=self._work_mode,
+                        stream_key=self._stream_key,
+                    ),
                 )
             )
             observed_at = metrics.get("observed_at")
@@ -814,10 +1008,13 @@ class DurablePICSProcessor:
         )
 
     def _heartbeat_all(self, claims: List[PICSWorkClaim]) -> None:
-        heartbeat_count = self._work_store.heartbeat_claims(
-            claims=claims,
-            worker_id=self._worker_id,
-            lease_seconds=settings.pics_consumer_lease_seconds,
+        heartbeat_count = gevent.get_hub().threadpool.apply(
+            self._work_store.heartbeat_claims,
+            kwds=dict(
+                claims=claims,
+                worker_id=self._worker_id,
+                lease_seconds=settings.pics_consumer_lease_seconds,
+            ),
         )
         if heartbeat_count != len(claims):
             raise RuntimeError(

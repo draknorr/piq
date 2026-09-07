@@ -128,7 +128,11 @@ def main():
         sys.exit(1)
 
     finally:
-        health_server.stop()
+        try:
+            if current_worker and hasattr(current_worker, "close"):
+                current_worker.close()
+        finally:
+            health_server.stop()
 
 
 if __name__ == "__main__":

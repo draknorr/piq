@@ -8,7 +8,7 @@ import pytest
 
 from src.database.durable_work import PICSWorkClaim
 from src.database.tiger_change_history import ArchivePointer
-from src.workers.durable_processor import DurablePICSProcessor
+from src.workers.durable_processor import DurablePICSProcessor, PICSClaimOutcome
 
 
 def make_claim(*, appid=7, attempts=1):
@@ -138,6 +138,105 @@ class FailingSettlementWorkStore(FakeWorkStore):
         raise RuntimeError("Tiger settlement unavailable")
 
 
+@pytest.mark.parametrize("admission_fails", [False, True])
+def test_automatic_feeder_runs_after_live_claim_and_preserves_live_on_failure(
+    monkeypatch, admission_fails
+):
+    from contextlib import contextmanager
+
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "pics_successor_feeder_enabled", True)
+    monkeypatch.setattr(settings, "pics_consumer_live_batch_size", 1)
+    monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", 10)
+    store = FakeWorkStore(make_claim())
+    order = []
+
+    @contextmanager
+    def gate():
+        order.append("gate")
+        yield True
+
+    def feed(*, limit):
+        order.append("feed")
+        assert limit == 10
+        if admission_fails:
+            raise RuntimeError("uncertain admission commit")
+        return {"status": "enqueued", "enqueued": 1}
+
+    def claim(**kwargs):
+        lane = kwargs["lane_group"]
+        order.append(lane)
+        if not kwargs["limit"]:
+            return []
+        return [replace(make_claim(appid=7 if lane == "live" else 8), lane=lane)]
+
+    store.catchup_gate = gate
+    store.feed_successor_backlog = feed
+    store.claim_work = claim
+    processor = DurablePICSProcessor(
+        work_mode="durable",
+        stream_key="primary",
+        work_store=store,
+        promoter=object(),
+        archive_store=FakeArchiveStore(),
+        worker_id="test-worker",
+    )
+    settled = []
+
+    def settle(**kwargs):
+        settled.append(kwargs["claim"].appid)
+        return PICSClaimOutcome(completed=1)
+
+    monkeypatch.setattr(processor, "_process_and_settle_claim", settle)
+    stats = processor.process_once(FakeFetcher(make_payload()))
+    assert order == ["live", "gate", "feed", "catchup"]
+    assert 7 in settled
+    assert stats.completed == (1 if admission_fails else 2)
+    assert stats.catchup_claimed == (0 if admission_fails else 1)
+    assert stats.recovery_feed == (
+        {"status": "error", "enqueued": None}
+        if admission_fails
+        else {"status": "enqueued", "enqueued": 1}
+    )
+    assert "recovery_feed" in stats.phase_seconds
+
+
+@pytest.mark.parametrize("guard", ["disabled", "shadow", "zero_quota", "heavy_gate"])
+def test_automatic_feeder_respects_admission_guards(monkeypatch, guard):
+    from contextlib import contextmanager
+
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "pics_successor_feeder_enabled", guard != "disabled")
+    monkeypatch.setattr(settings, "pics_consumer_live_batch_size", 0)
+    monkeypatch.setattr(
+        settings, "pics_consumer_catchup_batch_size", 0 if guard == "zero_quota" else 10
+    )
+    store = FakeWorkStore(make_claim())
+    store.claim_work = lambda **kwargs: []
+
+    def forbidden(**kwargs):
+        raise AssertionError("admission must not run")
+
+    @contextmanager
+    def gate():
+        yield guard != "heavy_gate"
+
+    store.feed_successor_backlog = forbidden
+    store.catchup_gate = gate
+    mode = "shadow" if guard == "shadow" else "durable"
+    processor = DurablePICSProcessor(
+        work_mode=mode,
+        stream_key="shadow-test" if mode == "shadow" else "primary",
+        work_store=store,
+        promoter=object(),
+        archive_store=FakeArchiveStore(),
+    )
+    stats = processor.process_once(FakeFetcher(make_payload()))
+    assert stats.recovery_feed is None and stats.claimed == 0
+
+
 def test_processor_rejects_product_batches_above_existing_cap(monkeypatch):
     monkeypatch.setattr(
         "src.workers.durable_processor.settings.pics_consumer_live_batch_size",
@@ -188,6 +287,50 @@ def test_shadow_processor_validates_archives_and_acknowledges_without_promoting(
         "live",
         "catchup",
     ]
+
+
+@pytest.mark.parametrize("live_demand", [0, 30, 80, 120])
+def test_live_borrowing_preserves_total_cap_and_catchup_reserve(monkeypatch, live_demand):
+    from dataclasses import replace
+
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "pics_consumer_live_borrowing_enabled", True)
+    monkeypatch.setattr(settings, "pics_consumer_live_batch_size", 40)
+    monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", 60)
+    monkeypatch.setattr(settings, "pics_consumer_catchup_min_batch_size", 20)
+    store = FakeWorkStore(make_claim())
+
+    def claim_work(**kwargs):
+        store.claim_calls.append(kwargs)
+        live = kwargs["lane_group"] == "live"
+        count = min(live_demand, kwargs["limit"]) if live else kwargs["limit"]
+        return [
+            replace(
+                make_claim(),
+                id=(1 if live else 1001) + i,
+                appid=(1 if live else 1001) + i,
+                lane="live" if live else "catchup",
+            )
+            for i in range(count)
+        ]
+
+    store.claim_work = claim_work
+    fetcher = FakeFetcher(None)
+    fetcher.fetch_apps_batch = lambda appids: {appid: make_payload(appid=appid) for appid in appids}
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=store,
+        archive_store=FakeArchiveStore(),
+        worker_id="test-worker",
+    )
+    stats = processor.process_once(fetcher)
+    assert stats.claimed == stats.completed == 100
+    assert stats.live_claimed == min(live_demand, 80)
+    assert stats.catchup_claimed == 100 - min(live_demand, 80)
+    assert stats.catchup_claimed >= 20
+    assert store.claim_calls[0]["limit"] == 80
 
 
 def test_missing_access_token_is_archived_and_source_blocked():
@@ -540,3 +683,75 @@ def test_blocking_downstream_work_is_bounded_and_does_not_starve_gevent(
     assert stats.heartbeat_transactions == 2
     assert stats.tiger_transactions_per_settlement is not None
     assert stats.phase_latency_seconds["r2_write"]["count"] == 8
+
+
+def test_capacity_deferral_does_not_dead_letter_exhausted_attempt(monkeypatch):
+    from src.database.durable_work import PICSHeavyPhaseBusyError
+
+    claim = replace(make_claim(attempts=3), lane="catchup")
+    store = FakeWorkStore(claim)
+    deferred = []
+    store.defer_catchup_claim = lambda **kwargs: deferred.append(kwargs)
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=store,
+        archive_store=FakeArchiveStore(),
+        worker_id="test-worker",
+    )
+
+    def busy(**kwargs):
+        raise PICSHeavyPhaseBusyError()
+
+    monkeypatch.setattr(processor, "_process_claim", busy)
+    result = processor._process_and_settle_claim(
+        claim=claim,
+        raw_payload=make_payload(),
+        previous_pointer=None,
+    )
+    assert result.capacity_deferred == 1
+    assert result.dead_lettered == result.retried == result.completed == 0
+    assert deferred == [dict(claim=claim, worker_id="test-worker")]
+    assert not store.failed
+
+
+def test_periodic_lease_renewal_runs_while_steam_fetch_waits(monkeypatch):
+    import src.workers.durable_processor as module
+
+    claim = make_claim()
+    store = FakeWorkStore(claim)
+    progress = []
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=store,
+        archive_store=FakeArchiveStore(),
+        worker_id="test-worker",
+        on_progress=lambda: progress.append(time.monotonic()),
+    )
+    # Real renewal loop with a fast timer; production keeps a ten-second floor.
+    real_event = module.Event
+
+    class FastEvent(real_event):
+        def wait(self, timeout=None):
+            return super().wait(timeout=min(timeout, 0.01) if timeout is not None else None)
+
+    monkeypatch.setattr(module, "Event", FastEvent)
+    fetcher = FakeFetcher(make_payload())
+    progress_during_wait = []
+
+    def slow_fetch(appids):
+        before = len(progress)
+        gevent.sleep(0.055)
+        progress_during_wait.append(len(progress) - before)
+        return {7: make_payload()}
+
+    fetcher.fetch_apps_batch = slow_fetch
+    stats = processor.process_once(fetcher)
+    assert stats.completed == 1
+    assert stats.heartbeat_transactions >= 4
+    assert len(store.heartbeats) == stats.heartbeat_transactions
+    assert progress_during_wait == [0]  # renewal is not worker progress
+    observed = len(store.heartbeats)
+    gevent.sleep(0.02)
+    assert len(store.heartbeats) == observed

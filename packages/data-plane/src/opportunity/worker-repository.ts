@@ -53,6 +53,7 @@ import {
 
 const COHORT_FEATURE_PAGE_SIZE = 5_000;
 const COHORT_FEATURE_MAX_ROWS = 250_000;
+const COHORT_FEATURE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const COHORT_CACHE_WRITE_BATCH_SIZE = 250;
 const OPPORTUNITY_LOOKUP_BATCH_SIZE = 250;
 const RESULT_PERSISTENCE_BATCH_SIZE = 100;
@@ -233,6 +234,7 @@ interface OpportunityCohortSourceWatermarkRow extends QueryResultRow {
 
 interface OpportunityCohortSourceWatermark {
   cacheable: boolean;
+  currentHash: string | null;
   featureSourceRevisions: Record<string, number> | null;
   hash: string;
   sourceDate: string;
@@ -635,6 +637,9 @@ export function assignOpportunityDeliveryResults(
 export class OpportunityWorkerRepository {
   readonly productRepository: OpportunityRepository;
   private readonly cohortFeatureSnapshotMaxAgeMs: number;
+  // A single serialized snapshot bounds retained storage exactly. Decoded
+  // rows/postings have the same temporary lifetime as an uncached resolution.
+  private cohortFeatureRowsCache: { key: string; data: Buffer } | null = null;
 
   constructor(
     private readonly pool: Pool,
@@ -798,6 +803,12 @@ export class OpportunityWorkerRepository {
           FROM opportunity.candidate_state pending
           WHERE pending.state = 'pending_readiness'
             AND pending.next_evaluation_at <= now()
+            AND NOT EXISTS (
+              SELECT 1 FROM opportunity.work_queue existing
+              WHERE existing.idempotency_key =
+                'readiness:' || pending.user_id || ':' || pending.appid || ':' ||
+                to_char(pending.next_evaluation_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI')
+            )
           ORDER BY pending.next_evaluation_at, pending.appid
           LIMIT 1000
           ON CONFLICT (idempotency_key) DO NOTHING
@@ -844,23 +855,25 @@ export class OpportunityWorkerRepository {
     const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
     const result = await this.pool.query<WorkRow>(
       `
-        WITH eligible AS (
+        WITH candidates AS (
+          SELECT work.id, work.lane, work.priority, work.scheduled_for
+          FROM opportunity.work_queue work
+          WHERE work.state IN ('pending', 'retrying')
+            AND work.scheduled_for <= now()
+            AND work.next_attempt_at <= now()
+          UNION ALL
+          SELECT work.id, work.lane, work.priority, work.scheduled_for
+          FROM opportunity.work_queue work
+          WHERE work.state = 'claimed'
+            AND work.claim_expires_at < now()
+        ), eligible AS (
           SELECT
             work.id,
             row_number() OVER (
               PARTITION BY work.lane
               ORDER BY work.priority DESC, work.scheduled_for, work.id
             ) AS lane_rank
-          FROM opportunity.work_queue work
-          WHERE (
-              work.state IN ('pending', 'retrying')
-              AND work.scheduled_for <= now()
-              AND work.next_attempt_at <= now()
-            )
-            OR (
-              work.state = 'claimed'
-              AND work.claim_expires_at < now()
-            )
+          FROM candidates work
         ),
         claims AS (
           SELECT work.id
@@ -2057,20 +2070,50 @@ export class OpportunityWorkerRepository {
     };
   }
 
-  private async refreshCohortFeatureProjection(): Promise<void> {
-    const client = await this.pool.connect();
+  private async refreshFencedCohortSnapshot(): Promise<{
+    client: PoolClient;
+    snapshotId: string;
+    watermark: OpportunityCohortSourceWatermark;
+    rowsCacheKey: string | null;
+  }> {
+    const refreshClient = await this.pool.connect();
+    let fenceClient: PoolClient | null = null;
+    let snapshot: Awaited<
+      ReturnType<OpportunityWorkerRepository["openCurrentCohortSnapshot"]>
+    > = null;
     try {
-      await client.query("BEGIN");
-      await client.query("SET LOCAL statement_timeout = '5min'");
-      await client.query(
+      await refreshClient.query("BEGIN");
+      await refreshClient.query("SET LOCAL statement_timeout = '5min'");
+      // Acquire the heavy gate before source-table locks. The procedure runs
+      // on this same connection, so its transaction gate is reentrant. The
+      // separate source fence survives refresh COMMIT until the read snapshot
+      // is exported, preserving the existing exact-revision contract.
+      await refreshClient.query("SELECT ops.acquire_heavy_phase_gate(120)");
+      fenceClient = await this.acquireCohortFeatureSourceFence();
+      await refreshClient.query(
         "CALL opportunity.refresh_released_cohort_features_v2()",
       );
-      await client.query("COMMIT");
+      await refreshClient.query("COMMIT");
+      snapshot = await this.openCurrentCohortSnapshot();
+      if (!snapshot) {
+        throw new Error(
+          "Opportunity cohort feature projection did not match the fenced exported source snapshot.",
+        );
+      }
+      await fenceClient.query("COMMIT");
+      return snapshot;
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await refreshClient.query("ROLLBACK").catch(() => undefined);
+      if (fenceClient)
+        await fenceClient.query("ROLLBACK").catch(() => undefined);
+      if (snapshot) {
+        await snapshot.client.query("ROLLBACK").catch(() => undefined);
+        snapshot.client.release();
+      }
       throw error;
     } finally {
-      client.release();
+      fenceClient?.release();
+      refreshClient.release();
     }
   }
 
@@ -2192,6 +2235,16 @@ export class OpportunityWorkerRepository {
       : null;
     return {
       cacheable,
+      currentHash:
+        cacheable &&
+        required.every(
+          (key) =>
+            typeof currentSourceRevisions[key] === "number" &&
+            Number.isSafeInteger(currentSourceRevisions[key]) &&
+            Number(currentSourceRevisions[key]) >= 0,
+        )
+          ? stableHash({ sourceDate, currentValue })
+          : null,
       featureSourceRevisions,
       hash: stableHash({ sourceDate, value }),
       sourceDate,
@@ -2203,6 +2256,7 @@ export class OpportunityWorkerRepository {
     client: PoolClient;
     snapshotId: string;
     watermark: OpportunityCohortSourceWatermark;
+    rowsCacheKey: string | null;
   } | null> {
     const client = await this.pool.connect();
     try {
@@ -2246,7 +2300,18 @@ export class OpportunityWorkerRepository {
           "Tiger did not return an exported snapshot for Opportunity cohort resolution.",
         );
       }
-      return { client, snapshotId, watermark };
+      return {
+        client,
+        snapshotId,
+        watermark,
+        rowsCacheKey: watermark.currentHash
+          ? stableHash({
+              currentHash: watermark.currentHash,
+              projection,
+              version: OPPORTUNITY_COHORT_FEATURE_PROJECTION_VERSION,
+            })
+          : null,
+      };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
@@ -2322,6 +2387,7 @@ export class OpportunityWorkerRepository {
   private async loadReleasedCohortRowsBatch(
     signatures: NormalizedCohortInput[],
     snapshotId: string | null = null,
+    rowsCacheKey: string | null = null,
   ): Promise<Map<string, OpportunityReleasedCohortRow[]>> {
     const unique = Array.from(
       new Map(
@@ -2333,25 +2399,34 @@ export class OpportunityWorkerRepository {
       return rowsBySignature;
     }
 
-    const client = await this.pool.connect();
-    let transactionOpen = false;
-    const features: OpportunityCohortFeatureRow[] = [];
+    let features: OpportunityCohortFeatureRow[] = [];
     let taxonomyRows: OpportunityCohortTaxonomyRow[] = [];
-    try {
-      await client.query(
-        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-      );
-      transactionOpen = true;
-      await client.query("SET LOCAL statement_timeout = '120s'");
-      if (snapshotId) {
-        if (!/^[0-9A-Fa-f-]+$/.test(snapshotId)) {
-          throw new Error(
-            "Tiger returned an invalid exported snapshot identifier.",
-          );
+    if (rowsCacheKey && this.cohortFeatureRowsCache?.key === rowsCacheKey) {
+      ({ features, taxonomyRows } = JSON.parse(
+        this.cohortFeatureRowsCache.data.toString("utf8"),
+      ));
+    } else {
+      // A different snapshot, failed read, or oversize result evicts the prior
+      // entry. Never reuse data based solely on a permitted projection age:
+      // joined names/metrics must match current source revisions too.
+      this.cohortFeatureRowsCache = null;
+      const client = await this.pool.connect();
+      let transactionOpen = false;
+      try {
+        await client.query(
+          "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        transactionOpen = true;
+        await client.query("SET LOCAL statement_timeout = '120s'");
+        if (snapshotId) {
+          if (!/^[0-9A-Fa-f-]+$/.test(snapshotId)) {
+            throw new Error(
+              "Tiger returned an invalid exported snapshot identifier.",
+            );
+          }
+          await client.query(`SET TRANSACTION SNAPSHOT '${snapshotId}'`);
         }
-        await client.query(`SET TRANSACTION SNAPSHOT '${snapshotId}'`);
-      }
-      const taxonomy = await client.query<OpportunityCohortTaxonomyRow>(`
+        const taxonomy = await client.query<OpportunityCohortTaxonomyRow>(`
         SELECT
           position.taxonomy_kind,
           position.taxonomy_id,
@@ -2372,12 +2447,12 @@ export class OpportunityWorkerRepository {
         END IS NOT NULL
         ORDER BY position.taxonomy_kind, position.taxonomy_id
       `);
-      taxonomyRows = taxonomy.rows;
+        taxonomyRows = taxonomy.rows;
 
-      let cursor = 0;
-      while (features.length <= COHORT_FEATURE_MAX_ROWS) {
-        const page = await client.query<OpportunityCohortFeatureRow>(
-          `
+        let cursor = 0;
+        while (features.length <= COHORT_FEATURE_MAX_ROWS) {
+          const page = await client.query<OpportunityCohortFeatureRow>(
+            `
             SELECT
               feature.appid,
               feature.is_free,
@@ -2400,28 +2475,38 @@ export class OpportunityWorkerRepository {
             ORDER BY feature.appid
             LIMIT $2
           `,
-          [cursor, COHORT_FEATURE_PAGE_SIZE],
-        );
-        features.push(...page.rows);
-        if (features.length > COHORT_FEATURE_MAX_ROWS) {
-          throw new Error(
-            `Opportunity cohort feature row cap exceeded (${COHORT_FEATURE_MAX_ROWS}).`,
+            [cursor, COHORT_FEATURE_PAGE_SIZE],
           );
+          features.push(...page.rows);
+          if (features.length > COHORT_FEATURE_MAX_ROWS) {
+            throw new Error(
+              `Opportunity cohort feature row cap exceeded (${COHORT_FEATURE_MAX_ROWS}).`,
+            );
+          }
+          if (page.rows.length < COHORT_FEATURE_PAGE_SIZE) {
+            break;
+          }
+          cursor = page.rows.at(-1)?.appid ?? cursor;
         }
-        if (page.rows.length < COHORT_FEATURE_PAGE_SIZE) {
-          break;
+        await client.query("COMMIT");
+        transactionOpen = false;
+      } catch (error) {
+        if (transactionOpen) {
+          await client.query("ROLLBACK").catch(() => undefined);
         }
-        cursor = page.rows.at(-1)?.appid ?? cursor;
+        throw error;
+      } finally {
+        client.release();
       }
-      await client.query("COMMIT");
-      transactionOpen = false;
-    } catch (error) {
-      if (transactionOpen) {
-        await client.query("ROLLBACK").catch(() => undefined);
+      if (rowsCacheKey) {
+        const data = Buffer.from(
+          JSON.stringify({ features, taxonomyRows }),
+          "utf8",
+        );
+        if (data.byteLength <= COHORT_FEATURE_CACHE_MAX_BYTES) {
+          this.cohortFeatureRowsCache = { key: rowsCacheKey, data };
+        }
       }
-      throw error;
-    } finally {
-      client.release();
     }
 
     const taxonomyIds = {
@@ -2712,26 +2797,7 @@ export class OpportunityWorkerRepository {
 
     let snapshot = await this.openCurrentCohortSnapshot();
     if (!snapshot) {
-      const fenceClient = await this.acquireCohortFeatureSourceFence();
-      try {
-        await this.refreshCohortFeatureProjection();
-        snapshot = await this.openCurrentCohortSnapshot();
-        if (!snapshot) {
-          throw new Error(
-            "Opportunity cohort feature projection did not match the fenced exported source snapshot.",
-          );
-        }
-        await fenceClient.query("COMMIT");
-      } catch (error) {
-        await fenceClient.query("ROLLBACK").catch(() => undefined);
-        if (snapshot) {
-          await snapshot.client.query("ROLLBACK").catch(() => undefined);
-          snapshot.client.release();
-        }
-        throw error;
-      } finally {
-        fenceClient.release();
-      }
+      snapshot = await this.refreshFencedCohortSnapshot();
     }
 
     const snapshotClient = snapshot.client;
@@ -2752,6 +2818,7 @@ export class OpportunityWorkerRepository {
       const rowsBySignature = await this.loadReleasedCohortRowsBatch(
         misses.map((item) => item.subject),
         snapshot.snapshotId,
+        snapshot.rowsCacheKey,
       );
       const resolved = new Map<number, OpportunityReleasedCohort>();
       for (const item of keyed) {

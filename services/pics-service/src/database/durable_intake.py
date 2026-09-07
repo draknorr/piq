@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Sequence
 from uuid import UUID
 
+from .connection_pool import PICSConnectionPool
+
 
 class PICSDurableIntakeError(RuntimeError):
     """Base error for durable PICS intake failures."""
@@ -119,6 +121,13 @@ class TigerPICSDurableIntakeStore:
         self._statement_timeout_seconds = max(1, int(statement_timeout_seconds))
         self._lock_timeout_seconds = max(1, int(lock_timeout_seconds))
         self._connection_factory = connection_factory
+        self._pool = PICSConnectionPool(
+            database_url,
+            application_name="publisheriq-pics-durable-intake",
+            max_size=1,
+            statement_timeout_seconds=self._statement_timeout_seconds,
+            lock_timeout_seconds=self._lock_timeout_seconds,
+        )
 
     @classmethod
     def from_settings(cls, settings: Any) -> "TigerPICSDurableIntakeStore":
@@ -137,17 +146,13 @@ class TigerPICSDurableIntakeStore:
         if self._connection_factory is not None:
             return self._connection_factory()
 
-        try:
-            import psycopg
-        except ImportError as error:
-            raise RuntimeError(
-                "Durable PICS intake requires psycopg. Install pics-service dependencies."
-            ) from error
+        return self._pool.connection()
 
-        return psycopg.connect(
-            self._database_url,
-            application_name="publisheriq-pics-durable-intake",
-        )
+    def close(self) -> None:
+        self._pool.close()
+
+    def get_pool_stats(self) -> dict[str, int]:
+        return self._pool.get_stats()
 
     def get_start_change_number(
         self,
@@ -356,18 +361,20 @@ class TigerPICSDurableIntakeStore:
                         from_change_number=source_cursor,
                         primary_cursor=primary_cursor,
                     )
-                    self._stage_batch_apps(cursor, normalized_changes)
-                    staged_count, staged_distinct, staged_hash = self._read_staged_manifest(cursor)
-                    self._assert_manifest(
-                        location="staged",
-                        expected_count=source_app_count,
-                        expected_distinct=distinct_app_count,
-                        expected_hash=app_changes_sha256,
-                        actual_count=staged_count,
-                        actual_distinct=staged_distinct,
-                        actual_hash=staged_hash,
-                    )
-
+                    if source_app_count:
+                        self._stage_batch_apps(cursor, normalized_changes)
+                        staged_count, staged_distinct, staged_hash = self._read_staged_manifest(
+                            cursor
+                        )
+                        self._assert_manifest(
+                            location="staged",
+                            expected_count=source_app_count,
+                            expected_distinct=distinct_app_count,
+                            expected_hash=app_changes_sha256,
+                            actual_count=staged_count,
+                            actual_distinct=staged_distinct,
+                            actual_hash=staged_hash,
+                        )
                     batch_id = self._insert_batch(
                         cursor,
                         stream_key=normalized_stream,
@@ -387,26 +394,27 @@ class TigerPICSDurableIntakeStore:
                         status=batch_status,
                         archive=archive,
                     )
-                    cursor.execute(
-                        """
-                        INSERT INTO ops.pics_change_batch_apps (
-                          batch_id,
-                          source_index,
-                          appid,
-                          source_change_number,
-                          needs_token
+                    if source_app_count:
+                        cursor.execute(
+                            """
+                            INSERT INTO ops.pics_change_batch_apps (
+                              batch_id,
+                              source_index,
+                              appid,
+                              source_change_number,
+                              needs_token
+                            )
+                            SELECT
+                              %s,
+                              source_index,
+                              appid,
+                              source_change_number,
+                              needs_token
+                            FROM pics_batch_stage
+                            ORDER BY source_index
+                            """,
+                            (batch_id,),
                         )
-                        SELECT
-                          %s,
-                          source_index,
-                          appid,
-                          source_change_number,
-                          needs_token
-                        FROM pics_batch_stage
-                        ORDER BY source_index
-                        """,
-                        (batch_id,),
-                    )
 
                     durable_count, durable_distinct, durable_hash = self._read_durable_manifest(
                         cursor,
@@ -434,7 +442,7 @@ class TigerPICSDurableIntakeStore:
                             recovered_app_changes_sha256=app_changes_sha256,
                         )
 
-                    if source_complete:
+                    if source_complete and source_app_count:
                         self._upsert_work(
                             cursor,
                             batch_id=batch_id,
@@ -444,12 +452,13 @@ class TigerPICSDurableIntakeStore:
                             received_at=observed_at,
                         )
                     if normalized_mode == "durable" and source_complete:
-                        self._mark_pics_readiness_pending(
-                            cursor,
-                            batch_id=batch_id,
-                            to_change_number=target_cursor,
-                            received_at=observed_at,
-                        )
+                        if source_app_count:
+                            self._mark_pics_readiness_pending(
+                                cursor,
+                                batch_id=batch_id,
+                                to_change_number=target_cursor,
+                                received_at=observed_at,
+                            )
                         cursor.execute(
                             """
                             UPDATE ops.pics_sync_state

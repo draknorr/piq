@@ -10,8 +10,10 @@ from typing import Any, Callable, Mapping, Optional
 from ..extractors.common import Association, ExtractedPICSData
 from ..extractors.taxonomy import CATEGORY_NAMES, GENRE_NAMES
 from .change_intelligence import diff_pics_snapshots
+from .connection_pool import PICSConnectionPool
 from .durable_payload import ValidatedPICSPayload, serialize_payload_evidence
 from .durable_work import (
+    PICSHeavyPhaseBusyError,
     PICSLatestSnapshot,
     PICSWorkClaim,
     PICSWorkStateError,
@@ -42,12 +44,18 @@ class TigerPICSDurablePromoter:
         work_store: TigerPICSDurableWorkStore,
         *,
         connection_factory: Optional[Callable[[], Any]] = None,
+        pool_size: int = 3,
     ):
         if not database_url and connection_factory is None:
             raise ValueError("A Tiger database URL is required for durable PICS promotion")
         self._database_url = database_url
         self._work_store = work_store
         self._connection_factory = connection_factory
+        self._pool = PICSConnectionPool(
+            database_url,
+            application_name="publisheriq-pics-durable-promotion",
+            max_size=pool_size,
+        )
 
     @classmethod
     def from_settings(
@@ -60,23 +68,19 @@ class TigerPICSDurablePromoter:
             raise ValueError(
                 "Durable PICS promotion requires PICS_LATEST_STATE_TIGER_URL or TIGER_PRIMARY_URL"
             )
-        return cls(database_url, work_store)
+        return cls(database_url, work_store, pool_size=int(settings.pics_consumer_concurrency))
 
     def _connect(self) -> Any:
         if self._connection_factory is not None:
             return self._connection_factory()
 
-        try:
-            import psycopg
-        except ImportError as error:
-            raise RuntimeError(
-                "Durable PICS promotion requires psycopg. Install pics-service dependencies."
-            ) from error
+        return self._pool.connection()
 
-        return psycopg.connect(
-            self._database_url,
-            application_name="publisheriq-pics-durable-promotion",
-        )
+    def close(self) -> None:
+        self._pool.close()
+
+    def get_pool_stats(self) -> dict[str, int]:
+        return self._pool.get_stats()
 
     def promote(
         self,
@@ -115,6 +119,13 @@ class TigerPICSDurablePromoter:
             with connection.transaction():
                 with connection.cursor() as cursor:
                     self._work_store.configure_transaction(cursor)
+                    if claim.lane == "catchup":
+                        # Protect the actual write transaction even if the pass's
+                        # gate connection dies. Never wait here: a queued exclusive
+                        # refresh must not deadlock with our outer shared lock.
+                        cursor.execute("SELECT pg_try_advisory_xact_lock_shared(1886417008, 3)")
+                        if not cursor.fetchone()[0]:
+                            raise PICSHeavyPhaseBusyError("A heavy database phase has priority")
                     self._work_store.lock_claim_for_promotion(
                         cursor,
                         claim=claim,
@@ -603,6 +614,7 @@ class TigerPICSDurablePromoter:
                     FROM jsonb_to_recordset(%s::jsonb)
                       AS rows(category_id integer, name text)
                     ON CONFLICT (category_id) DO UPDATE SET name = EXCLUDED.name
+                    WHERE legacy.steam_categories.name IS DISTINCT FROM EXCLUDED.name
                     """,
                     (
                         json.dumps(
@@ -619,7 +631,11 @@ class TigerPICSDurablePromoter:
                         ),
                     ),
                 )
-            cursor.execute("DELETE FROM legacy.app_categories WHERE appid = %s", (app.appid,))
+            cursor.execute(
+                "DELETE FROM legacy.app_categories WHERE appid = %s "
+                "AND category_id <> ALL(%s::int[])",
+                (app.appid, category_ids),
+            )
             if category_ids:
                 cursor.execute(
                     """
@@ -642,6 +658,7 @@ class TigerPICSDurablePromoter:
                     FROM jsonb_to_recordset(%s::jsonb)
                       AS rows(genre_id integer, name text)
                     ON CONFLICT (genre_id) DO UPDATE SET name = EXCLUDED.name
+                    WHERE legacy.steam_genres.name IS DISTINCT FROM EXCLUDED.name
                     """,
                     (
                         json.dumps(
@@ -655,7 +672,10 @@ class TigerPICSDurablePromoter:
                         ),
                     ),
                 )
-            cursor.execute("DELETE FROM legacy.app_genres WHERE appid = %s", (app.appid,))
+            cursor.execute(
+                "DELETE FROM legacy.app_genres WHERE appid = %s AND genre_id <> ALL(%s::int[])",
+                (app.appid, genre_ids),
+            )
             if genre_ids:
                 cursor.execute(
                     """
@@ -664,6 +684,7 @@ class TigerPICSDurablePromoter:
                     FROM unnest(%s::int[]) AS genre_id
                     ON CONFLICT (appid, genre_id)
                     DO UPDATE SET is_primary = EXCLUDED.is_primary
+                    WHERE legacy.app_genres.is_primary IS DISTINCT FROM EXCLUDED.is_primary
                     """,
                     (app.appid, app.primary_genre, genre_ids),
                 )
@@ -682,7 +703,10 @@ class TigerPICSDurablePromoter:
                     """,
                     (tag_ids,),
                 )
-            cursor.execute("DELETE FROM legacy.app_steam_tags WHERE appid = %s", (app.appid,))
+            cursor.execute(
+                "DELETE FROM legacy.app_steam_tags WHERE appid = %s AND tag_id <> ALL(%s::int[])",
+                (app.appid, tag_ids),
+            )
             if tag_ids:
                 cursor.execute(
                     """
@@ -691,15 +715,20 @@ class TigerPICSDurablePromoter:
                     FROM unnest(%s::int[]) WITH ORDINALITY AS tags(tag_id, rank)
                     ON CONFLICT (appid, tag_id)
                     DO UPDATE SET rank = EXCLUDED.rank
+                    WHERE legacy.app_steam_tags.rank IS DISTINCT FROM EXCLUDED.rank
                     """,
                     (app.appid, tag_ids),
                 )
 
         if evidence.family_is_complete("associations"):
             franchises = cls._association_names(app.associations, "franchise")
-            cursor.execute("DELETE FROM legacy.app_franchises WHERE appid = %s", (app.appid,))
-            for franchise_name in franchises:
-                franchise_id = resolve_tiger_franchise_id(cursor, franchise_name)
+            franchise_ids = [resolve_tiger_franchise_id(cursor, name) for name in franchises]
+            cursor.execute(
+                "DELETE FROM legacy.app_franchises WHERE appid = %s "
+                "AND franchise_id <> ALL(%s::bigint[])",
+                (app.appid, franchise_ids),
+            )
+            for franchise_id in franchise_ids:
                 cursor.execute(
                     """
                     INSERT INTO legacy.app_franchises (appid, franchise_id)
@@ -722,8 +751,9 @@ class TigerPICSDurablePromoter:
                 DELETE FROM legacy.app_dlc
                 WHERE parent_appid = %s
                   AND source = 'pics'
+                  AND dlc_appid <> ALL(%s::int[])
                 """,
-                (app.appid,),
+                (app.appid, dlc_ids),
             )
             if dlc_ids:
                 cursor.execute(
@@ -745,6 +775,7 @@ class TigerPICSDurablePromoter:
                     SELECT %s, unnest(%s::int[]), 'pics'
                     ON CONFLICT (parent_appid, dlc_appid)
                     DO UPDATE SET source = EXCLUDED.source
+                    WHERE legacy.app_dlc.source IS DISTINCT FROM EXCLUDED.source
                     """,
                     (app.appid, dlc_ids),
                 )

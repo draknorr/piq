@@ -145,6 +145,8 @@ class S3ArchiveStore:
             aws_secret_access_key=config.secret_access_key,
             config=Config(
                 max_pool_connections=max_pool_connections,
+                connect_timeout=10,
+                read_timeout=60,
                 s3={"addressing_style": addressing_style},
             ),
             endpoint_url=config.endpoint,
@@ -226,8 +228,28 @@ class S3ArchiveStore:
     ) -> Dict[str, Any]:
         """Read one immutable JSON object and verify its retained R2 pointer."""
 
+        if (
+            not isinstance(expected_byte_size, int)
+            or isinstance(expected_byte_size, bool)
+            or expected_byte_size < 0
+        ):
+            raise ValueError("Archive expected byte size must be a nonnegative integer")
         response = self._client.get_object(Bucket=bucket, Key=key)
-        body = response["Body"].read()
+        stream = response["Body"]
+        body = bytearray()
+        try:
+            if response.get("ContentLength", expected_byte_size) != expected_byte_size:
+                raise ValueError(f"Archive byte-size mismatch for {bucket}/{key}")
+            # Retained pointers define an exact size. Read at most one extra
+            # byte to detect excess content before it can consume unbounded
+            # memory; partial streaming reads remain valid.
+            while len(body) <= expected_byte_size:
+                chunk = stream.read(min(64 * 1024, expected_byte_size + 1 - len(body)))
+                if not chunk:
+                    break
+                body.extend(chunk)
+        finally:
+            stream.close()
         actual_content_type = str(response.get("ContentType") or "")
         if len(body) != expected_byte_size:
             raise ValueError(

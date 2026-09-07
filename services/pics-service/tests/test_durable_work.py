@@ -74,7 +74,7 @@ class FakeCursor(AbstractContextManager):
             ]
         elif normalized.startswith("SELECT id, content_hash"):
             self._row = (100, "a" * 64, "test-bucket", "test/key.json", "b" * 64)
-        elif normalized.startswith("SELECT clock_timestamp()"):
+        elif normalized.startswith("WITH metric_clock AS MATERIALIZED"):
             self._row = (
                 datetime.now(timezone.utc),
                 12,
@@ -644,3 +644,94 @@ def test_token_replay_fails_closed_when_any_exact_target_is_ineligible():
         for statement, _ in cursor.events
     )
     assert connection.rolled_back is True
+
+
+def test_capacity_deferral_locks_owned_lease_and_refunds_without_readiness_failure():
+    from dataclasses import replace
+
+    cursor = FakeCursor()
+    store, connection = make_store(cursor)
+    claim = replace(make_claim(), lane="catchup", attempts=8, max_attempts=8)
+    store.defer_catchup_claim(claim=claim, worker_id="worker-1")
+    statements = [sql for sql, _ in cursor.events]
+    lock = next(sql for sql in statements if sql.startswith("SELECT attempts"))
+    assert "worker_id = %s" in lock and "claim_expires_at > clock_timestamp()" in lock
+    update = next(sql for sql in statements if sql.startswith("UPDATE ops.pics_work_state"))
+    assert "attempts = GREATEST(0, attempts - 1)" in update
+    assert "state = 'retrying'" in update
+    assert not any(
+        "INSERT INTO" in sql or "UPDATE ops.pics_reconciliation_items" in sql for sql in statements
+    )
+    assert connection.committed
+
+
+def test_capacity_deferral_rejects_stale_ownership_before_refund():
+    from dataclasses import replace
+
+    cursor = FakeCursor()
+    original = cursor.execute
+
+    def execute(query, params=None):
+        original(query, params)
+        if "SELECT attempts, max_attempts" in query:
+            cursor._row = None
+
+    cursor.execute = execute
+    store, connection = make_store(cursor)
+    with pytest.raises(PICSWorkStateError):
+        store.defer_catchup_claim(claim=replace(make_claim(), lane="catchup"), worker_id="worker-1")
+    assert connection.rolled_back
+    assert not any(sql.startswith("UPDATE") for sql, _ in cursor.events)
+
+
+def test_successor_pause_applies_only_to_catchup_claims():
+    cursor = FakeCursor()
+    store, _ = make_store(cursor)
+    store.claim_work(
+        work_mode="durable",
+        stream_key="primary",
+        worker_id="worker-1",
+        lane_group="catchup",
+        limit=10,
+        lease_seconds=300,
+    )
+    query = next(sql for sql, _ in cursor.events if sql.startswith("WITH candidates"))
+    assert "successor.catchup_paused" in query
+    assert "work.lane IN ('new', 'live') OR NOT EXISTS" in query
+
+
+def test_successor_feeder_commits_one_bounded_admission():
+    cursor = FakeCursor()
+    execute = cursor.execute
+
+    def feed(query, params=None):
+        execute(query, params)
+        if query.startswith("SELECT ops.feed_pics_successor_backlog"):
+            cursor._row = ({"status": "enqueued", "enqueued": 10},)
+
+    cursor.execute = feed
+    store, connection = make_store(cursor)
+    assert store.feed_successor_backlog(limit=10) == {"status": "enqueued", "enqueued": 10}
+    assert connection.committed
+    assert cursor.events == [
+        ("SET LOCAL statement_timeout = '15s'", None),
+        ("SELECT ops.feed_pics_successor_backlog(%s, %s)", (10, 20)),
+    ]
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101, True, 1.5])
+def test_successor_feeder_rejects_unbounded_admission(limit):
+    cursor = FakeCursor()
+    store, _ = make_store(cursor)
+    with pytest.raises(ValueError):
+        store.feed_successor_backlog(limit=limit)
+    assert cursor.events == []
+
+
+def test_successor_feeder_failure_rolls_back_without_retry():
+    cursor = FakeCursor(fail_on="feed_pics_successor_backlog")
+    store, connection = make_store(cursor)
+    with pytest.raises(RuntimeError, match="injected"):
+        store.feed_successor_backlog(limit=10)
+    assert connection.rolled_back and not connection.committed
+    assert sum("feed_pics_successor_backlog" in query for query, _ in cursor.events) == 1
