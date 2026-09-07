@@ -12,6 +12,8 @@ concurrency:
 
 env:
   TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+  PGAPPNAME: publisheriq-unreleased-refresh
+  PGCONNECT_TIMEOUT: '10'
 
 jobs:
   refresh:
@@ -41,15 +43,19 @@ jobs:
           start_time=$(date +%s)
 
           psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 \
-            -c "SET temp_buffers TO '512MB'" \
-            -c "SET work_mem TO '128MB'" \
+            -c "SET temp_buffers TO '32MB'" \
+            -c "SET work_mem TO '16MB'" \
+            -c "SET hash_mem_multiplier TO 1" \
+            -c "SET max_parallel_workers_per_gather TO 0" \
             -c "SET statement_timeout TO '30min'" \
             -c "SET lock_timeout TO '15s'" \
             -c "REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.unreleased_games_projection;"
 
           psql "$TIGER_PRIMARY_URL" -X -v ON_ERROR_STOP=1 \
-            -c "SET temp_buffers TO '512MB'" \
-            -c "SET work_mem TO '128MB'" \
+            -c "SET temp_buffers TO '32MB'" \
+            -c "SET work_mem TO '16MB'" \
+            -c "SET hash_mem_multiplier TO 1" \
+            -c "SET max_parallel_workers_per_gather TO 0" \
             -c "SET statement_timeout TO '10min'" \
             -c "SET lock_timeout TO '15s'" \
             -c "REFRESH MATERIALIZED VIEW CONCURRENTLY metrics.unreleased_filter_counts;"
