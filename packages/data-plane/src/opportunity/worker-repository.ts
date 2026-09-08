@@ -866,7 +866,7 @@ export class OpportunityWorkerRepository {
           FROM opportunity.work_queue work
           WHERE work.state = 'claimed'
             AND work.claim_expires_at < now()
-        ), eligible AS (
+        ), ranked AS (
           SELECT
             work.id,
             row_number() OVER (
@@ -875,11 +875,20 @@ export class OpportunityWorkerRepository {
             ) AS lane_rank
           FROM candidates work
         ),
+        eligible AS MATERIALIZED (
+          SELECT id, lane_rank
+          FROM ranked
+          -- Every kind's quota is at most this bound. Keep ranking before locks.
+          WHERE lane_rank <= GREATEST(1, CEIL($2::numeric / 4))::bigint
+        ),
         claims AS (
           SELECT work.id
           FROM opportunity.work_queue work
           JOIN eligible ON eligible.id = work.id
-          WHERE eligible.lane_rank <= CASE
+          -- Expose the small ID set as an index condition; joining lane ranks
+          -- alone can make the planner scan and hash the entire work queue.
+          WHERE work.id = ANY(ARRAY(SELECT id FROM eligible))
+            AND eligible.lane_rank <= CASE
             WHEN work.kind = 'materialize_events' THEN 1
             ELSE GREATEST(1, CEIL($2::numeric / 4))
           END

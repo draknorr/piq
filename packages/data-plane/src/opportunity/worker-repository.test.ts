@@ -15,10 +15,36 @@ it("opportunity claims keep lane ordering and leases with disjoint eligible path
   assert.match(query, /UNION ALL/);
   assert.match(query, /FROM candidates work/);
   assert.match(query, /PARTITION BY work.lane/);
+  assert.match(query, /eligible AS MATERIALIZED/);
+  assert.match(
+    query,
+    /FROM ranked\s+--[^\n]*\n\s+WHERE lane_rank <= GREATEST\(1, CEIL\(\$2::numeric \/ 4\)\)::bigint/,
+  );
+  assert.match(query, /work.id = ANY\(ARRAY\(SELECT id FROM eligible\)\)/);
   assert.match(query, /ORDER BY work.priority DESC, work.scheduled_for, work.id/);
   assert.match(query, /FOR UPDATE OF work SKIP LOCKED/);
   assert.match(query, /claim_expires_at = now\(\) \+ interval '5 minutes'/);
   assert.deepEqual(values, ["worker-a", 20]);
+});
+
+it("bounds claim limits before computing the per-lane shortlist", async () => {
+  const values: unknown[][] = [];
+  const pool = {
+    query: async (_text: string, params: unknown[]) => {
+      values.push(params);
+      return { rows: [] };
+    },
+  } as unknown as Pool;
+  const repository = new OpportunityWorkerRepository(pool);
+  for (const limit of [-1, 0, 1.9, 101]) {
+    await repository.claimWork("worker-a", limit);
+  }
+  assert.deepEqual(values, [
+    ["worker-a", 1],
+    ["worker-a", 1],
+    ["worker-a", 1],
+    ["worker-a", 100],
+  ]);
 });
 
 it("limits worker material events to non-delisted canonical games", async () => {
