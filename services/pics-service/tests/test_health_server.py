@@ -143,3 +143,50 @@ def test_intake_progress_cannot_hide_stalled_processing(monkeypatch):
     ) == (503, "PROCESSING_STALE")
     health.update_status({"last_processing_progress_at": datetime.now(timezone.utc).isoformat()})
     assert not health.is_progress_stale(late)
+
+
+def test_status_reports_stale_health_without_overwriting_worker_evidence(monkeypatch):
+    original = {
+        "health_state": "ok", "updated_at": "2000-01-01T00:00:00Z",
+        "last_successful_change_poll_at": "2000-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(HealthHandler, "_status", original.copy())
+    status = HealthHandler.get_status_response()
+    assert status["health_state"] == "unhealthy"
+    assert status["reported_health_state"] == "ok"
+    assert status["health_reason"] == "STALE"
+    assert status["health_http_status"] == 503
+    assert status["last_successful_change_poll_at"] == original["last_successful_change_poll_at"]
+    assert HealthHandler._status == original
+
+
+def test_status_retains_responsive_source_block(monkeypatch):
+    original = {"health_state": "degraded", "updated_at": datetime.now(timezone.utc).isoformat()}
+    monkeypatch.setattr(HealthHandler, "_status", original.copy())
+    status = HealthHandler.get_status_response()
+    assert status["health_state"] == "degraded"
+    assert status["health_http_status"] == 200
+    assert HealthHandler._status == original
+
+
+def test_native_watchdog_terminates_a_blocked_coordinator():
+    import subprocess
+
+    script = """
+import threading
+import time
+from src.config.settings import settings
+from src.health.server import HealthServer
+settings.pics_progress_timeout_seconds = 1
+health = HealthServer()
+health.update_status({"health_state": "ok"})
+threading.Thread(target=health._watchdog_loop, daemon=True).start()
+time.sleep(30)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=12,
+    )
+    assert result.returncode == 1
+    assert "coordinator stopped reporting progress" in result.stderr

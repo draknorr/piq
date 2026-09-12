@@ -377,3 +377,34 @@ After the initial live-work and recovery canaries pass, explicitly enable `PICS_
 Durable stores use locked `psycopg-pool` 3.3.1, opened lazily on first checkout. Intake allows one connection, work state allows two (including the catch-up gate), and promotion allows the configured consumer concurrency. At the current concurrency of three this caps the service's durable pools at six connections; do not increase concurrency as part of rollout. Pools start with zero connections, use a 300-second idle shrink interval and a jittered 30-minute lifetime, and retain existing per-operation transactions. Checkout waits are bounded at 10 seconds with at most 16 waiting requests per pool; connect and TCP failure settings are bounded separately. Work-state queries can briefly queue behind a held gate and another work query. Intake has its own pool.
 
 Every return commits or rolls back first, then synchronously clears temporary tables, session advisory locks, role/GUC/LISTEN state and driver transaction settings. Automatic prepared statements are disabled because reset discards server statements. A failed reset closes the connection without changing the already-known transaction outcome; dead sessions are checked/replaced on checkout. Pooling adds persistent backend memory plus check/reset round trips, which must be included in restored-load measurements. Cumulative pool logs expose creation, request, waiting and size counters; these are distinct from logical application transaction counts. Shutdown drains the processing pass before closing the pools. Rollback may restore the tested baseline-plus-successor-compatibility image, preserving accepted data and successor guards.
+
+
+### Recovery from a stalled Steam connection
+
+Reconnect callers preserve the current attempt's ownership of the Steam client,
+even when a caller requests forced recovery. Background reconnects return after
+three attempts; subsequent poll passes retry with the existing backoff. Finite
+attempt budgets do not reset at the tenth failure. Cooperative deadlines remain
+in place, but cannot interrupt every native I/O stall.
+
+`/status` computes liveness at read time and exposes `health_http_status` and
+`health_reason`. On a stale worker it reports `health_state=unhealthy`, preserving
+the original label as `reported_health_state` and leaving all observation
+timestamps untouched. `/status` retains HTTP 200 for diagnostic consumers;
+`/health` returns 503 for stale progress. A responsive source-history block remains
+degraded and requires audited recovery rather than a restart loop.
+
+For an approved recovery, enable the existing `PICS_WATCHDOG_ENABLED=true` with
+`PICS_PROGRESS_TIMEOUT_SECONDS=900` after checking normal phase times. Its native
+thread dumps stacks and exits on lost coordinator/processor progress so Railway's
+existing failure restart policy can recover. Tradeoff: unfinished transactions
+roll back and retry; committed batches, queue outcomes and R2 archives persist.
+Do not use a watchdog restart to bypass a forced-full history gap.
+
+Roll out one collector with processing and successor feeder disabled first.
+Verify fresh complete archived change batches before activating the audited
+successor and restoring bounded primary processing. Retain previous source blocks
+and checkpoint audits. Catch-up expansion requires measured restored-load capacity
+through a full normal daily overlap cycle. To roll back the runtime, disable
+processing/feeder, preserve the persistent catch-up pause, and deploy the previous
+successor-compatible image with one collector. Never rewind the canonical cursor.
