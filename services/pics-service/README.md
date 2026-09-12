@@ -79,6 +79,16 @@ reconciliation work through the additive Tiger records.
 - `needs_token` remains durable from the source change through claim routing;
   token-required work uses explicit cached tokens, refreshes once after
   rejection, and never falls through to an anonymous product-info request
+- token-request timeouts and malformed response maps use the existing bounded
+  request/queue retries; a valid response without an app token remains an
+  unresolved source block. This can add retry traffic compared with falsely
+  treating a timeout as a permanent access restriction
+- `/status.steam_request_attempts` reports process-lifetime governed Steam
+  method attempts by class, including internal retries and failed attempts.
+  Counters reset on process restart and survive reconnects. Compare readings
+  from the same worker instance; these are not packet counts. The per-pass
+  `last_processing_product_info_requests` sums both fetch groups and counts
+  fetcher calls rather than retries inside the request governor
 - redacted token-request evidence and successful, blocked, or failed request
   evidence are archived separately to R2; access-token values are never stored
 - raw source presence is retained before normalization; only explicitly

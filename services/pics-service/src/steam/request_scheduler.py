@@ -83,6 +83,14 @@ class SteamRequestScheduler:
         self._last_started_at: Optional[float] = None
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        self._request_attempts = dict.fromkeys(
+            ("pics_changes_since", "pics_product_info", "pics_access_tokens", "other"), 0
+        )
+
+    @property
+    def request_attempts(self) -> dict[str, int]:
+        """Copy fixed-cardinality counters; queued/rejected calls are not attempts."""
+        return dict(self._request_attempts)
 
     def execute(self, request_name: str, operation: Callable[[], Any]) -> Any:
         """Run one request within the shared bounded queue and policy."""
@@ -126,6 +134,8 @@ class SteamRequestScheduler:
             self._wait_for_governor_slot()
             self._check_deadline(request_name, deadline)
             try:
+                counter = request_name if request_name in self._request_attempts else "other"
+                self._request_attempts[counter] += 1
                 result = operation()
                 self._check_deadline(request_name, deadline)
                 self._consecutive_failures = 0

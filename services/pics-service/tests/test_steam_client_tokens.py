@@ -2,6 +2,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 client_module = importlib.import_module("src.steam.client")
@@ -93,6 +95,44 @@ def test_rejected_token_records_refresh_reason(monkeypatch):
     assert tokens == {7: 222}
     assert evidence[7]["status"] == "refreshed"
     assert evidence[7]["refreshReason"] == "steam_rejected"
+
+
+@pytest.mark.parametrize("response", [None, {}, {"apps": None}, []])
+def test_missing_or_malformed_token_response_does_not_become_access_denial(response):
+    client = make_client()
+    client._client.responses = [response]
+    with pytest.raises((TimeoutError, ValueError)):
+        client.acquire_access_tokens([7])
+    assert client._access_tokens == {}
+
+
+def test_empty_successful_token_map_preserves_unavailable_evidence():
+    client = make_client()
+    client._client.responses = [{"apps": {}, "packages": {}}]
+    tokens, evidence = client.acquire_access_tokens([7])
+    assert tokens == {}
+    assert evidence == {7: {"needsToken": True, "status": "unavailable"}}
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_token_timeout_uses_existing_bounded_governor_retries(recovers):
+    from src.steam.request_scheduler import SteamRequestPolicy, SteamRequestScheduler
+
+    client = make_client()
+    client._client.responses = [None, {"apps": {7: 111}} if recovers else None]
+    client._request_scheduler = SteamRequestScheduler(
+        SteamRequestPolicy(max_attempts=2), sleep=lambda _seconds: None
+    )
+    if recovers:
+        tokens, evidence = client.acquire_access_tokens([7])
+        assert tokens == {7: 111}
+        assert evidence[7]["status"] == "acquired"
+    else:
+        with pytest.raises(TimeoutError):
+            client.acquire_access_tokens([7])
+        assert client._access_tokens == {}
+    assert len(client._client.calls) == 2
+    assert client.request_attempts["pics_access_tokens"] == 2
 
 
 def test_forced_reconnect_does_not_destroy_an_active_attempt(monkeypatch):

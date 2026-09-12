@@ -375,14 +375,21 @@ class PICSSteamClient:
                 missing.append(appid)
 
         if missing:
+            def request_tokens() -> Dict[str, Any]:
+                response = self.client.get_access_tokens(app_ids=missing, package_ids=[])
+                # ValvePython returns None on timeout. Let the existing governor
+                # retry it instead of turning a transport failure into a source block.
+                if response is None:
+                    raise TimeoutError("Steam access-token request returned no response")
+                if not isinstance(response, dict) or not isinstance(response.get("apps"), dict):
+                    raise ValueError("Steam access-token response has no valid app-token map")
+                return response
+
             response = self._request_scheduler.execute(
                 "pics_access_tokens",
-                lambda: self.client.get_access_tokens(
-                    app_ids=missing,
-                    package_ids=[],
-                ),
+                request_tokens,
             )
-            received = response.get("apps", {}) if isinstance(response, dict) else {}
+            received = response["apps"]
             expires_at = time.monotonic() + self._access_token_ttl_seconds
             expires_iso = (
                 datetime.now(timezone.utc) + timedelta(seconds=self._access_token_ttl_seconds)
@@ -417,6 +424,11 @@ class PICSSteamClient:
         self._expired_access_token_reasons[normalized_appid] = "steam_rejected"
 
     # Properties
+    @property
+    def request_attempts(self) -> Dict[str, int]:
+        """Process-lifetime governed Steam method attempts, including retries."""
+        return self._request_scheduler.request_attempts
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to Steam."""
