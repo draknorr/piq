@@ -118,19 +118,17 @@ class PICSSteamClient:
 
         Args:
             max_attempts: Maximum reconnection attempts (0 = unlimited, default)
-            force: Reset any stale reconnect marker before retrying
+            force: Request immediate recovery without taking over an active reconnect
 
         Returns:
             True if reconnected successfully
         """
         if self._reconnecting:
-            if not force:
-                logger.debug("Reconnection already in progress, skipping")
-                return False
-
-            logger.warning("Forcing Steam reconnect after stale reconnect state")
-            self._cleanup_client()
-            self._reconnecting = False
+            # A slow attempt still owns the shared client. Destroying it here
+            # lets two greenlets log in and clean up each other's connection.
+            # Its cooperative deadline or the native watchdog handles stalls.
+            logger.debug("Reconnection already in progress, preserving its ownership")
+            return False
 
         self._reconnecting = True
         attempt = 0
@@ -157,7 +155,7 @@ class PICSSteamClient:
                     return True
 
                 # Reset backoff after 10 failed attempts to avoid getting stuck
-                if attempt % 10 == 0:
+                if max_attempts == 0 and attempt % 10 == 0:
                     logger.info("Resetting backoff after 10 failed attempts")
                     attempt = 0
 
@@ -274,7 +272,7 @@ class PICSSteamClient:
         gevent.sleep(2)
 
         if not self._connected and not self._reconnecting:
-            self.reconnect(max_attempts=0)  # Unlimited attempts
+            self.reconnect(max_attempts=3)  # Yield further recovery to the polling loop
 
     def _on_error(self, error):
         """Handle error events."""

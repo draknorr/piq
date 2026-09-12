@@ -27,9 +27,19 @@ class HealthHandler(BaseHTTPRequestHandler):
             code, message = self.get_health_response()
             self._send_response(code, message)
         elif self.path == "/status":
-            self._send_json_response(200, self._status)
+            self._send_json_response(200, self.get_status_response())
         else:
             self._send_response(404, "Not Found")
+
+    @classmethod
+    def get_status_response(cls, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Report current liveness without rewriting the last worker observation."""
+        code, reason = cls.get_health_response(now)
+        status = {**cls._status, "health_http_status": code, "health_reason": reason}
+        if code != 200:
+            status["reported_health_state"] = status.get("health_state")
+            status["health_state"] = "unhealthy"
+        return status
 
     @classmethod
     def get_health_response(cls, now: Optional[datetime] = None) -> tuple[int, str]:

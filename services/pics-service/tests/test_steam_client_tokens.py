@@ -93,3 +93,57 @@ def test_rejected_token_records_refresh_reason(monkeypatch):
     assert tokens == {7: 222}
     assert evidence[7]["status"] == "refreshed"
     assert evidence[7]["refreshReason"] == "steam_rejected"
+
+
+def test_forced_reconnect_does_not_destroy_an_active_attempt(monkeypatch):
+    import gevent
+
+    client = PICSSteamClient()
+    client._reconnect_delay = 0
+    entered = gevent.event.Event()
+    release = gevent.event.Event()
+    cleanups = []
+    monkeypatch.setattr(client, "_cleanup_client", lambda: cleanups.append(True))
+
+    def connect():
+        entered.set()
+        release.wait()
+        return True
+
+    monkeypatch.setattr(client, "connect", connect)
+    owner = gevent.spawn(client.reconnect, max_attempts=1)
+    assert entered.wait(timeout=1)
+    try:
+        assert client.reconnect(max_attempts=3, force=True) is False
+        assert len(cleanups) == 1
+        assert client.is_reconnecting
+    finally:
+        release.set()
+        assert owner.get(timeout=1) is True
+    assert not client.is_reconnecting
+
+
+def test_finite_reconnect_budget_is_not_reset_after_ten_failures(monkeypatch):
+    client = PICSSteamClient()
+    attempts = []
+    monkeypatch.setattr(client_module.gevent, "sleep", lambda _: None)
+    monkeypatch.setattr(client, "_cleanup_client", lambda: None)
+
+    def connect():
+        attempts.append(True)
+        assert len(attempts) <= 10
+        return False
+
+    monkeypatch.setattr(client, "connect", connect)
+    assert client.reconnect(max_attempts=10) is False
+    assert len(attempts) == 10
+    assert not client.is_reconnecting
+
+
+def test_background_reconnect_returns_after_bounded_attempts(monkeypatch):
+    client = PICSSteamClient()
+    calls = []
+    monkeypatch.setattr(client_module.gevent, "sleep", lambda _: None)
+    monkeypatch.setattr(client, "reconnect", lambda **kwargs: calls.append(kwargs))
+    client._auto_reconnect_handler()
+    assert calls == [{"max_attempts": 3}]
