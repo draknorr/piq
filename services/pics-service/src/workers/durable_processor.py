@@ -354,6 +354,7 @@ class DurablePICSProcessor:
         raw_by_appid: Dict[int, Dict[str, Any]] = {}
         outcomes: List[PICSClaimOutcome] = []
         failed_claim_ids = set()
+        product_info_requests = 0
         anonymous_claims = [claim for claim in claims if not claim.needs_token]
         token_claims = [claim for claim in claims if claim.needs_token]
         fetch_groups = [
@@ -434,6 +435,8 @@ class DurablePICSProcessor:
                     failed_claim_ids.add(claim.id)
                     renewal.claims.pop(claim.id, None)
                     self._on_progress()
+            finally:
+                product_info_requests += int(getattr(fetcher, "last_product_info_attempts", 1))
             self._on_progress()
         phase_seconds["steam_product_info"] = time.perf_counter() - phase_started
         process_claims = [claim for claim in claims if claim.id not in failed_claim_ids]
@@ -535,7 +538,7 @@ class DurablePICSProcessor:
             capacity_deferred=capacity_deferred,
             recovery_feed=recovery_feed,
             duration_seconds=phase_seconds["total"],
-            product_info_requests=int(getattr(fetcher, "last_product_info_attempts", 1)),
+            product_info_requests=product_info_requests,
             heartbeat_transactions=heartbeat_transactions,
             tiger_transactions=tiger_transactions,
             tiger_transactions_per_settlement=self._transactions_per_settlement(

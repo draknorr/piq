@@ -54,6 +54,10 @@ def test_scheduler_serial_policy_retries_with_governor_and_jittered_backoff():
     assert calls == [0.0, 5.0, 15.0]
     assert clock.sleeps == [5.0, 10.0]
     assert scheduler.pending == 0
+    assert scheduler.request_attempts["other"] == 3
+    snapshot = scheduler.request_attempts
+    snapshot["other"] = 999
+    assert scheduler.request_attempts["other"] == 3
 
 
 def test_scheduler_opens_and_half_opens_the_circuit():
@@ -75,10 +79,12 @@ def test_scheduler_opens_and_half_opens_the_circuit():
         scheduler.execute("changes", lambda: (_ for _ in ()).throw(RuntimeError("down")))
     with pytest.raises(SteamCircuitOpenError):
         scheduler.execute("heartbeat", lambda: "should not run")
+    assert sum(scheduler.request_attempts.values()) == 2
 
     clock.now = 31.0
     assert scheduler.execute("half_open", lambda: "recovered") == "recovered"
     assert scheduler.circuit_open_until == 0.0
+    assert sum(scheduler.request_attempts.values()) == 3
 
 
 def test_scheduler_never_converts_process_control_exceptions_into_retries():

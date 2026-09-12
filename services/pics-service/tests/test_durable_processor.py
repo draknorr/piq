@@ -138,6 +138,32 @@ class FailingSettlementWorkStore(FakeWorkStore):
         raise RuntimeError("Tiger settlement unavailable")
 
 
+@pytest.mark.parametrize("token_requests", [0, 2])
+def test_mixed_pass_retains_anonymous_request_count_when_token_group_resets_it(token_requests):
+    live = make_claim()
+    token = replace(make_claim(appid=8), id=42, needs_token=True)
+    store = FakeWorkStore(live)
+    store.claim_work = lambda **kwargs: [live, token] if kwargs["lane_group"] == "live" else []
+
+    class MixedFetcher:
+        def fetch_apps_batch(self, appids):
+            self.last_product_info_attempts = 1
+            return {7: make_payload()}
+
+        def fetch_token_required_apps(self, appids):
+            self.last_product_info_attempts = token_requests
+            return {8: make_payload(appid=8, missing_token=token_requests == 0)}
+
+    processor = DurablePICSProcessor(
+        work_mode="shadow", stream_key="shadow-test", work_store=store,
+        archive_store=FakeArchiveStore(), worker_id="test-worker",
+    )
+    stats = processor.process_once(MixedFetcher())
+    assert stats.product_info_requests == 1 + token_requests
+    assert stats.completed == (2 if token_requests else 1)
+    assert stats.source_blocked == (0 if token_requests else 1)
+
+
 @pytest.mark.parametrize("admission_fails", [False, True])
 def test_automatic_feeder_runs_after_live_claim_and_preserves_live_on_failure(
     monkeypatch, admission_fails

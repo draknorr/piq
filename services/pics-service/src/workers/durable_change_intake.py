@@ -523,6 +523,7 @@ class DurableChangeIntakeWorker:
                 ),
                 "processing_queue_metrics": (processing.queue_metrics if processing else None),
                 "last_intake_phase_seconds": self._last_intake_phase_seconds,
+                "steam_request_attempts": getattr(self._steam, "request_attempts", {}),
                 "health_state": health_state,
                 "last_change": last_change,
                 "last_committed_batch_id": str(batch.batch_id) if batch else None,
