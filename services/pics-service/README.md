@@ -435,3 +435,29 @@ blocking session was no longer present during September 14 inspection. This
 repair prevents that contention from permanently stopping the service; it does
 not remove the shared database lock or reconstruct Steam history lost during
 the outage. A forced-full response still requires audited successor recovery.
+
+### Forward-only operation after the September 14 outage
+
+The operator explicitly chose to accept the missing interval and collect future
+changes without a full-catalog replay. Checkpoint
+`f497be03-59fd-42f9-9177-9179f2e5afdb` advanced the primary cursor from 38,839,466
+to the freshly verified Steam boundary 38,872,388. Gap and complete shadow-head
+archives were verified before the atomic control-record transition. This does
+not claim recovery of the skipped interval.
+
+The prior reconciliation `ccfd57ea-44df-4707-90ee-ddd43bc574f8` is cancelled and
+its successor catch-up is paused. Its original 306,593-item manifest and all
+individual outcomes remain retained. No new recovery manifest was staged.
+Production uses `PICS_WORK_MODE=durable`, `PICS_PROCESSING_ENABLED=true`,
+`PICS_SUCCESSOR_FEEDER_ENABLED=false`, and `PICS_CONSUMER_CATCHUP_BATCH_SIZE=0`.
+Keep catch-up disabled unless the operator explicitly requests it again. Normal
+live changes can still refresh an app from the old manifest; the intake upsert
+clears associations with cancelled runs so those apps remain processable.
+
+The deployment retains the September 14 database-contention retry fix. Existing
+live queue work can finish under the normal live quota, but the cancelled
+full-catalog catch-up is not admitted. The local incident packet in
+`output/pics-crash-2026-09-14/` contains the user-authorized operator script,
+evidence checks, archive verification, checkpoint audit, and runtime validation.
+Never rewind the cursor or invoke destructive legacy checkpoint rollback; pause
+processing and retain accepted data if another repair is necessary.
