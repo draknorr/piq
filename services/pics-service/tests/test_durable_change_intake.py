@@ -398,3 +398,100 @@ def test_run_processes_due_work_while_incremental_intake_is_source_blocked(monke
     assert worker._consecutive_poll_failures == 1
     assert worker._last_poll_error == "source_blocked"
     assert worker._consecutive_processing_failures == 0
+
+
+@pytest.mark.parametrize("phase", ["poll", "processing"])
+@pytest.mark.parametrize(
+    "error_name", ["LockNotAvailable", "DeadlockDetected", "SerializationFailure"]
+)
+def test_transaction_contention_recovers_beyond_restart_threshold(monkeypatch, phase, error_name):
+    from psycopg import errors
+
+    worker, observed, sleeps = make_retry_loop_worker(monkeypatch)
+    failures = 7
+    attempts = []
+
+    def operation(cursor=None):
+        attempts.append(cursor)
+        if len(attempts) <= failures:
+            raise getattr(errors, error_name)("temporary transaction contention")
+        if phase == "poll":
+            return 20
+        worker._consecutive_processing_failures = 0
+        worker._last_processing_error = None
+
+    if phase == "poll":
+        worker.poll_once = operation
+    else:
+        worker._process_once_if_due = operation
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == failures + 1:
+            worker._running = False
+
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", sleep)
+    worker.run()
+
+    assert len(attempts) == failures + 1
+    assert all(state["cursor"] == 10 for state in observed[:-1])
+    assert observed[-1]["cursor"] == (20 if phase == "poll" else 10)
+    assert all(state["forced_state"] is None for state in observed)
+    assert getattr(worker, f"_consecutive_{phase}_failures") == 0
+    assert getattr(worker, f"_last_{phase}_error") is None
+    assert all(0 < seconds <= 300 for seconds in sleeps)
+    if phase == "poll":
+        assert attempts == [10] * (failures + 1)
+        assert sleeps[:7] == [30, 60, 120, 240, 300, 300, 300]
+
+
+@pytest.mark.parametrize("phase", ["poll", "processing"])
+def test_unexpected_errors_still_exit_after_three_failures(monkeypatch, phase):
+    worker, observed, _sleeps = make_retry_loop_worker(monkeypatch)
+
+    def fail(*_args):
+        raise ValueError("invalid invariant")
+
+    if phase == "poll":
+        worker.poll_once = fail
+    else:
+        worker._process_once_if_due = fail
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="Exceeded consecutive durable PICS"):
+        worker.run()
+    assert observed[-1]["forced_state"] == "unhealthy"
+    assert getattr(worker, f"_consecutive_{phase}_failures") == 3
+
+
+def make_retry_loop_worker(monkeypatch):
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "poll_interval", 30)
+    worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
+    worker._work_mode = "durable"
+    worker._stream_key = "primary"
+    worker._steam = SimpleNamespace(
+        set_heartbeat_interval=lambda _value: None,
+        set_auto_reconnect=lambda _value: None,
+        connect=lambda: True,
+        disconnect=lambda: None,
+    )
+    worker._store = SimpleNamespace(get_start_change_number=lambda **_kwargs: 10)
+    worker._processor = None
+    worker._processing_job = None
+    worker._consecutive_poll_failures = 0
+    worker._last_poll_error = None
+    worker._consecutive_processing_failures = 0
+    worker._last_processing_error = None
+    worker.poll_once = lambda cursor: cursor
+    worker._process_once_if_due = lambda: None
+    observed = []
+    sleeps = []
+    worker._update_health_status = lambda cursor, forced_state=None: observed.append(
+        {"cursor": cursor, "forced_state": forced_state}
+    )
+    monkeypatch.setattr(
+        "src.workers.durable_change_intake.PICSFetcher", lambda *_a, **_kw: object()
+    )
+    return worker, observed, sleeps

@@ -418,3 +418,20 @@ and checkpoint audits. Catch-up expansion requires measured restored-load capaci
 through a full normal daily overlap cycle. To roll back the runtime, disable
 processing/feeder, preserve the persistent catch-up pause, and deploy the previous
 successor-compatible image with one collector. Never rewind the canonical cursor.
+
+
+### Recovery from database contention
+
+Durable intake and processing retry PostgreSQL lock timeouts, deadlocks and
+serialization failures without exiting after three attempts. These errors abort
+the current transaction; intake keeps its last committed cursor and processing
+retains the existing lease/replay rules. Retry delays remain capped at 300 seconds
+and health remains degraded until a successful pass. Other unexpected errors
+still exit after three failures, and the progress watchdog remains enabled.
+
+The September 13, 2026 incident exhausted Railway's restart budget when readiness
+updates repeatedly timed out on `opportunity.cohort_source_revisions_v1`. The
+blocking session was no longer present during September 14 inspection. This
+repair prevents that contention from permanently stopping the service; it does
+not remove the shared database lock or reconstruct Steam history lost during
+the outage. A forced-full response still requires audited successor recovery.

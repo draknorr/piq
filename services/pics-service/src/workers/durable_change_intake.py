@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import gevent
+from psycopg.errors import DeadlockDetected, LockNotAvailable, SerializationFailure
 
 from ..config.settings import settings
 from ..database.durable_intake import (
@@ -25,6 +26,10 @@ from ..steam.pics import PICSFetcher
 from .durable_processor import DurablePICSProcessor, PICSProcessingStats
 
 logger = logging.getLogger(__name__)
+
+# PostgreSQL aborts these transactions before the durable cursor can commit.
+# Retry the same cursor instead of consuming the process restart budget.
+RETRYABLE_TRANSACTION_ERRORS = (LockNotAvailable, DeadlockDetected, SerializationFailure)
 
 
 class IncompletePICSChangeResponseError(RuntimeError):
@@ -162,7 +167,10 @@ class DurableChangeIntakeWorker:
                         sleep_seconds,
                         error,
                     )
-                    if self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                    if (
+                        self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES
+                        and not isinstance(error, RETRYABLE_TRANSACTION_ERRORS)
+                    ):
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
                             "Exceeded consecutive durable PICS poll failures; exiting"
@@ -182,7 +190,10 @@ class DurableChangeIntakeWorker:
                         processing_backoff_seconds,
                         error,
                     )
-                    if self._consecutive_processing_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                    if (
+                        self._consecutive_processing_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES
+                        and not isinstance(error, RETRYABLE_TRANSACTION_ERRORS)
+                    ):
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
                             "Exceeded consecutive durable PICS processing failures; exiting"
