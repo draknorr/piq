@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Sequence
@@ -56,6 +57,16 @@ class PICSReplayProvenance:
     requested_by: str
     source_archive: PICSArchiveReference
     gap_archive: PICSArchiveReference
+
+
+@dataclass(frozen=True)
+class PICSForwardRecovery:
+    """Verified immutable evidence for an explicitly enabled missing-history policy."""
+
+    gap: dict[str, Any]
+    head: dict[str, Any]
+    requested_by: str
+    verified_at: datetime
 
 
 @dataclass(frozen=True)
@@ -207,6 +218,202 @@ class TigerPICSDurableIntakeStore:
             raise ValueError("PICS_SHADOW_START_CHANGE_NUMBER must be nonnegative")
         return int(shadow_start_change_number)
 
+    def read_forward_recovery_evidence(self, gap_id: UUID, head_id: UUID) -> tuple[dict, dict]:
+        """Read two bounded retained batches and reconcile their exact child manifests."""
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                self._configure_transaction(cursor)
+                batches = []
+                for batch_id in (gap_id, head_id):
+                    cursor.execute(
+                        "SELECT row_to_json(b) FROM ops.pics_change_batches b WHERE id=%s LIMIT 1",
+                        (batch_id,),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise PICSBatchReconciliationError("Recovery evidence is missing")
+                    batch = row[0]
+                    if not 0 <= batch["source_app_count"] <= 100_000:
+                        raise PICSBatchReconciliationError("Recovery source count exceeds cap")
+                    if not isinstance(batch["archive_byte_size"], int) or not (
+                        0 < batch["archive_byte_size"] <= 32 * 1024 * 1024
+                    ):
+                        raise PICSBatchReconciliationError("Recovery archive exceeds cap")
+                    actual = self._read_durable_manifest(cursor, batch_id=batch_id)
+                    if (
+                        actual
+                        != (
+                            batch["source_app_count"],
+                            batch["distinct_app_count"],
+                            batch["app_changes_sha256"],
+                        )
+                        or batch["durable_app_count"] != batch["source_app_count"]
+                    ):
+                        raise PICSBatchReconciliationError("Recovery durable manifest mismatch")
+                    batches.append(batch)
+        return batches[0], batches[1]
+
+    @staticmethod
+    def verify_forward_recovery_document(batch: dict, document: dict) -> None:
+        """Check the hash-verified R2 body against every retained source field."""
+        if document.get("_archive_schema_version") != "pics-change-response/v2":
+            raise PICSBatchReconciliationError("Recovery archive schema mismatch")
+        for key in (
+            "stream_key",
+            "work_mode",
+            "lane",
+            "from_change_number",
+            "to_change_number",
+            "response_since_change_number",
+            "source_app_count",
+            "distinct_app_count",
+            "app_changes_sha256",
+            "force_full_update",
+            "force_full_app_update",
+            "force_full_package_update",
+        ):
+            if (
+                type(document.get(key)) is not type(batch[key]) or document[key] != batch[key]  # noqa: E721
+            ):  # noqa: E721
+                raise PICSBatchReconciliationError(f"Recovery archive mismatch: {key}")
+        items = document.get("app_changes")
+        if not isinstance(items, list) or len(items) != batch["source_app_count"]:
+            raise PICSBatchReconciliationError("Recovery archive source count mismatch")
+        changes = []
+        for index, item in enumerate(items):
+            if (
+                not isinstance(item, dict)
+                or any(
+                    type(item.get(key)) is not int  # noqa: E721
+                    for key in ("source_index", "appid", "change_number")
+                )
+                or type(item.get("needs_token")) is not bool  # noqa: E721
+                or item["source_index"] != index
+            ):  # noqa: E721
+                raise PICSBatchReconciliationError("Recovery archive source item invalid")
+            changes.append(
+                PICSSourceAppChange(item["appid"], item["change_number"], item["needs_token"])
+            )
+        if hash_pics_app_changes(changes) != batch["app_changes_sha256"] or (
+            len({item.appid for item in changes}) != batch["distinct_app_count"]
+        ):
+            raise PICSBatchReconciliationError("Recovery archive source manifest mismatch")
+
+    @staticmethod
+    def validate_forward_recovery(recovery: PICSForwardRecovery, now: datetime) -> None:
+        gap, head = recovery.gap, recovery.head
+        age = (now - datetime.fromisoformat(head["received_at"])).total_seconds()
+        verification_age = (now - recovery.verified_at).total_seconds()
+        if not recovery.requested_by.strip() or len(recovery.requested_by) > 200:
+            raise ValueError("Forward recovery requires the approving policy identity")
+        if not (
+            gap["stream_key"] == "primary"
+            and gap["work_mode"] == "durable"
+            and gap["status"] == "source_blocked"
+            and not gap["source_complete"]
+            and not gap["primary_cursor_advanced"]
+            and gap["response_since_change_number"] == gap["from_change_number"]
+            and (gap["force_full_update"] or gap["force_full_app_update"])
+            and head["work_mode"] == "shadow"
+            and head["stream_key"] != "primary"
+            and head["lane"] == "live"
+            and head["status"] == "committed"
+            and head["source_complete"]
+            and not head["primary_cursor_advanced"]
+            and not head["force_full_update"]
+            and not head["force_full_app_update"]
+            and head["response_since_change_number"] == head["from_change_number"]
+            and head["from_change_number"] == gap["to_change_number"]
+            and head["from_change_number"] > gap["from_change_number"]
+            and head["to_change_number"] > head["from_change_number"]
+            and head["source_app_count"] == head["durable_app_count"]
+            and 0 <= age < 300
+            and 0 <= verification_age < 300
+        ):
+            raise PICSBatchReconciliationError("Invalid or stale forward recovery boundaries")
+
+    def _apply_forward_checkpoint(
+        self,
+        cursor: Any,
+        recovery: PICSForwardRecovery,
+        *,
+        primary_cursor: Optional[int],
+        from_change_number: int,
+        to_change_number: int,
+        manifest_sha256: str,
+        source_count: int,
+        package_force_full: bool,
+    ) -> None:
+        """Checkpoint only inside the transaction that admits the verified fresh head."""
+        self.validate_forward_recovery(recovery, datetime.now(timezone.utc))
+        gap, head = recovery.gap, recovery.head
+        if not (
+            primary_cursor == gap["from_change_number"]
+            and from_change_number == head["from_change_number"]
+            and to_change_number == head["to_change_number"]
+            and manifest_sha256 == head["app_changes_sha256"]
+            and source_count == head["source_app_count"]
+            and package_force_full == head["force_full_package_update"]
+        ):
+            raise PICSCursorMismatchError("Forward recovery cursor or fresh source changed")
+        # The normal primary advisory and cursor row locks are already held.
+        for batch in (gap, head):
+            cursor.execute(
+                "SELECT row_to_json(b) FROM ops.pics_change_batches b WHERE id=%s FOR SHARE",
+                (UUID(batch["id"]),),
+            )
+            row = cursor.fetchone()
+            if row is None or row[0] != batch:
+                raise PICSBatchReconciliationError("Verified recovery evidence changed")
+            actual = self._read_durable_manifest(cursor, batch_id=UUID(batch["id"]))
+            if actual != (
+                batch["source_app_count"],
+                batch["distinct_app_count"],
+                batch["app_changes_sha256"],
+            ):
+                raise PICSBatchReconciliationError("Verified recovery child manifest changed")
+        cursor.execute("SELECT id FROM ops.pics_reconciliation_runs WHERE status='active' LIMIT 1")
+        if cursor.fetchone() is not None:
+            raise PICSBatchReconciliationError("Active reconciliation prevents forward recovery")
+        reason = json.dumps(
+            {
+                "policy": "automatic_forward_only_v1",
+                "historyRecovered": False,
+                "skippedFrom": primary_cursor,
+                "skippedThrough": from_change_number,
+                "freshHeadThrough": to_change_number,
+                "gapArchiveHash": gap["archive_content_hash"],
+                "headArchiveHash": head["archive_content_hash"],
+                "verifiedAt": recovery.verified_at.isoformat(),
+                "note": "Approved missing history; no replay; fresh head admitted atomically",
+            },
+            separators=(",", ":"),
+        )
+        cursor.execute(
+            """INSERT INTO ops.pics_cursor_checkpoints (
+                from_change_number,to_change_number,gap_evidence_batch_id,
+                head_evidence_batch_id,evidence_stream_key,reason,requested_by,
+                app_manifest_count,app_manifest_sha256,status,applied_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,'applied',clock_timestamp())""",
+            (
+                primary_cursor,
+                from_change_number,
+                UUID(gap["id"]),
+                UUID(head["id"]),
+                head["stream_key"],
+                reason,
+                recovery.requested_by,
+                hashlib.sha256(b"").hexdigest(),
+            ),
+        )
+        cursor.execute(
+            """UPDATE ops.pics_sync_state SET last_change_number=%s,
+                updated_at=clock_timestamp() WHERE id=1 AND last_change_number=%s""",
+            (from_change_number, primary_cursor),
+        )
+        if cursor.rowcount != 1:
+            raise PICSCursorMismatchError("Forward checkpoint compare-and-swap failed")
+
     def persist_batch(
         self,
         *,
@@ -223,6 +430,7 @@ class TigerPICSDurableIntakeStore:
         lane: str = "live",
         received_at: Optional[datetime] = None,
         replay_provenance: Optional[PICSReplayProvenance] = None,
+        forward_recovery: Optional[PICSForwardRecovery] = None,
     ) -> PersistedPICSBatch:
         """Persist one complete upstream response and conditionally advance the cursor."""
 
@@ -270,6 +478,14 @@ class TigerPICSDurableIntakeStore:
             to_change_number=target_cursor,
             source_complete=source_complete,
         )
+        if forward_recovery is not None and (
+            normalized_mode != "durable"
+            or normalized_stream != "primary"
+            or normalized_lane != "live"
+            or not source_complete
+            or normalized_replay is not None
+        ):
+            raise ValueError("Forward recovery requires complete primary live intake")
 
         with self._connect() as connection:
             with connection.transaction():
@@ -354,6 +570,18 @@ class TigerPICSDurableIntakeStore:
                             idempotent_replay=True,
                         )
 
+                    if forward_recovery is not None:
+                        self._apply_forward_checkpoint(
+                            cursor,
+                            forward_recovery,
+                            primary_cursor=primary_cursor,
+                            from_change_number=source_cursor,
+                            to_change_number=target_cursor,
+                            manifest_sha256=app_changes_sha256,
+                            source_count=source_app_count,
+                            package_force_full=package_force_full,
+                        )
+                        primary_cursor = source_cursor
                     self._assert_contiguous_cursor(
                         cursor,
                         work_mode=normalized_mode,

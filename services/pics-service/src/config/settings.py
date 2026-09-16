@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     pics_shadow_start_change_number: Optional[int] = None
     pics_intake_statement_timeout_seconds: int = 60
     pics_intake_lock_timeout_seconds: int = 10
+    # Explicit approval accepts unavailable history; never enabled implicitly.
+    pics_forward_recovery_enabled: bool = False
+    pics_forward_recovery_requested_by: str = ""
     # Leased processing remains disabled until a separately approved shadow
     # runtime. Intake can be validated without enabling payload promotion.
     pics_processing_enabled: bool = False

@@ -135,6 +135,9 @@ def make_worker(store, archive_store=None):
     worker._store = store
     worker._archive_store = archive_store or FakeArchiveStore()
     worker._last_committed_batch = None
+    worker._forward_recovery_gap = None
+    worker._forward_recovery_next_attempt = 0.0
+    worker._processing_job = None
     return worker
 
 
@@ -217,6 +220,7 @@ def test_poll_once_returns_later_cursor_only_after_store_commit():
             "work_mode": "shadow",
             "stream_key": "replay-test",
             "lane": "live",
+            "forward_recovery": None,
         }
     ]
     archive_call = worker._archive_store.calls[0]
@@ -495,3 +499,94 @@ def make_retry_loop_worker(monkeypatch):
         "src.workers.durable_change_intake.PICSFetcher", lambda *_a, **_kw: object()
     )
     return worker, observed, sleeps
+
+
+@pytest.mark.parametrize("full,since", [(True, 10), (False, 9)])
+def test_same_cursor_incomplete_response_is_not_success(full, since):
+    worker = make_worker(FakeStore())
+    worker._fetcher = FakeFetcher(10, [], response_since=since, force_full_app_update=full)
+    with pytest.raises(IncompletePICSChangeResponseError):
+        worker.poll_once(10)
+    assert worker._store.calls == []
+
+
+def make_forward_worker(monkeypatch):
+    from src.config.settings import settings
+    from test_durable_intake import forward_evidence
+    from src.database.durable_intake import TigerPICSDurableIntakeStore
+
+    monkeypatch.setattr(settings, "pics_forward_recovery_enabled", True)
+    monkeypatch.setattr(settings, "pics_forward_recovery_requested_by", "approved policy")
+    worker = make_worker(FakeStore())
+    worker._work_mode = "durable"
+    worker._stream_key = "primary"
+    worker._fetcher = FakeFetcher(20, [], force_full_app_update=True)
+    with pytest.raises(IncompletePICSChangeResponseError):
+        worker.poll_once(10)
+    worker._consecutive_poll_failures = 3
+    worker._fetcher = FakeFetcher(30, [PICSSourceAppChange(7, 21, True)], response_since=20)
+    recovery = forward_evidence()
+    worker._store.read_forward_recovery_evidence = lambda *_a: (recovery.gap, recovery.head)
+    worker._store.validate_forward_recovery = TigerPICSDurableIntakeStore.validate_forward_recovery
+    worker._store.verify_forward_recovery_document = lambda *_a: None
+    worker._archive_store.read_json_verified = lambda **_kwargs: {}
+    return worker
+
+
+def test_forward_worker_keeps_shadow_separate_and_admits_exact_head(monkeypatch):
+    worker = make_forward_worker(monkeypatch)
+    assert worker._try_forward_recovery(10) == 30
+    assert [call["work_mode"] for call in worker._store.calls] == ["durable", "shadow", "durable"]
+    assert worker._store.calls[1]["stream_key"].startswith("forward-recovery-")
+    primary = worker._store.calls[2]
+    assert primary["stream_key"] == "primary" and primary["from_change_number"] == 20
+    assert primary["app_changes"] == worker._store.calls[1]["app_changes"]
+    assert primary["forward_recovery"] is not None
+    assert worker._last_forward_recovery["history_recovered"] is False
+    assert worker._forward_recovery_gap is None
+
+
+@pytest.mark.parametrize("blocker", ["disabled", "threshold", "cooldown", "processing"])
+def test_forward_worker_does_not_probe_until_eligible(monkeypatch, blocker):
+    from src.config.settings import settings
+
+    worker = make_forward_worker(monkeypatch)
+    if blocker == "disabled":
+        monkeypatch.setattr(settings, "pics_forward_recovery_enabled", False)
+    elif blocker == "threshold":
+        worker._consecutive_poll_failures = 2
+    elif blocker == "cooldown":
+        worker._forward_recovery_next_attempt = float("inf")
+    else:
+        worker._processing_job = SimpleNamespace(ready=lambda: False)
+    worker._fetcher.get_changes_since = lambda *_a: pytest.fail("unexpected Steam probe")
+    assert worker._try_forward_recovery(10) is None
+
+
+@pytest.mark.parametrize("phase", ["archive", "transaction"])
+def test_forward_recovery_failure_retains_gap_and_enforces_cooldown(monkeypatch, phase):
+    worker = make_forward_worker(monkeypatch)
+
+    def fail(*_a, **_kw):
+        raise RuntimeError("injected recovery failure")
+
+    if phase == "archive":
+        worker._archive_store.read_json_verified = fail
+    else:
+        persist = worker._store.persist_batch
+        worker._store.persist_batch = lambda **kw: (
+            fail() if kw.get("forward_recovery") else persist(**kw)
+        )
+    with pytest.raises(RuntimeError, match="injected"):
+        worker._try_forward_recovery(10)
+    assert worker._forward_recovery_gap.from_change_number == 10
+    assert worker._try_forward_recovery(10) is None
+
+
+def test_forward_worker_retains_incomplete_head_without_primary_admission(monkeypatch):
+    worker = make_forward_worker(monkeypatch)
+    worker._fetcher.force_full_app_update = True
+    assert worker._try_forward_recovery(10) is None
+    assert len(worker._store.calls) == 2
+    assert worker._store.calls[-1]["work_mode"] == "shadow"
+    assert worker._forward_recovery_gap.from_change_number == 10

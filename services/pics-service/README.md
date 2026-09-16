@@ -461,3 +461,43 @@ full-catalog catch-up is not admitted. The local incident packet in
 evidence checks, archive verification, checkpoint audit, and runtime validation.
 Never rewind the cursor or invoke destructive legacy checkpoint rollback; pause
 processing and retain accepted data if another repair is necessary.
+
+### Automatic audited forward-only recovery
+
+Disabled by default. Enable only after approval to accept unavailable history:
+`PICS_FORWARD_RECOVERY_ENABLED=true` and
+`PICS_FORWARD_RECOVERY_REQUESTED_BY=<approved policy identity>`.
+The worker requires durable primary/live intake, catch-up quota zero and the
+successor feeder disabled. An active reconciliation prevents checkpointing.
+
+After three incomplete responses, the existing Steam session may probe the
+preceding archived response's newer boundary. Probes use the shared governor,
+wait for active processing, and are limited to one recovery attempt per 15
+minutes per process. Normal complete intake does not invoke recovery. Steam
+can still reject a newer boundary; that response is retained and no primary
+cursor moves. Requests are never retried in a tight recovery loop.
+
+Recovery archives a complete shadow response, verifies both gap/head R2 hashes,
+sizes, source positions, token flags and database manifests, and checks that the
+head and verification are less than five minutes old. Verification is bounded
+to 100,000 source entries and 32 MiB per archive. The worker takes the existing
+primary advisory/cursor locks, rechecks the evidence and writes a checkpoint
+only through the fresh response's starting boundary. The checkpoint, complete
+primary head batch, every head source entry, coalesced work and final cursor
+advance share one transaction. Failure rolls all of them back. Concurrent
+retries at that head are idempotent.
+
+Checkpoint `reason` records policy `automatic_forward_only_v1`, the skipped
+interval, archive hashes and verification time, with `historyRecovered=false`.
+All prior checkpoints, manifests, source blocks and observations are retained.
+This policy restores forward collection; it cannot reconstruct unavailable
+historical changes. It adds bounded shadow/archive verification and bookkeeping
+load, followed by resumed normal ingestion load. `/status` exposes
+`forward_recovery_enabled` and the current process's `last_forward_recovery`;
+the database checkpoint remains authoritative across restarts.
+
+Rollback: disable `PICS_FORWARD_RECOVERY_ENABLED` and restart the same image or
+restore the preceding image. Keep accepted data/checkpoints and never rewind the
+cursor. Future unavailable intervals will then remain blocked for manual review.
+Continue monitoring cursor advance, actual promotions, queue age, archive
+integrity, Steam errors and overlapping database/API workload after recovery.

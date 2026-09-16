@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config.settings import Settings, resolve_pics_work_mode  # noqa: E402
 from src.database.durable_intake import (
+    PICSForwardRecovery,
     PICSArchiveReference,
     PICSSourceAppChange,
     PICSBatchReconciliationError,
@@ -321,6 +322,200 @@ def test_hash_retains_order_positions_duplicates_and_source_metadata():
     assert hash_pics_app_changes([]) == (
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
+
+
+def forward_evidence():
+    now = datetime.now(timezone.utc)
+    gap = dict(
+        id=str(GAP_BATCH_ID),
+        stream_key="primary",
+        work_mode="durable",
+        lane="live",
+        status="source_blocked",
+        source_complete=False,
+        primary_cursor_advanced=False,
+        from_change_number=10,
+        to_change_number=20,
+        response_since_change_number=10,
+        force_full_update=False,
+        force_full_app_update=True,
+        force_full_package_update=False,
+        source_app_count=0,
+        distinct_app_count=0,
+        durable_app_count=0,
+        app_changes_sha256=hash_pics_app_changes([]),
+        received_at=now.isoformat(),
+        archive_bucket="archive",
+        archive_key="gap",
+        archive_content_hash="a" * 64,
+        archive_byte_size=123,
+        archive_content_type="application/json",
+    )
+    head = dict(
+        gap,
+        id=str(SOURCE_BATCH_ID),
+        stream_key="forward-test",
+        work_mode="shadow",
+        status="committed",
+        source_complete=True,
+        force_full_app_update=False,
+        from_change_number=20,
+        to_change_number=30,
+        response_since_change_number=20,
+        source_app_count=3,
+        distinct_app_count=2,
+        durable_app_count=3,
+        app_changes_sha256=hash_pics_app_changes(
+            [
+                app_change(7, 21),
+                app_change(7, 22, True),
+                app_change(9, 30),
+            ]
+        ),
+        archive_key="head",
+        archive_content_hash="b" * 64,
+    )
+    return PICSForwardRecovery(gap, head, "approved forward-only policy", now)
+
+
+@pytest.mark.parametrize(
+    "label,key,value",
+    [
+        ("gap", "source_complete", True),
+        ("gap", "status", "committed"),
+        ("gap", "response_since_change_number", 9),
+        ("gap", "force_full_app_update", False),
+        ("head", "work_mode", "durable"),
+        ("head", "stream_key", "primary"),
+        ("head", "force_full_app_update", True),
+        ("head", "force_full_update", True),
+        ("head", "primary_cursor_advanced", True),
+        ("head", "from_change_number", 21),
+        ("head", "response_since_change_number", 19),
+        ("head", "durable_app_count", 2),
+        ("head", "received_at", "2000-01-01T00:00:00+00:00"),
+        ("head", "received_at", "2100-01-01T00:00:00+00:00"),
+    ],
+)
+def test_forward_recovery_rejects_invalid_evidence(label, key, value):
+    recovery = forward_evidence()
+    getattr(recovery, label)[key] = value
+    with pytest.raises(PICSBatchReconciliationError):
+        TigerPICSDurableIntakeStore.validate_forward_recovery(recovery, datetime.now(timezone.utc))
+
+
+def test_forward_recovery_requires_current_verification_and_policy_identity():
+    recovery = forward_evidence()
+    TigerPICSDurableIntakeStore.validate_forward_recovery(recovery, datetime.now(timezone.utc))
+    with pytest.raises(ValueError):
+        TigerPICSDurableIntakeStore.validate_forward_recovery(
+            replace(recovery, requested_by=""), datetime.now(timezone.utc)
+        )
+    with pytest.raises(PICSBatchReconciliationError):
+        TigerPICSDurableIntakeStore.validate_forward_recovery(
+            replace(recovery, verified_at=datetime(2000, 1, 1, tzinfo=timezone.utc)),
+            datetime.now(timezone.utc),
+        )
+
+
+class ForwardCursor(FakeCursor):
+    def __init__(self, *, fail_on=None, active=False, changed=False, primary_cursor=10):
+        super().__init__(primary_cursor=primary_cursor, fail_on=fail_on)
+        self.recovery = forward_evidence()
+        self.active = active
+        self.changed = changed
+
+    def execute(self, query, params=None):
+        super().execute(query, params)
+        if "SELECT row_to_json(b)" in query:
+            batch = self.recovery.gap if params[0] == GAP_BATCH_ID else self.recovery.head
+            self._next_row = (dict(batch, archive_key="changed") if self.changed else batch,)
+        elif "FROM ops.pics_reconciliation_runs" in query:
+            self._next_row = (GAP_BATCH_ID,) if self.active else None
+        elif "FROM ops.pics_change_batch_apps" in query and "count(*)::integer" in query:
+            if params[0] in (GAP_BATCH_ID, SOURCE_BATCH_ID):
+                batch = self.recovery.gap if params[0] == GAP_BATCH_ID else self.recovery.head
+                self._next_row = (
+                    batch["source_app_count"],
+                    batch["distinct_app_count"],
+                    batch["app_changes_sha256"],
+                )
+
+
+def persist_forward(store, recovery):
+    return store.persist_batch(
+        archive=ARCHIVE,
+        from_change_number=20,
+        to_change_number=30,
+        response_since_change_number=20,
+        app_changes=[app_change(7, 21), app_change(7, 22, True), app_change(9, 30)],
+        force_full_update=False,
+        force_full_app_update=False,
+        force_full_package_update=False,
+        work_mode="durable",
+        stream_key="primary",
+        forward_recovery=recovery,
+    )
+
+
+def test_forward_checkpoint_and_all_fresh_items_share_transaction():
+    cursor = ForwardCursor()
+    store, connection = make_store(cursor)
+    result = persist_forward(store, cursor.recovery)
+    assert result.to_change_number == 30 and result.source_app_count == 3
+    assert connection.committed and not connection.rolled_back
+    queries = [query for query, _ in cursor.events]
+    checkpoint = next(
+        i for i, q in enumerate(queries) if "INSERT INTO ops.pics_cursor_checkpoints" in q
+    )
+    admission = next(i for i, q in enumerate(queries) if "INSERT INTO ops.pics_change_batches" in q)
+    assert checkpoint < admission
+    assert cursor.copied_rows == [(0, 7, 21, False), (1, 7, 22, True), (2, 9, 30, False)]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"fail_on": "INSERT INTO ops.pics_change_batches"},
+        {"fail_on": "INSERT INTO ops.pics_work_state"},
+        {"active": True},
+        {"changed": True},
+        {"primary_cursor": 11},
+    ],
+)
+def test_forward_failure_rolls_back_checkpoint_and_cursor(kwargs):
+    cursor = ForwardCursor(**kwargs)
+    store, connection = make_store(cursor)
+    with pytest.raises(RuntimeError):
+        persist_forward(store, cursor.recovery)
+    assert connection.rolled_back and not connection.committed
+
+
+@pytest.mark.parametrize("mutation", [None, "order", "token", "count", "flag"])
+def test_forward_archive_verification_preserves_positions_tokens_and_flags(mutation):
+    head = forward_evidence().head
+    document = dict(
+        head,
+        _archive_schema_version="pics-change-response/v2",
+        app_changes=[
+            dict(source_index=0, appid=7, change_number=21, needs_token=False),
+            dict(source_index=1, appid=7, change_number=22, needs_token=True),
+            dict(source_index=2, appid=9, change_number=30, needs_token=False),
+        ],
+    )
+    if mutation == "order":
+        document["app_changes"].reverse()
+    elif mutation == "token":
+        document["app_changes"][1]["needs_token"] = False
+    elif mutation == "count":
+        document["app_changes"].pop()
+    elif mutation == "flag":
+        document["force_full_app_update"] = True
+    if mutation:
+        with pytest.raises(PICSBatchReconciliationError):
+            TigerPICSDurableIntakeStore.verify_forward_recovery_document(head, document)
+    else:
+        TigerPICSDurableIntakeStore.verify_forward_recovery_document(head, document)
 
 
 def test_hash_rejects_invalid_appid():
