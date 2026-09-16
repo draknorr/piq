@@ -135,6 +135,9 @@ def make_worker(store, archive_store=None):
     worker._store = store
     worker._archive_store = archive_store or FakeArchiveStore()
     worker._last_committed_batch = None
+    worker._forward_recovery_gap = None
+    worker._forward_recovery_next_attempt = 0.0
+    worker._processing_job = None
     return worker
 
 
@@ -217,6 +220,7 @@ def test_poll_once_returns_later_cursor_only_after_store_commit():
             "work_mode": "shadow",
             "stream_key": "replay-test",
             "lane": "live",
+            "forward_recovery": None,
         }
     ]
     archive_call = worker._archive_store.calls[0]
@@ -398,3 +402,191 @@ def test_run_processes_due_work_while_incremental_intake_is_source_blocked(monke
     assert worker._consecutive_poll_failures == 1
     assert worker._last_poll_error == "source_blocked"
     assert worker._consecutive_processing_failures == 0
+
+
+@pytest.mark.parametrize("phase", ["poll", "processing"])
+@pytest.mark.parametrize(
+    "error_name", ["LockNotAvailable", "DeadlockDetected", "SerializationFailure"]
+)
+def test_transaction_contention_recovers_beyond_restart_threshold(monkeypatch, phase, error_name):
+    from psycopg import errors
+
+    worker, observed, sleeps = make_retry_loop_worker(monkeypatch)
+    failures = 7
+    attempts = []
+
+    def operation(cursor=None):
+        attempts.append(cursor)
+        if len(attempts) <= failures:
+            raise getattr(errors, error_name)("temporary transaction contention")
+        if phase == "poll":
+            return 20
+        worker._consecutive_processing_failures = 0
+        worker._last_processing_error = None
+
+    if phase == "poll":
+        worker.poll_once = operation
+    else:
+        worker._process_once_if_due = operation
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == failures + 1:
+            worker._running = False
+
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", sleep)
+    worker.run()
+
+    assert len(attempts) == failures + 1
+    assert all(state["cursor"] == 10 for state in observed[:-1])
+    assert observed[-1]["cursor"] == (20 if phase == "poll" else 10)
+    assert all(state["forced_state"] is None for state in observed)
+    assert getattr(worker, f"_consecutive_{phase}_failures") == 0
+    assert getattr(worker, f"_last_{phase}_error") is None
+    assert all(0 < seconds <= 300 for seconds in sleeps)
+    if phase == "poll":
+        assert attempts == [10] * (failures + 1)
+        assert sleeps[:7] == [30, 60, 120, 240, 300, 300, 300]
+
+
+@pytest.mark.parametrize("phase", ["poll", "processing"])
+def test_unexpected_errors_still_exit_after_three_failures(monkeypatch, phase):
+    worker, observed, _sleeps = make_retry_loop_worker(monkeypatch)
+
+    def fail(*_args):
+        raise ValueError("invalid invariant")
+
+    if phase == "poll":
+        worker.poll_once = fail
+    else:
+        worker._process_once_if_due = fail
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="Exceeded consecutive durable PICS"):
+        worker.run()
+    assert observed[-1]["forced_state"] == "unhealthy"
+    assert getattr(worker, f"_consecutive_{phase}_failures") == 3
+
+
+def make_retry_loop_worker(monkeypatch):
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "poll_interval", 30)
+    worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
+    worker._work_mode = "durable"
+    worker._stream_key = "primary"
+    worker._steam = SimpleNamespace(
+        set_heartbeat_interval=lambda _value: None,
+        set_auto_reconnect=lambda _value: None,
+        connect=lambda: True,
+        disconnect=lambda: None,
+    )
+    worker._store = SimpleNamespace(get_start_change_number=lambda **_kwargs: 10)
+    worker._processor = None
+    worker._processing_job = None
+    worker._consecutive_poll_failures = 0
+    worker._last_poll_error = None
+    worker._consecutive_processing_failures = 0
+    worker._last_processing_error = None
+    worker.poll_once = lambda cursor: cursor
+    worker._process_once_if_due = lambda: None
+    observed = []
+    sleeps = []
+    worker._update_health_status = lambda cursor, forced_state=None: observed.append(
+        {"cursor": cursor, "forced_state": forced_state}
+    )
+    monkeypatch.setattr(
+        "src.workers.durable_change_intake.PICSFetcher", lambda *_a, **_kw: object()
+    )
+    return worker, observed, sleeps
+
+
+@pytest.mark.parametrize("full,since", [(True, 10), (False, 9)])
+def test_same_cursor_incomplete_response_is_not_success(full, since):
+    worker = make_worker(FakeStore())
+    worker._fetcher = FakeFetcher(10, [], response_since=since, force_full_app_update=full)
+    with pytest.raises(IncompletePICSChangeResponseError):
+        worker.poll_once(10)
+    assert worker._store.calls == []
+
+
+def make_forward_worker(monkeypatch):
+    from src.config.settings import settings
+    from test_durable_intake import forward_evidence
+    from src.database.durable_intake import TigerPICSDurableIntakeStore
+
+    monkeypatch.setattr(settings, "pics_forward_recovery_enabled", True)
+    monkeypatch.setattr(settings, "pics_forward_recovery_requested_by", "approved policy")
+    worker = make_worker(FakeStore())
+    worker._work_mode = "durable"
+    worker._stream_key = "primary"
+    worker._fetcher = FakeFetcher(20, [], force_full_app_update=True)
+    with pytest.raises(IncompletePICSChangeResponseError):
+        worker.poll_once(10)
+    worker._consecutive_poll_failures = 3
+    worker._fetcher = FakeFetcher(30, [PICSSourceAppChange(7, 21, True)], response_since=20)
+    recovery = forward_evidence()
+    worker._store.read_forward_recovery_evidence = lambda *_a: (recovery.gap, recovery.head)
+    worker._store.validate_forward_recovery = TigerPICSDurableIntakeStore.validate_forward_recovery
+    worker._store.verify_forward_recovery_document = lambda *_a: None
+    worker._archive_store.read_json_verified = lambda **_kwargs: {}
+    return worker
+
+
+def test_forward_worker_keeps_shadow_separate_and_admits_exact_head(monkeypatch):
+    worker = make_forward_worker(monkeypatch)
+    assert worker._try_forward_recovery(10) == 30
+    assert [call["work_mode"] for call in worker._store.calls] == ["durable", "shadow", "durable"]
+    assert worker._store.calls[1]["stream_key"].startswith("forward-recovery-")
+    primary = worker._store.calls[2]
+    assert primary["stream_key"] == "primary" and primary["from_change_number"] == 20
+    assert primary["app_changes"] == worker._store.calls[1]["app_changes"]
+    assert primary["forward_recovery"] is not None
+    assert worker._last_forward_recovery["history_recovered"] is False
+    assert worker._forward_recovery_gap is None
+
+
+@pytest.mark.parametrize("blocker", ["disabled", "threshold", "cooldown", "processing"])
+def test_forward_worker_does_not_probe_until_eligible(monkeypatch, blocker):
+    from src.config.settings import settings
+
+    worker = make_forward_worker(monkeypatch)
+    if blocker == "disabled":
+        monkeypatch.setattr(settings, "pics_forward_recovery_enabled", False)
+    elif blocker == "threshold":
+        worker._consecutive_poll_failures = 2
+    elif blocker == "cooldown":
+        worker._forward_recovery_next_attempt = float("inf")
+    else:
+        worker._processing_job = SimpleNamespace(ready=lambda: False)
+    worker._fetcher.get_changes_since = lambda *_a: pytest.fail("unexpected Steam probe")
+    assert worker._try_forward_recovery(10) is None
+
+
+@pytest.mark.parametrize("phase", ["archive", "transaction"])
+def test_forward_recovery_failure_retains_gap_and_enforces_cooldown(monkeypatch, phase):
+    worker = make_forward_worker(monkeypatch)
+
+    def fail(*_a, **_kw):
+        raise RuntimeError("injected recovery failure")
+
+    if phase == "archive":
+        worker._archive_store.read_json_verified = fail
+    else:
+        persist = worker._store.persist_batch
+        worker._store.persist_batch = lambda **kw: (
+            fail() if kw.get("forward_recovery") else persist(**kw)
+        )
+    with pytest.raises(RuntimeError, match="injected"):
+        worker._try_forward_recovery(10)
+    assert worker._forward_recovery_gap.from_change_number == 10
+    assert worker._try_forward_recovery(10) is None
+
+
+def test_forward_worker_retains_incomplete_head_without_primary_admission(monkeypatch):
+    worker = make_forward_worker(monkeypatch)
+    worker._fetcher.force_full_app_update = True
+    assert worker._try_forward_recovery(10) is None
+    assert len(worker._store.calls) == 2
+    assert worker._store.calls[-1]["work_mode"] == "shadow"
+    assert worker._forward_recovery_gap.from_change_number == 10

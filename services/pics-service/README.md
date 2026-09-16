@@ -418,3 +418,86 @@ and checkpoint audits. Catch-up expansion requires measured restored-load capaci
 through a full normal daily overlap cycle. To roll back the runtime, disable
 processing/feeder, preserve the persistent catch-up pause, and deploy the previous
 successor-compatible image with one collector. Never rewind the canonical cursor.
+
+
+### Recovery from database contention
+
+Durable intake and processing retry PostgreSQL lock timeouts, deadlocks and
+serialization failures without exiting after three attempts. These errors abort
+the current transaction; intake keeps its last committed cursor and processing
+retains the existing lease/replay rules. Retry delays remain capped at 300 seconds
+and health remains degraded until a successful pass. Other unexpected errors
+still exit after three failures, and the progress watchdog remains enabled.
+
+The September 13, 2026 incident exhausted Railway's restart budget when readiness
+updates repeatedly timed out on `opportunity.cohort_source_revisions_v1`. The
+blocking session was no longer present during September 14 inspection. This
+repair prevents that contention from permanently stopping the service; it does
+not remove the shared database lock or reconstruct Steam history lost during
+the outage. A forced-full response still requires audited successor recovery.
+
+### Forward-only operation after the September 14 outage
+
+The operator explicitly chose to accept the missing interval and collect future
+changes without a full-catalog replay. Checkpoint
+`f497be03-59fd-42f9-9177-9179f2e5afdb` advanced the primary cursor from 38,839,466
+to the freshly verified Steam boundary 38,872,388. Gap and complete shadow-head
+archives were verified before the atomic control-record transition. This does
+not claim recovery of the skipped interval.
+
+The prior reconciliation `ccfd57ea-44df-4707-90ee-ddd43bc574f8` is cancelled and
+its successor catch-up is paused. Its original 306,593-item manifest and all
+individual outcomes remain retained. No new recovery manifest was staged.
+Production uses `PICS_WORK_MODE=durable`, `PICS_PROCESSING_ENABLED=true`,
+`PICS_SUCCESSOR_FEEDER_ENABLED=false`, and `PICS_CONSUMER_CATCHUP_BATCH_SIZE=0`.
+Keep catch-up disabled unless the operator explicitly requests it again. Normal
+live changes can still refresh an app from the old manifest; the intake upsert
+clears associations with cancelled runs so those apps remain processable.
+
+The deployment retains the September 14 database-contention retry fix. Existing
+live queue work can finish under the normal live quota, but the cancelled
+full-catalog catch-up is not admitted. The local incident packet in
+`output/pics-crash-2026-09-14/` contains the user-authorized operator script,
+evidence checks, archive verification, checkpoint audit, and runtime validation.
+Never rewind the cursor or invoke destructive legacy checkpoint rollback; pause
+processing and retain accepted data if another repair is necessary.
+
+### Automatic audited forward-only recovery
+
+Disabled by default. Enable only after approval to accept unavailable history:
+`PICS_FORWARD_RECOVERY_ENABLED=true` and
+`PICS_FORWARD_RECOVERY_REQUESTED_BY=<approved policy identity>`.
+The worker requires durable primary/live intake, catch-up quota zero and the
+successor feeder disabled. An active reconciliation prevents checkpointing.
+
+After three incomplete responses, the existing Steam session may probe the
+preceding archived response's newer boundary. Probes use the shared governor,
+wait for active processing, and are limited to one recovery attempt per 15
+minutes per process. Normal complete intake does not invoke recovery. Steam
+can still reject a newer boundary; that response is retained and no primary
+cursor moves. Requests are never retried in a tight recovery loop.
+
+Recovery archives a complete shadow response, verifies both gap/head R2 hashes,
+sizes, source positions, token flags and database manifests, and checks that the
+head and verification are less than five minutes old. Verification is bounded
+to 100,000 source entries and 32 MiB per archive. The worker takes the existing
+primary advisory/cursor locks, rechecks the evidence and writes a checkpoint
+only through the fresh response's starting boundary. The checkpoint, complete
+primary head batch, every head source entry, coalesced work and final cursor
+advance share one transaction. Failure rolls all of them back. Concurrent
+retries at that head are idempotent.
+
+Checkpoint `reason` records policy `automatic_forward_only_v1`, the skipped
+interval, archive hashes and verification time, with `historyRecovered=false`.
+All prior checkpoints, manifests, source blocks and observations are retained.
+This policy restores forward collection; it cannot reconstruct unavailable
+historical changes. It adds bounded shadow/archive verification and bookkeeping
+load, followed by resumed normal ingestion load. `/status` exposes
+`forward_recovery_enabled` and the current process's `last_forward_recovery`;
+the database checkpoint remains authoritative across restarts.
+
+Rollback: disable `PICS_FORWARD_RECOVERY_ENABLED` and restart the same image or
+restore the preceding image. Keep accepted data/checkpoints and never rewind the
+cursor. Future unavailable intervals will then remain blocked for manual review.
+Continue monitoring cursor advance, actual promotions, queue age, archive
+integrity, Steam errors and overlapping database/API workload after recovery.

@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import gevent
+from psycopg.errors import DeadlockDetected, LockNotAvailable, SerializationFailure
 
 from ..config.settings import settings
 from ..database.durable_intake import (
     PersistedPICSBatch,
     PICSArchiveReference,
+    PICSForwardRecovery,
     PICSSourceAppChange,
     TigerPICSDurableIntakeStore,
     hash_pics_app_changes,
@@ -26,6 +28,10 @@ from .durable_processor import DurablePICSProcessor, PICSProcessingStats
 
 logger = logging.getLogger(__name__)
 
+# PostgreSQL aborts these transactions before the durable cursor can commit.
+# Retry the same cursor instead of consuming the process restart budget.
+RETRYABLE_TRANSACTION_ERRORS = (LockNotAvailable, DeadlockDetected, SerializationFailure)
+
 
 class IncompletePICSChangeResponseError(RuntimeError):
     """Raised when Steam cannot provide a complete incremental change response."""
@@ -36,6 +42,8 @@ class DurableChangeIntakeWorker:
 
     MAX_CONSECUTIVE_POLL_FAILURES = 3
     MIN_SAFE_PRODUCT_INFO_INTERVAL_SECONDS = 212
+    FORWARD_RECOVERY_FAILURE_THRESHOLD = 3
+    FORWARD_RECOVERY_COOLDOWN_SECONDS = 900
 
     def __init__(
         self,
@@ -68,6 +76,17 @@ class DurableChangeIntakeWorker:
         self._last_processing_error: Optional[str] = None
         self._last_successful_change_poll_at: Optional[str] = None
         self._last_committed_batch: Optional[PersistedPICSBatch] = None
+        self._forward_recovery_gap: Optional[PersistedPICSBatch] = None
+        self._forward_recovery_next_attempt = 0.0
+        self._last_forward_recovery: Optional[dict] = None
+        if settings.pics_forward_recovery_enabled and not (
+            work_mode == "durable"
+            and self._lane == "live"
+            and 0 < len(settings.pics_forward_recovery_requested_by.strip()) <= 200
+            and not settings.pics_successor_feeder_enabled
+            and settings.pics_consumer_catchup_batch_size == 0
+        ):
+            raise ValueError("Forward recovery requires approved primary/live forward-only policy")
         self._processor = (
             DurablePICSProcessor(
                 work_mode=self._work_mode,
@@ -141,6 +160,7 @@ class DurableChangeIntakeWorker:
                     self._consecutive_poll_failures = 0
                     self._last_poll_error = None
                     self._last_successful_change_poll_at = datetime.now(timezone.utc).isoformat()
+                    self._forward_recovery_gap = None
                 except IncompletePICSChangeResponseError as error:
                     self._consecutive_poll_failures += 1
                     self._last_poll_error = str(error)
@@ -152,6 +172,21 @@ class DurableChangeIntakeWorker:
                         sleep_seconds,
                         error,
                     )
+                    if settings.pics_forward_recovery_enabled:
+                        try:
+                            recovered_cursor = self._try_forward_recovery(last_change)
+                            if recovered_cursor is not None:
+                                last_change = recovered_cursor
+                                self._consecutive_poll_failures = 0
+                                self._last_poll_error = None
+                                self._last_successful_change_poll_at = datetime.now(
+                                    timezone.utc
+                                ).isoformat()
+                                sleep_seconds = float(settings.poll_interval)
+                        except Exception as recovery_error:
+                            # Failed verification/transactions retain the old cursor and evidence.
+                            self._last_poll_error = f"Forward recovery deferred: {recovery_error}"
+                            logger.exception("Forward recovery failed; retaining primary cursor")
                 except Exception as error:
                     self._consecutive_poll_failures += 1
                     self._last_poll_error = str(error)
@@ -162,7 +197,10 @@ class DurableChangeIntakeWorker:
                         sleep_seconds,
                         error,
                     )
-                    if self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                    if (
+                        self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES
+                        and not isinstance(error, RETRYABLE_TRANSACTION_ERRORS)
+                    ):
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
                             "Exceeded consecutive durable PICS poll failures; exiting"
@@ -182,7 +220,10 @@ class DurableChangeIntakeWorker:
                         processing_backoff_seconds,
                         error,
                     )
-                    if self._consecutive_processing_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES:
+                    if (
+                        self._consecutive_processing_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES
+                        and not isinstance(error, RETRYABLE_TRANSACTION_ERRORS)
+                    ):
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
                             "Exceeded consecutive durable PICS processing failures; exiting"
@@ -250,8 +291,62 @@ class DurableChangeIntakeWorker:
             phase_seconds["steam_change_poll_requests"] = int(
                 getattr(self._fetcher, "last_change_poll_attempts", 1)
             )
-        if changes is None or changes.change_number <= last_change:
+        if changes is None:
+            raise RuntimeError("Steam returned no change response")
+        if changes.change_number < last_change:
+            raise RuntimeError("Steam change response regressed below the requested cursor")
+        if changes.change_number == last_change:
+            if changes.since_change_number != last_change or (
+                changes.force_full_update or changes.force_full_app_update
+            ):
+                raise IncompletePICSChangeResponseError("Incomplete response at unchanged cursor")
             return last_change
+
+        committed = self._retain_response(changes, last_change, phase_seconds)
+        previous_batch = self._last_committed_batch
+        self._last_committed_batch = committed
+        if not committed.source_complete:
+            # Keep a recent boundary from the preceding poll. A candidate frozen
+            # throughout the cooldown could itself age out of Steam's history.
+            self._forward_recovery_gap = (
+                previous_batch
+                if previous_batch is not None
+                and not previous_batch.source_complete
+                and previous_batch.from_change_number == last_change
+                else committed
+            )
+            raise IncompletePICSChangeResponseError(
+                "PICS returned an incomplete app-change response; "
+                f"batch {committed.batch_id} was retained as source_blocked and "
+                "the intake cursor was not advanced "
+                f"(requested_since={last_change}, "
+                f"response_since={committed.response_since_change_number}, "
+                f"force_full_update={committed.force_full_update}, "
+                f"force_full_app_update={committed.force_full_app_update})"
+            )
+        logger.info(
+            "Committed PICS batch %s (%s -> %s, source=%s, distinct=%s, replay=%s)",
+            committed.batch_id,
+            committed.from_change_number,
+            committed.to_change_number,
+            committed.source_app_count,
+            committed.distinct_app_count,
+            committed.idempotent_replay,
+        )
+        return committed.to_change_number
+
+    def _retain_response(
+        self,
+        changes,
+        last_change: int,
+        phase_seconds: dict,
+        *,
+        work_mode: Optional[str] = None,
+        stream_key: Optional[str] = None,
+        forward_recovery: Optional[PICSForwardRecovery] = None,
+    ) -> PersistedPICSBatch:
+        work_mode = work_mode or self._work_mode
+        stream_key = stream_key or self._stream_key
 
         if changes.app_change_details is None:
             raise RuntimeError("PICS durable intake requires item-level change metadata")
@@ -276,6 +371,8 @@ class DurableChangeIntakeWorker:
                     force_full_update=changes.force_full_update,
                     force_full_app_update=changes.force_full_app_update,
                     force_full_package_update=changes.force_full_package_update,
+                    work_mode=work_mode,
+                    stream_key=stream_key,
                 ),
             )
         finally:
@@ -293,9 +390,10 @@ class DurableChangeIntakeWorker:
                     force_full_update=changes.force_full_update,
                     force_full_app_update=changes.force_full_app_update,
                     force_full_package_update=changes.force_full_package_update,
-                    work_mode=self._work_mode,
-                    stream_key=self._stream_key,
+                    work_mode=work_mode,
+                    stream_key=stream_key,
                     lane=self._lane,
+                    forward_recovery=forward_recovery,
                 ),
             )
         finally:
@@ -303,25 +401,83 @@ class DurableChangeIntakeWorker:
         if committed.to_change_number != changes.change_number:
             raise RuntimeError("Committed PICS batch cursor does not match the source response")
 
+        return committed
+
+    def _try_forward_recovery(self, last_change: int) -> Optional[int]:
+        """Probe one newer boundary with the same governed session; never skip silently."""
+        now = time.monotonic()
+        gap = self._forward_recovery_gap
+        if (
+            not settings.pics_forward_recovery_enabled
+            or gap is None
+            or self._consecutive_poll_failures < self.FORWARD_RECOVERY_FAILURE_THRESHOLD
+            or now < self._forward_recovery_next_attempt
+            or (self._processing_job is not None and not self._processing_job.ready())
+        ):
+            return None
+        self._forward_recovery_next_attempt = now + self.FORWARD_RECOVERY_COOLDOWN_SECONDS
+        if (
+            gap.from_change_number != last_change
+            or not (gap.force_full_update or gap.force_full_app_update)
+            or gap.response_since_change_number != last_change
+        ):
+            return None
+        anchor = gap.to_change_number
+        changes = self._fetcher.get_changes_since(anchor)
+        if changes is None or changes.change_number <= anchor:
+            return None
+        if changes.app_change_details is None or len(changes.app_change_details) > 100_000:
+            raise ValueError("Recovery head exceeds the bounded source verification limit")
+        head = self._retain_response(
+            changes,
+            anchor,
+            {},
+            work_mode="shadow",
+            stream_key=f"forward-recovery-{gap.batch_id}",
+        )
+        if not head.source_complete:
+            # The candidate interval is unavailable too. A later bounded attempt
+            # uses the latest retained primary gap, never a made-up cursor.
+            self._forward_recovery_gap = self._last_committed_batch
+            return None
+        evidence_gap, evidence_head = gevent.get_hub().threadpool.apply(
+            self._store.read_forward_recovery_evidence, (gap.batch_id, head.batch_id)
+        )
+
+        def verify_archives():
+            for batch in (evidence_gap, evidence_head):
+                document = self._archive_store.read_json_verified(
+                    bucket=batch["archive_bucket"],
+                    key=batch["archive_key"],
+                    expected_content_hash=batch["archive_content_hash"],
+                    expected_byte_size=batch["archive_byte_size"],
+                    expected_content_type=batch["archive_content_type"],
+                )
+                self._store.verify_forward_recovery_document(batch, document)
+
+        gevent.get_hub().threadpool.apply(verify_archives)
+        recovery = PICSForwardRecovery(
+            evidence_gap,
+            evidence_head,
+            settings.pics_forward_recovery_requested_by.strip(),
+            datetime.now(timezone.utc),
+        )
+        self._store.validate_forward_recovery(recovery, datetime.now(timezone.utc))
+        committed = self._retain_response(changes, anchor, {}, forward_recovery=recovery)
         self._last_committed_batch = committed
-        if not committed.source_complete:
-            raise IncompletePICSChangeResponseError(
-                "PICS returned an incomplete app-change response; "
-                f"batch {committed.batch_id} was retained as source_blocked and "
-                "the intake cursor was not advanced "
-                f"(requested_since={last_change}, "
-                f"response_since={committed.response_since_change_number}, "
-                f"force_full_update={committed.force_full_update}, "
-                f"force_full_app_update={committed.force_full_app_update})"
-            )
-        logger.info(
-            "Committed PICS batch %s (%s -> %s, source=%s, distinct=%s, replay=%s)",
-            committed.batch_id,
-            committed.from_change_number,
-            committed.to_change_number,
-            committed.source_app_count,
-            committed.distinct_app_count,
-            committed.idempotent_replay,
+        self._forward_recovery_gap = None
+        self._last_forward_recovery = {
+            "from_change_number": last_change,
+            "skipped_through_change_number": anchor,
+            "resumed_through_change_number": committed.to_change_number,
+            "gap_batch_id": str(gap.batch_id),
+            "head_batch_id": str(head.batch_id),
+            "primary_batch_id": str(committed.batch_id),
+            "history_recovered": False,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        logger.warning(
+            "Audited forward-only PICS recovery %s", json.dumps(self._last_forward_recovery)
         )
         return committed.to_change_number
 
@@ -377,14 +533,16 @@ class DurableChangeIntakeWorker:
         force_full_update: bool,
         force_full_app_update: bool,
         force_full_package_update: bool,
+        work_mode: Optional[str] = None,
+        stream_key: Optional[str] = None,
     ) -> PICSArchiveReference:
         """Archive an exact response before its Tiger transaction can advance."""
 
         app_changes_sha256 = hash_pics_app_changes(app_changes)
         document = {
             "_archive_schema_version": "pics-change-response/v2",
-            "stream_key": self._stream_key,
-            "work_mode": self._work_mode,
+            "stream_key": stream_key or self._stream_key,
+            "work_mode": work_mode or self._work_mode,
             "lane": self._lane,
             "from_change_number": from_change_number,
             "to_change_number": to_change_number,
@@ -409,7 +567,7 @@ class DurableChangeIntakeWorker:
         pointer = self._archive_store.write_json(
             content_hash=None,
             key_parts=[
-                self._stream_key,
+                stream_key or self._stream_key,
                 str(from_change_number),
                 str(to_change_number),
                 app_changes_sha256,
@@ -524,6 +682,8 @@ class DurableChangeIntakeWorker:
                 "processing_queue_metrics": (processing.queue_metrics if processing else None),
                 "last_intake_phase_seconds": self._last_intake_phase_seconds,
                 "steam_request_attempts": getattr(self._steam, "request_attempts", {}),
+                "forward_recovery_enabled": settings.pics_forward_recovery_enabled,
+                "last_forward_recovery": getattr(self, "_last_forward_recovery", None),
                 "health_state": health_state,
                 "last_change": last_change,
                 "last_committed_batch_id": str(batch.batch_id) if batch else None,
