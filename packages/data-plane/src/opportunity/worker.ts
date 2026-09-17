@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isTransientDatabaseConnectionError } from "@publisheriq/shared";
 
 import {
   calculateOpportunityMarketContext,
@@ -415,6 +416,8 @@ export class OpportunityWorker {
           return;
       }
     } catch (error) {
+      // Preserve the lease; a database outage is not an item failure.
+      if (isTransientDatabaseConnectionError(error)) throw error;
       await this.repository.failWork({
         code: "opportunity_worker_failed",
         error: error instanceof Error ? error.message : String(error),
