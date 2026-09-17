@@ -1,7 +1,8 @@
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
-import { TigerChangeIntelRepository } from './tiger-repository.js';
+import { TigerChangeIntelRepository, getTigerChangeIntelRepository, shutdownTigerChangeIntelRepository } from './tiger-repository.js';
 
 test('Storefront tag daily budget reserves the full claimed batch', async () => {
   let sql = '';
@@ -88,4 +89,30 @@ test('Storefront tag evidence wakes pending opportunity classification immediate
   assert.match(queries[1]?.sql ?? '', /'content_descriptors' = ANY\(candidate\.missing_fields\)/);
   assert.match(queries[1]?.sql ?? '', /'tags' = ANY\(candidate\.missing_fields\)/);
   assert.deepEqual(queries[1]?.values, [[10, 20]]);
+});
+
+
+test('idle change-intel pool errors do not crash the worker or expose the client', async (t) => {
+  const previous = process.env.CHANGE_INTEL_TIGER_URL;
+  process.env.CHANGE_INTEL_TIGER_URL = 'postgres://test:test@localhost/test';
+  const logs: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args); });
+  try {
+    const repository = getTigerChangeIntelRepository();
+    const pool = (repository as unknown as { pool: Pool }).pool;
+    assert.doesNotThrow(() => (pool as unknown as EventEmitter).emit('error',
+      Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' }),
+      { password: 'must-not-log' }));
+    assert.equal((pool as unknown as { options: { connectionTimeoutMillis: number } }).options.connectionTimeoutMillis, 10_000);
+    assert.equal((pool as unknown as EventEmitter).listenerCount('error'), 1);
+    assert.ok(!JSON.stringify(logs).includes('must-not-log'));
+    assert.equal(getTigerChangeIntelRepository(), repository);
+    const checkedOutClient = new EventEmitter();
+    (pool as unknown as EventEmitter).emit('connect', checkedOutClient);
+    assert.doesNotThrow(() => checkedOutClient.emit('error', new Error('Connection terminated unexpectedly')));
+  } finally {
+    await shutdownTigerChangeIntelRepository();
+    if (previous === undefined) delete process.env.CHANGE_INTEL_TIGER_URL;
+    else process.env.CHANGE_INTEL_TIGER_URL = previous;
+  }
 });

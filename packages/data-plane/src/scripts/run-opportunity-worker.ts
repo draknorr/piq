@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
-import { logger } from "@publisheriq/shared";
+import {
+  logger,
+  runDatabaseWorker,
+  waitForWorkerDelay,
+} from "@publisheriq/shared";
 
 import { getDataPlanePool, shutdownPool } from "../pg.js";
 import {
@@ -23,7 +28,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function main(): Promise<void> {
+export async function runOpportunityWorker(): Promise<void> {
   const workerId = process.env.WORKER_ID ?? `opportunity-${randomUUID()}`;
   const pollIntervalMs = positiveInteger(process.env.POLL_INTERVAL_MS, 5_000);
   const claimLimit = positiveInteger(process.env.CLAIM_LIMIT, 8);
@@ -83,11 +88,11 @@ async function main(): Promise<void> {
         presentationControl,
       )
     : null;
-  let shuttingDown = false;
+  const shutdown = new AbortController();
   let idlePolls = 0;
 
   const stop = (): void => {
-    shuttingDown = true;
+    shutdown.abort();
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -120,36 +125,58 @@ async function main(): Promise<void> {
   });
 
   try {
-    while (!shuttingDown) {
-      const evaluation = await worker.runOnce();
-      const deliveries = deliveryDispatcher
-        ? await deliveryDispatcher.runOnce(deliveryLimit)
-        : 0;
-      const active =
-        evaluation.claimed > 0 || evaluation.scheduled > 0 || deliveries > 0;
-      idlePolls = active ? 0 : idlePolls + 1;
+    await runDatabaseWorker(
+      async () => {
+        const evaluation = await worker.runOnce();
+        const deliveries = deliveryDispatcher
+          ? await deliveryDispatcher.runOnce(deliveryLimit)
+          : 0;
+        const active =
+          evaluation.claimed > 0 || evaluation.scheduled > 0 || deliveries > 0;
+        idlePolls = active ? 0 : idlePolls + 1;
 
-      if (active) {
-        log.info("Processed opportunity work", {
-          claimed: evaluation.claimed,
-          deliveries,
-          scheduled: evaluation.scheduled,
-          workerId,
-        });
-      }
-      if (maxIdlePolls > 0 && idlePolls >= maxIdlePolls) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, pollIntervalMs);
-      });
-    }
+        if (active) {
+          log.info("Processed opportunity work", {
+            claimed: evaluation.claimed,
+            deliveries,
+            scheduled: evaluation.scheduled,
+            workerId,
+          });
+        }
+        if (maxIdlePolls > 0 && idlePolls >= maxIdlePolls) {
+          return false;
+        }
+        await waitForWorkerDelay(pollIntervalMs, shutdown.signal);
+        return true;
+      },
+      {
+        signal: shutdown.signal,
+        onUnavailable: (error, attempt, delayMs) => {
+          log.warn("Opportunity database unavailable; pausing queue work", {
+            error,
+            attempt,
+            delayMs,
+            workerId,
+          });
+        },
+        onRecovered: (attempts) => {
+          log.info("Opportunity database recovered; queue work resumed", {
+            attempts,
+            workerId,
+          });
+        },
+      },
+    );
   } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
     await shutdownPool();
   }
 }
 
-main().catch((error) => {
-  log.error("Steam opportunity worker stopped unexpectedly", { error });
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runOpportunityWorker().catch((error) => {
+    log.error("Steam opportunity worker stopped unexpectedly", { error });
+    process.exitCode = 1;
+  });
+}

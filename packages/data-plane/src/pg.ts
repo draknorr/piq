@@ -12,12 +12,15 @@ export function getDataPlanePool(config: DataPlaneConfig = loadDataPlaneConfig()
       application_name: 'publisheriq-data-plane',
       connectionString: config.connectionString,
       max: config.maxPoolSize,
+      connectionTimeoutMillis: 10_000,
       statement_timeout: config.statementTimeoutMs,
     });
 
-    pool.on('error', (error) => {
+    const reportConnectionError = (error: Error): void => {
       logger.error('Data-plane pool error', { error });
-    });
+    };
+    pool.on('connect', (client) => client.on('error', reportConnectionError));
+    pool.on('error', reportConnectionError);
   }
 
   return pool;

@@ -2186,3 +2186,28 @@ describe("opportunity delivery preference scoping", () => {
     });
   });
 });
+
+
+describe("database outage during claimed opportunity work", () => {
+  it("keeps the lease and stops the batch instead of failing the item", async () => {
+    const error = Object.assign(new Error("admin shutdown"), { code: "57P01" });
+    let failures = 0; let completed = 0; let heartbeats = 0;
+    const repository = {
+      scheduleWork: async () => 0,
+      claimWork: async () => [
+        { id: 1, kind: "materialize_events" },
+        { id: 2, kind: "materialize_events" },
+      ],
+      heartbeatWork: async () => { heartbeats += 1; throw error; },
+      completeWork: async () => { completed += 1; },
+      failWork: async () => { failures += 1; },
+    } as unknown as OpportunityWorkerRepository;
+    const worker = new OpportunityWorker(repository, {
+      workerId: "outage", claimLimit: 8, websiteBaseUrl: "https://publisheriq.com",
+    });
+    await assert.rejects(worker.runOnce(), error);
+    assert.equal(heartbeats, 1);
+    assert.equal(failures, 0);
+    assert.equal(completed, 0);
+  });
+});

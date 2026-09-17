@@ -465,3 +465,25 @@ describe("opportunity delivery presentation scope", () => {
     assert.deepEqual(failed, []);
   });
 });
+
+
+describe("database interruption after an external delivery", () => {
+  it("leaves uncertain completion leased and does not send the next item", async () => {
+    const error = Object.assign(new Error("connection lost"), { code: "ECONNRESET" });
+    let sends = 0; let failed = 0;
+    const repository = {
+      claim: async () => [DELIVERY, { ...DELIVERY, id: "next" }],
+      complete: async () => { throw error; },
+      fail: async () => { failed += 1; },
+    } as unknown as OpportunityDeliveryRepository;
+    const cipher = { decrypt: () => "test@example.com" } as unknown as OpportunityDestinationCipher;
+    const provider: OpportunityDeliveryProvider = {
+      sendEmail: async () => { sends += 1; return "message-1"; },
+      sendSlack: async () => { assert.fail("unexpected Slack send"); },
+    };
+    const dispatcher = new OpportunityDeliveryDispatcher(repository, cipher, provider, "outage");
+    await assert.rejects(dispatcher.runOnce(), error);
+    assert.equal(sends, 1);
+    assert.equal(failed, 0);
+  });
+});
