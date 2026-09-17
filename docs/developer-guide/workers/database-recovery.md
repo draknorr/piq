@@ -54,6 +54,11 @@ The same 15 bounded API reads at 07:59–08:00 UTC all passed. Medians were
 establish latency percentiles or causation. Shared WAL grew about 446,502 bytes/s
 between 07:56:26 and 08:08:17 UTC, including all workloads. SteamSpy and tiered CCU
 were active at the latter snapshot, alongside PICS and the restored workers.
+Rendered Tiger chart samples show the added overlap: average CPU was about
+5.74% during 07:43–07:52 UTC (ten one-minute points) versus 17.60% during
+07:54–08:01 UTC (eight points), with an after-restart peak of 28.20%. Average
+memory rose from 35.17% to 38.75%, peaking at 40.04%. These are values reconstructed
+from the rendered chart and its actual tick scales; other workloads contribute.
 No sustained-capacity acceptance or throughput increase follows from this check.
 
 ## Validation
