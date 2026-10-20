@@ -63,7 +63,7 @@ test("unauthenticated and forged-cookie requests do not contain the atlas datase
     const response = await GET(new NextRequest(URL, { headers: { cookie } }));
     const html = await response.text();
     assert.equal(response.status, 200);
-    assert.match(html, /Shared password/);
+    assert.match(html, /<label for="password">Password<\/label>/);
     assert.doesNotMatch(html, /nf-payload/);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
   }
