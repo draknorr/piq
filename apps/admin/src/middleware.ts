@@ -122,6 +122,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // This standalone atlas enforces its own shared-password gate in the route handler.
+  if (pathname === '/next-fest' || pathname.startsWith('/next-fest/')) {
+    return NextResponse.next();
+  }
+
   if (isLocalChatEvalBypassRequest(request)) {
     return NextResponse.next();
   }
