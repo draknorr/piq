@@ -7,6 +7,7 @@ const nextConfig = {
   ...(distDir ? { distDir } : {}),
   outputFileTracingIncludes: {
     '/reports/[slug]': ['./src/app/reports/content/**/*.html'],
+    '/next-fest': ['./src/app/next-fest/content/*.html'],
   },
   transpilePackages: ['@publisheriq/database'],
 };
