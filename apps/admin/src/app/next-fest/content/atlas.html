@@ -21,13 +21,42 @@
 @media(max-width:850px){#nf-landscape{padding:0 22px}.masthead{height:76px}.mast-links{gap:18px}.workspace{grid-template-columns:1fr;padding-top:30px}.filter-rail{border-right:0;border-bottom:1px solid var(--line);padding:0 0 25px}.rail-heading{margin-top:10px;justify-content:flex-start;gap:25px}.nf-toolbar{grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;margin-top:17px}.nf-toolbar label{font-size:10px}.nf-toolbar input,.nf-toolbar select{font-size:11px}#nf-more{border:0;padding-top:0;margin-top:15px}.nf-extra{grid-template-columns:repeat(4,1fr);gap:12px}.atlas-heading h2{font-size:29px}.directory-heading{align-items:start}.directory-actions{flex-direction:column;align-items:stretch}.data-strip{font-size:10px}.page-footer>span{display:none}}
 @media(max-width:600px){#nf-landscape{padding:0 18px}.mast-links>a{display:none}.masthead{height:72px}.data-strip{font-size:9px;line-height:1.5}.data-strip #nf-coverage{display:none}.nf-toolbar{grid-template-columns:1fr 1fr}.nf-toolbar input,.nf-toolbar select{font-size:13px}.nf-extra{grid-template-columns:1fr 1fr}.atlas-heading{align-items:center;gap:10px}.atlas-heading h2{font-size:24px}.selection-summary{gap:8px}.selection-summary svg{width:35px;height:35px}.selection-summary strong{font-size:21px}.selection-summary small{font-size:8px;max-width:70px;line-height:1.5}.selection-summary>span:last-child{display:none}.section-kicker{font-size:8px}.view-bar{flex-wrap:wrap;gap:9px}.view-tabs{width:100%;justify-content:space-between}.view-tabs button{padding:9px 7px;font-size:10px}.action-select{margin-left:auto}.chart-toolbar{align-items:start;display:grid;grid-template-columns:1fr 1fr;gap:10px}.chart-toolbar label{display:grid;font-size:9px}.chart-toolbar select{padding:8px 0;width:100%;max-width:100%;font-size:11px}.chart-toolbar .tag-search-label{grid-column:1/-1;max-width:100%;width:100%;margin:0}.tag-search-label input{font-size:14px;padding:10px 12px}.nf-cloud{min-height:500px}.plot-meta{font-size:8px;gap:5px}.nf-legend{gap:7px 12px}.nf-legend button{font-size:9px;padding:6px 0}.visual-foot{flex-direction:column;font-size:9px}.nf-inspect{font-size:10px;gap:7px}.segment-panel{grid-template-columns:1fr;gap:0}.segment-panel>.nf-cooccur{grid-column:1;grid-row:auto;border-top:1px solid var(--line);padding-top:20px;margin-top:20px}.directory{padding-top:30px}.directory-heading{flex-direction:column;gap:19px}.directory h2{font-size:29px;line-height:1.13}.directory-actions{flex-direction:row;align-items:end;justify-content:space-between;width:100%}.directory-actions select{font-size:12px}.button-primary{font-size:11px}#nf-results-status{font-size:10px;line-height:1.5}.nf-table,.nf-table tbody{display:block}.nf-table thead{display:none}.nf-table tr{display:grid;grid-template-columns:1fr 1fr;gap:8px 15px;padding:20px 0;border-bottom:1px solid var(--line)}.nf-table td{border:0;padding:0!important;min-width:0}.nf-table td:first-child{grid-column:1/-1;margin-bottom:6px}.nf-table td:nth-child(2){font-size:10px;order:3}.nf-table td:nth-child(2):before{content:'GAMEPLAY · ';font-size:8px;color:var(--muted-ink);display:block;margin-bottom:5px}.nf-table td:nth-child(3){grid-column:1/-1;margin-bottom:7px}.nf-table td:nth-child(4){order:4;font-size:10px;text-align:right}.nf-table td:nth-child(4):before,.nf-table td:last-child:before{font-size:8px;color:var(--muted-ink);display:block;margin-bottom:5px}.nf-table td:nth-child(4):before{content:'RELEASE · '}.nf-table td:last-child{order:5;grid-column:1/-1;font-size:11px;text-align:left;margin-top:7px}.nf-table td:last-child:before{content:'DEMO RECEPTION · '}.nf-game-title{font-size:17px}.nf-game-sub{font-size:11px}.nf-taglinks{font-size:10px}.signature{max-width:100%;height:3px}.signature span{height:3px}.nf-footer{justify-content:center;gap:18px}.nf-pagination{gap:7px}.nf-pagination button{padding:9px;font-size:11px}.page-footer{align-items:start;gap:20px}.footer-brand span{display:block;font-size:9px;margin-top:7px}.page-footer>a:last-child{font-size:9px;white-space:nowrap}.methods ul{font-size:11px}.methods summary{font-size:14px}.nf-cloud:has(.nf-word:hover) .nf-word:not(:hover){opacity:1}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+/* Static popularity views share the atlas palette and existing filters. */
+.popularity-section{border-top:1px solid var(--ink);padding:32px 0 40px;scroll-margin-top:20px}
+.popularity-heading{display:flex;justify-content:space-between;align-items:baseline;gap:18px;flex-wrap:wrap}
+.popularity-heading h2{font-size:28px;font-weight:500;letter-spacing:-.025em;margin:0}
+.popularity-heading a,.popularity-note,.popularity-coverage{font-size:12px;color:var(--muted-ink);line-height:1.6}
+.popularity-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(320px,1fr);gap:32px;margin-top:24px}
+.popularity-layout>*{min-width:0}.popularity-layout h3{font-size:17px;font-weight:500;margin:0 0 8px}
+.scatter-wrap{position:relative;min-width:0}.scatter-wrap svg{display:block;width:100%;overflow:visible;position:relative}.scatter-points{position:absolute;inset:0;width:100%;height:360px;pointer-events:none}
+.scatter-point{fill:var(--viz-series-1);fill-opacity:.48;stroke:var(--paper);stroke-width:.6;cursor:pointer}
+.scatter-point[data-unsettled=true]{fill:var(--paper);stroke:var(--muted-ink);stroke-width:1.2;stroke-dasharray:2 1}
+.scatter-point:hover,.scatter-point:focus,.scatter-point[aria-pressed=true]{fill:var(--accent);fill-opacity:1;stroke:var(--ink);stroke-width:1.5;outline:none}
+.scatter-label{fill:var(--ink);font-size:11px;paint-order:stroke;stroke:var(--paper);stroke-width:4px;stroke-linejoin:round;pointer-events:none}
+.game-inspector{border-top:1px solid var(--line);padding-top:16px;margin-top:12px;min-height:115px;font-size:12px;line-height:1.65;overflow-wrap:anywhere}
+.game-inspector h4{font-size:18px;font-weight:500;margin:0 0 8px}.game-inspector a{color:var(--accent)}
+.game-inspector .inspector-values{display:flex;flex-wrap:wrap;gap:6px 20px;margin-bottom:6px}
+.leader-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.leader-heading h3{margin:0}.leader-heading label{font-size:10px}.leader-heading select{font-size:12px;padding:7px;max-width:150px}
+.leaders{list-style:none;padding:0;margin:0}.leader-row{border-bottom:1px solid var(--line);padding:8px 0}
+.leader-title{display:flex;align-items:baseline;gap:9px;margin-bottom:8px}.leader-title>span{font-size:11px;color:var(--muted-ink);min-width:16px}
+.leader-title button{border:0;background:none;padding:0;text-align:left;font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.leader-title button[aria-pressed=true]{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.leader-metrics{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-left:25px}.leader-metric{min-width:0;font-size:11px}
+.leader-metric>span{display:flex;justify-content:space-between;gap:6px;font-variant-numeric:tabular-nums}.leader-track{height:4px;background:var(--soft);margin:5px 0 4px}
+.leader-track i{height:4px;display:block;background:var(--viz-series-1)}.leader-metric[data-metric=reviews] i{background:var(--viz-series-2)}
+.leader-metric small{font-size:10px;color:var(--muted-ink)}.leader-reception{margin:5px 0 0 25px;font-size:11px;color:var(--muted-ink)}
+.tag-inspector-detail{flex-basis:100%;line-height:1.65}.tag-inspector-detail button{font-size:11px;margin:3px 6px 0 0}
+.metric-caption{font-size:11px;line-height:1.6;color:var(--muted-ink);margin:9px 0}.plot-empty{padding:50px 15px;text-align:center;font-size:13px;line-height:1.7;color:var(--muted-ink)}
+@media(max-width:900px){.popularity-layout{grid-template-columns:1fr;gap:28px}}
+@media(max-width:600px){.popularity-section{padding-top:28px}.popularity-heading h2{font-size:24px}.popularity-layout{display:flex;flex-direction:column}.leaders-panel{order:-1}.popularity-note,.popularity-coverage{font-size:11px}.leader-heading select{max-width:140px}.leader-metrics{gap:12px}.game-inspector{min-height:0}.popularity-heading{gap:8px}}
 </style>
 </head>
 <body>
 <div id="nf-landscape">
   <nav id="top" class="masthead" aria-label="Page navigation">
     <a class="brand" href="#top" aria-label="PublisherIQ Next Fest Atlas"><span class="brand-wordmark" aria-hidden="true">Publisher<span>IQ</span></span><small>STEAM NEXT FEST / OCTOBER 19–26, 2026</small></a>
-    <div class="mast-links"><a href="#atlas">Cloud Map</a><a href="#directory">Game directory</a><a href="#method">Data</a><button id="nf-theme" class="icon-button" type="button" aria-label="Switch to dark theme">◐</button></div>
+    <div class="mast-links"><a href="#atlas">Cloud Map</a><a href="#popularity">Popularity</a><a href="#directory">Game directory</a><a href="#method">Data</a><button id="nf-theme" class="icon-button" type="button" aria-label="Switch to dark theme">◐</button></div>
   </nav>
   <div class="data-strip"><span id="nf-total">Loading games…</span><span id="nf-coverage">100% tag coverage</span></div>
   <main>
@@ -60,9 +89,18 @@
 <button type="button" class="btn btn-ghost" data-preset="Deckbuilding">Deckbuilders</button></div>
         <div class="nf-chiprow"><div id="nf-chips" class="nf-chips"></div><label id="nf-match-label" hidden>Match<select id="nf-match"><option value="all">All included tags</option><option value="any">Any included tag</option></select></label></div>
         <div class="view-bar"><div class="view-tabs" role="group" aria-label="Visualization view"><button type="button" data-view="cloud" aria-pressed="true"><span aria-hidden="true">Aa</span> Word cloud</button><button type="button" data-view="bubbles" aria-pressed="false"><span aria-hidden="true">◉</span> Bubble atlas</button><button type="button" data-view="network" aria-pressed="false"><span aria-hidden="true">⌘</span> Connections</button></div><label class="action-select">Click to<select id="nf-operation"><option value="include">Include a tag +</option><option value="exclude">Exclude a tag −</option></select></label></div>
-        <div class="chart-toolbar"><label>Show<select id="nf-focus"><option value="distinctive">Distinctive tags</option><option value="all">All tags</option><option value="Gameplay">Gameplay</option><option value="Mood & theme">Mood & theme</option><option value="Art & perspective">Art & perspective</option><option value="Player mode">Player mode</option><option value="Features & tools">Features & tools</option><option value="Broad descriptors">Broad descriptors</option></select></label><label>Size / rank<select id="nf-rank"><option value="count">Number of games</option><option value="lift">Over-index vs festival</option></select></label><label class="tag-search-label"><span class="sr-only">Find a tag</span><input id="nf-tagsearch" type="search" placeholder="Find a tag…" autocomplete="off"></label></div>
+        <div class="chart-toolbar"><label>Show<select id="nf-focus"><option value="distinctive">Distinctive tags</option><option value="all">All tags</option><option value="Gameplay">Gameplay</option><option value="Mood & theme">Mood & theme</option><option value="Art & perspective">Art & perspective</option><option value="Player mode">Player mode</option><option value="Features & tools">Features & tools</option><option value="Broad descriptors">Broad descriptors</option></select></label><label>Size / rank<select id="nf-rank"><option value="count">Number of games</option><option value="players">Demo players at last check</option><option value="reviews">Lifetime demo reviews</option><option value="lift">Over-index vs festival</option></select></label><label class="tag-search-label"><span class="sr-only">Find a tag</span><input id="nf-tagsearch" type="search" placeholder="Find a tag…" autocomplete="off"></label></div>
+        <p id="nf-tag-metric-status" class="metric-caption"></p>
         <div id="nf-tagmatches" class="nf-related"></div>
         <div class="atlas-layout"><div class="main-visual"><div class="plot-meta"><span id="nf-cloud-status">Loading tags…</span><span id="nf-view-caption">Word size represents game count</span></div><div id="nf-cloud" class="nf-cloud" aria-label="Interactive Steam tag atlas"></div><div id="nf-legend" class="nf-legend" aria-label="Tag families"></div><div class="visual-foot"><span>Click a tag to filter · Shift + click to exclude</span><span id="nf-graph-hint">Counts are titles, not players.</span></div><div id="nf-inspect" class="nf-inspect" aria-live="polite">Hover over a tag for counts and festival share.</div></div><aside class="segment-panel"><h3>Gameplay segments</h3><p>One primary segment per title.<br>Select a bar to narrow the view.</p><div id="nf-segment-chart"></div><div class="nf-cooccur"><h3>Tag co-occurrence</h3><p id="nf-pair-label">Most common tag pairs</p><div id="nf-pairs"></div></div></aside></div>
+      </div>
+    </section>
+    <section class="popularity-section" id="popularity" aria-labelledby="nf-popularity-title">
+      <div class="popularity-heading"><h2 id="nf-popularity-title">Demo popularity</h2><a href="#atlas">Uses the filters above ↑</a></div>
+      <p id="nf-popularity-coverage" class="popularity-coverage" aria-live="polite"></p>
+      <div class="popularity-layout">
+        <div class="scatter-panel"><h3>Players vs reviews</h3><p class="popularity-note">Upper-right means more of both. Logarithmic axes include zero. Players are from each demo’s last check, not one simultaneous count.</p><div id="nf-scatter" class="scatter-wrap"></div><p id="nf-scatter-status" class="metric-caption"></p><p class="metric-caption">Select a point or a leading game for details. Focus a point and use arrow keys to browse. Hollow, dashed points have stale, failed, or undated observations.</p><div id="nf-game-inspector" class="game-inspector" tabindex="-1" aria-live="polite"></div></div>
+        <aside class="leaders-panel" aria-labelledby="nf-leaders-title"><div class="leader-heading"><h3 id="nf-leaders-title">Leading games</h3><label>Rank by<select id="nf-leaderMetric"><option value="reviews">Demo reviews</option><option value="players">Demo players</option></select></label></div><p id="nf-leaders-status" class="metric-caption"></p><ol id="nf-leaders" class="leaders"></ol></aside>
       </div>
     </section>
     <section class="directory" id="directory" aria-labelledby="nf-games-title">
@@ -83,6 +121,7 @@
       const bytes=Uint8Array.from(atob(el('payload').textContent.trim()),c=>c.charCodeAt(0));
       const data=JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
       const tagNames=data.tags,tagByName=Object.fromEntries(Object.entries(tagNames).map(([id,name])=>[name,+id]));
+      const tagIds=Object.keys(tagNames).map(Number),tagIndices=new Map(tagIds.map((id,index)=>[id,index]));
       const familySets={
         'Mood & theme':new Set(`1980s|1990's|Abstract|Aliens|Alternate History|Animals|Assassins|Atmospheric|Beautiful|Birds|Capybaras|Cats|Cold War|Comedy|Conspiracy|Cozy|Crime|Cult|Cute|Cyberpunk|Dark|Dark Comedy|Dark Fantasy|Dark Humor|Demons|Dinosaurs|Dogs|Dragons|Dwarves|Dystopian |Elves|Emotional|Epic|Espionage|Faith|Family Friendly|Fantasy|Female Protagonist|Foxes|Funny|Futuristic|Gore|Gothic|Hentai|Historical|Horror|Horses|Immersive|Jump Scare|LGBTQ+|Lore-Rich|Lovecraftian|Magic|Mars|Mechs|Medieval|Memes|Military|Modern|Music|Mystery|Mythology|Nature|Naval|Ninja|Noir|Nostalgia|Nudity|Parody |Philosophical|Pirates|Post-apocalyptic|Psychedelic|Psychological|Psychological Horror|Relaxing|Robots|Romance|Rome|Samurai|Satire|Sci-fi|Science|Sexual Content|Silent Protagonist|Snow|Space|Spaceships|Steampunk|Story Rich|Superhero|Supernatural|Surreal|Thriller|Time Travel|Transhumanism|Underground|Underwater|Vampires|Vikings|Villain Protagonist|Violent|War|Werewolves|Western|Wholesome|Wolves|World War I|World War II|Wuxia|Xianxia|Zombies|Zoo`.split('|')),
         'Art & perspective':new Set(`2D|2.5D|3D|6DOF|Anime|Cartoon|Cartoony|Cinematic|Colorful|Comic Book|First-Person|Grid-Based Movement|Hand-drawn|Hex Grid|Isometric|Minimalist|Old School|Pixel Graphics|Realistic|Retro|Side Scroller|Stylized|Third Person|Top-Down|Voxel`.split('|')),
@@ -94,15 +133,17 @@
       const family=id=>Object.entries(familySets).find(([,set])=>set.has(tagNames[id]))?.[0]||'Gameplay';
       const color=id=>'var(--viz-series-'+(families.indexOf(family(id))+1)+')';
       const generic=new Set('Indie|Casual|Action|Adventure|RPG|Strategy|Simulation|Singleplayer|Multiplayer|2D|3D|Controller|Early Access|Free to Play'.split('|'));
-      const defaults={search:'',mode:'all',year:'all',publishing:'all',type:'game',platform:'all',depth:'20',limit:'70',focus:'distinctive',rank:'count',match:'all',sort:'name',view:'cloud',operation:'include',included:[],excluded:[],segment:-1,page:1,tagsearch:''};
+      const defaults={search:'',mode:'all',year:'all',publishing:'all',type:'game',platform:'all',depth:'20',limit:'70',focus:'distinctive',rank:'count',match:'all',sort:'name',view:'cloud',operation:'include',leaderMetric:'reviews',included:[],excluded:[],segment:-1,page:1,tagsearch:''};
       const normalize=s=>String(s).normalize('NFKD').toLocaleLowerCase();
-      data.games.forEach(g=>{g.search=normalize([g.name,...g.developers,...g.publishers,g.appid].join(' '));g.tagset=new Set(g.tags)});
-      let state={...defaults},filtered=[],baseline=[],segmentBase=[],counts=new Map(),baselineCounts=new Map(),renderFrame=0,cloudWords=[],lastCloudKey='';
+      data.games.forEach(g=>{g.tags=[...new Set(g.tags)];g.search=normalize([g.name,...g.developers,...g.publishers,g.appid].join(' '));g.tagset=new Set(g.tags)});
+      let state={...defaults},filtered=[],baseline=[],segmentBase=[],counts=new Map(),baselineCounts=new Map(),renderFrame=0,cloudWords=[],lastCloudKey='',baselineKey='';
       const restore=s=>{const p=s?.privateContent||s?.modelContent?.filters;if(p&&typeof p==='object'){state={...defaults,...p,included:(p.included||[]).filter(id=>tagNames[id]),excluded:(p.excluded||[]).filter(id=>tagNames[id])};if(!Number.isInteger(state.segment)||state.segment< -1||state.segment>=data.segments.length)state.segment=-1;state.page=Math.max(1,+state.page||1)}};
       try{restore({privateContent:JSON.parse(localStorage.getItem('piq-nextfest-atlas-v1')||'null')})}catch{}
       function save(){try{localStorage.setItem('piq-nextfest-atlas-v1',JSON.stringify(state))}catch{}}
       function sync(){for(const key of Object.keys(defaults)){const node=el(key);if(node&&'value'in node)node.value=state[key]}el('page').value=state.page}
-      function tagsFor(g){return g.tags.slice(0,+state.depth)}
+      let preparedDepth=null;
+      function tagsFor(g){return g.visibleTags}
+      function prepareTags(){if(preparedDepth!==state.depth){for(const g of data.games)g.visibleTags=g.tags.slice(0,+state.depth);preparedDepth=state.depth}}
       function countTags(rows){const out=new Map();for(const g of rows)for(const id of tagsFor(g))out.set(id,(out.get(id)||0)+1);return out}
       function typeMatches(g){return state.type==='all'||(state.type==='game'?!g.software:g.software)}
       function modeMatches(g){const t=g.tagset,m=g.player_modes;return state.mode==='all'||state.mode==='single'&&(m.includes(2)||t.has(tagByName.Singleplayer))||state.mode==='multi'&&(m.some(x=>[1,27,36,37,38,47,48,49].includes(x))||t.has(tagByName.Multiplayer))||state.mode==='coop'&&(m.some(x=>[9,24,38,39,48].includes(x))||['Co-op','Online Co-Op','Local Co-Op','Co-op Campaign'].some(n=>t.has(tagByName[n])))||state.mode==='local'&&(m.some(x=>[24,36,37,39,47,48,49].includes(x))||['Local Multiplayer','Local Co-Op','4 Player Local','Split Screen'].some(n=>t.has(tagByName[n])))||state.mode==='vr'&&(t.has(tagByName.VR)||t.has(tagByName['Asymmetric VR']))}
@@ -111,18 +152,92 @@
       function toggleTag(id,exclude=false){id=+id;const target=exclude?'excluded':'included',other=exclude?'included':'excluded';change({[target]:state[target].includes(id)?state[target].filter(x=>x!==id):[...state[target],id],[other]:state[other].filter(x=>x!==id),tagsearch:''})}
       function tagButton(id,label){return `<button type="button" class="btn btn-ghost" data-tag="${id}">${esc(label||tagNames[id])}</button>`}
       function renderChips(){el('chips').innerHTML=[...(state.segment>=0?[`<button type="button" class="btn" data-clear-segment>${esc(data.segments[state.segment])} ×</button>`]:[]),...state.included.map(id=>`<button type="button" class="btn" data-tag="${id}" aria-label="Remove included tag ${esc(tagNames[id])}">+ ${esc(tagNames[id])} ×</button>`),...state.excluded.map(id=>`<button type="button" class="btn" data-tag="${id}" data-exclude="true" aria-label="Remove excluded tag ${esc(tagNames[id])}">− ${esc(tagNames[id])} ×</button>`)].join('');el('match-label').hidden=state.included.length<2}
-      function inspect(id){const n=counts.get(+id)||0,b=baselineCounts.get(+id)||0,lift=filtered.length&&b?n/filtered.length/(b/baseline.length):0;el('inspect').innerHTML=`<span>${esc(tagNames[id])}</span><span>${fmt(n)} matching titles · ${filtered.length?(100*n/filtered.length).toFixed(1):'0.0'}%</span><span>${lift.toFixed(2)}× festival share</span><button type="button" class="btn btn-ghost" data-tag="${id}" data-exclude="true">Exclude tag</button>`}
-      function selectedCloud(){let rows=[...counts].map(([id,count])=>({id,name:tagNames[id],count,lift:baselineCounts.get(id)?count/Math.max(1,filtered.length)/((baselineCounts.get(id)||0)/Math.max(1,baseline.length)):0}));rows=rows.filter(w=>state.tagsearch?normalize(w.name).includes(normalize(state.tagsearch)):state.focus==='all'||state.focus==='distinctive'?!generic.has(w.name)||state.focus==='all':family(w.id)===state.focus);if(state.rank==='lift'&&filtered.length<baseline.length)rows=rows.filter(w=>w.count>=Math.min(5,filtered.length));rows.sort((a,b)=>(state.rank==='lift'&&filtered.length<baseline.length?b.lift-a.lift:0)||b.count-a.count||a.name.localeCompare(b.name));return rows.slice(0,+state.limit)}
+      // Derived only from the embedded snapshot; no runtime requests.
+      const knownCount=value=>Number.isSafeInteger(value)&&value>=0;
+      const gameMetrics=new Map(data.games.map(g=>{
+        const p=popularity(g),r=p?.review,c=p?.ccu;
+        const votes=r&&knownCount(r.positive)&&knownCount(r.negative);
+        return [g.appid,{players:!g.software&&knownCount(c?.current)?c.current:null,
+          reviews:!g.software&&votes?r.positive+r.negative:null,
+          positive:votes?r.positive:0,negative:votes?r.negative:0}];
+      }));
+      let tagMetrics=new Map(),selectedGameId=null,scatterGames=[],scatterKey='',scatterLabels=[];
+      const metricMode=()=>['players','reviews'].includes(state.rank)?state.rank:'count';
+      const metricName=metric=>metric==='players'?'players at last check':metric==='reviews'?'lifetime demo reviews':'titles';
+      const metricValue=(g,metric)=>gameMetrics.get(g.appid)?.[metric]??null;
+      const observationCache=new Map();
+      function observationState(g,metric){
+        const key=g.appid+':'+metric;if(!observationCache.has(key))observationCache.set(key,readObservationState(g,metric));return observationCache.get(key);
+      }
+      function readObservationState(g,metric){
+        const p=popularity(g),at=metric==='players'?p?.ccu?.observedAt:p?.review?.observedAt;
+        const issue=metric==='players'&&['error','invalid','suspect_zero'].includes(p?.ccuLastAttemptState)
+          &&(!at||p.ccuLastAttemptAt>at)?({error:'Refresh failed',invalid:'Demo unavailable',suspect_zero:'Zero unconfirmed'}[p.ccuLastAttemptState])
+          :metric==='reviews'&&p?.failedReviewAt&&(!at||p.failedReviewAt>at)?'Refresh failed':null;
+        if(metricValue(g,metric)===null)return issue||'Unknown';
+        if(issue)return issue;
+        if(!at||!Number.isFinite(Date.parse(at)))return 'Time unknown';
+        return metricState(at,metric==='players'?(data.popularity?.ccuStaleHours??36):(data.popularity?.reviewStaleHours??60));
+      }
+      function emptyMetrics(){return {count:0,players:0,reviews:0,playersKnown:0,reviewsKnown:0,playersUnsettled:0,reviewsUnsettled:0,positive:0,negative:0}}
+      function addMetrics(sum,g){
+        sum.count++;
+        const m=gameMetrics.get(g.appid);
+        for(const metric of ['players','reviews'])if(m?.[metric]!==null&&m?.[metric]!==undefined){
+          sum[metric]+=m[metric];sum[metric+'Known']++;
+          if(observationState(g,metric)!=='Fresh')sum[metric+'Unsettled']++;
+        }
+        if(m?.reviews!==null){sum.positive+=m?.positive??0;sum.negative+=m?.negative??0}
+        return sum;
+      }
+      function summarizeGames(rows){return rows.reduce(addMetrics,emptyMetrics())}
+      function refreshTagMetrics(){
+        tagMetrics=new Map();
+        // Compute freshness once per game, then reuse it across that game's tags.
+        for(const g of filtered){
+          const one=addMetrics(emptyMetrics(),g);
+          for(const id of tagsFor(g)){
+            if(!tagMetrics.has(id))tagMetrics.set(id,emptyMetrics());
+            const total=tagMetrics.get(id);total.count++;total.players+=one.players;total.reviews+=one.reviews;total.playersKnown+=one.playersKnown;total.reviewsKnown+=one.reviewsKnown;total.playersUnsettled+=one.playersUnsettled;total.reviewsUnsettled+=one.reviewsUnsettled;total.positive+=one.positive;total.negative+=one.negative;
+          }
+        }
+      }
+      function coverageText(sum,metric){
+        const known=sum[metric+'Known'],unsettled=sum[metric+'Unsettled'];
+        return `${fmt(known)}/${fmt(sum.count)} with ${metric==='players'?'player':'review'} counts${unsettled?`; ${fmt(unsettled)} stale, failed, or undated`:''}`;
+      }
+      function metricTotal(sum,metric){return sum[metric+'Known']?fmt(sum[metric]):'Unknown'}
+      function tagDescription(id){
+        const s=tagMetrics.get(+id)||emptyMetrics();
+        return `${tagNames[id]} · ${fmt(s.count)} titles · ${metricTotal(s,'players')} players at last check · ${metricTotal(s,'reviews')} lifetime reviews · ${coverageText(s,'players')} · ${coverageText(s,'reviews')}`;
+      }
+      function rankGames(rows,metric){return rows.filter(g=>metricValue(g,metric)!==null).sort((a,b)=>metricValue(b,metric)-metricValue(a,metric)||a.name.localeCompare(b.name))}
+      function inspect(id){
+        id=+id;const s=tagMetrics.get(id)||emptyMetrics(),b=baselineCounts.get(id)||0,lift=filtered.length&&b?s.count/filtered.length/(b/baseline.length):0;
+        const top=rankGames(filtered.filter(g=>tagsFor(g).includes(id)),metricMode()==='count'?'reviews':metricMode()).slice(0,3);
+        el('inspect').innerHTML=`<strong>${esc(tagNames[id])}</strong><span>${fmt(s.count)} matching titles · ${lift.toFixed(2)}× festival share</span><button type="button" class="btn btn-ghost" data-tag="${id}" data-exclude="true">Exclude tag</button><div class="tag-inspector-detail">${metricTotal(s,'players')} players at last check · ${metricTotal(s,'reviews')} lifetime reviews${s.positive+s.negative?` · ${(100*s.positive/(s.positive+s.negative)).toFixed(1)}% positive (all votes)`:''}<br>${esc(coverageText(s,'players'))} · ${esc(coverageText(s,'reviews'))}${top.length?'<br>Leading games by '+(metricMode()==='count'?'reviews':metricMode())+': '+top.map(g=>`<button type="button" class="text-button" data-inspect-game="${g.appid}">${esc(g.name)} ↗</button>`).join(''):''}</div>`;
+      }
+      function selectedCloud(){
+        const metric=metricMode();
+        let rows=[...counts].map(([id,count])=>({id,name:tagNames[id],count,
+          weight:metric==='count'?count:tagMetrics.get(id)?.[metric]||0,
+          lift:baselineCounts.get(id)?count/Math.max(1,filtered.length)/((baselineCounts.get(id)||0)/Math.max(1,baseline.length)):0}));
+        rows=rows.filter(w=>state.tagsearch?normalize(w.name).includes(normalize(state.tagsearch)):state.focus==='all'||state.focus==='distinctive'?!generic.has(w.name)||state.focus==='all':family(w.id)===state.focus);
+        if(metric!=='count')rows=rows.filter(w=>w.weight>0);
+        if(state.rank==='lift'&&filtered.length<baseline.length)rows=rows.filter(w=>w.count>=Math.min(5,filtered.length));
+        rows.sort((a,b)=>(state.rank==='lift'&&filtered.length<baseline.length?b.lift-a.lift:0)||b.weight-a.weight||b.count-a.count||a.name.localeCompare(b.name));
+        return rows.slice(0,+state.limit);
+      }
       const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
       function drawWordCloud(){
         const width=Math.max(260,Math.floor(el('cloud').getBoundingClientRect().width)),height=width<440?500:560,words=selectedCloud();
-        const cloudKey=JSON.stringify([width,height,state.rank,words.map(w=>[w.id,w.count]),state.included]);
+        const cloudKey=JSON.stringify([width,height,state.rank,words.map(w=>[w.id,w.weight]),state.included]);
         if(cloudKey===lastCloudKey)return;
         lastCloudKey=cloudKey;
-        if(!words.length){el('cloud').innerHTML='<div class="nf-empty">No tags match these filters. Remove a filter or choose another tag family.</div>';el('cloud-status').textContent=`${fmt(counts.size)} tags in selection · 0 shown`;return}
-        const font=getComputedStyle(root).fontFamily,base=parseFloat(getComputedStyle(root).fontSize)||14,max=Math.max(...words.map(w=>w.count)),placed=[];
+        if(!words.length){graphEmpty();return}
+        const font=getComputedStyle(root).fontFamily,base=parseFloat(getComputedStyle(root).fontSize)||14,max=Math.max(...words.map(w=>w.weight)),placed=[];
         let area=0;
-        for(const w of words){w.scale=.65+1.9*Math.sqrt(w.count/max);ctx.font=`500 ${base*w.scale}px ${font}`;area+=(ctx.measureText(w.name).width+16)*(base*w.scale*1.3+8)}
+        for(const w of words){w.scale=.65+1.9*Math.sqrt(w.weight/max);ctx.font=`500 ${base*w.scale}px ${font}`;area+=(ctx.measureText(w.name).width+16)*(base*w.scale*1.3+8)}
         const density=Math.min(1.2,Math.sqrt(width*height*.50/area));
         for(const w of words){
           let scale=Math.max(12/base,w.scale*density);
@@ -139,7 +254,8 @@
         }
         cloudWords=placed;
         const svgNS='http://www.w3.org/2000/svg';let svg=el('cloud').querySelector('svg');
-        if(!svg){el('cloud').innerHTML='';svg=document.createElementNS(svgNS,'svg');svg.setAttribute('role','group');svg.setAttribute('aria-label','Tag cloud. Size represents number of matching titles; dots show editorial tag family.');el('cloud').append(svg)}
+        if(!svg){el('cloud').innerHTML='';svg=document.createElementNS(svgNS,'svg');svg.setAttribute('role','group');svg.setAttribute('aria-label',`Tag cloud. Size represents ${metricName(metricMode())}; color shows tag family.`);el('cloud').append(svg)}
+        svg.setAttribute('aria-label',`Tag cloud. Size represents ${metricName(metricMode())}; color shows tag family.`);
         svg.setAttribute('viewBox',`0 0 ${width} ${height}`);svg.style.height=height+'px';
         const old=new Map([...svg.querySelectorAll('.nf-word')].map(n=>[+n.dataset.id,n]));
         for(const w of placed){
@@ -147,15 +263,20 @@
           if(!node){node=document.createElementNS(svgNS,'a');node.classList.add('nf-word','cursor-interaction');node.dataset.id=w.id;node.dataset.tag=w.id;node.setAttribute('href','#nf-cloud');node.setAttribute('role','button');node.addEventListener('pointerenter',()=>inspect(w.id));node.addEventListener('focus',()=>inspect(w.id));node.addEventListener('keydown',e=>{if(e.key===' '){e.preventDefault();toggleTag(w.id,e.shiftKey||state.operation==='exclude')}});node.innerHTML='<circle class="nf-dot" r="2.1" cx="-5" cy="-4"></circle><text></text>';svg.append(node)}
           node.setAttribute('transform',`translate(${(w.x+9).toFixed(2)} ${(w.y+w.h*.73).toFixed(2)}) scale(${w.scale.toFixed(3)})`);
           node.setAttribute('aria-pressed',String(state.included.includes(w.id)));
-          node.setAttribute('aria-label',`${w.name}: ${fmt(w.count)} matching titles. Activate to filter; shift activate to exclude.`);
-          node.dataset.tooltip=`${w.name} · ${fmt(w.count)} titles · ${(100*w.count/Math.max(1,filtered.length)).toFixed(1)}% · ${w.lift.toFixed(2)}× festival share`;
+          node.setAttribute('aria-label',`${tagDescription(w.id)}. Activate to filter; shift activate to exclude.`);
+          node.dataset.tooltip=tagDescription(w.id);
           node.querySelector('text').textContent=w.name;node.querySelector('text').style.fontSize=base+'px';node.querySelector('text').style.fontFamily=font;node.querySelector('circle').style.fill=color(w.id);old.delete(w.id);
         }
         for(const node of old.values())node.remove();
         el('cloud-status').textContent=`${fmt(counts.size)} tags in selection · ${placed.length} shown · top ${state.depth} per title`;
       }
-      function drawSegments(){const box=el('segment-chart'),width=Math.max(220,Math.floor(box.getBoundingClientRect().width)),c=new Map(),rowHeight=matchMedia('(pointer:coarse)').matches?46:37;for(const g of segmentBase)c.set(g.segment,(c.get(g.segment)||0)+1);const rows=data.segments.map((name,i)=>({name,i,n:c.get(i)||0})).filter(x=>state.type==='game'?x.i!==15:state.type==='software'?x.i===15:true).sort((a,b)=>b.n-a.n||a.i-b.i),max=Math.max(1,...rows.map(x=>x.n));box.innerHTML=`<svg viewBox="0 0 ${width} ${rows.length*rowHeight+10}" role="group" aria-label="Primary gameplay segments. Counts use all other active filters.">${rows.map((r,j)=>`<a href="#nf-segment-chart" role="button" class="cursor-interaction" data-segment="${r.i}" aria-pressed="${state.segment===r.i}" aria-label="${esc(r.name)}, ${fmt(r.n)} titles" data-tooltip="${esc(r.name)} · ${fmt(r.n)} titles within other filters"><rect x="0" y="${j*rowHeight}" width="${width}" height="${rowHeight-1}" fill="transparent" pointer-events="all" data-chart-hit="true"/><text x="0" y="${j*rowHeight+17}" fill="var(--foreground)" style="font-size:12px;font-weight:${state.segment===r.i?500:400}">${esc(r.name)}</text><text x="${width}" y="${j*rowHeight+17}" text-anchor="end" fill="var(--muted-foreground)" style="font-size:12px">${fmt(r.n)}</text><rect x="0" y="${j*rowHeight+24}" width="${width}" height="4" fill="var(--muted)"/><rect x="0" y="${j*rowHeight+24}" width="${Math.max(0,r.n/max*width)}" height="4" fill="var(--viz-series-1)" opacity="${state.segment<0||state.segment===r.i?1:.35}"/></a>`).join('')}</svg>`}
-      function renderPairs(){const candidates=[...counts].filter(([id,n])=>!generic.has(tagNames[id])&&!state.included.includes(id)&&n>=2).sort((a,b)=>b[1]-a[1]);let pairs=[];if(state.included.length){pairs=candidates.slice(0,5).map(([id,n])=>({a:id,n}));el('pair-label').textContent='Common additional tags in this selection'}else{const set=new Set(candidates.map(x=>x[0])),pc=new Map();for(const g of filtered){const ts=tagsFor(g).filter(id=>set.has(id));for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){const k=[ts[i],ts[j]].sort((a,b)=>a-b).join(',');pc.set(k,(pc.get(k)||0)+1)}}pairs=[...pc].sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,n])=>({a:+k.split(',')[0],b:+k.split(',')[1],n}));el('pair-label').textContent='Most common pairs · distinctive tags'}el('pairs').innerHTML=pairs.map(p=>`<div class="nf-related"><button type="button" class="btn btn-ghost" data-pair="${p.a}${p.b?','+p.b:''}">${esc(tagNames[p.a])}${p.b?' + '+esc(tagNames[p.b]):''} · ${fmt(p.n)}</button></div>`).join('')||'<div class="text-small text-muted">No tag pairs in this selection.</div>'}
+      function drawSegments(){
+        const box=el('segment-chart'),width=Math.max(220,Math.floor(box.getBoundingClientRect().width)),c=new Map(),rowHeight=matchMedia('(pointer:coarse)').matches?46:37,metric=metricMode();
+        for(const g of segmentBase){if(!c.has(g.segment))c.set(g.segment,emptyMetrics());addMetrics(c.get(g.segment),g)}
+        const rows=data.segments.map((name,i)=>{const stats=c.get(i)||emptyMetrics();return {name,i,stats,n:metric==='count'?stats.count:stats[metric],known:metric==='count'?true:stats[metric+'Known']}}).filter(x=>state.type==='game'?x.i!==15:state.type==='software'?x.i===15:true).sort((a,b)=>b.n-a.n||a.i-b.i),max=Math.max(1,...rows.map(x=>x.n));
+        box.innerHTML=`<svg viewBox="0 0 ${width} ${rows.length*rowHeight+10}" role="group" aria-label="Primary gameplay segments. Bars show ${metricName(metric)} within all other active filters.">${rows.map((r,j)=>`<a href="#nf-segment-chart" role="button" class="cursor-interaction" data-segment="${r.i}" aria-pressed="${state.segment===r.i}" aria-label="${esc(r.name)}, ${r.known?fmt(r.n):'Unknown'} ${metricName(metric)}" data-tooltip="${esc(r.name)} · ${r.known?fmt(r.n):'Unknown'} ${metricName(metric)}${metric==='count'?'':' · '+esc(coverageText(r.stats,metric))}"><rect x="0" y="${j*rowHeight}" width="${width}" height="${rowHeight-1}" fill="transparent" pointer-events="all"/><text x="0" y="${j*rowHeight+17}" fill="var(--ink)" style="font-size:12px;font-weight:${state.segment===r.i?500:400}">${esc(r.name)}</text><text x="${width}" y="${j*rowHeight+17}" text-anchor="end" fill="var(--muted-ink)" style="font-size:12px">${r.known?fmt(r.n):'—'}</text><rect x="0" y="${j*rowHeight+24}" width="${width}" height="4" fill="var(--soft)"/><rect x="0" y="${j*rowHeight+24}" width="${r.n/max*width}" height="4" fill="var(--viz-series-1)" opacity="${state.segment<0||state.segment===r.i?1:.35}"/></a>`).join('')}</svg>`;
+      }
+      function renderPairs(){const candidates=[...counts].filter(([id,n])=>!generic.has(tagNames[id])&&!state.included.includes(id)&&n>=2).sort((a,b)=>b[1]-a[1]);let pairs=[];if(state.included.length){pairs=candidates.slice(0,5).map(([id,n])=>({a:id,n}));el('pair-label').textContent='Common additional tags in this selection'}else{const set=new Set(candidates.map(x=>x[0])),pc=new Map();for(const g of filtered){const ts=tagsFor(g).filter(id=>set.has(id)).map(id=>tagIndices.get(id));for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){const k=Math.min(ts[i],ts[j])*tagIds.length+Math.max(ts[i],ts[j]);pc.set(k,(pc.get(k)||0)+1)}}pairs=[...pc].sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,n])=>({a:tagIds[Math.floor(k/tagIds.length)],b:tagIds[k%tagIds.length],n}));el('pair-label').textContent='Most common pairs · distinctive tags'}el('pairs').innerHTML=pairs.map(p=>`<div class="nf-related"><button type="button" class="btn btn-ghost" data-pair="${p.a}${p.b?','+p.b:''}">${esc(tagNames[p.a])}${p.b?' + '+esc(tagNames[p.b]):''} · ${fmt(p.n)}</button></div>`).join('')||'<div class="text-small text-muted">No tag pairs in this selection.</div>'}
       function popularity(g){return data.popularity?.demos?.[[...new Set(g.demos)][0]]}
       function metricTime(value){return value?new Date(value).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}):'time unknown'}
       function metricState(at,hours){return !at?'Unknown':Date.now()-Date.parse(at)>hours*3600000?'Stale':'Fresh'}
@@ -176,17 +297,134 @@
       }
       function gameDetails(g){return `<div class="nf-details text-small"><div>Steam app ID · ${g.appid}</div><div>${esc(data.segments[g.segment])}</div><div>Developer · ${esc(g.developers.join(', ')||'Unknown')}</div><div>Publisher · ${esc(g.publishers.join(', ')||'Unknown')}</div><div>Platforms · ${['Windows','macOS','Linux / SteamOS'].filter((_,i)=>g.platforms&(1<<i)).join(', ')||'Unknown'}</div><div>${g.languages.length} supported languages</div><div class="nf-full nf-taglinks">${g.tags.map(id=>`<a href="#nf-cloud" data-tag="${id}">${esc(tagNames[id])}</a>`).join('')}</div><div class="nf-full">${g.demos.map(id=>`<a href="https://store.steampowered.com/app/${id}/" target="_blank" rel="noopener noreferrer">Demo ${id} ↗</a>`).join(' · ')}</div></div>`}
       function renderGames(){const pageSize=20,totalPages=Math.max(1,Math.ceil(filtered.length/pageSize));state.page=Math.max(1,Math.min(totalPages,+state.page||1));el('page').value=state.page;el('page').max=totalPages;el('prev').disabled=state.page<=1;el('next').disabled=state.page>=totalPages;const start=(state.page-1)*pageSize,rows=filtered.slice(start,start+pageSize);el('games').innerHTML=rows.map(g=>`<tr><td><a class="nf-game-title" href="https://store.steampowered.com/app/${g.appid}/" target="_blank" rel="noopener noreferrer">${esc(g.name)} ↗</a><div class="nf-game-sub text-small">${esc(g.developers.join(', ')||'Developer unknown')}</div><details><summary class="text-small">All tags & demo</summary>${gameDetails(g)}</details></td><td class="text-small">${esc(data.segments[g.segment])}</td><td><div class="nf-taglinks text-small">${g.tags.slice(0,4).map(id=>`<a href="#nf-cloud" data-tag="${id}">${esc(tagNames[id])}</a>`).join('')}</div></td><td class="text-small">${esc(g.release)}</td><td class="text-small">${popularityCell(g)}</td></tr>`).join('')||'<tr><td colspan="5">No matching titles. Remove an included tag or switch from “All” to “Any”.</td></tr>';el('page-status').textContent=filtered.length?`${fmt(start+1)}–${fmt(Math.min(start+pageSize,filtered.length))} of ${fmt(filtered.length)} titles · ${fmt(totalPages)} pages`:'0 titles';el('results-status').textContent=`${fmt(filtered.length)} matching ${state.type==='game'?'games':state.type==='software'?'software entries':'entries'} · ${(100*filtered.length/Math.max(1,baseline.length)).toFixed(1)}% of ${state.type==='game'?'festival games':state.type==='software'?'festival software':'event entries'}`}
+      function renderPopularity(){
+        const games=filtered.filter(g=>!g.software),sum=summarizeGames(games);
+        el('popularity-coverage').textContent=`${fmt(games.length)} games in this selection · ${coverageText(sum,'players')} · ${coverageText(sum,'reviews')}. Last successful values are retained when a refresh fails.`;
+        const ranked=rankGames(games,state.leaderMetric),leaders=ranked.slice(0,10);
+        if(!games.some(g=>g.appid===selectedGameId))selectedGameId=leaders[0]?.appid??null;
+        el('leaders-status').textContent=`${leaders.length?`Top ${leaders.length} of ${fmt(ranked.length)} with known ${state.leaderMetric}`:'No known '+state.leaderMetric+' in this selection'}. Each bar uses its own metric’s maximum in this selection.`;
+        const maxima=Object.fromEntries(['players','reviews'].map(metric=>[metric,Math.max(1,...games.map(g=>metricValue(g,metric)??0))]));
+        el('leaders').innerHTML=leaders.map((g,i)=>{
+          const m=gameMetrics.get(g.appid);
+          const bars=['players','reviews'].map(metric=>{
+            const value=m[metric];
+            return `<div class="leader-metric" data-metric="${metric}"><span><span>${metric==='players'?'Players':'Reviews'}</span><span>${value===null?'—':fmt(value)}</span></span><div class="leader-track" aria-hidden="true"><i style="width:${value===null?0:100*value/maxima[metric]}%"></i></div></div>`;
+          }).join('');
+          return `<li class="leader-row" data-leader-id="${g.appid}"><div class="leader-title"><span>${i+1}</span><button type="button" data-game="${g.appid}" aria-pressed="${g.appid===selectedGameId}">${esc(g.name)}</button></div><div class="leader-metrics">${bars}</div><div class="leader-reception">${m.reviews===null?'Reception unknown':m.reviews===0?'No reviews yet':`${(100*m.positive/m.reviews).toFixed(1)}% positive`} · Players: ${esc(observationState(g,'players'))} · Reviews: ${esc(observationState(g,'reviews'))}</div></li>`;
+        }).join('')||'<li class="plot-empty">Try another metric or broaden the filters. Missing observations are not zero.</li>';
+        drawScatter();renderGameInspector();
+      }
+      function renderGameInspector(){
+        const g=filtered.find(g=>g.appid===selectedGameId);
+        if(!g){el('game-inspector').textContent='Select a game to inspect its counts and observation times.';return}
+        const m=gameMetrics.get(g.appid),p=popularity(g),r=p?.review,c=p?.ccu;
+        el('game-inspector').innerHTML=`<h4>${esc(g.name)}</h4><div class="inspector-values"><span><strong>${m.players===null?'Unknown':fmt(m.players)}</strong> players at last check</span><span><strong>${m.reviews===null?'Unknown':fmt(m.reviews)}</strong> lifetime reviews</span>${m.reviews?`<span>${(100*m.positive/m.reviews).toFixed(1)}% positive · ${fmt(m.positive)} positive / ${fmt(m.negative)} negative</span>`:''}</div><div>Players: ${esc(observationState(g,'players'))} · ${esc(metricTime(c?.observedAt))}</div><div>Reviews: ${esc(observationState(g,'reviews'))} · ${esc(metricTime(r?.observedAt))}</div>${c?`<div>Observed peak: ${fmt(c.peak)} players across ${fmt(c.samples)} samples · ${esc(metricTime(c.from))}–${esc(metricTime(c.observedAt))}</div>`:''}${p?.reviewGrowth?`<div>${signed(p.reviewGrowth.net)} net lifetime reviews · ${esc(metricTime(p.reviewGrowth.from))}–${esc(metricTime(p.reviewGrowth.to))}</div>`:''}<div><a href="https://store.steampowered.com/app/${g.appid}/" target="_blank" rel="noopener noreferrer">Game on Steam ↗</a> · <a href="https://store.steampowered.com/app/${[...new Set(g.demos)][0]}/" target="_blank" rel="noopener noreferrer">Demo on Steam ↗</a>${m.players===null||m.reviews===null?' · Not plotted: both counts are required.':''}</div>`;
+      }
+      function selectGame(id,focus=false){
+        selectedGameId=+id;renderGameInspector();
+        root.querySelectorAll('#nf-leaders [data-game]').forEach(node=>node.setAttribute('aria-pressed',String(+node.dataset.game===selectedGameId)));
+        const point=el('scatter').querySelector('[data-game]');
+        const selected=scatterLabels.find(p=>p.g.appid===selectedGameId),position=selected||scatterLabels[0];
+        if(point&&position){
+          point.dataset.game=position.g.appid;point.setAttribute('cx',position.x);point.setAttribute('cy',position.y);
+          point.setAttribute('r',selected?'6':'3.5');point.setAttribute('aria-pressed',String(Boolean(selected)));
+          point.setAttribute('aria-label',pointDescription(position.g));
+          if(focus)point.focus();
+        }
+        drawScatterLabels();
+      }
+      function axisTicks(max,count){
+        const ticks=[0];for(let v=1;v<=max;v*=10)ticks.push(v);
+        return ticks.length<=count?ticks:[...new Set(Array.from({length:count},(_,i)=>ticks[Math.round(i*(ticks.length-1)/(count-1))]))];
+      }
+      function drawScatter(){
+        const width=Math.max(260,Math.floor(el('scatter').getBoundingClientRect().width));
+        const games=filtered.filter(g=>!g.software&&metricValue(g,'players')!==null&&metricValue(g,'reviews')!==null).sort((a,b)=>metricValue(b,'reviews')-metricValue(a,'reviews')||a.appid-b.appid);
+        const key=width+':'+games.map(g=>g.appid+(observationState(g,'players')==='Fresh'&&observationState(g,'reviews')==='Fresh'?'f':'u')).join(',');
+        const all=filtered.filter(g=>!g.software).length;
+        el('scatter-status').textContent=`${fmt(games.length)} plotted · ${fmt(all-games.length)} missing one or both counts. Genuine zeros appear on the zero ticks.`;
+        if(scatterKey===key)return;scatterKey=key;scatterGames=games;
+        if(!games.length){scatterLabels=[];el('scatter').innerHTML='<div class="plot-empty">No games in this selection have both player and review observations yet.<br>Review rankings remain available while player counts arrive.</div>';return}
+        const height=360,left=62,right=18,top=24,bottom=52,plotWidth=width-left-right,plotHeight=height-top-bottom;
+        const maxX=Math.max(1,...games.map(g=>metricValue(g,'reviews')))*1.5,maxY=Math.max(1,...games.map(g=>metricValue(g,'players')))*1.5;
+        const x=value=>left+7+Math.log10(1+value)/Math.log10(1+maxX)*(plotWidth-14);
+        const y=value=>top+plotHeight-7-Math.log10(1+value)/Math.log10(1+maxY)*(plotHeight-14);
+        const compact=value=>value>=1000000?value/1000000+'m':value>=1000?value/1000+'k':String(value);
+        const xt=axisTicks(maxX,width<480?4:6),yt=axisTicks(maxY,5);
+        const grid=xt.map(v=>`<line x1="${x(v)}" x2="${x(v)}" y1="${top}" y2="${top+plotHeight}" stroke="var(--line)"/><text x="${x(v)}" y="${height-bottom+20}" text-anchor="middle">${compact(v)}</text>`).join('')+yt.map(v=>`<line x1="${left}" x2="${width-right}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${left-10}" y="${y(v)+4}" text-anchor="end">${compact(v)}</text>`).join('');
+        const coordinates=games.map(g=>({g,x:x(metricValue(g,'reviews')),y:y(metricValue(g,'players'))}));
+        scatterLabels=coordinates;
+        el('scatter').innerHTML=`<canvas class="scatter-points" aria-hidden="true" data-point-count="${games.length}"></canvas><svg viewBox="0 0 ${width} ${height}" height="${height}" role="group" aria-label="${fmt(games.length)} games by lifetime demo reviews and players at last check. Logarithmic axes include zero. Select a point for details; arrow keys browse games."><g fill="var(--ink)" font-size="11">${grid}<text x="${left+plotWidth/2}" y="${height-5}" text-anchor="middle">Lifetime demo reviews</text><text transform="translate(13 ${top+plotHeight/2}) rotate(-90)" text-anchor="middle">Players at last check</text></g><rect data-plot-hit x="${left}" y="${top}" width="${plotWidth}" height="${plotHeight}" fill="transparent"/><circle class="scatter-point" r="6" role="button" tabindex="0" data-game="${games[0].appid}" style="pointer-events:none"/><g data-scatter-labels></g></svg>`;
+        const pointCanvas=el('scatter').querySelector('canvas'),context=pointCanvas.getContext('2d'),ratio=Math.min(2,devicePixelRatio||1),style=getComputedStyle(root);
+        pointCanvas.width=Math.round(width*ratio);pointCanvas.height=Math.round(height*ratio);context.scale(ratio,ratio);
+        const groups=[[],[]];
+        for(const p of coordinates)groups[observationState(p.g,'players')==='Fresh'&&observationState(p.g,'reviews')==='Fresh'?0:1].push(p);
+        groups.forEach((points,index)=>{
+          const sprite=document.createElement('canvas');sprite.width=sprite.height=10*ratio;
+          const dot=sprite.getContext('2d');dot.scale(ratio,ratio);dot.beginPath();dot.arc(5,5,3.5,0,2*Math.PI);
+          if(index){dot.globalAlpha=.7;dot.strokeStyle=style.getPropertyValue('--muted-ink');dot.setLineDash([2,1]);dot.lineWidth=1.2;dot.stroke()}
+          else{dot.globalAlpha=.5;dot.fillStyle=style.getPropertyValue('--viz-series-1');dot.fill()}
+          for(const p of points)context.drawImage(sprite,p.x-5,p.y-5,10,10);
+        });
+        selectGame(selectedGameId);
+      }
+      function pointDescription(g){return `${g.name} · ${fmt(metricValue(g,'players'))} players at last check (${observationState(g,'players')}) · ${fmt(metricValue(g,'reviews'))} lifetime reviews (${observationState(g,'reviews')})`}
+      function pointAt(event,cycle=false){
+        const rect=el('scatter').getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
+        const nearby=[];for(const p of scatterLabels){const d=(p.x-x)**2+(p.y-y)**2;if(d<=64)nearby.push({p,d})}nearby.sort((a,b)=>a.d-b.d);
+        if(!nearby.length)return null;
+        const tied=nearby.filter(p=>p.d<=nearby[0].d+1),current=tied.findIndex(p=>p.p.g.appid===selectedGameId);
+        return tied[cycle?(current+1)%tied.length:0].p.g;
+      }
+      function drawScatterLabels(){
+        const group=el('scatter').querySelector('[data-scatter-labels]');if(!group)return;
+        const width=el('scatter').getBoundingClientRect().width;
+        const selected=scatterLabels.find(p=>p.g.appid===selectedGameId);
+        const leaders=[...scatterLabels].sort((a,b)=>metricValue(b.g,'players')-metricValue(a.g,'players')).slice(0,2);
+        const candidates=[selected,...scatterLabels.slice(0,2),...leaders].filter(Boolean),seen=new Set(),boxes=[];
+        ctx.font=`500 11px ${getComputedStyle(root).fontFamily}`;
+        group.innerHTML=candidates.map(p=>{
+          if(seen.has(p.g.appid))return '';seen.add(p.g.appid);
+          const maxWidth=Math.min(180,width-100);let name=p.g.name;
+          while(ctx.measureText(name).width>maxWidth&&name.length>4)name=name.slice(0,-2);
+          if(name!==p.g.name)name+='…';
+          const w=ctx.measureText(name).width,x=Math.min(width-20-w,Math.max(66,p.x+9));
+          const options=[p.y-12,p.y+20];
+          const y=options.find(y=>y>24&&y<299&&!boxes.some(b=>x<b.x+b.w+4&&x+w+4>b.x&&y-12<b.y+4&&y+4>b.y-12));
+          if(y===undefined)return '';boxes.push({x,y,w});
+          return `<text class="scatter-label" x="${x}" y="${y}">${esc(name)}</text>`;
+        }).join('');
+      }
       function renderTagMatches(){const q=normalize(state.tagsearch);el('tagmatches').innerHTML=q?Object.entries(tagNames).filter(([id,n])=>normalize(n).includes(q)&&baselineCounts.has(+id)).sort((a,b)=>(counts.get(+b[0])||0)-(counts.get(+a[0])||0)).slice(0,12).map(([id,n])=>tagButton(id,`${n} · ${fmt(counts.get(+id)||0)}`)).join(''):''}
-      function render(){el('export-panel').hidden=true;baseline=data.games.filter(typeMatches);baselineCounts=countTags(baseline);segmentBase=data.games.filter(matches);filtered=segmentBase.filter(g=>state.segment<0||g.segment===state.segment);filtered.sort((a,b)=>['players','reviews','positivity'].includes(state.sort)?popularitySort(a,b):state.sort==='appid'?a.appid-b.appid:state.sort==='segment'?a.segment-b.segment||a.name.localeCompare(b.name):a.name.localeCompare(b.name));counts=countTags(filtered);el('total').textContent=`${fmt(data.meta.games)} games · ${fmt(data.meta.software)} software entries · ${fmt(baselineCounts.size)} tags in this entry type`;el('coverage').textContent='100% tag coverage · Captured October 20, 2026';el('inspect').textContent='Tag size = matching titles · Activate to filter · Shift + activate to exclude';renderChips();renderTagMatches();drawSegments();renderPairs();renderGames();updateAtlas();cancelAnimationFrame(renderFrame);renderFrame=requestAnimationFrame(drawCloud)}
-      for(const key of ['search','mode','year','publishing','type','platform','depth','limit','focus','rank','match','sort','tagsearch','operation']){el(key).addEventListener(['search','tagsearch'].includes(key)?'input':'change',()=>change({[key]:el(key).value,...(key==='type'?{segment:-1}:{})}))}
+      function render(){prepareTags();observationCache.clear();el('export-panel').hidden=true;if(baselineKey!==state.type+':'+state.depth){baseline=data.games.filter(typeMatches);baselineCounts=countTags(baseline);baselineKey=state.type+':'+state.depth;}segmentBase=data.games.filter(matches);filtered=segmentBase.filter(g=>state.segment<0||g.segment===state.segment);filtered.sort((a,b)=>['players','reviews','positivity'].includes(state.sort)?popularitySort(a,b):state.sort==='appid'?a.appid-b.appid:state.sort==='segment'?a.segment-b.segment||a.name.localeCompare(b.name):a.name.localeCompare(b.name));counts=countTags(filtered);refreshTagMetrics();el('total').textContent=`${fmt(data.meta.games)} games · ${fmt(data.meta.software)} software entries · ${fmt(baselineCounts.size)} tags in this entry type`;el('coverage').textContent='100% tag coverage · Captured October 20, 2026';el('inspect').textContent='Hover or focus a tag for counts, reception and coverage · Activate to filter · Shift + activate to exclude';renderChips();renderTagMatches();drawSegments();renderPairs();renderGames();renderPopularity();updateAtlas();cancelAnimationFrame(renderFrame);renderFrame=requestAnimationFrame(drawCloud)}
+      for(const key of ['search','mode','year','publishing','type','platform','depth','limit','focus','rank','match','sort','tagsearch','operation','leaderMetric']){el(key).addEventListener(['search','tagsearch'].includes(key)?'input':'change',()=>change({[key]:el(key).value,...(key==='type'?{segment:-1}:{})}))}
       el('reset').addEventListener('click',()=>{state={...defaults,view:state.view,included:[],excluded:[]};sync();render();save()});el('prev').addEventListener('click',()=>change({page:state.page-1}));el('next').addEventListener('click',()=>change({page:state.page+1}));el('page').addEventListener('change',()=>change({page:Math.max(1,+el('page').value||1)}));
       root.addEventListener('click',e=>{if(suppressTagClick&&e.target.closest('[data-tag]')){e.preventDefault();return}const tag=e.target.closest('[data-tag]'),segment=e.target.closest('[data-segment]'),preset=e.target.closest('[data-preset]'),pair=e.target.closest('[data-pair]');if(tag){e.preventDefault();toggleTag(+tag.dataset.tag,tag.dataset.exclude==='true'||e.shiftKey||(state.operation==='exclude'&&!tag.closest('#nf-chips')))}else if(segment){e.preventDefault();change({segment:state.segment===+segment.dataset.segment?-1:+segment.dataset.segment})}else if(preset){change({included:[tagByName[preset.dataset.preset]],excluded:[],match:'all',segment:-1})}else if(pair){const ids=pair.dataset.pair.split(',').map(Number);change({included:[...new Set([...state.included,...ids])],excluded:state.excluded.filter(id=>!ids.includes(id)),match:'all'})}else if(e.target.closest('[data-clear-segment]'))change({segment:-1})});
       root.addEventListener('keydown',e=>{const segment=e.target.closest('[data-segment]');if(segment&&e.key===' '){e.preventDefault();change({segment:state.segment===+segment.dataset.segment?-1:+segment.dataset.segment})}});
+      root.addEventListener('click',event=>{
+        const target=event.target.closest('[data-game], [data-inspect-game]');if(!target)return;
+        event.preventDefault();selectGame(+(target.dataset.game||target.dataset.inspectGame));
+        if(target.dataset.inspectGame||target.closest('#nf-leaders')&&matchMedia('(max-width:600px)').matches){el('game-inspector').focus({preventScroll:true});el('game-inspector').scrollIntoView({block:'center',behavior:'auto'})}
+      });
+      el('scatter').addEventListener('pointermove',event=>{
+        const target=event.target.closest('[data-plot-hit]');if(!target)return;
+        const g=pointAt(event);if(g)target.dataset.tooltip=pointDescription(g);else delete target.dataset.tooltip;
+      });
+      el('scatter').addEventListener('click',event=>{if(!event.target.closest('[data-plot-hit]'))return;const g=pointAt(event,true);if(g)selectGame(g.appid,true)});
+      el('scatter').addEventListener('keydown',event=>{
+        const point=event.target.closest('[data-game]');if(!point)return;
+        if(event.key==='Enter'||event.key===' '){event.preventDefault();selectGame(+point.dataset.game,true);return}
+        if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
+        event.preventDefault();const index=scatterGames.findIndex(g=>g.appid===+point.dataset.game);
+        const next=event.key==='Home'?0:event.key==='End'?scatterGames.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+scatterGames.length)%scatterGames.length;
+        selectGame(scatterGames[next].appid,true);
+      });
       el('export').addEventListener('click',exportCsv);
       el('export-close').addEventListener('click',()=>el('export-panel').hidden=true);
       el('popularity-status').textContent=data.popularity?`Metrics exported ${metricTime(data.popularity.exportedAt)}. Reviews are lifetime totals; net changes use observed timestamps, not festival-written reviews. Players are sampled, not live; highest sampled counts cover only the displayed collection window. This static page refreshes daily; reviews rotate across the roster over two days. Fresh means observed within ${data.popularity.reviewStaleHours}h for reviews or ${data.popularity.ccuStaleHours}h for players; exporting does not refresh Steam observations.`:'Popularity collection is not yet available.';
-      const time=new Date(data.meta.captured_at_utc).toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'long',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});el('methods').innerHTML=`<li>Source: <a href="https://store.steampowered.com/sale/nextfest" target="_blank" rel="noopener noreferrer">Valve’s live event roster</a> and public Steam StoreBrowse metadata. Snapshot: ${esc(time)}. All ${fmt(data.meta.entries)} entries have names, tags, and linked demos.</li><li>${esc(data.meta.segmentation)} Activate “All tags & demo” on any row to inspect the source tags.</li><li>Tag families are editorial navigation groups. Tags, mood, art, player mode, and features can overlap across primary gameplay segments.</li>${data.meta.limitations.map(x=>`<li>${esc(x)}</li>`).join('')}<li>Over-index = tag share among matching titles divided by its share in the full selected entry type, using the same tag depth. Cloud ranking requires at least five matching titles per tag, or the selection size if smaller. This measures concentration, not market demand.</li><li>CSV exports include every filtered result, including pages not currently visible. All-tag counts use each tag at most once per title.</li>`;
-      new ResizeObserver(()=>{cancelAnimationFrame(renderFrame);renderFrame=requestAnimationFrame(()=>{drawCloud();drawSegments()})}).observe(el('cloud'));
+      const time=new Date(data.meta.captured_at_utc).toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'long',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});el('methods').innerHTML=`<li>Source: <a href="https://store.steampowered.com/sale/nextfest" target="_blank" rel="noopener noreferrer">Valve’s live event roster</a> and public Steam StoreBrowse metadata. Snapshot: ${esc(time)}. All ${fmt(data.meta.entries)} entries have names, tags, and linked demos.</li><li>${esc(data.meta.segmentation)} Activate “All tags & demo” on any row to inspect the source tags.</li><li>Tag families are editorial navigation groups. Tags, mood, art, player mode, and features can overlap across primary gameplay segments.</li>${data.meta.limitations.map(x=>`<li>${esc(x)}</li>`).join('')}<li>Over-index = tag share among matching titles divided by its share in the full selected entry type, using the same tag depth. Cloud ranking requires at least five matching titles per tag, or the selection size if smaller. This measures concentration, not market demand.</li><li>Player/review tag totals sum the last successful demo observations for matching games. Games count once per tag, but tags overlap, so these totals are not shares of a single market. Tag positivity pools positive and negative votes. Zero and unknown tag totals have no size in weighted views; coverage and stale/failed/undated counts are shown separately. Segment bars use one primary segment per title and all other active filters.</li><li>The game comparison uses log10(1 + count) on both axes so genuine zeros remain visible. Each point is one demo with both counts known; clicking overlapping points cycles through them, and arrow keys browse in review order. Hollow points have a stale, failed, or undated observation. Leader bars use separate linear scales for players and lifetime reviews. A last-check player count is not a simultaneous festival-wide total.</li><li>CSV exports include every filtered result, including pages not currently visible. All-tag counts use each tag at most once per title.</li>`;
+      new ResizeObserver(()=>{cancelAnimationFrame(renderFrame);renderFrame=requestAnimationFrame(()=>{drawCloud();drawSegments();drawScatter()})}).observe(el('cloud'));
+      new ResizeObserver(()=>drawScatter()).observe(el('scatter'));
       let atlasView='',suppressTagClick=false,toastTimer;
       const svgNS='http://www.w3.org/2000/svg';
       function showToast(message){el('toast').textContent=message;el('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el('toast').hidden=true,3500)}
@@ -213,8 +451,10 @@
       }
       function drawCloud(){
         if(atlasView!==state.view){el('cloud').innerHTML='';lastCloudKey='';atlasView=state.view}
-        el('view-caption').textContent=state.view==='bubbles'?'Circle area represents game count':state.view==='network'?'Connections represent shared tags':'Word size represents game count';
-        el('graph-hint').textContent=state.view==='network'?'Drag nodes to rearrange the map.':'Counts are titles, not players.';
+        const metric=metricMode(),name=metricName(metric),sum=summarizeGames(filtered);
+        el('view-caption').textContent=state.view==='bubbles'?'Circle area = '+name:state.view==='network'?'Node size = '+name:'Word size = '+name;
+        el('graph-hint').textContent=state.view==='network'?'Edges show shared titles; drag nodes to rearrange.':metric==='count'?'Counts are titles, not players.':'Tag totals overlap: a game can have multiple tags.';
+        el('tag-metric-status').textContent=metric==='count'?'':`${coverageText(sum,metric)}. Tag and segment totals use last successful observations. Tags with zero or unknown totals are omitted from weighted views.`;
         if(state.view==='bubbles')drawBubbles();else if(state.view==='network')drawNetwork();else drawWordCloud();
         if(state.view==='cloud')el('cloud').querySelectorAll('.nf-word').forEach(node=>{node.querySelector('text').style.fill=color(+node.dataset.id)});
       }
@@ -222,20 +462,20 @@
         el('cloud').innerHTML=`<svg viewBox="0 0 ${width} ${height}" height="${height}" role="group" aria-label="${esc(label)}"><title>${esc(label)}</title></svg>`;
         return el('cloud').querySelector('svg');
       }
-      function graphEmpty(){el('cloud').innerHTML='<div class="nf-empty">No tags in this view.<br>Remove a filter or choose a different tag family.</div>';el('cloud-status').textContent=fmt(counts.size)+' tags in selection · 0 shown'}
+      function graphEmpty(){el('cloud').innerHTML='<div class="nf-empty">'+(metricMode()==='count'?'No tags in this view.<br>Remove a filter or choose a different tag family.':'No positive '+metricName(metricMode())+' totals in this tag view.<br>Known zeros and missing counts remain visible in the directory.')+'</div>';el('cloud-status').textContent=fmt(counts.size)+' tags in selection · 0 shown'}
       function wireMark(node,id){
         node.addEventListener('pointerenter',()=>inspect(id));node.addEventListener('focus',()=>inspect(id));
         node.addEventListener('keydown',event=>{if(event.key===' '){event.preventDefault();toggleTag(id,event.shiftKey||state.operation==='exclude')}});
       }
-      function markAttributes(word){return `href="#atlas" role="button" data-tag="${word.id}" aria-pressed="${state.included.includes(word.id)}" aria-label="${esc(word.name)}, ${fmt(word.count)} matching titles" data-tooltip="${esc(word.name)} · ${fmt(word.count)} titles · ${(100*word.count/Math.max(1,filtered.length)).toFixed(1)}% · ${word.lift.toFixed(2)}× festival share"`}
+      function markAttributes(word){return `href="#atlas" role="button" data-tag="${word.id}" aria-pressed="${state.included.includes(word.id)}" aria-label="${esc(tagDescription(word.id))}" data-tooltip="${esc(tagDescription(word.id))}"`}
       function drawBubbles(){
         const width=Math.floor(el('cloud').clientWidth),height=width<440?500:560,words=selectedCloud().slice(0,width<440?30:50);
         if(!words.length){graphEmpty();return}
-        const sum=words.reduce((n,w)=>n+w.count,0);let placed=[];
+        const sum=words.reduce((n,w)=>n+w.weight,0);let placed=[];
         for(let attempt=0;attempt<9;attempt++){
           placed=[];const scale=Math.pow(.91,attempt);
           for(const w of words){
-            const r=Math.sqrt(w.count/sum*width*height*.55/Math.PI)*scale;let found=false;
+            const r=Math.sqrt(w.weight/sum*width*height*.55/Math.PI)*scale;let found=false;
             for(let t=0;t<17000;t++){
               const a=t*.23+(w.id%13),d=2.25*Math.sqrt(t),x=width/2+Math.cos(a)*d*(width/height)*1.12,y=height/2+Math.sin(a)*d;
               if(x-r<8||x+r>width-8||y-r<8||y+r>height-8)continue;
@@ -245,32 +485,32 @@
           }
           if(placed.length===words.length)break;
         }
-        const svg=graphSvg(width,height,'Bubble atlas. Circle area represents the number of matching titles. Activate a bubble to filter.');
+        const svg=graphSvg(width,height,`Bubble atlas. Circle area represents ${metricName(metricMode())}. Activate a bubble to filter.`);
         for(const w of placed){
           const node=document.createElementNS(svgNS,'a');node.classList.add('bubble-node');
           const size=Math.max(11,Math.min(15,w.r*.24)),maxLine=w.r*1.65,lines=[];let line='';ctx.font=`500 ${size}px ${getComputedStyle(root).fontFamily}`;
           for(const word of w.name.split(' ')){const trial=line?line+' '+word:word;if(ctx.measureText(trial).width>maxLine&&line){lines.push(line);line=word}else line=trial}if(line)lines.push(line);
           const display=lines.slice(0,3).map(text=>{if(ctx.measureText(text).width<=maxLine)return text;while(text.length>2&&ctx.measureText(text+'…').width>maxLine)text=text.slice(0,-1);return text+'…'});
-          node.innerHTML=`<circle cx="${w.x}" cy="${w.y}" r="${w.r}" fill="${color(w.id)}" fill-opacity=".20" stroke="${color(w.id)}" stroke-width=".8"/><text x="${w.x}" text-anchor="middle" style="font-size:${size}px;font-weight:500">${display.map((text,i)=>`<tspan x="${w.x}" y="${w.y-(display.length-1)*size*.58-6+i*size*1.15}">${esc(text)}</tspan>`).join('')}<tspan class="bubble-count" x="${w.x}" y="${w.y+(display.length-1)*size*.57+size*1.15+2}" style="font-size:${Math.max(10,size-1)}px;font-weight:400">${fmt(w.count)}</tspan></text>`;
+          node.innerHTML=`<circle cx="${w.x}" cy="${w.y}" r="${w.r}" fill="${color(w.id)}" fill-opacity=".20" stroke="${color(w.id)}" stroke-width=".8"/><text x="${w.x}" text-anchor="middle" style="font-size:${size}px;font-weight:500">${display.map((text,i)=>`<tspan x="${w.x}" y="${w.y-(display.length-1)*size*.58-6+i*size*1.15}">${esc(text)}</tspan>`).join('')}<tspan class="bubble-count" x="${w.x}" y="${w.y+(display.length-1)*size*.57+size*1.15+2}" style="font-size:${Math.max(10,size-1)}px;font-weight:400">${fmt(w.weight)}</tspan></text>`;
           const tmp=document.createElementNS(svgNS,'g');tmp.innerHTML=`<a ${markAttributes(w)}></a>`;const anchor=tmp.firstElementChild;anchor.classList.add('bubble-node');anchor.append(...node.childNodes);svg.append(anchor);wireMark(anchor,w.id);
         }
-        el('cloud-status').textContent=`${fmt(counts.size)} tags in selection · ${placed.length} bubbles shown · area = titles`;
+        el('cloud-status').textContent=`${fmt(counts.size)} tags in selection · ${placed.length} bubbles shown · area = ${metricName(metricMode())}`;
       }
       function drawNetwork(){
         const width=Math.floor(el('cloud').clientWidth),height=width<440?500:560,words=selectedCloud().slice(0,width<440?16:28);
         if(!words.length){graphEmpty();return}
         const idSet=new Set(words.map(w=>w.id)),lookup=new Map(words.map(w=>[w.id,w])),pairCounts=new Map();
-        for(const game of filtered){const ts=tagsFor(game).filter(id=>idSet.has(id));for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){const key=[ts[i],ts[j]].sort((a,b)=>a-b).join(',');pairCounts.set(key,(pairCounts.get(key)||0)+1)}}
+        for(const game of filtered){const ts=tagsFor(game).filter(id=>idSet.has(id));for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){const key=ts[i]<ts[j]?ts[i]+','+ts[j]:ts[j]+','+ts[i];pairCounts.set(key,(pairCounts.get(key)||0)+1)}}
         const links=[...pairCounts].filter(([,n])=>n>=Math.min(5,filtered.length)).map(([key,n])=>{const [a,b]=key.split(',').map(Number);return {a,b,n,jaccard:n/(lookup.get(a).count+lookup.get(b).count-n)}}).sort((a,b)=>b.jaccard-a.jaccard||b.n-a.n).slice(0,55);
-        const max=Math.max(...words.map(w=>w.count)),pad=width<440?38:75;
-        const nodes=words.map((w,i)=>{const a=i*2.399963,r=Math.sqrt((i+1)/words.length)*Math.min(width,height)*.34;return {...w,x:width/2+Math.cos(a)*r,y:height/2+Math.sin(a)*r,vx:0,vy:0,r:8+15*Math.sqrt(w.count/max)}}),byId=new Map(nodes.map(n=>[n.id,n]));
+        const max=Math.max(...words.map(w=>w.weight)),pad=width<440?38:75;
+        const nodes=words.map((w,i)=>{const a=i*2.399963,r=Math.sqrt((i+1)/words.length)*Math.min(width,height)*.34;return {...w,x:width/2+Math.cos(a)*r,y:height/2+Math.sin(a)*r,vx:0,vy:0,r:8+15*Math.sqrt(w.weight/max)}}),byId=new Map(nodes.map(n=>[n.id,n]));
         for(let tick=0;tick<260;tick++){
           for(const n of nodes){n.vx+=(width/2-n.x)*.0018;n.vy+=(height/2-n.y)*.0018}
           for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){const a=nodes[i],b=nodes[j],dx=b.x-a.x,dy=b.y-a.y,d=Math.max(1,Math.hypot(dx,dy)),desired=width<440?83:114,force=2100/(d*d)+Math.max(0,desired-d)*.018,fx=dx/d*force,fy=dy/d*force;a.vx-=fx;a.vy-=fy;b.vx+=fx;b.vy+=fy}
           for(const link of links){const a=byId.get(link.a),b=byId.get(link.b),dx=b.x-a.x,dy=b.y-a.y,d=Math.max(1,Math.hypot(dx,dy)),target=(width<440?72:110)+(1-link.jaccard)*75,f=(d-target)*(.002+link.jaccard*.003);a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f}
           for(const n of nodes){n.vx*=.76;n.vy*=.76;n.x=Math.max(pad,Math.min(width-pad,n.x+n.vx));n.y=Math.max(42,Math.min(height-57,n.y+n.vy))}
         }
-        const svg=graphSvg(width,height,'Tag relationships. Lines connect tags found together on titles; thicker lines mean more shared titles. Drag nodes to rearrange.');
+        const svg=graphSvg(width,height,`Tag relationships. Node size represents ${metricName(metricMode())}; edges represent shared titles. Drag nodes to rearrange.`);
         const edgeElements=[];
         for(const link of links){const edge=document.createElementNS(svgNS,'line');edge.classList.add('network-edge');edge.style.strokeWidth=String(.6+2.2*Math.sqrt(link.n/Math.max(...links.map(l=>l.n))));edge.dataset.a=link.a;edge.dataset.b=link.b;svg.append(edge);edgeElements.push({edge,link})}
         function updateEdges(){for(const {edge,link} of edgeElements){const a=byId.get(link.a),b=byId.get(link.b);edge.setAttribute('x1',a.x);edge.setAttribute('y1',a.y);edge.setAttribute('x2',b.x);edge.setAttribute('y2',b.y)}}
@@ -285,12 +525,13 @@
       }
       function theme(value){document.documentElement.dataset.theme=value;el('theme').setAttribute('aria-label','Switch to '+(value==='dark'?'light':'dark')+' theme');try{localStorage.setItem('piq-nextfest-theme',value)}catch{}}
       let savedTheme='light';try{savedTheme=localStorage.getItem('piq-nextfest-theme')||'light'}catch{}theme(savedTheme);
-      el('theme').addEventListener('click',()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
+      el('theme').addEventListener('click',()=>{theme(document.documentElement.dataset.theme==='dark'?'light':'dark');scatterKey='';drawScatter()});
       el('legend').innerHTML=families.map((name,i)=>`<button type="button" data-family="${esc(name)}" aria-pressed="false"><i class="nf-swatch" style="--nf-color:var(--viz-series-${i+1})"></i>${esc(name)}</button>`).join('');
       root.addEventListener('click',event=>{const view=event.target.closest('[data-view]'),f=event.target.closest('[data-family]');if(view)change({view:view.dataset.view});if(f)change({focus:state.focus===f.dataset.family?'distinctive':f.dataset.family})});
-      root.addEventListener('pointermove',event=>{const target=event.target.closest('[data-tooltip]');if(!target){el('tooltip').hidden=true;return}const id=+target.dataset.tag;if(id&&tagNames[id]){const count=counts.get(id)||0,baselineCount=baselineCounts.get(id)||0,lift=count&&baselineCount?count/filtered.length/(baselineCount/baseline.length):0;el('tooltip').innerHTML=`<strong>${esc(tagNames[id])}</strong>${fmt(count)} titles · ${(100*count/Math.max(1,filtered.length)).toFixed(1)}% of this view<small>${lift.toFixed(2)}× festival tag share · ${esc(family(id))}</small>`}else el('tooltip').textContent=target.dataset.tooltip;el('tooltip').hidden=false;const rect=el('tooltip').getBoundingClientRect();el('tooltip').style.left=Math.max(10,Math.min(innerWidth-rect.width-10,event.clientX+16))+'px';el('tooltip').style.top=Math.max(10,Math.min(innerHeight-rect.height-10,event.clientY+18))+'px'});
+      root.addEventListener('pointermove',event=>{const target=event.target.closest('[data-tooltip]');if(!target){el('tooltip').hidden=true;return}const id=+target.dataset.tag;el('tooltip').textContent=id&&tagNames[id]?tagDescription(id):target.dataset.tooltip;el('tooltip').hidden=false;const rect=el('tooltip').getBoundingClientRect();el('tooltip').style.left=Math.max(10,Math.min(innerWidth-rect.width-10,event.clientX+16))+'px';el('tooltip').style.top=Math.max(10,Math.min(innerHeight-rect.height-10,event.clientY+18))+'px'});
       root.addEventListener('pointerleave',()=>el('tooltip').hidden=true);
 
+      if(!['reviews','players'].includes(state.leaderMetric))state.leaderMetric='reviews';
       sync();render();
     }catch(error){el('total').textContent='The verified roster could not be displayed.';el('cloud').innerHTML='<div role="alert">'+esc(error.message)+'</div>';console.error(error)}
   })();</script>

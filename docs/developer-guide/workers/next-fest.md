@@ -45,6 +45,14 @@ The publisher commits only `apps/admin/src/app/next-fest/content/atlas.html` on 
 
 The UI calculates positivity from exact vote counts; zero reviews have no positivity percentage. CCU is labeled “players at last check,” with the highest sampled count, actual collection window, and sample count. Once-daily samples cannot establish a true peak or intraday trend. Review changes are signed differences between lifetime-count observations, not counts of reviews written during the festival. Festival review text, follower/news/discussion polling, and higher-frequency active-demo sampling remain optional follow-ups.
 
+## Static popularity views
+
+The atlas uses its embedded snapshot for player/review weighting in the word cloud, bubble atlas, connection nodes, and primary-segment bars. Each title contributes once per tag; tag totals overlap. Coverage includes known zero counts, while tags with zero or unknown totals have no size in weighted views. Tag positivity pools underlying positive and negative votes. The original title-count and over-index options remain available; connection edges continue to measure shared titles.
+
+The players-versus-reviews chart plots one point per game with both observations known, using `log10(1 + count)` to include genuine zeros. Canvas draws the points without thousands of DOM nodes; SVG retains axes, labels, a focusable selection, and arrow-key navigation. Clicking coincident points cycles their games. The top-ten list uses independently scaled player/review bars, links selection to the chart and inspector, and appears first on narrow screens. Both views follow the existing game/tag filters. Stale, failed, and undated observations remain identifiable; missing values never become zero. All new calculations run in the browser against the same snapshot, with no new API calls, database work, dependencies, or history export.
+
+For a visual-only rollback, revert the markup/script/style changes while preserving the latest `nf-payload` snapshot. Coordinate publication with an in-progress collection run: the existing atlas-change guard intentionally stops that run from overwriting a concurrent UI edit.
+
 ## Verification and activation
 
 1. Run `node --test scripts/ops/{collect-next-fest,export-next-fest-popularity,next-fest-github-state}.test.mjs`, repository type checks/lint/build, and the existing Next Fest access tests. The worker without `--collect` prints its plan and makes no network calls.
