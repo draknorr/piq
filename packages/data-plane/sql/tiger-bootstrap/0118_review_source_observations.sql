@@ -3,7 +3,9 @@
 -- Run as separate statements, not inside a surrounding transaction. Build the
 -- partial index before allowing review rows, without blocking existing writers.
 SET lock_timeout = '2s';
-SET statement_timeout = '30s';
+-- Concurrent creation scans the existing 2.5 GB table twice. The initial
+-- 30-second attempt completed its first scan but timed out during validation.
+SET statement_timeout = '120s';
 CREATE UNIQUE INDEX CONCURRENTLY idx_app_source_snapshots_review_observation
   ON docs.app_source_snapshots(appid, source, observed_at) WHERE source = 'reviews';
 BEGIN;
