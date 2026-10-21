@@ -86,7 +86,7 @@ test("valid login sets a scoped HttpOnly cookie and unlocks the complete standal
   assert.equal(unlocked.status, 200);
   const html = await unlocked.text();
   assert.match(html, /id="nf-payload"/);
-  assert.match(html, /Next Fest demos are made/);
+  assert.match(html, /Steam Next Fest Overview/);
   assert.doesNotMatch(html, /<!--nf-payload-->/);
   assert.doesNotMatch(html, /fixture-password|fixture-secret/);
 });
