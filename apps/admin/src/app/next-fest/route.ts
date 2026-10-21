@@ -9,6 +9,7 @@ import {
   isNextFestPasswordValid,
   NEXT_FEST_ACCESS_COOKIE,
 } from "./access";
+import { composeNextFestPage } from "./compose";
 import { renderNextFestGate } from "./gate";
 
 export const runtime = "nodejs";
@@ -35,11 +36,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return gate(request.nextUrl.searchParams.get("error") === "invalid" ? "invalid" : null);
   }
   try {
-    const html = await readFile(
-      path.join(process.cwd(), "src", "app", "next-fest", "content", "atlas.html"),
-      "utf8",
-    );
-    return new NextResponse(html, { headers: PRIVATE_HEADERS });
+    const content = path.join(process.cwd(), "src", "app", "next-fest", "content");
+    const [atlas, explorer] = await Promise.all([
+      readFile(path.join(content, "atlas.html"), "utf8"),
+      readFile(path.join(content, "explorer.html"), "utf8").catch(() => null),
+    ]);
+    return new NextResponse(composeNextFestPage(atlas, explorer), { headers: PRIVATE_HEADERS });
   } catch {
     return new NextResponse("The atlas is temporarily unavailable.", {
       status: 503,
