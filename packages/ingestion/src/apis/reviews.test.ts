@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchReviewHistogram, fetchReviewSummary, parseRetryAfterMs, ReviewRateLimitCircuit } from './reviews.js';
+import { fetchReviewHistogram, fetchReviewSummary as fetchReviewSummaryApi, parseRetryAfterMs, ReviewRateLimitCircuit } from './reviews.js';
+
+const fetchReviewSummary: typeof fetchReviewSummaryApi = (appid, options) =>
+  fetchReviewSummaryApi(appid, { apiKey: 'test-reviews-key', ...options });
 
 function summaryResponse(status = 200, headers?: Record<string, string>): Response {
   return new Response(
@@ -66,7 +69,7 @@ test('review summaries preserve unknown counts as failed observations and accept
 test('review summary requests use the public Web API with all-language lifetime counts', async () => {
   const result = await fetchReviewSummary(4349200, {
     limiter: { acquire: async () => {} },
-    fetchImpl: async (input) => {
+    fetchImpl: async (input, init) => {
       const url = new URL(String(input));
       assert.equal(url.origin + url.pathname,
         'https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/');
@@ -75,6 +78,7 @@ test('review summary requests use the public Web API with all-language lifetime 
         purchase_type: 1, num_per_page: 1,
       });
       assert.equal(url.searchParams.has('key'), false);
+      assert.equal(new Headers(init?.headers).get('x-webapi-key'), 'test-reviews-key');
       return summaryResponse();
     },
   });
@@ -87,6 +91,43 @@ test('review summary requests use the public Web API with all-language lifetime 
     reviewScore: 8,
     reviewScoreDesc: 'Very Positive',
   });
+});
+
+test('review requests require the dedicated key and never fall back to the shared key or anonymous access', async () => {
+  const originalReviewKey = process.env.STEAM_REVIEWS_API_KEY;
+  const originalSharedKey = process.env.STEAM_API_KEY;
+  delete process.env.STEAM_REVIEWS_API_KEY;
+  process.env.STEAM_API_KEY = 'shared-key-must-not-be-used';
+  try {
+    let attempts = 0;
+    let guards = 0;
+    const result = await fetchReviewSummaryApi(10, {
+      limiter: { acquire: async () => { guards++; } },
+      beforeAttempt: async () => { guards++; },
+      fetchImpl: async () => { attempts++; return summaryResponse(); },
+    });
+    assert.equal(result.status, 'failed');
+    if (result.status === 'failed') assert.equal(result.errorCode, 'request_guard_failed');
+    assert.equal(result.telemetry.attempts, 0);
+    assert.equal(attempts, 0);
+    assert.equal(guards, 0);
+
+    process.env.STEAM_REVIEWS_API_KEY = ' dedicated-review-key ';
+    const authenticated = await fetchReviewSummaryApi(10, {
+      limiter: { acquire: async () => {} },
+      fetchImpl: async (input, init) => {
+        assert.equal(new Headers(init?.headers).get('x-webapi-key'), 'dedicated-review-key');
+        assert.equal(String(input).includes('key'), false);
+        return summaryResponse();
+      },
+    });
+    assert.equal(authenticated.status, 'success');
+  } finally {
+    if (originalReviewKey === undefined) delete process.env.STEAM_REVIEWS_API_KEY;
+    else process.env.STEAM_REVIEWS_API_KEY = originalReviewKey;
+    if (originalSharedKey === undefined) delete process.env.STEAM_API_KEY;
+    else process.env.STEAM_API_KEY = originalSharedKey;
+  }
 });
 
 test('review summaries reject incomplete counts and scores without retrying or falling back', async () => {

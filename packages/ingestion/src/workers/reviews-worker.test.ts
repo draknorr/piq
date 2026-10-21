@@ -357,6 +357,7 @@ test('mixed review responses persist valid peers and keep null totals out of met
     now: () => new Date('2026-10-20T23:50:00.000Z'),
     fetchSummary: (appid, options) => fetchReviewSummary(appid, {
       ...options,
+      apiKey: 'test-reviews-key',
       limiter: { acquire: async () => {} },
       fetchImpl: async () => new Response(JSON.stringify({ response: { query_summary: {
         total_reviews: appid === 1 ? null : appid === 2 ? 100 : 0,

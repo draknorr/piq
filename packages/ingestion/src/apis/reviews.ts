@@ -66,6 +66,7 @@ interface ReviewRateLimiter {
 }
 
 export interface ReviewSummaryFetchOptions {
+  apiKey?: string;
   beforeAttempt?: () => Promise<void>;
   circuitBreaker?: ReviewRateLimitCircuit;
   deadlineMs?: number;
@@ -198,6 +199,14 @@ export async function fetchReviewSummary(
   appid: number,
   options: ReviewSummaryFetchOptions = {}
 ): Promise<ReviewSummaryFetchResult> {
+  const telemetry = createReviewAttemptTelemetry();
+  const apiKey = (options.apiKey ?? process.env.STEAM_REVIEWS_API_KEY)?.trim();
+  if (!apiKey) {
+    return reviewFailure(telemetry, {
+      errorCode: 'request_guard_failed',
+      errorMessage: 'STEAM_REVIEWS_API_KEY is required for review collection'
+    });
+  }
   // Valve retires /appreviews on October 22, 2026. The Service API wraps
   // results in `response` and takes numeric filters inside input_json.
   // Zero means the default 20 records on this endpoint; one is the smallest
@@ -211,7 +220,6 @@ export async function fetchReviewSummary(
     purchase_type: 1,
     num_per_page: 1,
   }));
-  const telemetry = createReviewAttemptTelemetry();
   const fetchImpl = options.fetchImpl ?? fetch;
   const limiter = options.limiter ?? rateLimiters.reviews;
   const now = options.now ?? Date.now;
@@ -270,6 +278,7 @@ export async function fetchReviewSummary(
 
     try {
       const response = await fetchImpl(url.toString(), {
+        headers: { 'x-webapi-key': apiKey },
         signal: AbortSignal.timeout(requestTimeoutMs)
       });
 

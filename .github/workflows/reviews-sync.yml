@@ -43,8 +43,14 @@ jobs:
         run: pnpm build
 
       - name: Run Reviews sync
-        run: pnpm --filter @publisheriq/ingestion reviews-sync
+        run: |
+          if [ -z "$STEAM_REVIEWS_API_KEY" ]; then
+            echo "STEAM_REVIEWS_API_KEY is required for review collection" >&2
+            exit 1
+          fi
+          pnpm --filter @publisheriq/ingestion reviews-sync
         env:
+          STEAM_REVIEWS_API_KEY: ${{ secrets.STEAM_REVIEWS_API_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           BATCH_SIZE: ${{ github.event.inputs.batch_size || '3000' }}
           MAX_RUNTIME_MINUTES: '50'
