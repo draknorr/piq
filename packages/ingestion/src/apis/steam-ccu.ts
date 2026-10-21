@@ -16,6 +16,9 @@ interface CCUResponse {
 }
 
 interface SteamCCURequestOptions {
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  requestTimeoutMs?: number;
   cacheBust?: string;
   noCacheHeaders?: boolean;
 }
@@ -35,6 +38,7 @@ interface BatchCCUFetchOptions {
 }
 
 interface SteamCCUFetchResult {
+  ok: boolean;
   data: CCUResponse | null;
   status: number;
   url: string;
@@ -127,13 +131,14 @@ async function requestSteamCCU(
   options?: SteamCCURequestOptions
 ): Promise<SteamCCUFetchResult> {
   const url = buildSteamCCUUrl(appid, options);
-  const headers = options?.noCacheHeaders
-    ? {
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-      }
-    : undefined;
-  const res = await fetch(url, headers ? { headers } : undefined);
+  const headers: Record<string, string> = {};
+  if (options?.noCacheHeaders) Object.assign(headers, { 'Cache-Control': 'no-cache', Pragma: 'no-cache' });
+  if (options?.apiKey) headers['x-webapi-key'] = options.apiKey;
+  const init = Object.keys(headers).length || options?.requestTimeoutMs ? {
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(options?.requestTimeoutMs ? { signal: AbortSignal.timeout(options.requestTimeoutMs) } : {}),
+  } : undefined;
+  const res = await (options?.fetchImpl ?? fetch)(url, init);
 
   let data: CCUResponse | null = null;
   try {
@@ -142,7 +147,7 @@ async function requestSteamCCU(
     data = null;
   }
 
-  return { data, status: res.status, url };
+  return { data, status: res.status, ok: res.ok, url };
 }
 
 async function confirmSuspiciousZero(
@@ -514,4 +519,54 @@ export async function fetchSteamCCUBatch(
   });
 
   return { data: results, successCount, failedCount };
+}
+
+// Bounded demo polling also used by the temporary festival roster. Every
+// retry passes the caller’s durable request reservation before HTTP starts.
+export async function fetchDemoCcuSummary(
+  appid: number,
+  options: {
+    apiKey: string;
+    beforeAttempt: () => Promise<void>;
+    sleep: (ms: number) => Promise<void>;
+    fetchImpl: typeof fetch;
+    requestTimeoutMs: number;
+  },
+  previousPlayers: number | null = null
+): Promise<
+  | { status: 'success'; summary: { playerCount: number }; telemetry: { attempts: number } }
+  | { status: 'failed'; errorCode: string; statusCode?: number; telemetry: { attempts: number } }
+> {
+  const telemetry = { attempts: 0 };
+  let errorCode = 'network_error';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await options.beforeAttempt(); }
+    catch { return { status: 'failed', errorCode, telemetry }; }
+    telemetry.attempts++;
+    try {
+      const response = await requestSteamCCU(appid, {
+        apiKey: options.apiKey, fetchImpl: options.fetchImpl, requestTimeoutMs: options.requestTimeoutMs,
+        ...(attempt ? { cacheBust: String(Date.now()) } : {}),
+      });
+      if (!response.ok) {
+        errorCode = `http_${response.status}`;
+        if ([401, 403, 429].includes(response.status) || response.status < 500) {
+          return { status: 'failed', statusCode: response.status, errorCode, telemetry };
+        }
+      } else {
+        const body = response.data;
+        const count = body?.response?.player_count;
+        if (body?.response?.result === 42) return { status: 'failed', errorCode: 'invalid_app', telemetry };
+        if (body?.response?.result !== 1 || typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+          return { status: 'failed', errorCode: 'invalid_response', telemetry };
+        }
+        if (count !== 0 || !((previousPlayers ?? 0) > 0) || attempt > 0) {
+          return { status: 'success', summary: { playerCount: count }, telemetry };
+        }
+        errorCode = 'suspect_zero';
+      }
+    } catch { errorCode = errorCode === 'suspect_zero' ? errorCode : 'network_error'; }
+    if (attempt === 0) await options.sleep(1000 + Math.floor(Math.random() * 500));
+  }
+  return { status: 'failed', errorCode, telemetry };
 }

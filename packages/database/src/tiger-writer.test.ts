@@ -2189,3 +2189,57 @@ test('alertsPinsChat upserts and deletes per-pin alert settings', async () => {
   assert.match(pool.calls[0]?.sql ?? '', /legacy\.user_pin_alert_settings/);
   assert.match(pool.calls[0]?.sql ?? '', /ON CONFLICT \(pin_id\) DO UPDATE SET/);
 });
+
+test('review observations archive source times, skip stale totals, and preserve regular scheduling', async () => {
+  const pool = new CapturingPool([
+    result(), result([], 2), result([
+      { appid: 10, last_reviews_sync: '2026-10-20T00:00:00.000Z', total_reviews: 90, positive_reviews: 70, reviews_interval_hours: 4 },
+      { appid: 20, last_reviews_sync: '2026-10-21T12:00:00.000Z', total_reviews: 110, positive_reviews: 90 },
+    ]), result([], 1), result([], 1), result([], 1), result(),
+  ]);
+  const writer = createTigerWriterForPool(pool);
+  const summary = { totalReviews: 100, positiveReviews: 80, negativeReviews: 20, reviewScore: null, reviewScoreDesc: null };
+  await writer.reviews.persistReviewObservations([10, 20].map(appid => ({ appid, observedAt: '2026-10-21T01:00:00.000Z', status: 'success', summary })));
+  const calls = pool.client!.calls;
+  assert.deepEqual(calls.filter(c => ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(c.sql)).map(c => c.sql), ['BEGIN', 'COMMIT']);
+  assert.match(calls[1]!.sql, /ON CONFLICT \(appid, source, observed_at\)/);
+  assert.match(calls[2]!.sql, /reviews_claimed_by IS NULL/);
+  assert.match(calls[2]!.sql, /FOR UPDATE OF s SKIP LOCKED/);
+  assert.equal(JSON.parse(calls[3]!.values![0] as string).length, 1);
+  const status = JSON.parse(calls[5]!.values![0] as string);
+  assert.equal(status[0].last_reviews_sync, '2026-10-21T01:00:00.000Z');
+  assert.equal(calls[5]!.values![2], true);
+  assert.match(calls[5]!.sql, /next_reviews_sync = CASE WHEN \$3::boolean THEN status.next_reviews_sync/);
+  assert.equal(pool.client!.released, true);
+});
+
+test('claimed or uncatalogued demos retain their review snapshot without touching regular metrics', async () => {
+  const pool = new CapturingPool([result(), result([], 1), result(), result()]);
+  const writer = createTigerWriterForPool(pool);
+  await writer.reviews.persistReviewObservations([{ appid: 10, observedAt: '2026-10-21T01:00:00.000Z', status: 'success',
+    summary: { totalReviews: 0, positiveReviews: 0, negativeReviews: 0, reviewScore: null, reviewScoreDesc: null } }]);
+  assert.equal(pool.client!.calls.length, 4);
+  assert.equal(pool.client!.calls[3]!.sql, 'COMMIT');
+  assert.equal(JSON.parse(pool.client!.calls[1]!.values![0] as string)[0].snapshot_summary.summary.totalReviews, 0);
+});
+
+test('review observation transaction rolls back on persistence failure and rejects invalid vote totals', async () => {
+  const pool = new CapturingPool([result(), new Error('write failed'), result()]);
+  const writer = createTigerWriterForPool(pool);
+  await assert.rejects(writer.reviews.persistReviewObservations([{ appid: 10, observedAt: '2026-10-21T01:00:00.000Z', status: 'failed', errorCode: 'network_error' }]), /write failed/);
+  assert.equal(pool.client!.calls.at(-1)!.sql, 'ROLLBACK');
+  await assert.rejects(writer.reviews.persistReviewObservations([{ appid: 10, observedAt: '2026-10-21T01:00:00.000Z', status: 'success',
+    summary: { totalReviews: 1, positiveReviews: 0, negativeReviews: 0, reviewScore: null, reviewScoreDesc: null } }]), /Inconsistent/);
+});
+
+test('demo CCU checkpoints retain the newest attempt and protect newer database status', async () => {
+  const pool = new CapturingPool([result([], 1)]);
+  const writer = createTigerWriterForPool(pool);
+  await writer.metrics.checkpointDemoCcuValidation([
+    { appid: 10, observed_at: '2026-10-21T02:00:00.000Z', invalid_skip_until: '2026-11-20T02:00:00.000Z', validation_state: 'confirmed_zero' },
+    { appid: 10, observed_at: '2026-10-21T01:00:00.000Z', invalid_skip_until: '2026-11-20T01:00:00.000Z', validation_state: 'error' },
+  ]);
+  assert.equal(JSON.parse(pool.calls[0]!.values![0] as string)[0].validation_state, 'confirmed_zero');
+  assert.match(pool.calls[0]!.sql, /existing.last_ccu_validation_at < EXCLUDED.last_ccu_validation_at/);
+  assert.match(pool.calls[0]!.sql, /COALESCE\(EXCLUDED.last_ccu_synced, existing.last_ccu_synced\)/);
+});

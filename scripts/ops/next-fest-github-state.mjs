@@ -13,6 +13,7 @@ export function selectState({ current, runs, artifacts, jobsByRun, part, now }) 
   }
   let hadCollection = false;
   for (const run of runs.filter(r => r.id < current.id).sort((a, b) => b.id - a.id)) {
+    if (run.status && run.status !== 'completed') throw new Error('Prior festival run is still active; drain it before restoring state');
     const jobs = jobsByRun[run.id];
     if (!jobs) throw new Error('Run history is incomplete');
     for (const [name, partNumber] of [['reviews', 2], ['ccu', 1]]) {
