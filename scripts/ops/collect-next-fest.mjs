@@ -18,6 +18,35 @@ const DAY_MS = 86400000;
 const REUSE_MS = 36 * 3600000;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Operator-approved, fixed-roster catch-up. Regular collection keeps its limits.
+export const REVIEW_CATCH_UP_DAY = '2026-10-21';
+const REVIEW_CATCH_UP_LIMIT = 2470;
+const REVIEW_CATCH_UP_CUTOFF = '2026-10-20T02:05:14.977Z';
+
+export function festivalLimits(day, reviewCatchUp = false) {
+  if (reviewCatchUp && day !== REVIEW_CATCH_UP_DAY) throw new Error('Review catch-up has expired or not started');
+  return reviewCatchUp
+    ? { attemptCap: 13500, signalCaps: { ...SIGNAL_CAPS, reviews: 6300 }, reviewDemoCap: 3609 + REVIEW_CATCH_UP_LIMIT }
+    : { attemptCap: ATTEMPT_CAP, signalCaps: SIGNAL_CAPS, reviewDemoCap: 3609 };
+}
+
+export function selectReviewCatchUpIds(ids, manifest) {
+  const targets = manifest?.appids;
+  if (manifest?.day !== REVIEW_CATCH_UP_DAY || manifest?.observedBefore !== REVIEW_CATCH_UP_CUTOFF
+    || !Array.isArray(targets) || targets.length !== REVIEW_CATCH_UP_LIMIT || new Set(targets).size !== targets.length
+    || targets.some(id => !Number.isSafeInteger(id) || !ids.includes(id))) throw new Error('Invalid approved review catch-up roster');
+  const selected = new Set(targets);
+  return ids.filter(id => selected.has(id));
+}
+
+function completedForDay(records, signal, day, catchUpIds = null) {
+  return new Set(records.filter(r => r.kind === 'result' && (r.signal ?? 'reviews') === signal && r.at.startsWith(day)
+    // Twenty-five approved targets were reused earlier today but have since
+    // become stale. Keep those records; only a newer result completes them.
+    && !(catchUpIds?.has(r.appid) && r.attempts === 0 && (r.observedAt ?? r.at) < REVIEW_CATCH_UP_CUTOFF))
+    .map(r => r.appid));
+}
+
 export function parseJournal(text) {
   // A torn last write fails closed: never undercount attempts on resume.
   if (text && !text.endsWith('\n')) throw new Error('Incomplete journal; inspect before resuming');
@@ -95,14 +124,16 @@ export function reviewEvidence(html, records, checkedAt) {
 export async function collectSignal({ ids, records, fetchSummary, append, apiKey, signal = 'reviews',
   now = Date.now, wait = sleep, fetchImpl = fetch, intervalMs = signal === 'ccu' ? 1000 : INTERVAL_MS,
   limit = signal === 'ccu' ? ids.length : Math.min(3609, ids.length), maxRuntimeMs = 300 * 60000,
-  onProgress = () => {}, onResult = async () => {} } = {}) {
+  onProgress = () => {}, onResult = async () => {}, reviewCatchUp = false } = {}) {
   if (!apiKey?.trim()) throw new Error('STEAM_REVIEWS_API_KEY is required; never use the general key');
   const day = new Date(now()).toISOString().slice(0, 10);
   const deadline = now() + maxRuntimeMs;
   if (day < '2026-10-20' || day > '2026-11-02') throw new Error('Collection window has ended or not started');
+  const limits = festivalLimits(day, reviewCatchUp);
+  if (reviewCatchUp && (signal !== 'reviews' || ids.length > REVIEW_CATCH_UP_LIMIT)) throw new Error('Catch-up is limited to the approved review roster');
   const matches = r => (r.signal ?? 'reviews') === signal;
   let attempts = 0;
-  const completed = new Set(records.filter(r => r.kind === 'result' && matches(r) && r.at.slice(0, 10) === day).map(r => r.appid));
+  const completed = completedForDay(records, signal, day, reviewCatchUp ? new Set(ids) : null);
   const window = records.filter(r => r.kind === 'attempt' && Date.parse(r.at) > now() - DAY_MS).sort((a, b) => a.at.localeCompare(b.at));
   const counts = { reviews: 0, ccu: 0 };
   for (const r of window) counts[r.signal ?? 'reviews']++;
@@ -117,7 +148,7 @@ export async function collectSignal({ ids, records, fetchSummary, append, apiKey
   for (const appid of ids) {
     if (completed.has(appid)) continue;
     if (processed >= limit || stopReason) break;
-    if (signal === 'reviews' && !attemptsById.has(appid) && attemptsById.size >= 3609) break;
+    if (signal === 'reviews' && !attemptsById.has(appid) && attemptsById.size >= limits.reviewDemoCap) break;
     // Retries cannot take the primary request reserved for another demo.
     let appAttempts = attemptsById.get(appid) ?? 0;
     const result = await fetchSummary(appid, { apiKey, limiter: { acquire: async () => {} },
@@ -131,14 +162,16 @@ export async function collectSignal({ ids, records, fetchSummary, append, apiKey
           while (cursor < window.length && Date.parse(window[cursor].at) <= now() - DAY_MS) {
             counts[window[cursor++].signal ?? 'reviews']--;
           }
-          if (counts.ccu + counts.reviews < ATTEMPT_CAP && counts[signal] < SIGNAL_CAPS[signal]) break;
-          const oldest = counts[signal] >= SIGNAL_CAPS[signal]
+          if (counts.ccu + counts.reviews < limits.attemptCap && counts[signal] < limits.signalCaps[signal]) break;
+          const oldest = counts[signal] >= limits.signalCaps[signal]
             ? window.slice(cursor).find(matches) : window[cursor];
           const delay = Math.max(1, Date.parse(oldest.at) + DAY_MS + 1 - now());
           if (now() + delay >= deadline) { stopReason = 'rolling_budget_wait_exceeds_deadline'; throw new Error(stopReason); }
           await wait(Math.min(delay, 30000));
         }
-        if (appAttempts > 0 && SIGNAL_CAPS[signal] - counts[signal] <= Math.min(limit - processed - 1, ids.length - completed.size - 1)) throw new Error('Reserve remaining attempts for roster coverage');
+        const remainingBudget = Math.min(limits.signalCaps[signal] - counts[signal], limits.attemptCap - counts.ccu - counts.reviews);
+        if (appAttempts > 0 && remainingBudget <= Math.min(limit - processed - 1,
+          ids.filter(id => !completed.has(id)).length - 1)) throw new Error('Reserve remaining attempts for roster coverage');
         await wait(Math.max(0, intervalMs - (now() - lastAttempt)));
         if (now() >= deadline) { stopReason = 'runtime_deadline'; throw new Error(stopReason); }
         if (new Date(now()).toISOString().slice(0, 10) !== day) { stopReason = 'UTC_day_changed'; throw new Error(stopReason); }
@@ -237,7 +270,8 @@ export function reusableCcu(evidence, now) {
       observedAt: r.window_end, status: 'success', attempts: 0, summary: { playerCount: r.current_players } }));
 }
 
-export function verifyDailySnapshot(html, records, day) {
+export function verifyDailySnapshot(html, records, day, { reviewCatchUp = false } = {}) {
+  const limits = festivalLimits(day, reviewCatchUp);
   const data = decodeAtlas(html);
   const ids = festivalDemoIds(data);
   const today = records.filter(r => r.at.startsWith(day));
@@ -251,7 +285,7 @@ export function verifyDailySnapshot(html, records, day) {
     throw new Error('Do not publish: uncommitted observations remain in the journal');
   }
   const successful = [...results.values()].filter(r => r.status === 'success').length;
-  if (attempts.length > ATTEMPT_CAP || Object.entries(SIGNAL_CAPS).some(([signal, cap]) => signalCounts[signal] > cap)
+  if (attempts.length > limits.attemptCap || Object.entries(limits.signalCaps).some(([signal, cap]) => signalCounts[signal] > cap)
     || records.some(r => r.at > data.popularity?.exportedAt) || ids.some(id => !results.has(id)) || results.size !== ids.length
     || successful / ids.length < 0.95 || data.popularity?.exportedAt?.slice(0, 10) !== day) {
     throw new Error('Do not publish: roster coverage, success floor, date, or attempt cap failed');
@@ -298,16 +332,26 @@ export function reusableReviews(evidence, now, source = 'tiger') {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--collect', '--replay-only', '--signal=ccu', '--signal=reviews'].includes(arg) && !/^--limit=\d+$/.test(arg))) throw new Error('Usage: collect-next-fest.mjs [--collect|--replay-only] [--signal=ccu|reviews] [--limit=N]');
+  if (args.some(arg => !['--collect', '--replay-only', '--signal=ccu', '--signal=reviews', '--review-catch-up'].includes(arg) && !/^--limit=\d+$/.test(arg))) throw new Error('Usage: collect-next-fest.mjs [--collect|--replay-only] [--signal=ccu|reviews] [--limit=N] [--review-catch-up]');
   const signal = args.find(arg => arg.startsWith('--signal='))?.split('=')[1] ?? 'reviews';
+  const reviewCatchUp = args.includes('--review-catch-up');
+  const limits = festivalLimits(new Date().toISOString().slice(0, 10), reviewCatchUp);
+  if (reviewCatchUp && (signal !== 'reviews' || args.includes('--replay-only'))) throw new Error('Catch-up is reviews-only collection');
+  if (reviewCatchUp && args.includes('--collect') && process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch') {
+    throw new Error('Review catch-up requires an explicit manual workflow dispatch');
+  }
   const html = await readFile(ATLAS, 'utf8');
   const data = decodeAtlas(html);
   const ids = festivalDemoIds(data);
   const limit = Number(args.find(arg => arg.startsWith('--limit='))?.split('=')[1] ?? (signal === 'ccu' ? ids.length : 3609));
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > (signal === 'ccu' ? ids.length : 3609)) throw new Error('Invalid limit');
+  if (reviewCatchUp && limit !== 3609) throw new Error('Review catch-up requires the full workflow batch');
+  const catchUpManifest = reviewCatchUp
+    ? JSON.parse(await readFile(path.join(ROOT, 'scripts/ops/next-fest-review-catch-up.json'), 'utf8')) : null;
+  const catchUpIds = reviewCatchUp ? new Set(selectReviewCatchUpIds(ids, catchUpManifest)) : null;
   if (!args.includes('--collect') && !args.includes('--replay-only')) {
-    console.log(JSON.stringify({ mode: 'plan', signal, demos: ids.length, selected: limit, primaryRequests: limit,
-      combinedRollingAttemptCap: ATTEMPT_CAP, signalCaps: SIGNAL_CAPS, concurrency: 1,
+    console.log(JSON.stringify({ mode: 'plan', signal, demos: ids.length, selected: catchUpIds?.size ?? limit, primaryRequests: catchUpIds?.size ?? limit,
+      combinedRollingAttemptCap: limits.attemptCap, signalCaps: limits.signalCaps, concurrency: 1,
       intervalMs: signal === 'ccu' ? 1000 : INTERVAL_MS, databaseWrites: 'up to 25 observations per checkpoint; replay before collection',
       reviewKeyPresent: Boolean(process.env.STEAM_REVIEWS_API_KEY?.trim()) }, null, 2));
     return;
@@ -376,16 +420,17 @@ async function main() {
     ids.sort((a, b) => (signal === 'ccu'
       ? (current.popularity?.demos?.[b]?.ccu?.current ?? 0) - (current.popularity?.demos?.[a]?.ccu?.current ?? 0)
       : (current.popularity?.demos?.[a]?.review?.observedAt ?? '').localeCompare(current.popularity?.demos?.[b]?.review?.observedAt ?? '')) || a - b);
-    const collectionIds = limit < (signal === 'ccu' ? ids.length : 3609) ? ids.slice(0, limit) : ids;
+    const collectionIds = reviewCatchUp ? ids.filter(id => catchUpIds.has(id))
+      : limit < (signal === 'ccu' ? ids.length : 3609) ? ids.slice(0, limit) : ids;
     const selectedIds = new Set(collectionIds);
-    const completed = new Set(records.filter(r => r.kind === 'result' && (r.signal ?? 'reviews') === signal && r.at.startsWith(today)).map(r => r.appid));
+    const completed = completedForDay(records, signal, today, catchUpIds);
     const reusable = signal === 'ccu' ? reusableCcu(evidence, evidence.checkedAt) : reusableReviews(evidence, evidence.checkedAt);
     for (const record of reusable) {
       if (selectedIds.has(record.appid) && !completed.has(record.appid)) { await append(record); records.push(record); }
     }
     await persistResults(tiger, records, append, signal);
     let checkpointSize = 0;
-    const result = await collectSignal({ ids: collectionIds, records, signal,
+    const result = await collectSignal({ ids: collectionIds, records, signal, reviewCatchUp,
       fetchSummary: signal === 'reviews' ? fetchReviewSummary
         : (appid, options) => fetchDemoCcuSummary(appid, options, current.popularity?.demos?.[appid]?.ccu?.current),
       append, apiKey: process.env.STEAM_REVIEWS_API_KEY, limit,
