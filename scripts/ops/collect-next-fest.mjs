@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Temporary GitHub file-only collector. Reuses the migrated review API client.
+// Temporary roster/schedule adapter over the shared Steam clients and Tiger writers.
 import { open, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -23,8 +23,19 @@ export function parseJournal(text) {
   if (text && !text.endsWith('\n')) throw new Error('Incomplete journal; inspect before resuming');
   return text.trim() ? text.trim().split('\n').map(line => {
     const record = JSON.parse(line);
-    if (!['attempt', 'result'].includes(record.kind) || !['reviews', 'ccu'].includes(record.signal ?? 'reviews') || !Number.isSafeInteger(record.appid)
+    if (!['attempt', 'result', 'persisted'].includes(record.kind) || !['reviews', 'ccu'].includes(record.signal ?? 'reviews') || !Number.isSafeInteger(record.appid)
       || record.appid <= 0 || !Number.isFinite(Date.parse(record.at))) throw new Error('Invalid journal record');
+    if (record.kind === 'result') {
+      if (!['success', 'failed'].includes(record.status)) throw new Error('Invalid result status');
+      if (record.observedAt && (!Number.isFinite(Date.parse(record.observedAt))
+        || Date.parse(record.observedAt) > Date.parse(record.at))) throw new Error('Invalid source observation timestamp');
+      if (record.status === 'success') {
+        const values = record.signal === 'ccu' ? [record.summary?.playerCount]
+          : [record.summary?.totalReviews, record.summary?.positiveReviews, record.summary?.negativeReviews];
+        if (!values.every(n => Number.isSafeInteger(n) && n >= 0)
+          || (record.signal !== 'ccu' && values[0] !== values[1] + values[2])) throw new Error('Invalid journal counts');
+      }
+    }
     return record;
   }) : [];
 }
@@ -84,7 +95,7 @@ export function reviewEvidence(html, records, checkedAt) {
 export async function collectSignal({ ids, records, fetchSummary, append, apiKey, signal = 'reviews',
   now = Date.now, wait = sleep, fetchImpl = fetch, intervalMs = signal === 'ccu' ? 1000 : INTERVAL_MS,
   limit = signal === 'ccu' ? ids.length : Math.min(3609, ids.length), maxRuntimeMs = 300 * 60000,
-  onProgress = () => {} } = {}) {
+  onProgress = () => {}, onResult = async () => {} } = {}) {
   if (!apiKey?.trim()) throw new Error('STEAM_REVIEWS_API_KEY is required; never use the general key');
   const day = new Date(now()).toISOString().slice(0, 10);
   const deadline = now() + maxRuntimeMs;
@@ -154,6 +165,7 @@ export async function collectSignal({ ids, records, fetchSummary, append, apiKey
         attempts: result.telemetry.attempts };
       await append(record);
       records.push(record);
+      await onResult(record);
       processed++;
       completed.add(appid);
       if (processed % 100 === 0) onProgress({ signal, processed, attempts, rollingAttempts: counts.ccu + counts.reviews });
@@ -167,6 +179,64 @@ export async function collectSignal({ ids, records, fetchSummary, append, apiKey
     rollingAttempts: counts.ccu + counts.reviews };
 }
 
+const resultKey = r => `${r.signal ?? 'reviews'}:${r.appid}:${r.at}`;
+
+export async function persistResults(tiger, records, append, signal, limit = Infinity) {
+  const committed = new Set(records.filter(r => r.kind === 'persisted').map(resultKey));
+  const pending = records.filter(r => r.kind === 'result' && (r.signal ?? 'reviews') === signal
+    && !committed.has(resultKey(r)));
+  const selected = pending.slice(0, limit);
+  for (let offset = 0; offset < selected.length; offset += 25) {
+    const batch = selected.slice(offset, offset + 25);
+    if (signal === 'reviews') {
+      await tiger.reviews.persistReviewObservations(batch.map(r => ({ appid: r.appid,
+        observedAt: r.observedAt ?? r.at, status: r.status,
+        ...(r.status === 'success' ? { summary: { ...r.summary,
+          reviewScore: r.summary.reviewScore ?? null, reviewScoreDesc: r.summary.reviewScoreDesc ?? null } }
+          : { errorCode: r.errorCode ?? 'unknown_error' }) })));
+    } else {
+      if (batch.some(r => r.status === 'success' && (!Number.isSafeInteger(r.summary?.playerCount) || r.summary.playerCount < 0))) throw new Error('Invalid CCU count');
+      const snapshots = batch.filter(r => r.status === 'success' && r.source !== 'tiger').map(r => ({
+        appid: r.appid, snapshot_time: r.observedAt ?? r.at, player_count: r.summary.playerCount, ccu_tier: 2,
+      }));
+      await tiger.metrics.insertCcuSnapshots(snapshots);
+      const peaks = new Map();
+      for (const r of snapshots) {
+        const key = `${r.appid}:${r.snapshot_time.slice(0, 10)}`;
+        const previous = peaks.get(key);
+        if (!previous || previous.ccu_peak < r.player_count) peaks.set(key, {
+          appid: r.appid, metric_date: r.snapshot_time.slice(0, 10), ccu_peak: r.player_count, ccu_source: 'steam_api',
+        });
+      }
+      await tiger.metrics.upsertDailyCcuPeaks([...peaks.values()]);
+      await tiger.metrics.checkpointDemoCcuValidation(batch.filter(r => r.source !== 'tiger').map(r => ({ appid: r.appid,
+        observed_at: r.observedAt ?? r.at, invalid_skip_until: new Date(Date.parse(r.at) + 30 * DAY_MS).toISOString(),
+        validation_state: r.status === 'success' ? (r.summary.playerCount === 0 ? 'confirmed_zero' : 'confirmed_positive')
+          : r.errorCode === 'invalid_app' ? 'invalid' : r.errorCode === 'suspect_zero' ? 'suspect_zero' : 'error',
+      })));
+    }
+    // Commit acknowledgements follow successful writes. A crash before these
+    // acknowledgements replays the same source timestamps idempotently.
+    for (const r of batch) {
+      const receipt = { kind: 'persisted', signal, appid: r.appid, at: r.at };
+      await append(receipt); records.push(receipt);
+    }
+  }
+  return { persisted: selected.length, pending: pending.length - selected.length };
+}
+
+export function reusableCcu(evidence, now) {
+  const states = new Map(evidence.queries.roster_metrics.rows.map(r => [r.appid, r]));
+  // Under 20h prevents a nominally daily pass slipping into an alternate-day
+  // cadence when GitHub starts a little earlier than yesterday.
+  return evidence.queries.roster_ccu_window.rows.filter(r => Number.isSafeInteger(r.current_players)
+    && r.current_players >= 0 && Date.parse(r.window_end) >= Date.parse(now) - 20 * 3600000
+    && r.window_end <= now && !(states.get(r.appid)?.last_ccu_validation_at > r.window_end
+      && ['error', 'invalid', 'suspect_zero'].includes(states.get(r.appid)?.last_ccu_validation_state)))
+    .map(r => ({ kind: 'result', signal: 'ccu', source: 'tiger', appid: r.appid, at: now,
+      observedAt: r.window_end, status: 'success', attempts: 0, summary: { playerCount: r.current_players } }));
+}
+
 export function verifyDailySnapshot(html, records, day) {
   const data = decodeAtlas(html);
   const ids = festivalDemoIds(data);
@@ -176,6 +246,10 @@ export function verifyDailySnapshot(html, records, day) {
     && Date.parse(r.at) > Date.parse(data.popularity?.exportedAt) - DAY_MS);
   const signalCounts = Object.fromEntries(Object.keys(SIGNAL_CAPS).map(signal => [signal,
     attempts.filter(r => (r.signal ?? 'reviews') === signal).length]));
+  const committed = new Set(records.filter(r => r.kind === 'persisted').map(resultKey));
+  if (data.popularity?.source === 'tiger' && records.some(r => r.kind === 'result' && !committed.has(resultKey(r)))) {
+    throw new Error('Do not publish: uncommitted observations remain in the journal');
+  }
   const successful = [...results.values()].filter(r => r.status === 'success').length;
   if (attempts.length > ATTEMPT_CAP || Object.entries(SIGNAL_CAPS).some(([signal, cap]) => signalCounts[signal] > cap)
     || records.some(r => r.at > data.popularity?.exportedAt) || ids.some(id => !results.has(id)) || results.size !== ids.length
@@ -184,53 +258,30 @@ export function verifyDailySnapshot(html, records, day) {
   }
   for (const [id, r] of results) {
     const actual = data.popularity.demos[id]?.ccu;
-    if (r.status === 'success' && (!actual || actual.observedAt !== r.at
-      || actual.current !== r.summary.playerCount)) throw new Error('Published CCU differs from journal');
+    if (r.status === 'success' && (!actual || typeof actual.observedAt !== 'string' || actual.observedAt < (r.observedAt ?? r.at)
+      || (actual.observedAt === (r.observedAt ?? r.at) && actual.current !== r.summary.playerCount))) throw new Error('Published CCU differs from journal');
   }
   const reviewResults = new Map(today.filter(r => r.kind === 'result' && r.signal === 'reviews').map(r => [r.appid, r]));
   for (const [id, r] of reviewResults) {
     const actual = data.popularity.demos[id]?.review;
-    if (r.status === 'success' && (!actual || actual.observedAt !== (r.observedAt ?? r.at)
-      || actual.total !== r.summary.totalReviews || actual.positive !== r.summary.positiveReviews
-      || actual.negative !== r.summary.negativeReviews)) throw new Error('Published review differs from journal');
+    if (r.status === 'success' && (!actual || typeof actual.observedAt !== 'string' || actual.observedAt < (r.observedAt ?? r.at)
+      || (actual.observedAt === (r.observedAt ?? r.at) && (actual.total !== r.summary.totalReviews || actual.positive !== r.summary.positiveReviews
+      || actual.negative !== r.summary.negativeReviews)))) throw new Error('Published review differs from journal');
   }
   return { attempts: attempts.length, successful, demos: ids.length };
 }
 
-export async function fetchCcuSummary(appid, options, previousPlayers = null) {
-  const telemetry = { attempts: 0 };
-  let errorCode = 'network_error';
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try { await options.beforeAttempt(); }
-    catch { return { status: 'failed', errorCode, telemetry }; }
-    telemetry.attempts++;
-    try {
-      const url = new URL('https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/');
-      url.searchParams.set('appid', String(appid));
-      if (attempt) url.searchParams.set('cb', String(Date.now()));
-      const response = await options.fetchImpl(url, { headers: { 'x-webapi-key': options.apiKey },
-        signal: AbortSignal.timeout(options.requestTimeoutMs) });
-      if (!response.ok) {
-        errorCode = `http_${response.status}`;
-        if ([401, 403, 429].includes(response.status) || response.status < 500) {
-          return { status: 'failed', statusCode: response.status, errorCode, telemetry };
-        }
-      } else {
-        const body = await response.json();
-        const count = body?.response?.player_count;
-        if (body?.response?.result === 42) return { status: 'failed', errorCode: 'invalid_app', telemetry };
-        if (body?.response?.result !== 1 || !Number.isSafeInteger(count) || count < 0) {
-          return { status: 'failed', errorCode: 'invalid_response', telemetry };
-        }
-        if (count !== 0 || !(previousPlayers > 0) || attempt > 0) {
-          return { status: 'success', summary: { playerCount: count }, telemetry };
-        }
-        errorCode = 'suspect_zero';
-      }
-    } catch { errorCode = errorCode === 'suspect_zero' ? errorCode : 'network_error'; }
-    if (attempt === 0) await options.sleep(1000 + Math.floor(Math.random() * 500));
-  }
-  return { status: 'failed', errorCode, telemetry };
+export async function fetchCcuSummary(...args) {
+  const { fetchDemoCcuSummary } = await ingestionClients();
+  return fetchDemoCcuSummary(...args);
+}
+
+async function ingestionClients() {
+  const require = createRequire(path.join(ROOT, 'packages/ingestion/package.json'));
+  const { tsImport } = await import(require.resolve('tsx/esm/api'));
+  const reviews = await tsImport(path.join(ROOT, 'packages/ingestion/src/apis/reviews.ts'), import.meta.url);
+  const ccu = await tsImport(path.join(ROOT, 'packages/ingestion/src/apis/steam-ccu.ts'), import.meta.url);
+  return { ...reviews, ...ccu };
 }
 
 export function reusableReviews(evidence, now, source = 'tiger') {
@@ -247,26 +298,29 @@ export function reusableReviews(evidence, now, source = 'tiger') {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--collect', '--signal=ccu', '--signal=reviews'].includes(arg) && !/^--limit=\d+$/.test(arg))) throw new Error('Usage: collect-next-fest.mjs [--collect] [--signal=ccu|reviews] [--limit=N]');
+  if (args.some(arg => !['--collect', '--replay-only', '--signal=ccu', '--signal=reviews'].includes(arg) && !/^--limit=\d+$/.test(arg))) throw new Error('Usage: collect-next-fest.mjs [--collect|--replay-only] [--signal=ccu|reviews] [--limit=N]');
   const signal = args.find(arg => arg.startsWith('--signal='))?.split('=')[1] ?? 'reviews';
   const html = await readFile(ATLAS, 'utf8');
   const data = decodeAtlas(html);
   const ids = festivalDemoIds(data);
   const limit = Number(args.find(arg => arg.startsWith('--limit='))?.split('=')[1] ?? (signal === 'ccu' ? ids.length : 3609));
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > (signal === 'ccu' ? ids.length : 3609)) throw new Error('Invalid limit');
-  if (!args.includes('--collect')) {
+  if (!args.includes('--collect') && !args.includes('--replay-only')) {
     console.log(JSON.stringify({ mode: 'plan', signal, demos: ids.length, selected: limit, primaryRequests: limit,
       combinedRollingAttemptCap: ATTEMPT_CAP, signalCaps: SIGNAL_CAPS, concurrency: 1,
-      intervalMs: signal === 'ccu' ? 1000 : INTERVAL_MS, databaseWrites: 0,
+      intervalMs: signal === 'ccu' ? 1000 : INTERVAL_MS, databaseWrites: 'up to 25 observations per checkpoint; replay before collection',
       reviewKeyPresent: Boolean(process.env.STEAM_REVIEWS_API_KEY?.trim()) }, null, 2));
     return;
   }
-  if (!process.env.STEAM_REVIEWS_API_KEY?.trim()) throw new Error('GitHub secret STEAM_REVIEWS_API_KEY is required');
+  if (!args.includes('--replay-only') && !process.env.STEAM_REVIEWS_API_KEY?.trim()) throw new Error('GitHub secret STEAM_REVIEWS_API_KEY is required');
+  if (process.env.ENABLE_NEXT_FEST_TIGER_WRITES !== 'true') throw new Error('Tiger writes require the separately approved activation gate');
+  if (!process.env.TIGER_PRIMARY_URL) throw new Error('TIGER_PRIMARY_URL is required');
   if (!process.env.GITHUB_RUN_ID) throw new Error('Collect through the GitHub workflow so every run shares the same journal and budget');
   await mkdir(DIRECTORY, { recursive: true });
   const lockPath = path.join(DIRECTORY, '.refresh.lock');
   const lock = await open(lockPath, 'wx');
   let journal;
+  let pool;
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     const records = [];
@@ -276,50 +330,81 @@ async function main() {
     const roster = new Set(ids);
     if (records.some(r => !roster.has(r.appid) || Date.parse(r.at) > Date.now())) throw new Error('Journal does not match roster or clock');
     const today = new Date().toISOString().slice(0, 10);
-    if (records.some(r => r.kind === 'result' && r.at.startsWith(today) && ['http_401', 'http_403', 'http_429'].includes(r.errorCode))) {
+    if (today < '2026-10-20' || today > '2026-11-02') throw new Error('Next Fest collection window is closed');
+    if (!args.includes('--replay-only') && records.some(r => r.kind === 'result' && r.at.startsWith(today) && ['http_401', 'http_403', 'http_429'].includes(r.errorCode))) {
       throw new Error('Today’s lane is paused after an authorization/rate error; inspect it before a later run');
     }
     journal = await open(path.join(DIRECTORY, `${today}.journal.jsonl`), 'a');
     const append = async record => { await journal.writeFile(JSON.stringify(record) + '\n'); await journal.sync(); };
-    const evidence = await readTigerEvidence(ids, { includeCcu: false, rateOnly: signal === 'reviews', checkRate: true });
+    const require = createRequire(path.join(ROOT, 'packages/database/package.json'));
+    const { Pool } = require('pg');
+    const { createTigerWriterForPool } = await import(pathToFileURL(path.join(ROOT, 'packages/database/dist/tiger-writer.js')));
+    pool = new Pool({ connectionString: process.env.TIGER_PRIMARY_URL, max: 1, connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 10000, application_name: 'next-fest-tiger',
+      options: '-c statement_timeout=8000 -c lock_timeout=2000' });
+    const surface = await pool.query(`SELECT i.relname AS indexname FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_namespace n ON n.oid = i.relnamespace
+      WHERE n.nspname = 'docs' AND i.relname = 'idx_app_source_snapshots_review_observation'
+        AND x.indisvalid AND x.indisready AND x.indisunique LIMIT 1`);
+    if (surface.rows.length !== 1) throw new Error('Approved review snapshot migration must be applied before any festival writes');
+    const tiger = createTigerWriterForPool(pool);
+    // Retain pre-cutover review baselines with their source times. They are
+    // staged in the existing journal until acknowledged by Tiger.
+    const known = new Set(records.filter(r => r.kind === 'result' && (r.signal ?? 'reviews') === 'reviews')
+      .map(r => `${r.appid}:${r.observedAt ?? r.at}`));
+    for (const appid of ids) for (const review of [data.popularity?.demos?.[appid]?.reviewBaseline, data.popularity?.demos?.[appid]?.review]) {
+      if (!review?.observedAt || ![review.total, review.positive, review.negative].every(n => Number.isSafeInteger(n) && n >= 0)
+        || review.total !== review.positive + review.negative || known.has(`${appid}:${review.observedAt}`)) continue;
+      const r = { kind: 'result', signal: 'reviews', appid, at: review.observedAt, observedAt: review.observedAt,
+        status: 'success', source: 'cutover-snapshot', attempts: 0,
+        summary: { totalReviews: review.total, positiveReviews: review.positive, negativeReviews: review.negative } };
+      await append(r); records.push(r); known.add(`${appid}:${review.observedAt}`);
+    }
+    const replay = await persistResults(tiger, records, append, signal, limit);
+    if (args.includes('--replay-only') || replay.pending) {
+      console.log(JSON.stringify({ mode: 'replay', signal, ...replay, steamRequests: 0 }));
+      if (replay.pending && !args.includes('--replay-only')) process.exitCode = 1;
+      return;
+    }
+    const evidence = await readTigerEvidence(ids, { checkRate: true });
     const rate = evidence.queries.review_limiter.rows[0];
     if (Number(rate?.max_tokens) !== 1 || Number(rate?.refill_rate_per_second) !== 1) {
       throw new Error('Regular review rate changed; reassess the shared key budget before collecting');
     }
-    if (signal === 'ccu') {
-      const completed = new Set(records.filter(r => r.kind === 'result' && r.signal === 'reviews' && r.at.startsWith(today)).map(r => r.appid));
-      const checkedAt = new Date().toISOString();
-      const reusable = new Map([...reusableReviews(evidence, checkedAt),
-        ...reusableReviews(reviewEvidence(html, records, checkedAt), checkedAt, 'prior-snapshot')]
-        .sort((a, b) => a.observedAt.localeCompare(b.observedAt)).map(r => [r.appid, r]));
-      for (const record of reusable.values()) {
-        if (!completed.has(record.appid)) { await append(record); records.push(record); }
-      }
-    }
-    const require = createRequire(path.join(ROOT, 'packages/ingestion/package.json'));
-    const { tsImport } = await import(require.resolve('tsx/esm/api'));
-    const { fetchReviewSummary } = await tsImport(path.join(ROOT, 'packages/ingestion/src/apis/reviews.ts'), import.meta.url);
+    const current = decodeAtlas(enrichAtlas(html, evidence));
+    const { fetchReviewSummary, fetchDemoCcuSummary } = await ingestionClients();
     ids.sort((a, b) => (signal === 'ccu'
-      ? (data.popularity?.demos?.[b]?.ccu?.current ?? 0) - (data.popularity?.demos?.[a]?.ccu?.current ?? 0)
-      : (data.popularity?.demos?.[a]?.review?.observedAt ?? '').localeCompare(data.popularity?.demos?.[b]?.review?.observedAt ?? ''))
-      || (data.popularity?.demos?.[b]?.review?.total ?? 0) - (data.popularity?.demos?.[a]?.review?.total ?? 0));
-    const current = decodeAtlas(enrichAtlas(html, reviewEvidence(html, records, new Date().toISOString())));
-    const result = await collectSignal({ ids, records, signal,
+      ? (current.popularity?.demos?.[b]?.ccu?.current ?? 0) - (current.popularity?.demos?.[a]?.ccu?.current ?? 0)
+      : (current.popularity?.demos?.[a]?.review?.observedAt ?? '').localeCompare(current.popularity?.demos?.[b]?.review?.observedAt ?? '')) || a - b);
+    const collectionIds = limit < (signal === 'ccu' ? ids.length : 3609) ? ids.slice(0, limit) : ids;
+    const selectedIds = new Set(collectionIds);
+    const completed = new Set(records.filter(r => r.kind === 'result' && (r.signal ?? 'reviews') === signal && r.at.startsWith(today)).map(r => r.appid));
+    const reusable = signal === 'ccu' ? reusableCcu(evidence, evidence.checkedAt) : reusableReviews(evidence, evidence.checkedAt);
+    for (const record of reusable) {
+      if (selectedIds.has(record.appid) && !completed.has(record.appid)) { await append(record); records.push(record); }
+    }
+    await persistResults(tiger, records, append, signal);
+    let checkpointSize = 0;
+    const result = await collectSignal({ ids: collectionIds, records, signal,
       fetchSummary: signal === 'reviews' ? fetchReviewSummary
-        : (appid, options) => fetchCcuSummary(appid, options, current.popularity?.demos?.[appid]?.ccu?.current),
+        : (appid, options) => fetchDemoCcuSummary(appid, options, current.popularity?.demos?.[appid]?.ccu?.current),
       append, apiKey: process.env.STEAM_REVIEWS_API_KEY, limit,
-      onProgress: progress => console.log(JSON.stringify(progress)) });
-    const enriched = enrichAtlas(html, reviewEvidence(html, records, new Date().toISOString()));
+      onProgress: progress => console.log(JSON.stringify(progress)),
+      onResult: async () => {
+        if (++checkpointSize >= 25) { await persistResults(tiger, records, append, signal); checkpointSize = 0; }
+      } });
+    await persistResults(tiger, records, append, signal);
+    const enriched = enrichAtlas(html, await readTigerEvidence(ids));
     const snapshot = path.join(DIRECTORY, `${today}.json`);
     await writeFile(snapshot + '.tmp', JSON.stringify({ version: 1,
-      source: 'steam-festival-api', run: result, popularity: decodeAtlas(enriched).popularity }));
+      source: 'tiger', run: result, popularity: decodeAtlas(enriched).popularity }));
     await rename(snapshot + '.tmp', snapshot);
     const output = `${ATLAS}.${process.pid}.tmp`;
     await writeFile(output, enriched, { flag: 'wx' });
     await rename(output, ATLAS);
-    console.log(JSON.stringify({ ...result, atlas: ATLAS, databaseWrites: 0 }, null, 2));
+    console.log(JSON.stringify({ ...result, atlas: ATLAS, databaseSource: 'tiger' }, null, 2));
     if (result.stopReason) process.exitCode = 1;
-  } finally { await journal?.close(); await lock.close(); await unlink(lockPath); }
+  } finally { await pool?.end(); await journal?.close(); await lock.close(); await unlink(lockPath); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -1,49 +1,60 @@
-# Temporary October 2026 Next Fest snapshots
+# Temporary October 2026 Next Fest collection
 
-The existing `/next-fest` atlas serves a static HTML payload. `next-fest-daily.yml` refreshes its 7,218 verified demo IDs daily at 06:17 UTC from October 22 through November 2, 2026, following the manual October 21 bootstrap. It collects CCU for the whole roster and refreshes up to 3,609 review summaries per UTC day, oldest first. The review target is a full rotation in roughly two days. Delays or failures can extend that interval; the page always shows actual source times and stale/failed states.
+The `/next-fest` atlas remains static. The temporary roster/schedule selects 7,218 verified **demo** IDs; shared Steam clients and Tiger writers persist observations; the daily exporter reads Tiger; the existing atlas-only Git commit uses normal Vercel publication. Parent game IDs remain metadata/link identities.
 
-This temporary worker writes files and GitHub artifacts, not database records. It does not change the existing review or CCU jobs, activate the retired demo scheduler, apply SQL, refresh projections, or add dependencies. The previously completed review API migration remains separate. Demo IDs supply players/reviews; parent IDs remain the identity for game metadata and links.
+This is a prepared, **inactive** Tiger transition. No production SQL, writes, job cancellation, activation, or deployment was performed while preparing it. The previous file-only workflow may still be running. Do not equate local validation with production acceptance.
 
-## Request and resource budget
+The schedule stays at 06:17 UTC, October 22–November 2, following the October 21 bootstrap. CCU targets the full roster daily; reviews select up to 3,609 oldest due demos daily, aiming for a two-day rotation. Failures, budgets, backlog replay, and runner delays can extend these intervals. The expiry remains November 3 at 00:00 UTC.
 
-The owner confirmed Valve permission to use two keys at their basic 100,000-call daily allowances and approved sharing `STEAM_REVIEWS_API_KEY` for festival CCU and reviews. The first key receives no new festival requests. The existing main CCU client sends no API key, so its approximately 128,004 successful observations in the audited day are workload, not measured first-key usage.
+## Audit findings and scoped fix
 
-The regular review worker acquires its shared Tiger token bucket before every attempt, including retries. A bounded production read on October 21 at 04:26 UTC verified capacity 1 and refill 1/second. That bounds this existing consumer at approximately 86,401 attempts in 24 hours. The festival worker checks that configuration before each phase and refuses to collect if it changes. This calculation assumes other callers do not bypass that limiter or begin using this dedicated key; re-audit before changing either setup.
+Read AGENTS.md and CLAUDE.md before operating. Live read-only checks at 07:41 UTC October 21 confirmed:
 
-| Item | Limit or expected volume |
+- `metrics.ccu_snapshots` already accepts exact times and genuine zero counts; `(appid, snapshot_time)` identifies replayed observations. Its ID is an identity column.
+- Review totals and daily deltas already exist. They retain one mutable row per app/day, not every observation with its original timestamp. The owner selected reuse of `docs.app_source_snapshots` for exact review history rather than a new table. Candidate `0118_review_source_observations.sql` permits `source='reviews'` and adds a partial unique index for replay. It is not applied.
+- The live snapshot lifecycle trigger returns immediately for non-storefront sources. No review change events or new projection refresh calls are added.
+- Latest-metrics statements increment `opportunity.cohort_source_revisions_v1`. Existing downstream consumers may therefore do more work. The separate local peak-cache migration is unrelated and was not present in the audited live trigger set.
+- Tiger showed 27/105 connections, zero lock waiters, and 30 cumulative deadlocks. Prior evidence records 0.5 vCPU / 2 GB RAM and existing statement timeouts. Neither the connection sample nor passing unit tests establishes sustained compute headroom.
+- Earlier roster evidence found mixed `Demo`/`demo` catalog types and 81 absent catalog rows. Explicit verified demo IDs bypass selection gaps without restarting the retired demo scheduler, modifying regular collection coverage, or creating placeholder games.
+
+The festival adapter uses the existing review API client and shared demo CCU client module. CCU writes use the existing snapshot and daily-peak writers plus a timestamp-guarded demo status checkpoint. Review writes archive exact observations, then reuse the existing transactional review metrics writer when an existing sync-status row is unclaimed and older. Active regular claims, their schedule, priority overrides, and failure state are preserved. Claimed or uncatalogued demos still retain their observation in Tiger history and appear in the export; their regular latest-metrics row can lag until ordinary collection catches up.
+
+Ordinary review workers now pass their individual response times to the batch writer rather than assigning every response the batch's persistence time. Historical observations retain their previously recorded timestamps; older batch timestamps cannot be reconstructed more precisely.
+
+## Budgets, overlap, and load
+
+The authorized two-key setup and each key's 100,000-call daily allowance remain unchanged. Festival calls continue to use only `STEAM_REVIEWS_API_KEY`. The first key receives no new festival traffic. Existing unauthenticated CCU traffic must not be counted as measured first-key usage.
+
+The live regular-review limiter remains capacity 1, refill 1/second, acquired before every regular attempt including retries. This bounds that consumer at about 86,401 attempts per 24 hours. Festival reservations remain capped at 12,000 attempts in **every rolling 24 hours**, including retries, with CCU/review caps of 8,000/4,000. The combined second-key bound is approximately 98,401, leaving about 1,599 calls. This depends on all shared consumers continuing to use the audited paths; there is no provider usage meter here. The adapter rechecks the regular limiter before every collecting phase. Replay makes zero Steam requests.
+
+Fresh Tiger CCU under 20 hours old and consistent review observations under 36 hours old are reused with original timestamps. These cutoffs allow the next daily/alternate-day pass to become due even when the runner starts early. Later failures prevent reuse. Phase-start reads reduce overlap, but a regular worker can collect a demo after that read; an occasional duplicate request remains possible. Writer timestamp/claim guards prevent that overlap from overwriting newer observations or delaying regular work.
+
+| Daily work, before reuse/failures | Upper planning estimate |
 | --- | --- |
-| Daily full-roster CCU | 7,218 primary requests |
-| Daily reviews | At most 3,609 demos; fewer when fresh results can be reused |
-| Normal festival requests | At most 10,827/day before retries and reuse |
-| Festival hard cap | 12,000 attempts in every rolling 24 hours, including retries |
-| Per-signal rolling caps | CCU 8,000; reviews 4,000 |
-| Combined second-key bound | Approximately 98,401/day, leaving about 1,599 calls of margin |
-| Concurrency | One HTTP request in flight; phases run sequentially |
-| Request pacing | At least 1 second between CCU attempts, 4 seconds between review attempts |
-| Retry limits | At most two attempts per demo per signal per UTC day; 15-second HTTP timeout |
-| Runtime | Five-hour deadline per phase; 330-minute GitHub job timeout |
-| Database | Two short, sequential read-only connections per full daily run; one cohort metrics read and two limiter checks |
-| Database writes / downstream refreshes | Zero |
-| File writes | One durable JSONL reservation before each attempt, one result per observation/reuse; two snapshot replacements per run |
-| Retention | Complete two-week journals in two artifacts/run, retained 21 days; published HTML retained in Git |
+| Steam primary calls | 7,218 CCU + 3,609 reviews = 10,827 |
+| Steam attempts including retries | Hard maximum 12,000 rolling 24h |
+| New CCU rows | Up to 7,218 timestamped snapshots |
+| Other CCU changes | Up to 21,654 daily/latest/status row changes |
+| New review history | Up to 3,609 observations; failures are retained too |
+| Regular review metric/status changes | Up to 14,436 across four existing tables |
+| Opportunity revision updates | About 434 with full 25-result batches; partial batches/replay add overhead |
+| Total | About 47,351 row changes/day at the successful no-reuse planning bound |
 
-At minimum spacing, a full day without reuse takes about six runner-hours, plus setup and any slow responses (about 84 hours over 14 days). Each phase fits the hosted six-hour job limit separately. Current endpoint rates are not a guarantee of throughput. The workflow stops on the first 401/403/429 or five consecutive failures; a demo explicitly reported invalid does not count as a service outage. It never retries the retired `/appreviews` route.
+Review reuse can additionally archive a regular worker's source observation once so a precise baseline survives future updates; duplicate timestamps do not add history rows. Cutover also imports retained journals and published review baselines once. Those initial writes are additional to steady-state estimates. A replay after an ambiguous CCU commit may repeat daily/status statements, while snapshot uniqueness prevents duplicate samples. Unrelated future trigger changes require revisiting these estimates.
 
-Only one app ID is supported by the CCU and exact review-summary endpoints. A bounded StoreBrowse batch probe returned review totals and rounded positivity but no exact positive/negative counts or CCU; it is not used. Fresh, consistent regular-scraper or prior-snapshot review observations under 36 hours old are reused with their original timestamps. The 36-hour threshold skips the intervening daily pass while making the second pass due even when GitHub starts slightly early. Unknown/older reviews are sorted first. Active demos lead the CCU order without excluding inactive demos.
+Writes are sequential, in checkpoints of at most 25 observations. One writer-pool connection is allowed; an exporter connection may temporarily coexist with the idle writer, for **at most two additional connections and one active query at a time**. Connections have 10-second connect, 8-second statement, and 2-second lock timeouts; the idle writer closes after 10 seconds. A complete collecting run makes four bounded roster reads (before and after each phase), including review-history lookups. The ten-demo read check validates SQL only; full-roster export latency after ingestion remains to be measured during rollout. No connection is held in a transaction while waiting for Steam. There is no per-request projection refresh, ranking pass, new service, dependency, or regular scheduler activation.
 
-The October 20 investigation found Tiger at 0.5 vCPU / 2 GB RAM, about 60.2 GB database size, and 15 connections against 105 allowed. Sustained CPU/memory headroom was unavailable. The cohort read took 690 ms; existing SQL timeouts were present. Therefore this design avoids ingestion writes and projection refresh work. Reads have 8-second statement and 2-second lock limits and close before Steam polling starts. Connection availability alone is not proof of compute headroom.
+One Steam request is in flight, with at least 1 second between CCU attempts and 4 seconds between reviews. Both lanes retain their two-attempt daily per-demo cap, 15-second request timeout, five-hour phase deadline, and 330-minute job timeout. Authorization/rate errors or five consecutive service failures stop collection. Minimum no-reuse collection time remains about six runner-hours/day across sequential phases.
 
-## History, publication, and failure behavior
+## Durability, export, and viewer semantics
 
-Every request is reserved in an append-only, synced journal before HTTP starts. The next GitHub run restores that journal before collecting; all runs share one concurrency group. Rolling caps wait for old attempts to expire instead of resetting at midnight. The collector stops if a UTC day changes, preventing an overlapping date shard.
+Every HTTP attempt is durably reserved before it starts. Results remain in the existing journal until their Tiger write succeeds; `persisted` receipts are appended afterward. A database failure stops new collection. Replays retain original source times and are idempotent. Full journals remain in 21-day artifacts for budget accounting, recovery, and publication verification; the page's observations are read from Tiger.
 
-A run restores the preceding phase's final archive, including failed runs whose journal uploaded successfully. If collection ran but its final archive is missing, collection pauses for at least 24 hours; a preflight-only failure does not restart that wait. Missing all prior history, torn records, rerunning an existing GitHub attempt, or an unexpected roster fails closed. Dispatch a new run to resume from artifacts; never delete/reset the journal to get around a cap.
+Restore the latest final artifact, including failed-run artifacts. A prior active run must drain before its state can be restored. Missing/torn journals still fail closed; an interrupted collection with no final journal needs artifact recovery or the existing 24-hour conservative wait. Never reset counters, discard results, or rerun an existing GitHub attempt to bypass recovery.
 
-Publication requires results for all 7,218 CCU demos, at least 95% successful CCU observations, valid signal/combined caps, matching journal values, and the current export date. Failed individual observations retain their previous successful values and expose the later failure. First-run review coverage will be partial until the second daily rotation; it is not labeled complete or fresh by exporting.
+CCU exports aggregate raw snapshots from October 19 at 17:00 UTC through the temporary collection expiry. They preserve genuine zeros, the sampled high, number of samples, and actual first/last sample times. A daily sample is not a true intraday peak. Reviews use exact votes for positivity, with no positivity percentage at zero reviews. Lifetime totals remain distinct from signed changes between actual festival observations. A decline stays negative. No festival-start total or missing value is invented.
 
-The publisher commits only `apps/admin/src/app/next-fest/content/atlas.html` on the current default branch. It checks whether that file changed during collection and stops rather than overwrite concurrent edits. Other files on the current branch are preserved. Branch protection or a rejected push leaves the completed artifact available for review. The existing Vercel Git integration must complete before the site is considered updated.
-
-The UI calculates positivity from exact vote counts; zero reviews have no positivity percentage. CCU is labeled “demo players,” with observation dates, the highest sampled count, and its actual collection window under “More details.” Once-daily samples cannot establish a true peak or intraday trend. Review changes are signed differences between lifetime-count observations, not counts of reviews written during the festival. Festival review text, follower/news/discussion polling, and higher-frequency active-demo sampling remain optional follow-ups.
+Publication requires a Tiger export, all journal results acknowledged, a current export date, full daily CCU attempt/reuse coverage, at least 95% successes, valid request caps, and no observation regression. A newer Tiger value is allowed. Missing/older source data stops publication instead of replacing a good snapshot. The atlas concurrency guard and atlas-only commit remain. Vercel completion must be verified separately.
 
 ## Static popularity views
 
@@ -53,13 +64,18 @@ The players-versus-reviews chart plots one point per game with both observations
 
 For a visual-only rollback, revert the markup/script/style changes while preserving the latest `nf-payload` snapshot. Coordinate publication with an in-progress collection run: the existing atlas-change guard intentionally stops that run from overwriting a concurrent UI edit.
 
-## Verification and activation
+## Validation and approval-gated rollout
 
-1. Run `node --test scripts/ops/{collect-next-fest,export-next-fest-popularity,next-fest-github-state}.test.mjs`, repository type checks/lint/build, and the existing Next Fest access tests. The worker without `--collect` prints its plan and makes no network calls.
-2. Merge the scoped release with `ENABLE_NEXT_FEST_COLLECTION` unset/false. Dispatch `next-fest-daily.yml` with `batch_size=10` and `publish=false`: up to ten CCU and ten review demos, at most forty HTTP attempts. Review the artifacts for key/rate errors, exact vote consistency, genuine zeros, original timestamps, pacing, and request accounting. Compare regular-review job telemetry and a bounded DB health sample before/after.
-3. After the canary passes, dispatch a new full run with `batch_size=7218` and `publish=true`. It restores the canary's journal and skips already-completed demos. Confirm full CCU coverage, review freshness, the atlas-only commit, deployed page/CSV, and follow-up response times. Then set `ENABLE_NEXT_FEST_COLLECTION=true` for the daily schedule. A partial first review rotation is expected.
-4. After November 2 the date gate prevents collection even if the variable remains enabled. Disable the workflow/variable when the temporary page is retired.
+Local validation: festival collector/export/recovery tests, database writer tests, review and CCU client/worker tests, repository type checks/lint/build, and the static Tiger ingestion verifier. Tests inject transports and database clients; they do not collect from Steam or write production data. The collector without flags only prints a plan.
 
-Rollback: set only `ENABLE_NEXT_FEST_COLLECTION=false`, cancel this workflow if needed, and restore the last good atlas commit. Keep its artifacts so request history remains trustworthy. Do not alter existing worker gates, reset request accounting, delete production data, or revert the completed reviews migration.
+Before approval, compare the scoped patch against `output/steam-next-fest-2026-10/tiger-transition/before/`; the checkout contains substantial unrelated local work. Do not ship unrelated migrations or edits with this transition.
 
-Sources: [Valve API terms](https://steamcommunity.com/dev/apiterms), [exact review API](https://partner.steamgames.com/doc/webapi/IUserReviewsService), [CCU API](https://partner.steamgames.com/doc/webapi/ISteamUserStats), [GitHub runner limits](https://docs.github.com/en/actions/reference/limits). Dated audit evidence is retained locally under `output/steam-next-fest-2026-10/`.
+1. **Hold and drain the old generation.** With explicit approval, disable only the festival daily gate and resolve queued festival runs. Let any collector already executing finish and upload its final state. At audit, run `39548191481` was collecting reviews after its CCU archive completed, and `39555037953` was pending. Recheck these IDs before acting. Changing a variable or merging code does not replace the code of a queued/running run. Let old publication finish or explicitly cancel its publish stage before allowing the new publisher.
+2. **Prepare the release with both festival gates off.** Deploy the scoped code through the normal process. Preserve the latest completed artifacts, all attempt reservations, and the latest published atlas. Do not change regular worker gates.
+3. **Approve and apply only SQL 0118.** It expands one existing check and builds one partial unique index. Risk is medium: schema locks/index construction and subsequent ingestion load on the small Tiger instance. The table was about 2.5 GB at rollout, so build the index CONCURRENTLY first, outside a transaction, then change the check in a short transaction. It uses a 2-second lock limit, a 120-second concurrent-build limit, and a 30-second constraint statement limit. The initial 30-second concurrent attempt completed its first build phase but left an invalid index; transaction inspection found no blockers before the monitored retry. The check is added NOT VALID to avoid rescanning existing rows; new writes are still checked. Existing rows satisfied the narrower check. No data is deleted. A separately scheduled validation can follow. A failed concurrent build can leave an invalid index: stop, inspect, and remove only that invalid rollout index before retrying. The constraint transaction rolls back on failure; do not raise limits blindly.
+4. **Approve writes, then enable `ENABLE_NEXT_FEST_TIGER_WRITES`.** Keep the daily collection gate off. Dispatch a new run with `mode=replay`, `batch_size=10`, `publish=false`: at most ten retained results per signal, zero Steam requests. Compare source counts/times and state acknowledgements. Read bounded DB health and regular-review telemetry before/after. This is production ingestion, so it requires explicit approval.
+5. **Drain the retained backlog.** After canary acceptance, approve full replay with `mode=replay`, `batch_size=7218`, `publish=false`. Reviews remain capped at 3,609 replayed results per phase; repeat new runs until both phases report `pending=0`. This includes the one-time published-baseline import. Replay does not spend or reset request allowances. A collecting run with a remaining replay backlog stops before making new requests.
+6. **Approve collection and publication.** Run an unpublished ten-demo collection canary (at most 40 HTTP attempts), retaining its journal. Then approve the full collecting/publishing run and daily `ENABLE_NEXT_FEST_COLLECTION` gate. Verify Tiger rows, export parity, preserved visualizations/CSV/“Data Pending,” the atlas-only commit, normal Vercel deployment, and bounded DB/job telemetry. Neither a successful static build nor this audit proves production performance.
+7. Expiry continues to prevent collection after November 2 UTC. Disable both festival gates when retiring the temporary schedule.
+
+Rollback: disable both festival gates, drain/archive active work, and restore the last good static atlas through normal publication. Keep Tiger observations, the additive snapshot schema, and all accounting artifacts. Do not delete history or restore the narrower source constraint over retained reviews. Reverting to the older collector also requires removing the newer `persisted` records from a **copy** of its input journal while preserving every attempt/result; its old parser rejects the new receipt kind. Prefer leaving collection stopped while fixing forward. Do not modify regular worker gates or revert the separately released review API migration.

@@ -119,7 +119,7 @@ test('CCU uses the authorized key, rejects unknown counts, and confirms a zero a
     beforeAttempt: async () => { attempts++; }, sleep: async () => {},
     fetchImpl: async (url, init) => {
       assert.equal(init.headers['x-webapi-key'], 'fixture-key');
-      assert.equal(url.searchParams.get('appid'), '1');
+      assert.equal(new URL(url).searchParams.get('appid'), '1');
       return Response.json({ response: { result: 1, player_count: 0 } });
     } };
   assert.equal((await fetchCcuSummary(1, options, 20)).summary.playerCount, 0);
@@ -146,4 +146,87 @@ test('reuse skips the intervening daily run but becomes due on the second run ev
   const evidence = { queries: { roster_metrics: { rows: [row] } } };
   assert.equal(reusableReviews(evidence, '2026-10-22T03:50:00.000Z').length, 1);
   assert.equal(reusableReviews(evidence, '2026-10-23T03:50:00.000Z').length, 0);
+});
+
+test('Tiger replay checkpoints only after persistence and retains original timestamps', async () => {
+  const { persistResults } = await import('./collect-next-fest.mjs');
+  const record = { kind: 'result', signal: 'ccu', appid: 1, at: start, status: 'success', summary: { playerCount: 0 } };
+  const calls = [], receipts = [], records = [record];
+  const tiger = { metrics: {
+    insertCcuSnapshots: async rows => calls.push(['snapshots', rows]),
+    upsertDailyCcuPeaks: async rows => calls.push(['peaks', rows]),
+    checkpointDemoCcuValidation: async rows => calls.push(['state', rows]),
+  } };
+  const result = await persistResults(tiger, records, async r => receipts.push(r), 'ccu');
+  assert.deepEqual(result, { persisted: 1, pending: 0 });
+  assert.equal(calls[0][1][0].snapshot_time, start);
+  assert.equal(calls[0][1][0].player_count, 0);
+  assert.equal(calls[1][1][0].ccu_peak, 0);
+  assert.equal(calls[2][1][0].validation_state, 'confirmed_zero');
+  assert.equal(receipts[0].kind, 'persisted');
+  assert.deepEqual(await persistResults(tiger, records, async () => {}, 'ccu'), { persisted: 0, pending: 0 });
+  const failed = structuredClone(record);
+  failed.appid = 2;
+  tiger.metrics.upsertDailyCcuPeaks = async () => { throw new Error('db unavailable'); };
+  await assert.rejects(persistResults(tiger, [failed], async () => assert.fail('must not acknowledge'), 'ccu'), /db unavailable/);
+});
+
+test('review replay is bounded, preserves source time and does not spend requests', async () => {
+  const { persistResults } = await import('./collect-next-fest.mjs');
+  const saved = [], batches = [];
+  const records = [1, 2, 3].map(appid => ({ kind: 'result', signal: 'reviews', appid, at: start,
+    observedAt: '2026-10-20T23:00:00.000Z', status: 'success', summary, attempts: 0 }));
+  const result = await persistResults({ reviews: { persistReviewObservations: async rows => batches.push(rows) } },
+    records, async r => saved.push(r), 'reviews', 2);
+  assert.deepEqual(result, { persisted: 2, pending: 1 });
+  assert.equal(batches[0][0].observedAt, '2026-10-20T23:00:00.000Z');
+  assert.equal(saved.length, 2);
+  assert.equal(records.filter(r => r.kind === 'attempt').length, 0);
+});
+
+test('fresh Tiger CCU reuses known zero with its source time and becomes due before tomorrow', async () => {
+  const { reusableCcu } = await import('./collect-next-fest.mjs');
+  const evidence = { queries: { roster_metrics: { rows: [] }, roster_ccu_window: { rows: [
+    { appid: 1, current_players: 0, window_end: '2026-10-21T02:00:00.000Z' },
+    { appid: 2, current_players: 50, window_end: '2026-10-20T06:00:00.000Z' },
+    { appid: 3, current_players: null, window_end: start },
+  ] } } };
+  assert.deepEqual(reusableCcu(evidence, start).map(r => [r.appid, r.summary.playerCount, r.observedAt]),
+    [[1, 0, '2026-10-21T02:00:00.000Z']]);
+});
+
+test('persistence failure stops collection before the next request, retaining the result for replay', async () => {
+  const h = harness({ onResult: async () => { throw new Error('checkpoint unavailable'); } });
+  await assert.rejects(collectSignal(h.options), /checkpoint unavailable/);
+  assert.deepEqual(h.saved.map(r => r.kind), ['attempt', 'result']);
+});
+
+test('Tiger publication requires persistence receipts and accepts genuinely newer source observations', () => {
+  const { html, ids } = fixture();
+  const sourceAt = '2026-10-21T04:01:00.000Z';
+  const records = ids.map(appid => ({ kind: 'result', signal: 'ccu', appid, at: start,
+    status: 'success', summary: { playerCount: 1 } }));
+  const evidence = { source: 'tiger', checkedAt: sourceAt, queries: {
+    roster_metrics: { rows: ids.map(appid => ({ appid })) },
+    roster_ccu_window: { rows: ids.map(appid => ({ appid, current_players: 2, first_players: 1,
+      observed_peak: 2, samples: 2, window_start: start, window_end: sourceAt })) },
+  } };
+  const exported = enrichAtlas(html, evidence);
+  assert.throws(() => verifyDailySnapshot(exported, records, '2026-10-21'), /uncommitted/);
+  records.push(...records.map(r => ({ kind: 'persisted', appid: r.appid, signal: r.signal, at: r.at })));
+  assert.equal(verifyDailySnapshot(exported, records, '2026-10-21').successful, 7218);
+  const sameTimeMismatch = enrichAtlas(html, { ...evidence, queries: { ...evidence.queries,
+    roster_ccu_window: { rows: evidence.queries.roster_ccu_window.rows.map(r => ({ ...r, window_end: start })) },
+  } });
+  assert.throws(() => verifyDailySnapshot(sameTimeMismatch, records, '2026-10-21'), /differs/);
+});
+
+test('reusing Tiger CCU does not write another sample or advance the validation time', async () => {
+  const { persistResults } = await import('./collect-next-fest.mjs');
+  const records = [{ kind: 'result', signal: 'ccu', appid: 1, at: start,
+    observedAt: '2026-10-21T02:00:00.000Z', source: 'tiger', status: 'success', summary: { playerCount: 0 } }];
+  const expectEmpty = async rows => assert.equal(rows.length, 0);
+  await persistResults({ metrics: { insertCcuSnapshots: expectEmpty,
+    upsertDailyCcuPeaks: expectEmpty, checkpointDemoCcuValidation: expectEmpty } }, records, async () => {}, 'ccu');
+  assert.equal(records.at(-1).kind, 'persisted');
 });

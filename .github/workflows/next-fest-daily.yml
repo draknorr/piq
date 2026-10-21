@@ -5,6 +5,11 @@ on:
     - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'Replay retained observations without Steam requests, or collect after replay is complete'
+        type: choice
+        options: ['replay', 'collect']
+        default: 'replay'
       batch_size:
         description: '10 for the initial canary; 7218 for the full roster'
         type: choice
@@ -25,7 +30,7 @@ permissions:
 
 jobs:
   window:
-    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_NEXT_FEST_COLLECTION == 'true'
+    if: vars.ENABLE_NEXT_FEST_TIGER_WRITES == 'true' && (github.event_name == 'workflow_dispatch' || vars.ENABLE_NEXT_FEST_COLLECTION == 'true')
     runs-on: ubuntu-latest
     outputs:
       active: ${{ steps.window.outputs.active }}
@@ -56,15 +61,17 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build --filter=@publisheriq/shared
+      - run: pnpm exec turbo run build --filter=@publisheriq/database...
       - id: state
         run: node scripts/ops/next-fest-github-state.mjs 1
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Collect festival observations
-        run: node scripts/ops/collect-next-fest.mjs --collect --signal=ccu --limit="$BATCH_SIZE"
+        run: node scripts/ops/collect-next-fest.mjs --"$MODE" --signal=ccu --limit="$BATCH_SIZE"
         env:
           BATCH_SIZE: ${{ needs.window.outputs.full == 'true' && '7218' || '10' }}
+          MODE: ${{ inputs.mode == 'replay' && 'replay-only' || 'collect' }}
+          ENABLE_NEXT_FEST_TIGER_WRITES: ${{ vars.ENABLE_NEXT_FEST_TIGER_WRITES }}
           TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
           STEAM_REVIEWS_API_KEY: ${{ secrets.STEAM_REVIEWS_API_KEY }}
       - name: Preserve observations and attempt accounting, including failed runs
@@ -90,15 +97,17 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build --filter=@publisheriq/shared
+      - run: pnpm exec turbo run build --filter=@publisheriq/database...
       - id: state
         run: node scripts/ops/next-fest-github-state.mjs 2
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Collect festival observations
-        run: node scripts/ops/collect-next-fest.mjs --collect --signal=reviews --limit="$BATCH_SIZE"
+        run: node scripts/ops/collect-next-fest.mjs --"$MODE" --signal=reviews --limit="$BATCH_SIZE"
         env:
           BATCH_SIZE: ${{ needs.window.outputs.full == 'true' && '3609' || '10' }}
+          MODE: ${{ inputs.mode == 'replay' && 'replay-only' || 'collect' }}
+          ENABLE_NEXT_FEST_TIGER_WRITES: ${{ vars.ENABLE_NEXT_FEST_TIGER_WRITES }}
           TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
           STEAM_REVIEWS_API_KEY: ${{ secrets.STEAM_REVIEWS_API_KEY }}
       - if: always() && steps.state.outcome == 'success'
@@ -112,7 +121,7 @@ jobs:
 
   publish:
     needs: [window, reviews]
-    if: needs.window.outputs.full == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || inputs.publish)
+    if: inputs.mode != 'replay' && needs.window.outputs.full == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,12 +142,14 @@ jobs:
           atlas=apps/admin/src/app/next-fest/content/atlas.html
           node --input-type=module <<'JS'
           import { readFileSync, readdirSync } from 'node:fs';
+          import { decodeAtlas } from './scripts/ops/export-next-fest-popularity.mjs';
           import { parseJournal, verifyDailySnapshot } from './scripts/ops/collect-next-fest.mjs';
           const day = new Date().toISOString().slice(0, 10);
           const root = '/tmp/next-fest-publish';
           const html = readFileSync(root + '/apps/admin/src/app/next-fest/content/atlas.html', 'utf8');
           const directory = root + '/output/steam-next-fest-2026-10/daily';
           const records = readdirSync(directory).filter(n => n.endsWith('.journal.jsonl')).flatMap(n => parseJournal(readFileSync(directory + '/' + n, 'utf8')));
+          if (decodeAtlas(html).popularity?.source !== 'tiger') throw new Error('Publication requires a Tiger export');
           console.log(verifyDailySnapshot(html, records, day));
           JS
           git fetch origin "$DEFAULT_BRANCH"

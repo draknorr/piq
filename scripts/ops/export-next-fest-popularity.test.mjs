@@ -84,3 +84,28 @@ test('older or missing source rows preserve the successful observation and signe
   assert.deepEqual(changed.reviewDailyGrowth, { net: 5, from: now, to: later });
   assert.equal(buildDemoPopularity({ ...observation, last_reviews_sync: later }, null, changed, later).reviewDailyGrowth, null);
 });
+
+test('Tiger CCU export covers the temporary collection window after the festival ends', async () => {
+  const { readEvidence } = await import('./export-next-fest-popularity.mjs');
+  const calls = [];
+  const client = { query: async (sql, values) => {
+    calls.push({ sql, values });
+    return sql.includes('clock_timestamp') ? { rows: [{ now: '2026-10-28T00:00:00.000Z' }] } : { rows: [] };
+  } };
+  await readEvidence(client, [1]);
+  const ccu = calls.find(c => c.sql.includes('FROM metrics.ccu_snapshots'));
+  assert.equal(ccu.values[2], '2026-11-03T00:00:00.000Z');
+  assert.equal(buildDemoPopularity(observation, { current_players: 3, observed_peak: 10, first_players: 10,
+    samples: 2, window_start: now, window_end: '2026-10-28T00:00:00.000Z' }, null, '2026-10-28T01:00:00.000Z').ccu.current, 3);
+});
+
+test('Tiger export refuses a source older than the current published review', () => {
+  const games = Array.from({ length: 7218 }, (_, i) => ({ appid: i + 1, demos: [i + 10000] }));
+  const data = { games, popularity: { exportedAt: now, demos: { 10000: { review: {
+    total: 100, positive: 80, negative: 20, observedAt: now,
+  } } } } };
+  const html = `<script type="application/octet-stream" id="nf-payload">${gzipSync(JSON.stringify(data)).toString('base64')}</script>`;
+  assert.throws(() => enrichAtlas(html, { source: 'tiger', checkedAt: '2026-10-21T20:00:00.000Z', queries: {
+    roster_metrics: { rows: games.map(g => ({ appid: g.demos[0] })) }, roster_ccu_window: { rows: [] },
+  } }), /finish replay/);
+});

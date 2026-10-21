@@ -88,6 +88,9 @@ export function buildDemoPopularity(row, ccu, previous, exportedAt) {
 export function enrichAtlas(html, evidence) {
   const data = decodeAtlas(html);
   const ids = festivalDemoIds(data);
+  if (evidence.source === 'tiger' && data.popularity?.exportedAt > evidence.checkedAt) {
+    throw new Error('Tiger export is older than the published snapshot');
+  }
   if (!validTime(evidence.checkedAt) || Object.keys(evidence.errors ?? {}).length) {
     throw new Error('Incomplete or failed source reads; keep the last published snapshot');
   }
@@ -101,7 +104,16 @@ export function enrichAtlas(html, evidence) {
   const demos = {};
   for (const id of ids) {
     if (!byId.has(id)) throw new Error(`Missing demo ${id}`);
-    const observation = buildDemoPopularity(byId.get(id), ccuById.get(id), data.popularity?.demos?.[id], evidence.checkedAt);
+    const previous = data.popularity?.demos?.[id];
+    if (evidence.source === 'tiger' && ((previous?.review?.observedAt &&
+      (!byId.get(id).last_reviews_sync || byId.get(id).last_reviews_sync < previous.review.observedAt))
+      || (previous?.ccu?.observedAt && (!ccuById.get(id)?.window_end
+        || ccuById.get(id).window_end < previous.ccu.observedAt
+        || ccuById.get(id).observed_peak < previous.ccu.peak
+        || Number(ccuById.get(id).samples) < previous.ccu.samples)))) {
+      throw new Error(`Tiger is missing published observations for demo ${id}; finish replay before export`);
+    }
+    const observation = buildDemoPopularity(byId.get(id), ccuById.get(id), previous, evidence.checkedAt);
     // The current review already preserves this baseline until a later source
     // observation arrives. Avoid duplicating it and empty fields in the page.
     if (JSON.stringify(observation.reviewBaseline) === JSON.stringify(observation.review)) {
@@ -109,7 +121,7 @@ export function enrichAtlas(html, evidence) {
     }
     demos[id] = Object.fromEntries(Object.entries(observation).filter(([, value]) => value !== null));
   }
-  data.popularity = { exportedAt: evidence.checkedAt, previousExportedAt: data.popularity?.exportedAt ?? null, festivalStart: FESTIVAL_START,
+  data.popularity = { source: evidence.source ?? 'legacy', exportedAt: evidence.checkedAt, previousExportedAt: data.popularity?.exportedAt ?? null, festivalStart: FESTIVAL_START,
     festivalEnd: FESTIVAL_END, collectionEnd: COLLECTION_END, reviewStaleHours: 60, ccuStaleHours: 36, demos };
   return encodeAtlas(html, data);
 }
@@ -126,6 +138,51 @@ export async function readEvidence(client, ids, options = {}) {
     LEFT JOIN ops.sync_status s USING(appid)
     LEFT JOIN ops.demo_ccu_tier_assignments d USING(appid)
     LIMIT 7218`, [ids]);
+  if (!options.rateOnly) {
+    const history = await client.query(`
+      SELECT r.appid, latest.observed_at, latest.snapshot_summary,
+        baseline.observed_at AS baseline_at, baseline.snapshot_summary AS baseline,
+        failed.observed_at AS failed_at
+      FROM unnest($1::integer[]) r(appid)
+      LEFT JOIN LATERAL (
+        SELECT observed_at, snapshot_summary FROM docs.app_source_snapshots
+        WHERE appid = r.appid AND source = 'reviews' AND first_seen_at <= now()
+          AND snapshot_summary->>'status' = 'success'
+        ORDER BY first_seen_at DESC, id DESC LIMIT 1
+      ) latest ON true
+      LEFT JOIN LATERAL (
+        SELECT observed_at, snapshot_summary FROM docs.app_source_snapshots
+        WHERE appid = r.appid AND source = 'reviews' AND first_seen_at >= $2::timestamptz
+          AND first_seen_at < $3::timestamptz AND first_seen_at <= now()
+          AND snapshot_summary->>'status' = 'success'
+        ORDER BY first_seen_at ASC, id ASC LIMIT 1
+      ) baseline ON true
+      LEFT JOIN LATERAL (
+        SELECT observed_at FROM docs.app_source_snapshots
+        WHERE appid = r.appid AND source = 'reviews' AND first_seen_at >= $2::timestamptz
+          AND first_seen_at < $3::timestamptz AND first_seen_at <= now()
+          AND snapshot_summary->>'status' = 'failed'
+        ORDER BY first_seen_at DESC, id DESC LIMIT 1
+      ) failed ON true LIMIT 7218`, [ids, FESTIVAL_START, COLLECTION_END]);
+    const byId = new Map(history.rows.map(row => [row.appid, row]));
+    for (const row of metrics.rows) {
+      const h = byId.get(row.appid);
+      const sourceTime = h?.observed_at ? new Date(h.observed_at).toISOString() : null;
+      const currentTime = row.last_reviews_sync ? new Date(row.last_reviews_sync).toISOString() : null;
+      if (sourceTime && (!currentTime || sourceTime >= currentTime)) Object.assign(row, {
+        total_reviews: h.snapshot_summary.summary.totalReviews,
+        positive_reviews: h.snapshot_summary.summary.positiveReviews,
+        negative_reviews: h.snapshot_summary.summary.negativeReviews, last_reviews_sync: sourceTime,
+      });
+      if (h?.baseline_at) row.review_baseline = {
+        total: h.baseline.summary.totalReviews, positive: h.baseline.summary.positiveReviews,
+        negative: h.baseline.summary.negativeReviews, observedAt: new Date(h.baseline_at).toISOString(),
+      };
+      if (h?.failed_at && (row.last_error_source !== 'reviews' || !row.last_error_at || new Date(h.failed_at) > new Date(row.last_error_at))) {
+        row.last_error_source = 'reviews'; row.last_error_at = h.failed_at;
+      }
+    }
+  }
   const ccu = options.includeCcu === false || options.rateOnly ? { rows: [] } : await client.query(`
     SELECT r.appid, c.* FROM unnest($1::integer[]) r(appid)
     JOIN LATERAL (
@@ -138,12 +195,12 @@ export async function readEvidence(client, ids, options = {}) {
         AND snapshot_time < $3::timestamptz AND snapshot_time <= now()
         AND player_count >= 0
       HAVING count(*) > 0
-    ) c ON true LIMIT 7218`, [ids, FESTIVAL_START, FESTIVAL_END]);
+    ) c ON true LIMIT 7218`, [ids, FESTIVAL_START, COLLECTION_END]);
   const clock = await client.query('SELECT clock_timestamp() AS now LIMIT 1');
   const rate = options.checkRate ? await client.query(`SELECT max_tokens, refill_rate_per_second
     FROM ops.api_rate_limit_state WHERE source = 'reviews' LIMIT 1`) : { rows: [] };
   // Serialize pg Dates exactly once, before validating observation timestamps.
-  return JSON.parse(JSON.stringify({ checkedAt: clock.rows[0].now, errors: {}, queries: {
+  return JSON.parse(JSON.stringify({ source: 'tiger', checkedAt: clock.rows[0].now, errors: {}, queries: {
     roster_metrics: { rows: metrics.rows }, roster_ccu_window: { rows: ccu.rows },
     review_limiter: { rows: rate.rows },
   } }));

@@ -109,6 +109,7 @@ export interface ReviewsSyncDependencies {
 }
 
 interface SuccessfulReviewFetch {
+  observedAt: string;
   app: ClaimedReviewApp;
   summary: ReviewSummary;
 }
@@ -355,13 +356,14 @@ async function persistFetchedBatch(params: {
   if (tiger) {
     if (successes.length > 0) {
       await tiger.reviews.persistReviewSummaryBatch({
-        items: successes.map(({ app, summary }) => ({
+        items: successes.map(({ app, summary, observedAt }) => ({
+          observedAt,
           appid: app.appid,
           lane: app.lane,
           previous: previousSyncData.get(app.appid),
           priorityScore: app.priority_score,
           summary,
-          today,
+          today: observedAt.slice(0, 10),
           velocityTier: app.velocity_tier
         })),
         persistedAt: now.toISOString(),
@@ -706,7 +708,7 @@ export async function runReviewsSync(dependencies: ReviewsSyncDependencies = {})
 
         recordAttemptTelemetry(stats, result.telemetry);
         if (result.status === 'success') {
-          successes.push({ app, summary: result.summary });
+          successes.push({ app, summary: result.summary, observedAt: now().toISOString() });
           continue;
         }
 

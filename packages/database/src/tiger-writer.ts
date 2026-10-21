@@ -783,8 +783,17 @@ export interface ReviewSummaryForPersistence {
   totalReviews: number;
 }
 
+export interface ReviewObservation {
+  appid: number;
+  observedAt: string;
+  status: 'success' | 'failed';
+  summary?: ReviewSummaryForPersistence;
+  errorCode?: string;
+}
+
 export interface PersistReviewSummaryParams {
   appid: number;
+  observedAt?: string;
   lane?: string | null;
   previous: PreviousReviewSyncData | undefined;
   priorityScore?: number | null;
@@ -794,6 +803,9 @@ export interface PersistReviewSummaryParams {
 }
 
 export interface PersistReviewSummaryBatchParams {
+  // An external observation must not reschedule or release regular work.
+  preserveSchedule?: boolean;
+  client?: TigerQueryClient;
   items: PersistReviewSummaryParams[];
   persistedAt?: string;
   workerId: string;
@@ -3478,6 +3490,46 @@ export class TigerMetricsRepository {
     return result.rowCount ?? 0;
   }
 
+  async checkpointDemoCcuValidation(rows: Array<{
+    appid: number;
+    observed_at: string;
+    invalid_skip_until: string;
+    validation_state: 'confirmed_positive' | 'confirmed_zero' | 'suspect_zero' | 'invalid' | 'error';
+  }>): Promise<number> {
+    if (rows.length === 0) return 0;
+    const latest = new Map<number, (typeof rows)[number]>();
+    for (const row of rows) {
+      if (!latest.has(row.appid) || latest.get(row.appid)!.observed_at < row.observed_at) {
+        latest.set(row.appid, row);
+      }
+    }
+    const result = await runQuery(this.pool, 'metrics.checkpointDemoCcuValidation', `
+      INSERT INTO ops.demo_ccu_tier_assignments AS existing (
+        appid, last_ccu_validation_at, last_ccu_validation_state, last_ccu_synced,
+        ccu_fetch_status, ccu_skip_until
+      )
+      SELECT appid, observed_at, validation_state,
+        CASE WHEN validation_state IN ('confirmed_positive', 'confirmed_zero') THEN observed_at END,
+        CASE WHEN validation_state = 'invalid' THEN 'invalid'
+          WHEN validation_state IN ('confirmed_positive', 'confirmed_zero') THEN 'valid' END,
+        CASE WHEN validation_state = 'invalid' THEN invalid_skip_until END
+      FROM jsonb_to_recordset($1::jsonb) AS observed(
+        appid integer, observed_at timestamptz, invalid_skip_until timestamptz, validation_state text
+      )
+      ON CONFLICT (appid) DO UPDATE SET
+        last_ccu_validation_at = EXCLUDED.last_ccu_validation_at,
+        last_ccu_validation_state = EXCLUDED.last_ccu_validation_state,
+        last_ccu_synced = COALESCE(EXCLUDED.last_ccu_synced, existing.last_ccu_synced),
+        ccu_fetch_status = COALESCE(EXCLUDED.ccu_fetch_status, existing.ccu_fetch_status),
+        ccu_skip_until = CASE WHEN EXCLUDED.last_ccu_validation_state IN ('error', 'suspect_zero')
+          THEN existing.ccu_skip_until ELSE EXCLUDED.ccu_skip_until END,
+        updated_at = now()
+      WHERE existing.last_ccu_validation_at IS NULL
+        OR existing.last_ccu_validation_at < EXCLUDED.last_ccu_validation_at
+    `, [jsonRows([...latest.values()])]);
+    return result.rowCount ?? 0;
+  }
+
   async updateDemoCcuTierAssignments(appids: number[], values: JsonRecord): Promise<number> {
     if (appids.length === 0) {
       return 0;
@@ -3509,7 +3561,9 @@ export class TigerMetricsRepository {
     const result = await runQuery(
       this.pool,
       'metrics.updateDemoCcuTierAssignments',
-      `UPDATE ops.demo_ccu_tier_assignments SET ${setClauses.join(', ')} WHERE appid = ANY($1::integer[])`,
+      `UPDATE ops.demo_ccu_tier_assignments SET ${setClauses.join(', ')} WHERE appid = ANY($1::integer[])
+        ${entries.some(([column]) => column === 'last_ccu_validation_at')
+          ? `AND (last_ccu_validation_at IS NULL OR last_ccu_validation_at <= $${entries.findIndex(([column]) => column === 'last_ccu_validation_at') + 2}::timestamptz)` : ''}`,
       [appids, ...entries.map(([, value]) => value)]
     );
 
@@ -4021,13 +4075,16 @@ export class TigerReviewsRepository {
 
     const results: Array<PersistReviewSummaryResult & { hoursSinceLastSync: number | null }> = params.items.map(
       (item) => {
+        const observedAt = item.observedAt ?? nowIso;
+        const observedMs = Date.parse(observedAt);
+        if (!Number.isFinite(observedMs) || observedMs > nowMs) throw new Error('Invalid review observation time');
         const previousTotal = item.previous?.totalReviews ?? 0;
         const previousPositive = item.previous?.positiveReviews ?? 0;
         const reviewsAdded = Math.max(0, item.summary.totalReviews - previousTotal);
         const positiveAdded = Math.max(0, item.summary.positiveReviews - previousPositive);
         const negativeAdded = Math.max(0, reviewsAdded - positiveAdded);
         const hoursSinceLastSync = item.previous?.lastSync
-          ? (nowMs - item.previous.lastSync.getTime()) / (1000 * 60 * 60)
+          ? (observedMs - item.previous.lastSync.getTime()) / (1000 * 60 * 60)
           : null;
         const intervalHours = getReviewCadenceHours({
           lane: item.lane,
@@ -4045,7 +4102,7 @@ export class TigerReviewsRepository {
           intervalHours,
           negativeAdded,
           nextSyncAt,
-          nowIso,
+          nowIso: observedAt,
           positiveAdded,
           reviewsAdded
         };
@@ -4083,17 +4140,17 @@ export class TigerReviewsRepository {
       const result = resultByAppid.get(item.appid)!;
       return {
         appid: item.appid,
-        last_activity_at: result.reviewsAdded > 0 ? nowIso : null,
+        last_activity_at: result.reviewsAdded > 0 ? result.nowIso : null,
         last_known_total_reviews: item.summary.totalReviews,
-        last_reviews_sync: nowIso,
+        last_reviews_sync: result.nowIso,
         next_reviews_sync: result.nextSyncAt,
         reviews_interval_hours: result.intervalHours
       };
     });
 
-    const client = await this.pool.connect();
+    const client = params.client ?? await this.pool.connect();
     try {
-      await runQuery(client, 'reviews.persistReviewSummaryBatch.begin', 'BEGIN');
+      if (!params.client) await runQuery(client, 'reviews.persistReviewSummaryBatch.begin', 'BEGIN');
       await runQuery(
         client,
         'reviews.persistReviewSummaryBatch.reviewDeltas',
@@ -4207,7 +4264,7 @@ export class TigerReviewsRepository {
           FROM input_rows
           ON CONFLICT (appid)
           DO UPDATE SET
-            metric_date = EXCLUDED.metric_date,
+            metric_date = GREATEST(legacy.latest_daily_metrics.metric_date, EXCLUDED.metric_date),
             negative_reviews = EXCLUDED.negative_reviews,
             positive_reviews = EXCLUDED.positive_reviews,
             review_score = EXCLUDED.review_score,
@@ -4222,21 +4279,21 @@ export class TigerReviewsRepository {
         `
           UPDATE ops.sync_status AS status
           SET
-            consecutive_errors = 0,
-            last_error_at = NULL,
-            last_error_message = NULL,
-            last_error_source = NULL,
+            consecutive_errors = CASE WHEN $3::boolean THEN status.consecutive_errors ELSE 0 END,
+            last_error_at = CASE WHEN $3::boolean THEN status.last_error_at ELSE NULL END,
+            last_error_message = CASE WHEN $3::boolean THEN status.last_error_message ELSE NULL END,
+            last_error_source = CASE WHEN $3::boolean THEN status.last_error_source ELSE NULL END,
             last_known_total_reviews = rows.last_known_total_reviews,
             last_reviews_sync = rows.last_reviews_sync,
-            next_reviews_sync = rows.next_reviews_sync,
-            reviews_interval_hours = rows.reviews_interval_hours,
-            reviews_claimed_at = NULL,
-            reviews_claim_expires_at = NULL,
-            reviews_claimed_by = NULL,
-            reviews_priority_override_bucket = NULL,
-            reviews_priority_override_reason = NULL,
-            reviews_priority_override_score = NULL,
-            reviews_priority_override_until = NULL,
+            next_reviews_sync = CASE WHEN $3::boolean THEN status.next_reviews_sync ELSE rows.next_reviews_sync END,
+            reviews_interval_hours = CASE WHEN $3::boolean THEN status.reviews_interval_hours ELSE rows.reviews_interval_hours END,
+            reviews_claimed_at = CASE WHEN $3::boolean THEN status.reviews_claimed_at ELSE NULL END,
+            reviews_claim_expires_at = CASE WHEN $3::boolean THEN status.reviews_claim_expires_at ELSE NULL END,
+            reviews_claimed_by = CASE WHEN $3::boolean THEN status.reviews_claimed_by ELSE NULL END,
+            reviews_priority_override_bucket = CASE WHEN $3::boolean THEN status.reviews_priority_override_bucket ELSE NULL END,
+            reviews_priority_override_reason = CASE WHEN $3::boolean THEN status.reviews_priority_override_reason ELSE NULL END,
+            reviews_priority_override_score = CASE WHEN $3::boolean THEN status.reviews_priority_override_score ELSE NULL END,
+            reviews_priority_override_until = CASE WHEN $3::boolean THEN status.reviews_priority_override_until ELSE NULL END,
             last_activity_at = COALESCE(rows.last_activity_at, status.last_activity_at),
             updated_at = now()
           FROM jsonb_to_recordset($1::jsonb) AS rows (
@@ -4248,9 +4305,10 @@ export class TigerReviewsRepository {
             reviews_interval_hours integer
           )
           WHERE status.appid = rows.appid
-            AND status.reviews_claimed_by = $2
+            AND (($3::boolean AND status.reviews_claimed_by IS NULL)
+              OR (NOT $3::boolean AND status.reviews_claimed_by = $2))
         `,
-        [jsonRows(statusRows), params.workerId]
+        [jsonRows(statusRows), params.workerId, params.preserveSchedule ?? false]
       );
 
       if ((statusResult.rowCount ?? 0) !== params.items.length) {
@@ -4259,14 +4317,80 @@ export class TigerReviewsRepository {
         );
       }
 
-      await runQuery(client, 'reviews.persistReviewSummaryBatch.commit', 'COMMIT');
+      if (!params.client) await runQuery(client, 'reviews.persistReviewSummaryBatch.commit', 'COMMIT');
       return results.map(({ hoursSinceLastSync: _hoursSinceLastSync, ...result }) => result);
+    } catch (error) {
+      if (!params.client) await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      if (!params.client) client.release?.();
+    }
+  }
+
+  async persistReviewObservations(observations: ReviewObservation[]): Promise<number> {
+    if (observations.length === 0) return 0;
+    if (observations.length > 25) throw new Error('Review observation batches are limited to 25');
+    for (const row of observations) {
+      if (!Number.isSafeInteger(row.appid) || row.appid <= 0 || !Number.isFinite(Date.parse(row.observedAt))
+        || Date.parse(row.observedAt) > Date.now()) throw new Error('Invalid review observation');
+      if (row.status === 'success' && (!row.summary
+        || ![row.summary.totalReviews, row.summary.positiveReviews, row.summary.negativeReviews]
+          .every(value => Number.isSafeInteger(value) && value >= 0)
+        || row.summary.totalReviews !== row.summary.positiveReviews + row.summary.negativeReviews)) {
+        throw new Error('Inconsistent review observation');
+      }
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const archived = await runQuery(client, 'reviews.persistReviewObservations.archive', `
+        INSERT INTO docs.app_source_snapshots (
+          appid, source, observed_at, first_seen_at, last_seen_at, content_hash,
+          trigger_reason, snapshot_summary
+        )
+        SELECT appid, 'reviews', observed_at, observed_at, observed_at,
+          md5(snapshot_summary::text), 'next_fest', snapshot_summary
+        FROM jsonb_to_recordset($1::jsonb) AS rows(
+          appid integer, observed_at timestamptz, snapshot_summary jsonb
+        )
+        ON CONFLICT (appid, source, observed_at) WHERE source = 'reviews' DO NOTHING
+      `, [jsonRows(observations.map(row => ({ appid: row.appid, observed_at: row.observedAt,
+        snapshot_summary: { status: row.status, ...(row.summary ? { summary: row.summary } : {}),
+          ...(row.errorCode ? { errorCode: row.errorCode } : {}) } })))]);
+      const latest = new Map<number, ReviewObservation>();
+      for (const row of observations.filter(row => row.status === 'success')) {
+        if (!latest.has(row.appid) || latest.get(row.appid)!.observedAt < row.observedAt) latest.set(row.appid, row);
+      }
+      // Do not steal regular claims, postpone regular work, or replay older
+      // totals over newer values. The row lock also excludes new regular claims.
+      const locked = await client.query<PreviousReviewSyncRow>(`
+        SELECT s.appid, s.last_reviews_sync, s.last_activity_at, s.last_known_total_reviews,
+          s.consecutive_errors, s.reviews_interval_hours, false AS is_pinned,
+          m.total_reviews, m.positive_reviews
+        FROM ops.sync_status s LEFT JOIN legacy.latest_daily_metrics m USING(appid)
+        WHERE s.appid = ANY($1::integer[]) AND s.reviews_claimed_by IS NULL
+        ORDER BY s.appid FOR UPDATE OF s SKIP LOCKED
+      `, [[...latest.keys()]]);
+      const items: PersistReviewSummaryParams[] = locked.rows.flatMap(row => {
+        const observation = latest.get(row.appid)!;
+        const lastSync = normalizeTimestamp(row.last_reviews_sync);
+        if (lastSync && lastSync >= observation.observedAt) return [];
+        return [{ appid: row.appid, observedAt: observation.observedAt,
+          today: observation.observedAt.slice(0, 10), summary: observation.summary!, previous: {
+            consecutiveErrors: parseNumber(row.consecutive_errors),
+            intervalHours: normalizeIntervalHours(parseNumber(row.reviews_interval_hours)),
+            isPinned: false, lastActivityAt: null, lastSync: lastSync ? new Date(lastSync) : null,
+            positiveReviews: parseNumber(row.positive_reviews),
+            totalReviews: parseNumber(row.total_reviews ?? row.last_known_total_reviews),
+          } }];
+      });
+      await this.persistReviewSummaryBatch({ items, workerId: 'next-fest', preserveSchedule: true, client });
+      await client.query('COMMIT');
+      return archived.rowCount ?? 0;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release?.();
-    }
+    } finally { client.release?.(); }
   }
 
   async persistReviewFailuresBatch(params: PersistReviewFailureBatchParams): Promise<number> {

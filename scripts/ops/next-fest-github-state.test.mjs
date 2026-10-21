@@ -35,3 +35,8 @@ test('final artifacts allow recovery after publish failure; missing successful h
     jobsByRun: { 2: [job('ccu'), job('reviews')] }, now: now + 86400000 }), /no final journal/);
   assert.equal(selectState({ ...options, runs: [previous], jobsByRun: { 2: [job('ccu', 'skipped')] } }), null);
 });
+
+test('a preceding run must be fully drained even when its CCU artifact already exists', () => {
+  assert.throws(() => selectState({ ...options, runs: [{ ...previous, status: 'in_progress' }],
+    artifacts: [artifact(2, 1)], jobsByRun: { 2: [job('ccu'), job('reviews')] } }), /still active/);
+});
