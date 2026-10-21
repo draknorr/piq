@@ -9,6 +9,7 @@ import type {
 import type { ClaimedReviewApp } from '@publisheriq/database/ingestion';
 import {
   ReviewRateLimitCircuit,
+  fetchReviewSummary,
   type ReviewSummaryFetchOptions,
   type ReviewSummaryFetchResult
 } from '../apis/reviews.js';
@@ -342,4 +343,44 @@ test('Reviews worker releases unprocessed claims on a retry deadline without cir
   assert.equal(failureBatches[0]?.failures.length, 1);
   assert.deepEqual(releases[0], [2]);
   assert.equal(jobUpdates.at(-1)?.status, 'completed');
+});
+
+
+test('mixed review responses persist valid peers and keep null totals out of metric writes', async () => {
+  const successes: PersistReviewSummaryBatchParams[] = [];
+  const failures: PersistReviewFailureBatchParams[] = [];
+  const tiger = fakeTiger({ successBatches: successes, failureBatches: failures });
+  const stats = await runReviewsSync({
+    acquireRateToken: async () => ({ granted: true, waitMs: 0 }),
+    claimApps: async () => [claimedApp(1), claimedApp(2), claimedApp(3)],
+    env: tigerEnv(),
+    now: () => new Date('2026-10-20T23:50:00.000Z'),
+    fetchSummary: (appid, options) => fetchReviewSummary(appid, {
+      ...options,
+      apiKey: 'test-reviews-key',
+      limiter: { acquire: async () => {} },
+      fetchImpl: async () => new Response(JSON.stringify({ response: { query_summary: {
+        total_reviews: appid === 1 ? null : appid === 2 ? 100 : 0,
+        total_positive: appid === 2 ? 80 : 0,
+        total_negative: appid === 2 ? 20 : 0,
+        review_score: appid === 3 ? 0 : 8,
+        review_score_desc: appid === 3 ? 'No user reviews' : 'Very Positive',
+      } } })),
+    }),
+    getTiger: () => tiger,
+    releaseClaims: async ({ appids }) => appids.length,
+  });
+  assert.deepEqual(successes.flatMap((batch) => batch.items.map((item) => item.appid)), [2, 3]);
+  assert.deepEqual(failures.flatMap((batch) => batch.failures.map((item) => item.appid)), [1]);
+  assert.equal(stats.appsFailed, 1);
+  assert.equal(successes[0]?.persistedAt, '2026-10-20T23:50:00.000Z');
+  assert.equal(successes[0]?.items[0]?.today, '2026-10-20');
+  assert.deepEqual(successes[0]?.items[0]?.summary, {
+    appid: 2, totalReviews: 100, positiveReviews: 80, negativeReviews: 20,
+    reviewScore: 8, reviewScoreDesc: 'Very Positive',
+  });
+  assert.deepEqual(successes[0]?.items[1]?.summary, {
+    appid: 3, totalReviews: 0, positiveReviews: 0, negativeReviews: 0,
+    reviewScore: 0, reviewScoreDesc: 'No user reviews',
+  });
 });
