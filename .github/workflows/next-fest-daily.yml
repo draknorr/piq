@@ -61,7 +61,7 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build --filter=@publisheriq/database...
+      - run: pnpm exec turbo run build --filter=@publisheriq/database... --filter=@publisheriq/shared
       - id: state
         run: node scripts/ops/next-fest-github-state.mjs 1
         env:
@@ -97,7 +97,7 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build --filter=@publisheriq/database...
+      - run: pnpm exec turbo run build --filter=@publisheriq/database... --filter=@publisheriq/shared
       - id: state
         run: node scripts/ops/next-fest-github-state.mjs 2
         env:
