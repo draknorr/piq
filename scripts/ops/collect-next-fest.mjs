@@ -342,8 +342,10 @@ async function main() {
     pool = new Pool({ connectionString: process.env.TIGER_PRIMARY_URL, max: 1, connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 10000, application_name: 'next-fest-tiger',
       options: '-c statement_timeout=8000 -c lock_timeout=2000' });
-    const surface = await pool.query(`SELECT indexname FROM pg_indexes
-      WHERE schemaname = 'docs' AND indexname = 'idx_app_source_snapshots_review_observation' LIMIT 1`);
+    const surface = await pool.query(`SELECT i.relname AS indexname FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_namespace n ON n.oid = i.relnamespace
+      WHERE n.nspname = 'docs' AND i.relname = 'idx_app_source_snapshots_review_observation'
+        AND x.indisvalid AND x.indisready AND x.indisunique LIMIT 1`);
     if (surface.rows.length !== 1) throw new Error('Approved review snapshot migration must be applied before any festival writes');
     const tiger = createTigerWriterForPool(pool);
     // Retain pre-cutover review baselines with their source times. They are
