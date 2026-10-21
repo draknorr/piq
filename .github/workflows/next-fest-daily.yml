@@ -1,0 +1,154 @@
+name: Next Fest Daily Snapshot
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: '10 for the initial canary; 7218 for the full roster'
+        type: choice
+        options: ['10', '7218']
+        default: '10'
+      publish:
+        description: 'Publish the completed full-roster snapshot to /next-fest'
+        type: boolean
+        default: false
+
+concurrency:
+  group: next-fest-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  window:
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_NEXT_FEST_COLLECTION == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      active: ${{ steps.window.outputs.active }}
+      full: ${{ steps.window.outputs.full }}
+    steps:
+      - id: window
+        env:
+          BATCH_SIZE: ${{ inputs.batch_size || '7218' }}
+        run: |
+          today=$(date -u +%F)
+          if [[ "$today" > '2026-10-19' && "$today" < '2026-11-03' ]]; then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$BATCH_SIZE" == '7218' ]]; then echo 'full=true' >> "$GITHUB_OUTPUT"; fi
+
+  ccu:
+    needs: window
+    if: needs.window.outputs.active == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec turbo run build --filter=@publisheriq/shared
+      - id: state
+        run: node scripts/ops/next-fest-github-state.mjs 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Collect festival observations
+        run: node scripts/ops/collect-next-fest.mjs --collect --signal=ccu --limit="$BATCH_SIZE"
+        env:
+          BATCH_SIZE: ${{ needs.window.outputs.full == 'true' && '7218' || '10' }}
+          TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+          STEAM_REVIEWS_API_KEY: ${{ secrets.STEAM_REVIEWS_API_KEY }}
+      - name: Preserve observations and attempt accounting, including failed runs
+        if: always() && steps.state.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-fest-state-1
+          path: |
+            output/steam-next-fest-2026-10/daily/
+            apps/admin/src/app/next-fest/content/atlas.html
+          retention-days: 21
+
+  reviews:
+    needs: [window, ccu]
+    if: needs.window.outputs.active == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec turbo run build --filter=@publisheriq/shared
+      - id: state
+        run: node scripts/ops/next-fest-github-state.mjs 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Collect festival observations
+        run: node scripts/ops/collect-next-fest.mjs --collect --signal=reviews --limit="$BATCH_SIZE"
+        env:
+          BATCH_SIZE: ${{ needs.window.outputs.full == 'true' && '3609' || '10' }}
+          TIGER_PRIMARY_URL: ${{ secrets.TIGER_PRODUCTION_URL }}
+          STEAM_REVIEWS_API_KEY: ${{ secrets.STEAM_REVIEWS_API_KEY }}
+      - if: always() && steps.state.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-fest-state-2
+          path: |
+            output/steam-next-fest-2026-10/daily/
+            apps/admin/src/app/next-fest/content/atlas.html
+          retention-days: 21
+
+  publish:
+    needs: [window, reviews]
+    if: needs.window.outputs.full == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'schedule' || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-fest-state-2
+          path: /tmp/next-fest-publish
+      - name: Publish only the atlas, preserving concurrent site edits
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          atlas=apps/admin/src/app/next-fest/content/atlas.html
+          node --input-type=module <<'JS'
+          import { readFileSync, readdirSync } from 'node:fs';
+          import { parseJournal, verifyDailySnapshot } from './scripts/ops/collect-next-fest.mjs';
+          const day = new Date().toISOString().slice(0, 10);
+          const root = '/tmp/next-fest-publish';
+          const html = readFileSync(root + '/apps/admin/src/app/next-fest/content/atlas.html', 'utf8');
+          const directory = root + '/output/steam-next-fest-2026-10/daily';
+          const records = readdirSync(directory).filter(n => n.endsWith('.journal.jsonl')).flatMap(n => parseJournal(readFileSync(directory + '/' + n, 'utf8')));
+          console.log(verifyDailySnapshot(html, records, day));
+          JS
+          git fetch origin "$DEFAULT_BRANCH"
+          if ! git diff --quiet "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" -- "$atlas"; then
+            echo 'Atlas changed during collection; retain the artifact for review.' >&2
+            exit 1
+          fi
+          git checkout -B next-fest-publish "origin/$DEFAULT_BRANCH"
+          cp "/tmp/next-fest-publish/$atlas" "$atlas"
+          git add -- "$atlas"
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Refresh Next Fest demo reception snapshot'
+          git push origin "HEAD:$DEFAULT_BRANCH"
