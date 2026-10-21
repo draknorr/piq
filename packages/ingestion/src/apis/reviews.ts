@@ -8,40 +8,16 @@ const log = logger.child({ component: 'ReviewsAPI' });
  * Steam Reviews API response
  */
 interface ReviewsResponse {
-  success: number;
-  query_summary: {
-    num_reviews: number;
-    review_score: number;
-    review_score_desc: string;
-    total_positive: number;
-    total_negative: number;
-    total_reviews: number;
-  };
-  reviews: Array<{
-    recommendationid: string;
-    author: {
-      steamid: string;
-      num_games_owned: number;
+  response?: {
+    query_summary?: {
       num_reviews: number;
-      playtime_forever: number;
-      playtime_last_two_weeks: number;
-      playtime_at_review: number;
-      last_played: number;
+      review_score: number;
+      review_score_desc: string;
+      total_positive: number;
+      total_negative: number;
+      total_reviews: number;
     };
-    language: string;
-    review: string;
-    timestamp_created: number;
-    timestamp_updated: number;
-    voted_up: boolean;
-    votes_up: number;
-    votes_funny: number;
-    weighted_vote_score: string;
-    comment_count: number;
-    steam_purchase: boolean;
-    received_for_free: boolean;
-    written_during_early_access: boolean;
-  }>;
-  cursor: string;
+  };
 }
 
 /**
@@ -222,7 +198,19 @@ export async function fetchReviewSummary(
   appid: number,
   options: ReviewSummaryFetchOptions = {}
 ): Promise<ReviewSummaryFetchResult> {
-  const url = `${API_URLS.STEAM_STORE}/appreviews/${appid}?json=1&num_per_page=0&filter=all&language=all&review_type=all&purchase_type=all`;
+  // Valve retires /appreviews on October 22, 2026. The Service API wraps
+  // results in `response` and takes numeric filters inside input_json.
+  // Zero means the default 20 records on this endpoint; one is the smallest
+  // verified payload. Only the lifetime summary is retained here.
+  const url = new URL(`${API_URLS.STEAM_WEB}/IUserReviewsService/GetAppReviews/v1/`);
+  url.searchParams.set('input_json', JSON.stringify({
+    appid,
+    filter: 0, // Helpful: the replacement for the legacy filter=all.
+    languages: ['all'],
+    review_type: 0,
+    purchase_type: 1,
+    num_per_page: 1,
+  }));
   const telemetry = createReviewAttemptTelemetry();
   const fetchImpl = options.fetchImpl ?? fetch;
   const limiter = options.limiter ?? rateLimiters.reviews;
@@ -281,7 +269,7 @@ export async function fetchReviewSummary(
     let failure: ReviewSummaryFetchResult | null = null;
 
     try {
-      const response = await fetchImpl(url, {
+      const response = await fetchImpl(url.toString(), {
         signal: AbortSignal.timeout(requestTimeoutMs)
       });
 
@@ -299,14 +287,32 @@ export async function fetchReviewSummary(
           });
         }
 
-        if (body.success !== 1 || !body.query_summary) {
+        if (!body?.response?.query_summary) {
           return reviewFailure(telemetry, {
             errorCode: 'invalid_response',
             errorMessage: `Steam returned an invalid review summary for ${appid}`
           });
         }
 
-        const summary = body.query_summary;
+        const summary = body.response.query_summary;
+        // A successful envelope can still contain an unknown or malformed
+        // total. Keep it a failed observation so valid batch members persist;
+        // never turn an unknown count into zero or overwrite prior evidence.
+        if (![summary.total_reviews, summary.total_positive, summary.total_negative].every(
+          (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ) || summary.total_positive + summary.total_negative !== summary.total_reviews) {
+          return reviewFailure(telemetry, {
+            errorCode: 'invalid_response',
+            errorMessage: `Steam returned unknown or invalid review counts for ${appid}`
+          });
+        }
+        if (!Number.isSafeInteger(summary.review_score) || summary.review_score < 0 ||
+          typeof summary.review_score_desc !== 'string' || summary.review_score_desc.length === 0) {
+          return reviewFailure(telemetry, {
+            errorCode: 'invalid_response',
+            errorMessage: `Steam returned unknown or invalid review scores for ${appid}`
+          });
+        }
         return {
           circuitOpened: false,
           status: 'success',

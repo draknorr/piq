@@ -4,7 +4,7 @@ import { fetchReviewHistogram, fetchReviewSummary, parseRetryAfterMs, ReviewRate
 
 function summaryResponse(status = 200, headers?: Record<string, string>): Response {
   return new Response(
-    JSON.stringify({
+    JSON.stringify({ response: {
       cursor: '*',
       query_summary: {
         num_reviews: 0,
@@ -15,8 +15,7 @@ function summaryResponse(status = 200, headers?: Record<string, string>): Respon
         total_reviews: 100
       },
       reviews: [],
-      success: 1
-    }),
+    } }),
     {
       headers: {
         'content-type': 'application/json',
@@ -46,6 +45,96 @@ function histogramResponse(rollups: unknown[], success = 1): Response {
     }
   );
 }
+
+test('review summaries preserve unknown counts as failed observations and accept explicit zero', async () => {
+  for (const count of [null, undefined, '100', -1, 1.5, 0, 100]) {
+    const result = await fetchReviewSummary(10, {
+      limiter: { acquire: async () => {} },
+      fetchImpl: async () => new Response(JSON.stringify({response: {query_summary: {
+        total_reviews: count, total_positive: count, total_negative: 0,
+        review_score: 0, review_score_desc: 'No user reviews'
+      }}})),
+    });
+    assert.equal(result.status, typeof count === 'number' && Number.isInteger(count) && count >= 0
+      ? 'success' : 'failed');
+    assert.equal(result.telemetry.attempts, 1);
+    if (result.status === 'failed') assert.equal(result.errorCode, 'invalid_response');
+    if (result.status === 'success') assert.equal(result.summary.totalReviews, count);
+  }
+});
+
+test('review summary requests use the public Web API with all-language lifetime counts', async () => {
+  const result = await fetchReviewSummary(4349200, {
+    limiter: { acquire: async () => {} },
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      assert.equal(url.origin + url.pathname,
+        'https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/');
+      assert.deepEqual(JSON.parse(url.searchParams.get('input_json')!), {
+        appid: 4349200, filter: 0, languages: ['all'], review_type: 0,
+        purchase_type: 1, num_per_page: 1,
+      });
+      assert.equal(url.searchParams.has('key'), false);
+      return summaryResponse();
+    },
+  });
+  assert.equal(result.status, 'success');
+  if (result.status === 'success') assert.deepEqual(result.summary, {
+    appid: 4349200,
+    totalReviews: 100,
+    positiveReviews: 80,
+    negativeReviews: 20,
+    reviewScore: 8,
+    reviewScoreDesc: 'Very Positive',
+  });
+});
+
+test('review summaries reject incomplete counts and scores without retrying or falling back', async () => {
+  const valid = {
+    total_reviews: 100, total_positive: 80, total_negative: 20,
+    review_score: 8, review_score_desc: 'Very Positive',
+  };
+  const invalidSummaries = [
+    ...['total_reviews', 'total_positive', 'total_negative'].flatMap((field) =>
+      [undefined, null, '0', -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map((value) =>
+        ({ ...valid, [field]: value }))),
+    ...[undefined, null, '8', -1, 0.5].map((review_score) => ({ ...valid, review_score })),
+    ...[undefined, null, 8, ''].map((review_score_desc) => ({ ...valid, review_score_desc })),
+  ];
+  for (const query_summary of invalidSummaries) {
+    const result = await fetchReviewSummary(10, {
+      limiter: { acquire: async () => {} },
+      fetchImpl: async () => new Response(JSON.stringify({ response: { query_summary } })),
+    });
+    assert.equal(result.status, 'failed');
+    assert.equal(result.telemetry.attempts, 1);
+    assert.equal(result.telemetry.retries, 0);
+    if (result.status === 'failed') assert.equal(result.errorCode, 'invalid_response');
+  }
+});
+
+test('review summaries reject malformed JSON', async () => {
+  const result = await fetchReviewSummary(10, {
+    limiter: { acquire: async () => {} },
+    fetchImpl: async () => new Response('{'),
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.telemetry.attempts, 1);
+  if (result.status === 'failed') assert.equal(result.errorCode, 'invalid_response');
+});
+
+test('review summaries reject missing envelopes and inconsistent vote totals', async () => {
+  for (const body of [null, {}, {success: 1, query_summary: {}}, {response: {
+    query_summary: {total_reviews: 100, total_positive: 80, total_negative: 21},
+  }}]) {
+    const result = await fetchReviewSummary(10, {
+      limiter: { acquire: async () => {} },
+      fetchImpl: async () => new Response(JSON.stringify(body)),
+    });
+    assert.equal(result.status, 'failed');
+    assert.equal(result.telemetry.attempts, 1);
+  }
+});
 
 test('fetchReviewHistogram distinguishes data from an empty successful response', async () => {
   const originalFetch = globalThis.fetch;

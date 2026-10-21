@@ -131,46 +131,64 @@ https://store.steampowered.com/api/appdetails/?appids=730
 
 ### Steam Reviews API
 
-**Purpose:** Get review counts and sentiment
+**Purpose:** Get lifetime review counts and sentiment.
+
+Valve [announced](https://steamcommunity.com/groups/steamworks/announcements/detail/676258795703241581) retirement of `/appreviews` on October 22, 2026. The replacement is documented in [IUserReviewsService](https://partner.steamgames.com/doc/webapi/IUserReviewsService).
 
 **Endpoint:**
-```
-GET https://store.steampowered.com/appreviews/{appid}
-```
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `json` | int | Yes | Set to 1 for JSON response |
-| `num_per_page` | int | No | Reviews to return (0 for summary only) |
-| `filter` | string | No | all, recent, updated |
-| `language` | string | No | Language filter |
-| `purchase_type` | string | No | all, steam, non_steam_purchase |
-
-**Example Request:**
-```
-https://store.steampowered.com/appreviews/730?json=1&num_per_page=0
+```text
+GET https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/
 ```
 
-**Response:**
+Send the following object as the URL-encoded `input_json` query parameter:
+
 ```json
 {
-  "success": 1,
-  "query_summary": {
-    "num_reviews": 0,
-    "review_score": 8,
-    "review_score_desc": "Very Positive",
-    "total_positive": 4500000,
-    "total_negative": 500000,
-    "total_reviews": 5000000
-  },
-  "reviews": [],
-  "cursor": "*"
+  "appid": 730,
+  "filter": 0,
+  "languages": ["all"],
+  "review_type": 0,
+  "purchase_type": 1,
+  "num_per_page": 1
 }
 ```
 
-**Rate Limit:** ~20 requests per minute
+`filter=0` (Helpful) preserves the old `filter=all`. Review type 0 and purchase type 1 include both vote types and all purchase types. The first page supplies lifetime summary counts. The existing defaults remain: off-topic activity excluded, English score description, Helpful day range 30, and no date/playtime/hardware restriction. Zero page size returns the default 20 reviews in live probes; one minimizes the payload. Review text is discarded.
+
+**Response fields used by the collector:**
+```json
+{
+  "response": {
+    "query_summary": {
+      "num_reviews": 1,
+      "review_score": 8,
+      "review_score_desc": "Very Positive",
+      "total_positive": 4500000,
+      "total_negative": 500000,
+      "total_reviews": 5000000
+    }
+  }
+}
+```
+
+The replacement has no `success` field: check HTTP status and validate the wrapped summary. Read counts from `query_summary`, not page size or `total_matching`. Missing, null, inconsistent, negative, or noninteger counts and missing/invalid scores are failed observations. Explicit zero counts and score zero are valid. Failures retain successful metrics and `last_reviews_sync`; existing failure metadata and retry scheduling still update.
+
+**Production callers:** `packages/ingestion/src/workers/reviews-worker.ts` via `.github/workflows/reviews-sync.yml`, plus the operator-only `repair-review-truth` script. Both call `fetchReviewSummary`. Histogram collection uses a separate Store endpoint and is unchanged.
+
+**Authentication and capacity:** No key is required. Valve documents a lower shared rate limit for requests without an app-associated publisher key, but publishes no numeric threshold; anonymous results may be cached for ten minutes. A generic `STEAM_API_KEY` does not establish higher access across the catalog. The adapter adds no credential requirement. Existing local/shared one-attempt-per-second limits, retries, Retry-After handling, 403 stop, 429 circuit, and timeouts remain.
+
+The [Web API terms](https://steamcommunity.com/dev/apiterms) specify 100,000 calls/day. A read-only production audit at 2026-10-21 00:35 UTC found 106,502 successful CCU observations and 9,198 review attempts across five completed review jobs in the preceding 24 hours; running jobs and CCU retries are excluded. The user confirmed no known higher allowance. This is a concrete application-wide capacity risk: changing hosts or adding an unassociated key does not resolve it. Preserving all existing workload requires a verified larger allowance or a separately approved allocation plan. This compatibility release does not alter other collectors or reduce review coverage/freshness.
+
+**Compatibility release and rollback (prepared, not deployed):**
+
+- Baseline: `27bea88dac3d85fa7aa95a46befe705754b645b8` on `main`. Release only the review adapter, its API/worker tests, the persistence failure regression, and this documentation. Keep the dirty workspace's workflow, UI, schema, and other changes out.
+- Preserve the hourly `37 * * * *` schedule, 3,000-app cap, 50-minute runtime, single concurrency, shared token bucket, claim lanes, and Tiger storage. Actual GitHub dispatches were delayed to roughly 3–5-hour intervals in the baseline; this change does not repair scheduler delays.
+- Before any production run, obtain the explicit production-write approval required by `CLAUDE.md` and record the capacity decision. The bounded canary is the existing workflow on the release branch with `batch_size=10`. It writes normal claim/rate-token/job state in `ops`, review deltas and daily metrics in `metrics`, and `legacy.latest_daily_metrics`. Risk: medium, because provider limits remain unquantified and valid summaries update current review truth. There is no migration, replay, new collector, or repair-script invocation.
+- Canary acceptance: all attempted observations persist successfully, no 403/429/invalid summaries, coherent totals/votes/scores in the existing tables, advancing successful timestamps, no abandoned claims. Use the exact GitHub run ID to correlate `ops.sync_jobs`, workflow logs, and bounded row reads. On a failed response, verify prior successful values/timestamps are retained rather than replaced with zero.
+- After approval and successful canary/required checks, merge only the scoped release. Observe a naturally scheduled run at the merged SHA, correlate its completed job and persisted rows, and compare throughput/failure telemetry with the baseline (1,579–2,280 successes/run, 0.526–0.760 attempts/second, no 403/429). A manual run alone does not verify scheduled operation. Continued capacity/freshness acceptance needs the normal observation window; a handful of successful probes is insufficient.
+- Roll back by reverting the scoped commit or running the baseline revision before October 22, only if the old endpoint still responds. After retirement, the old endpoint is not a viable fallback: disable only `reviews-sync.yml` and stop an affected in-flight review run if necessary, retaining collected data and allowing normal claim expiry. Do not disable the shared metrics gate, delete observations, or silently fall back to zero. Resume after the forward fix and explicit approval. No database rollback/migration is needed; correcting any proven bad observations would require a separately reviewed repair.
+
+Local verification on October 20: build, type checks, lint (existing warnings), 23 API/worker tests and six review-persistence tests passed. Six paced read-only endpoint probes covered a large game, demo, and genuine zero-review app. Counts were coherent and scores agreed; active counts differed slightly across cached/live responses, so this is contract compatibility evidence, not exact simultaneous equality or sustained-capacity proof. Production persistence and replacement-endpoint scheduled operation remain unverified until rollout.
 
 ---
 

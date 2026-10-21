@@ -1125,6 +1125,10 @@ test('reviews.persistReviewFailuresBatch updates and releases owned claims in on
   assert.match(pool.calls[0]?.sql ?? '', /UPDATE ops\.sync_status AS status/);
   assert.match(pool.calls[0]?.sql ?? '', /reviews_claimed_by = NULL/);
   assert.match(pool.calls[0]?.sql ?? '', /status\.reviews_claimed_by = \$2/);
+  assert.equal(pool.calls.length, 1);
+  // A failed observation must preserve both review truth and its success timestamp.
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /last_reviews_sync|last_known_total_reviews/);
+  assert.doesNotMatch(pool.calls[0]?.sql ?? '', /metrics\.|INSERT|DELETE/);
   const rows = JSON.parse(String(pool.calls[0]?.values?.[0]));
   assert.equal(rows[0]?.next_reviews_sync, '2026-07-29T12:15:00.000Z');
   assert.equal(rows[1]?.next_reviews_sync, '2026-07-29T13:00:00.000Z');
