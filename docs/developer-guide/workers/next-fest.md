@@ -2,7 +2,7 @@
 
 The `/next-fest` atlas remains static. The temporary roster/schedule selects 7,218 verified **demo** IDs; shared Steam clients and Tiger writers persist observations; the daily exporter reads Tiger; the existing atlas-only Git commit uses normal Vercel publication. Parent game IDs remain metadata/link identities.
 
-This is a prepared, **inactive** Tiger transition. No production SQL, writes, job cancellation, activation, or deployment was performed while preparing it. The previous file-only workflow may still be running. Do not equate local validation with production acceptance.
+The Tiger transition was activated with explicit approval on October 21. The first full pass (`39581273257`) finished with 2,563 new successful review observations, zero retries/failures, and 7,218 reused CCU observations. All new review observations matched Tiger; the validated static export was published as `40d53eb5` and its normal Vercel production deployment was verified Ready. Connection/lock checks are bounded samples, not sustained capacity proof.
 
 The schedule stays at 06:17 UTC, October 22–November 2, following the October 21 bootstrap. CCU targets the full roster daily; reviews select up to 3,609 oldest due demos daily, aiming for a two-day rotation. Failures, budgets, backlog replay, and runner delays can extend these intervals. The expiry remains November 3 at 00:00 UTC.
 
@@ -11,7 +11,7 @@ The schedule stays at 06:17 UTC, October 22–November 2, following the October 
 Read AGENTS.md and CLAUDE.md before operating. Live read-only checks at 07:41 UTC October 21 confirmed:
 
 - `metrics.ccu_snapshots` already accepts exact times and genuine zero counts; `(appid, snapshot_time)` identifies replayed observations. Its ID is an identity column.
-- Review totals and daily deltas already exist. They retain one mutable row per app/day, not every observation with its original timestamp. The owner selected reuse of `docs.app_source_snapshots` for exact review history rather than a new table. Candidate `0118_review_source_observations.sql` permits `source='reviews'` and adds a partial unique index for replay. It is not applied.
+- Review totals and daily deltas already exist. They retain one mutable row per app/day, not every observation with its original timestamp. The owner selected reuse of `docs.app_source_snapshots` for exact review history rather than a new table. `0118_review_source_observations.sql`, applied with approval on October 21, permits `source='reviews'` and adds a partial unique index for replay.
 - The live snapshot lifecycle trigger returns immediately for non-storefront sources. No review change events or new projection refresh calls are added.
 - Latest-metrics statements increment `opportunity.cohort_source_revisions_v1`. Existing downstream consumers may therefore do more work. The separate local peak-cache migration is unrelated and was not present in the audited live trigger set.
 - Tiger showed 27/105 connections, zero lock waiters, and 30 cumulative deadlocks. Prior evidence records 0.5 vCPU / 2 GB RAM and existing statement timeouts. Neither the connection sample nor passing unit tests establishes sustained compute headroom.
@@ -26,6 +26,14 @@ Ordinary review workers now pass their individual response times to the batch wr
 The authorized two-key setup and each key's 100,000-call daily allowance remain unchanged. Festival calls continue to use only `STEAM_REVIEWS_API_KEY`. The first key receives no new festival traffic. Existing unauthenticated CCU traffic must not be counted as measured first-key usage.
 
 The live regular-review limiter remains capacity 1, refill 1/second, acquired before every regular attempt including retries. This bounds that consumer at about 86,401 attempts per 24 hours. Festival reservations remain capped at 12,000 attempts in **every rolling 24 hours**, including retries, with CCU/review caps of 8,000/4,000. The combined second-key bound is approximately 98,401, leaving about 1,599 calls. This depends on all shared consumers continuing to use the audited paths; there is no provider usage meter here. The adapter rechecks the regular limiter before every collecting phase. Replay makes zero Steam requests.
+
+### Approved one-time review catch-up
+
+The October 21 manual workflow input `review_catch_up=true` collects only the 2,470 demo IDs pinned in `scripts/ops/next-fest-review-catch-up.json`, selected from the verified export at the 14:05 UTC assessment. Use `mode=collect`, `batch_size=7218`, and `publish=true`. It expires at October 22 00:00 UTC and is never selected by the daily schedule. Current fresh Tiger reviews are still reused. Twenty-five targets had earlier same-day reuse records that became stale; the override preserves those records while allowing their first actual request. Subsequent dispatches retain receipts, daily per-demo attempt limits, and all prior reservations.
+
+Only this explicit catch-up raises the combined rolling cap to 13,500 and the review cap to 6,300. The regular review limiter stays at 1/second, so the audited combined second-key ceiling remains about 99,901 attempts per rolling day; there is no provider usage meter for unrelated/unreported consumers. At approval, the festival journal contained 10,828 attempts: 2,470 primary catch-up calls would bring it to 13,298, leaving at most 202 retry calls under the combined cap. The writer, checkpoints, pacing, error stops, and export remain unchanged. No SQL is required.
+
+Normal runs retain their existing caps. Retained catch-up calls can make the following day's run wait for rolling capacity; counters must not be reset to avoid this wait. Catch-up publication explicitly validates the same date-scoped caps and all normal coverage, persistence, and non-regression guards. Stop the run on failure and retain its artifacts; disable the input or revert this scoped change to withdraw the override. Keep the validated page and all Tiger observations.
 
 Fresh Tiger CCU under 20 hours old and consistent review observations under 36 hours old are reused with original timestamps. These cutoffs allow the next daily/alternate-day pass to become due even when the runner starts early. Later failures prevent reuse. Phase-start reads reduce overlap, but a regular worker can collect a demo after that read; an occasional duplicate request remains possible. Writer timestamp/claim guards prevent that overlap from overwriting newer observations or delaying regular work.
 

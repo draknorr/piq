@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { ATTEMPT_CAP, collectSignal, fetchCcuSummary, parseJournal, reusableReviews, reviewEvidence, verifyDailySnapshot } from './collect-next-fest.mjs';
+import { ATTEMPT_CAP, collectSignal, festivalLimits, selectReviewCatchUpIds, fetchCcuSummary, parseJournal, reusableReviews, reviewEvidence, verifyDailySnapshot } from './collect-next-fest.mjs';
 import { decodeAtlas, enrichAtlas } from './export-next-fest-popularity.mjs';
 
 const start = '2026-10-21T04:00:00.000Z';
@@ -229,4 +230,90 @@ test('reusing Tiger CCU does not write another sample or advance the validation 
   await persistResults({ metrics: { insertCcuSnapshots: expectEmpty,
     upsertDailyCcuPeaks: expectEmpty, checkpointDemoCcuValidation: expectEmpty } }, records, async () => {}, 'ccu');
   assert.equal(records.at(-1).kind, 'persisted');
+});
+
+
+test('the approved catch-up is date-scoped, keeps regular caps, and fits the shared-key worst case', () => {
+  assert.equal(festivalLimits('2026-10-21').attemptCap, 12000);
+  assert.equal(festivalLimits('2026-10-22').signalCaps.reviews, 4000);
+  const catchUp = festivalLimits('2026-10-21', true);
+  assert.equal(catchUp.attemptCap, 13500);
+  assert.equal(catchUp.signalCaps.reviews, 6300);
+  assert.ok(86401 + catchUp.attemptCap < 100000);
+  assert.throws(() => festivalLimits('2026-10-20', true), /expired/);
+  assert.throws(() => festivalLimits('2026-10-22', true), /expired/);
+});
+
+test('catch-up selection stays inside its fixed 2470-ID manifest and preserves oldest-first ordering', () => {
+  const manifest = JSON.parse(readFileSync(new URL('./next-fest-review-catch-up.json', import.meta.url), 'utf8'));
+  const ids = [...manifest.appids].reverse();
+  assert.deepEqual(selectReviewCatchUpIds([1, ...ids, 2], manifest), ids);
+  assert.throws(() => selectReviewCatchUpIds(ids.slice(1), manifest), /Invalid/);
+  assert.throws(() => selectReviewCatchUpIds(ids, { ...manifest, day: '2026-10-22' }), /Invalid/);
+  assert.throws(() => selectReviewCatchUpIds(ids, { ...manifest, appids: [...ids.slice(1), ids[1]] }), /Invalid/);
+});
+
+test('catch-up resumes past the ordinary daily limit without discarding reservations or repeating fresh results', async () => {
+  const prior = [
+    ...Array.from({ length: 7218 }, (_, i) => ({ kind: 'attempt', signal: 'ccu', appid: i + 10000, at: start })),
+    ...Array.from({ length: 3609 }, (_, i) => ({ kind: 'attempt', signal: 'reviews', appid: i + 10000, at: start })),
+    { kind: 'attempt', signal: 'reviews', appid: 10000, at: start },
+    { kind: 'result', signal: 'reviews', appid: 3, at: start, observedAt: '2026-10-20T02:00:00.000Z', attempts: 0, status: 'success', summary },
+    { kind: 'result', signal: 'reviews', appid: 4, at: start, observedAt: '2026-10-20T02:06:00.000Z', attempts: 0, status: 'success', summary },
+  ];
+  const ordinary = harness({ ids: [1, 2, 3, 4], records: structuredClone(prior) });
+  assert.equal((await collectSignal(ordinary.options)).attempts, 0);
+  const h = harness({ ids: [1, 2, 3, 4], records: structuredClone(prior), reviewCatchUp: true });
+  const result = await collectSignal(h.options);
+  assert.equal(result.attempts, 3);
+  assert.equal(result.rollingAttempts, 10831);
+  assert.deepEqual(h.saved.filter(r => r.kind === 'attempt').map(r => r.appid), [1, 2, 3]);
+  assert.deepEqual(h.options.records.slice(0, prior.length), prior);
+  assert.equal((await collectSignal({ ...h.options, records: structuredClone(h.options.records) })).attempts, 0);
+});
+
+test('catch-up enforces its combined and review rolling caps including crash reservations', async () => {
+  const attempts = (signal, count) => Array.from({ length: count }, () => ({ kind: 'attempt', signal, appid: 9000, at: start }));
+  const combined = harness({ ids: [1, 2], reviewCatchUp: true, records: [...attempts('ccu', 7218), ...attempts('reviews', 6281)] });
+  const result = await collectSignal(combined.options);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.rollingAttempts, 13500);
+  assert.equal(result.stopReason, 'rolling_budget_wait_exceeds_deadline');
+  const reviews = harness({ ids: [1], reviewCatchUp: true, records: attempts('reviews', 6300) });
+  assert.equal((await collectSignal(reviews.options)).attempts, 0);
+  await assert.rejects(collectSignal({ ...reviews.options, signal: 'ccu' }), /reviews|review roster/);
+  await assert.rejects(collectSignal({ ...reviews.options, now: () => Date.parse('2026-10-22T04:00:00Z') }), /expired/);
+});
+
+test('publication accepts only the explicit same-day catch-up budget and keeps its hard limit', () => {
+  const { html, ids } = fixture();
+  const records = ids.flatMap(appid => [
+    { kind: 'attempt', signal: 'ccu', appid, at: start },
+    { kind: 'result', signal: 'ccu', appid, at: start, status: 'success', summary: { playerCount: 0 } },
+  ]);
+  records.push(...Array.from({ length: 6080 }, () => ({ kind: 'attempt', signal: 'reviews', appid: ids[0], at: start })));
+  const enriched = enrichAtlas(html, reviewEvidence(html, records, start));
+  assert.throws(() => verifyDailySnapshot(enriched, records, '2026-10-21'), /cap/);
+  assert.equal(verifyDailySnapshot(enriched, records, '2026-10-21', { reviewCatchUp: true }).attempts, 13298);
+  records.push(...Array.from({ length: 203 }, () => ({ kind: 'attempt', signal: 'reviews', appid: ids[0], at: start })));
+  assert.throws(() => verifyDailySnapshot(enriched, records, '2026-10-21', { reviewCatchUp: true }), /cap/);
+});
+
+
+test('catch-up reserves combined-budget capacity for remaining targets despite completed out-of-scope demos', async () => {
+  const records = [
+    ...Array.from({ length: 7218 }, () => ({ kind: 'attempt', signal: 'ccu', appid: 9000, at: start })),
+    ...Array.from({ length: 6279 }, () => ({ kind: 'attempt', signal: 'reviews', appid: 9000, at: start })),
+    ...Array.from({ length: 10 }, (_, i) => ({ kind: 'result', signal: 'reviews', appid: 10000 + i, at: start, status: 'success', summary })),
+  ];
+  const attempted = [];
+  const h = harness({ records, reviewCatchUp: true, fetchSummary: async (appid, options) => {
+    await options.beforeAttempt(); attempted.push(appid);
+    await assert.rejects(options.beforeAttempt(), /Reserve remaining attempts|rolling_budget_wait/);
+    return { status: 'success', summary, telemetry: { attempts: 1 } };
+  } });
+  const result = await collectSignal(h.options);
+  assert.deepEqual(attempted, [1, 2, 3]);
+  assert.equal(result.attempts, 3);
+  assert.equal(result.rollingAttempts, 13500);
 });
