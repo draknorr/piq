@@ -36,6 +36,8 @@ jobs:
           BATCH_SIZE: ${{ inputs.batch_size || '7218' }}
         run: |
           today=$(date -u +%F)
+          # October 21 is bootstrapped manually; do not queue a duplicate behind it.
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$today" < "2026-10-22" ]]; then exit 0; fi
           if [[ "$today" > '2026-10-19' && "$today" < '2026-11-03' ]]; then
             echo 'active=true' >> "$GITHUB_OUTPUT"
           fi

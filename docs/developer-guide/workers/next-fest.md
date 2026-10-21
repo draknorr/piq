@@ -1,6 +1,6 @@
 # Temporary October 2026 Next Fest snapshots
 
-The existing `/next-fest` atlas serves a static HTML payload. `next-fest-daily.yml` refreshes its 7,218 verified demo IDs daily at 06:17 UTC through November 2, 2026. It collects CCU for the whole roster and refreshes up to 3,609 review summaries per UTC day, oldest first. The review target is a full rotation in roughly two days. Delays or failures can extend that interval; the page always shows actual source times and stale/failed states.
+The existing `/next-fest` atlas serves a static HTML payload. `next-fest-daily.yml` refreshes its 7,218 verified demo IDs daily at 06:17 UTC from October 22 through November 2, 2026, following the manual October 21 bootstrap. It collects CCU for the whole roster and refreshes up to 3,609 review summaries per UTC day, oldest first. The review target is a full rotation in roughly two days. Delays or failures can extend that interval; the page always shows actual source times and stale/failed states.
 
 This temporary worker writes files and GitHub artifacts, not database records. It does not change the existing review or CCU jobs, activate the retired demo scheduler, apply SQL, refresh projections, or add dependencies. The previously completed review API migration remains separate. Demo IDs supply players/reviews; parent IDs remain the identity for game metadata and links.
 
