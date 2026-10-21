@@ -70,7 +70,11 @@ The atlas uses its embedded snapshot for player/review weighting in the word clo
 
 The players-versus-reviews chart plots one point per game with both observations known, using `log10(1 + count)` to include genuine zeros. Canvas draws the points without thousands of DOM nodes; SVG retains axes, labels, a focusable selection, and arrow-key navigation. Clicking coincident points cycles their games. The top-ten list uses independently scaled player/review bars, links selection to the chart and inspector, and appears first on narrow screens. Both views follow the existing game/tag filters. Hover details show short names and numbers; missing values display “Data Pending” and never become zero. Observation dates and peak details remain available under “More details,” while the snapshot and CSV preserve collection timestamps and status metadata. All new calculations run in the browser against the same snapshot, with no new API calls, database work, dependencies, or history export.
 
-For a visual-only rollback, revert the markup/script/style changes while preserving the latest `nf-payload` snapshot. Coordinate publication with an in-progress collection run: the existing atlas-change guard intentionally stops that run from overwriting a concurrent UI edit.
+The page design lives in `apps/admin/src/app/next-fest/content/explorer.html`, separate from the data. At request time `route.ts` copies the base64 `nf-payload` snapshot out of `atlas.html` into the explorer's `<!--nf-payload-->` slot (`compose.ts`), so the served page keeps the same `nf-payload` tag. The daily job still rewrites only `atlas.html`. UI edits therefore touch `explorer.html` and never trip the atlas-change guard. If the explorer file is missing or has no slot, or the atlas payload is not base64, the route serves `atlas.html` unchanged.
+
+The explorer offers three tag views from the same filtered selection. The tag wall sizes words by game count, player total, or review total; hovering a tag shows the share of its games that also carry each other visible tag. The ranked view shows each tag's share of the selection with a tick at its whole-festival share. The connections view is the existing shared-title network. The players-versus-reviews chart keeps its axes fixed to the whole festival and draws games outside the selection in grey.
+
+For a visual-only rollback, revert `explorer.html` (or delete it to fall back to the legacy atlas markup) while preserving the latest `nf-payload` snapshot in `atlas.html`.
 
 ## Validation and approval-gated rollout
 
