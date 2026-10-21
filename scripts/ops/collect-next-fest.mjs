@@ -141,8 +141,9 @@ export async function collectSignal({ ids, records, fetchSummary, append, apiKey
       },
       // The existing client handles bounded jittered backoff and timeouts.
       // Stop the entire lane on its first 403/429, including Retry-After.
-      fetchImpl: async (...args) => {
-        const response = await fetchImpl(...args);
+      fetchImpl: async (url, init) => {
+        // Redirects would issue an unreserved second request.
+        const response = await fetchImpl(url, { ...init, redirect: 'error' });
         if ([401, 403, 429].includes(response.status)) stopReason = `http_${response.status}`;
         return response;
       },
