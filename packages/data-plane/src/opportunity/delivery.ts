@@ -1,3 +1,4 @@
+import { isTransientDatabaseConnectionError } from "@publisheriq/shared";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { OpportunityDestinationCipher } from "./delivery-secrets.js";
@@ -1221,6 +1222,8 @@ export class OpportunityDeliveryDispatcher {
           workerId: this.workerId,
         });
       } catch (error) {
+        // An uncertain completion stays leased; never resend it inside this cycle.
+        if (isTransientDatabaseConnectionError(error)) throw error;
         const deliveryError =
           error instanceof OpportunityDeliveryError
             ? error

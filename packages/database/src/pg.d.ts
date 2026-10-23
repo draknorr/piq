@@ -24,6 +24,7 @@ declare module 'pg' {
       values?: readonly unknown[]
     ): Promise<QueryResult<R>>;
     release(): void;
+    on(event: 'error', listener: (error: Error) => void): this;
   }
 
   export class Pool {
@@ -31,5 +32,6 @@ declare module 'pg' {
     connect(): Promise<PoolClient>;
     end(): Promise<void>;
     on(event: 'error', listener: (error: Error) => void): this;
+    on(event: 'connect', listener: (client: PoolClient) => void): this;
   }
 }

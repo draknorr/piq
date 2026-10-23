@@ -15,3 +15,9 @@ export {
   DatabaseError,
   ScrapeError,
 } from './errors.js';
+
+export {
+  isTransientDatabaseConnectionError,
+  runDatabaseWorker,
+  waitForWorkerDelay,
+} from './database-recovery.js';
