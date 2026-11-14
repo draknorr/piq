@@ -318,7 +318,7 @@ Useful controls:
 - `GET /health`
 - `GET /status`
 
-`/health` stays `200` while the worker is starting or transiently degraded, and returns `503` when the worker marks itself unhealthy after repeated change-poll failures or a fatal process error.
+`/health` stays `200` while the worker is starting or transiently degraded, and returns `503` when the worker marks itself unhealthy after repeated unexpected poll failures or a fatal process error. Check `/status` for a sustained Steam poll failure streak even when the HTTP health check is responsive.
 
 ## Tests
 
@@ -396,6 +396,15 @@ even when a caller requests forced recovery. Background reconnects return after
 three attempts; subsequent poll passes retry with the existing backoff. Finite
 attempt budgets do not reset at the tenth failure. Cooperative deadlines remain
 in place, but cannot interrupt every native I/O stall.
+
+A failed initial Steam login or change fetch now leaves the durable worker alive.
+The next poll retries with the existing capped backoff, retaining the committed
+cursor and allowing already connected processing to continue. Product work is
+not claimed while the Steam session is disconnected. Archive/persistence errors
+and other unexpected worker failures still use the existing fatal threshold.
+This prevents a temporary Steam outage from consuming Railway's finite restart
+budget; it does not recover missing source history. Forced-full responses still
+require the guarded, audited forward recovery path.
 
 `/status` computes liveness at read time and exposes `health_http_status` and
 `health_reason`. On a stale worker it reports `health_state=unhealthy`, preserving

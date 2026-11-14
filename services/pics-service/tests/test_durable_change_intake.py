@@ -30,6 +30,7 @@ from src.database.tiger_change_history import ArchivePointer  # noqa: E402
 from src.workers.durable_change_intake import (  # noqa: E402
     DurableChangeIntakeWorker,
     IncompletePICSChangeResponseError,
+    PICSChangeFetchError,
 )
 
 
@@ -134,6 +135,7 @@ def make_worker(store, archive_store=None):
     )
     worker._store = store
     worker._archive_store = archive_store or FakeArchiveStore()
+    worker._steam = SimpleNamespace(is_connected=True)
     worker._last_committed_batch = None
     worker._forward_recovery_gap = None
     worker._forward_recovery_next_attempt = 0.0
@@ -289,6 +291,40 @@ def test_poll_once_does_not_persist_or_advance_when_archive_fails():
     assert len(archive_store.calls) == 1
     assert store.calls == []
     assert worker._last_committed_batch is None
+
+
+def test_change_fetch_failure_is_retryable_before_archive_or_cursor_write():
+    store = FakeStore()
+    worker = make_worker(store)
+
+    class FailedFetcher:
+        last_change_poll_attempts = 1
+
+        def get_changes_since(self, _cursor):
+            try:
+                raise TimeoutError("Steam did not answer")
+            except TimeoutError as error:
+                raise RuntimeError("Failed to get PICS changes") from error
+
+    worker._fetcher = FailedFetcher()
+    with pytest.raises(PICSChangeFetchError, match="Failed to get PICS changes"):
+        worker.poll_once(10)
+    assert store.calls == []
+    assert worker._last_committed_batch is None
+
+
+def test_unexpected_change_fetch_error_still_surfaces_as_fatal():
+    worker = make_worker(FakeStore())
+
+    class BrokenFetcher:
+        last_change_poll_attempts = 1
+
+        def get_changes_since(self, _cursor):
+            raise ValueError("invalid change response")
+
+    worker._fetcher = BrokenFetcher()
+    with pytest.raises(ValueError, match="invalid change response"):
+        worker.poll_once(10)
 
 
 def test_poll_once_ignores_nonadvancing_source_response():
@@ -499,6 +535,64 @@ def make_retry_loop_worker(monkeypatch):
         "src.workers.durable_change_intake.PICSFetcher", lambda *_a, **_kw: object()
     )
     return worker, observed, sleeps
+
+
+def test_transient_change_fetch_failures_do_not_exhaust_restart_budget(monkeypatch):
+    worker, observed, sleeps = make_retry_loop_worker(monkeypatch)
+    attempts = []
+
+    def poll(cursor):
+        attempts.append(cursor)
+        if len(attempts) <= 7:
+            raise PICSChangeFetchError("Steam did not answer")
+        return 20
+
+    worker.poll_once = poll
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 8:
+            worker._running = False
+
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", sleep)
+    worker.run()
+
+    assert attempts == [10] * 8
+    assert observed[-1]["cursor"] == 20
+    assert all(state["forced_state"] is None for state in observed)
+    assert worker._consecutive_poll_failures == 0
+    assert sleeps[:7] == [30, 60, 120, 240, 300, 300, 300]
+
+
+def test_initial_steam_login_failure_keeps_worker_running(monkeypatch):
+    worker, observed, sleeps = make_retry_loop_worker(monkeypatch)
+    worker._steam.connect = lambda: False
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        worker._running = False
+
+    monkeypatch.setattr("src.workers.durable_change_intake.gevent.sleep", sleep)
+    worker.run()
+
+    assert observed[-1]["cursor"] == 10
+    assert observed[-1]["forced_state"] is None
+    assert sleeps == [30.0]
+
+
+def test_processing_does_not_claim_work_while_steam_is_disconnected():
+    worker = DurableChangeIntakeWorker.__new__(DurableChangeIntakeWorker)
+    worker._processing_job = None
+    worker._processor = object()
+    worker._next_processing_at_monotonic = 0.0
+    worker._steam = SimpleNamespace(is_connected=False)
+    worker._fetcher = object()
+    worker._last_processing_started_at = None
+
+    worker._process_once_if_due()
+
+    assert worker._last_processing_started_at is None
+    assert worker._processing_job is None
 
 
 @pytest.mark.parametrize("full,since", [(True, 10), (False, 9)])
