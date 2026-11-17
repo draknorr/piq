@@ -238,6 +238,7 @@ stored provenance is the exact completed prefix of the same plan.
 | `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`         | `10`                          | Upper bound for the stream/cursor lock                                                            |
 | `PICS_PROCESSING_ENABLED`                  | `false`                       | Independent fail-closed gate for leased payload processing                                        |
 | `PICS_CONSUMER_WORKER_ID`                  | generated                     | Optional stable worker identity; generated from host/process when unset                           |
+| `PICS_CONSUMER_LARGE_BATCHES_ENABLED` | `false` | Opt-in live-only passes up to 1,000 apps, chunked requests and pipelined promotion details; requires catch-up 0 and feeder disabled |
 | `PICS_CONSUMER_LIVE_BATCH_SIZE`            | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
 | `PICS_CONSUMER_CATCHUP_BATCH_SIZE`         | `10`                          | Separate per-pass historical catch-up quota                                                       |
 | `PICS_SUCCESSOR_FEEDER_ENABLED`           | `false`                       | Opt-in bounded admission from an active, unpaused audited successor; one chunk per pass, open catch-up window capped at two chunks |
@@ -286,8 +287,21 @@ stored provenance is the exact completed prefix of the same plan.
 | `LOG_LEVEL`                                | `INFO`                        | Logging level                                                                                     |
 | `LOG_JSON`                                 | `true`                        | JSON log formatting                                                                               |
 
-The live plus catch-up consumer quotas must not exceed the existing
-200-app product-info batch cap.
+The live plus catch-up consumer quotas default to a combined 200-app cap.
+`PICS_CONSUMER_LARGE_BATCHES_ENABLED=true` permits a live-only pass of up to
+1,000 apps, requires catch-up quota `0` and the successor feeder disabled, and
+pipelines ordered relationship/evidence/sync statements inside each existing
+promotion transaction. Every Steam product-info request remains at most 200
+apps; token-required and anonymous chunks use the same session and governor.
+Concurrency remains capped at eight. The pass retains periodic lease renewal,
+archive-before-promotion, failure audits, and atomic readiness/acknowledgement.
+New intake revisions preserve an existing pending/retry eligibility time, so
+frequently updated apps keep their queue position and retry delay.
+
+The candidate configuration is `scripts/backlog-drain.env.example`. It is not
+automatically loaded and does not change production defaults or the deployment
+hold. See `backlog-drain-review.md` for evidence, capacity limits and a proposed
+post-approval canary. Historical reconciliation remains cancelled/paused.
 
 ## PICS Change-History Backfill
 

@@ -1827,7 +1827,7 @@ class TigerPICSDurableIntakeStore:
                 ELSE ops.pics_work_state.attempts
               END,
               next_attempt_at = CASE
-                WHEN ops.pics_work_state.state = 'claimed'
+                WHEN ops.pics_work_state.state IN ('pending', 'retrying', 'claimed')
                   THEN ops.pics_work_state.next_attempt_at
                 ELSE clock_timestamp()
               END,

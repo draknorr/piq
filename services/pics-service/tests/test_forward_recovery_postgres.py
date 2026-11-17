@@ -184,6 +184,7 @@ def test_postgres_recovery_rollback_concurrency_and_exact_head(monkeypatch):
     worker._stream_key = "primary"
     worker._lane = "live"
     worker._processing_job = None
+    worker._last_committed_batch = None
     worker._forward_recovery_gap = None
     worker._forward_recovery_next_attempt = 0
     worker._consecutive_poll_failures = 3

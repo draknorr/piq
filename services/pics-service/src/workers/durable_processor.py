@@ -94,6 +94,7 @@ class DurablePICSProcessor:
     """Claim, validate, archive, promote, and acknowledge PICS app work."""
 
     MAX_PRODUCT_INFO_BATCH_SIZE = 200
+    MAX_PROCESSING_BATCH_SIZE = 1000
 
     def __init__(
         self,
@@ -122,11 +123,14 @@ class DurablePICSProcessor:
             raise ValueError("PICS consumer batch sizes cannot be negative")
         if settings.pics_consumer_catchup_min_batch_size < 0:
             raise ValueError("PICS catch-up minimum cannot be negative")
-        if live_batch_size + catchup_batch_size > self.MAX_PRODUCT_INFO_BATCH_SIZE:
-            raise ValueError(
-                "Combined PICS consumer batch size cannot exceed "
-                f"{self.MAX_PRODUCT_INFO_BATCH_SIZE}"
-            )
+        large_batches = settings.pics_consumer_large_batches_enabled
+        if large_batches and (catchup_batch_size or settings.pics_successor_feeder_enabled):
+            raise ValueError("Large PICS passes require catchup0 and disabled successor feeder")
+        pass_limit = (
+            self.MAX_PROCESSING_BATCH_SIZE if large_batches else self.MAX_PRODUCT_INFO_BATCH_SIZE
+        )
+        if live_batch_size + catchup_batch_size > pass_limit:
+            raise ValueError(f"Combined PICS consumer batch size cannot exceed {pass_limit}")
         if not 1 <= int(settings.pics_consumer_concurrency) <= 8:
             raise ValueError("PICS_CONSUMER_CONCURRENCY must be between 1 and 8")
         if int(settings.pics_consumer_heartbeat_interval_seconds) < 10:
@@ -357,21 +361,23 @@ class DurablePICSProcessor:
         product_info_requests = 0
         anonymous_claims = [claim for claim in claims if not claim.needs_token]
         token_claims = [claim for claim in claims if claim.needs_token]
-        fetch_groups = [
-            (
-                anonymous_claims,
-                lambda: fetcher.fetch_apps_batch([claim.appid for claim in anonymous_claims]),
-            ),
-            (
-                token_claims,
-                lambda: fetcher.fetch_token_required_apps([claim.appid for claim in token_claims]),
-            ),
-        ]
+        # Bound each Steam request independently of the leased processing pass.
+        # Every chunk still uses the fetcher's single session/request governor.
+        fetch_groups = []
+        for token_required, pending in ((False, anonymous_claims), (True, token_claims)):
+            for offset in range(0, len(pending), self.MAX_PRODUCT_INFO_BATCH_SIZE):
+                group = pending[offset : offset + self.MAX_PRODUCT_INFO_BATCH_SIZE]
+                method = (
+                    fetcher.fetch_token_required_apps
+                    if token_required
+                    else fetcher.fetch_apps_batch
+                )
+                fetch_groups.append((group, method))
         for group, fetch_group in fetch_groups:
             if not group:
                 continue
             try:
-                raw_by_appid.update(fetch_group())
+                raw_by_appid.update(fetch_group([claim.appid for claim in group]))
             except Exception as error:
                 logger.exception(
                     "Durable PICS %s batch fetch failed for %s claims",

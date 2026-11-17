@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 
+from ..config.settings import settings
 from ..extractors.common import Association, ExtractedPICSData
 from ..extractors.taxonomy import CATEGORY_NAMES, GENRE_NAMES
 from .change_intelligence import diff_pics_snapshots
@@ -145,18 +147,27 @@ class TigerPICSDurablePromoter:
                         observed_at=observed_at,
                     )
                     self._apply_app_fields(cursor, payload.extracted)
-                    self._apply_relationships(cursor, payload.extracted)
-                    self._record_field_evidence(
-                        cursor,
-                        app=payload.extracted,
-                        source_change_number=payload.source_change_number,
-                        source_at=observed_at,
-                    )
-                    self._update_sync_status(
-                        cursor,
-                        appid=claim.appid,
-                        change_number=payload.source_change_number,
-                    )
+                    # Queue independent statements over the same connection, in
+                    # order, to shorten the shared revision-lock holding phase.
+                    # SELECT/fetch dependencies sync automatically; context exit
+                    # flushes errors before readiness/acknowledgement can commit.
+                    with (
+                        connection.pipeline()
+                        if settings.pics_consumer_large_batches_enabled
+                        else nullcontext()
+                    ):
+                        self._apply_relationships(cursor, payload.extracted)
+                        self._record_field_evidence(
+                            cursor,
+                            app=payload.extracted,
+                            source_change_number=payload.source_change_number,
+                            source_at=observed_at,
+                        )
+                        self._update_sync_status(
+                            cursor,
+                            appid=claim.appid,
+                            change_number=payload.source_change_number,
+                        )
                     event_count = self._insert_events(
                         cursor,
                         claim=claim,

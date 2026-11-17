@@ -18,10 +18,16 @@ from typing import Any
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE_ROOT))
 
+import gevent  # noqa: E402
+
 from src.config.settings import settings  # noqa: E402
-from src.database.durable_work import PICSWorkClaim  # noqa: E402
+from src.database.durable_promotion import PICSPromotionResult  # noqa: E402
+from src.database.durable_work import PICSLatestSnapshot, PICSWorkClaim  # noqa: E402
 from src.database.tiger_change_history import ArchivePointer  # noqa: E402
+from src.steam.request_scheduler import SteamRequestPolicy, SteamRequestScheduler  # noqa: E402
 from src.workers.durable_processor import DurablePICSProcessor  # noqa: E402
+
+PRIOR_SNAPSHOT = {"name": "Previous benchmark snapshot"}
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -68,13 +74,23 @@ def _payload(appid: int) -> dict[str, Any]:
 
 
 class SyntheticFetcher:
-    def __init__(self, latency_seconds: float):
+    def __init__(self, latency_seconds: float, time_scale: float):
         self._latency_seconds = latency_seconds
         self.last_product_info_attempts = 1
+        self.scheduler = SteamRequestScheduler(
+            SteamRequestPolicy(
+                min_interval_seconds=0.5 * time_scale,
+            )
+        )
 
     def fetch_apps_batch(self, appids: list[int]) -> dict[int, dict[str, Any]]:
-        time.sleep(self._latency_seconds)
-        return {appid: _payload(appid) for appid in appids}
+        assert len(appids) <= 200
+
+        def request():
+            gevent.sleep(self._latency_seconds)
+            return {appid: _payload(appid) for appid in appids}
+
+        return self.scheduler.execute("pics_product_info", request)
 
 
 class SyntheticArchiveStore:
@@ -97,7 +113,8 @@ class SyntheticArchiveStore:
         )
 
     def read_json(self, **_kwargs: Any) -> dict[str, Any]:
-        raise AssertionError("The synthetic benchmark starts without prior snapshots")
+        time.sleep(self._latency_seconds)
+        return dict(PRIOR_SNAPSHOT)
 
 
 class SyntheticWorkStore:
@@ -107,7 +124,9 @@ class SyntheticWorkStore:
         catchup_claims: list[PICSWorkClaim],
         *,
         transaction_latency_seconds: float,
+        warm: bool = False,
     ):
+        self._warm = warm
         self._live_claims = live_claims
         self._catchup_claims = catchup_claims
         self._transaction_latency_seconds = transaction_latency_seconds
@@ -137,7 +156,18 @@ class SyntheticWorkStore:
         time.sleep(self._transaction_latency_seconds)
         with self._lock:
             self.latest_lookup_calls += 1
-        return {}
+        if not self._warm:
+            return {}
+        return {
+            appid: PICSLatestSnapshot(
+                id=appid,
+                content_hash="c" * 64,
+                archive_bucket="benchmark",
+                archive_key=f"prior/{appid}.json",
+                archive_content_hash=DurablePICSProcessor._hash_json(PRIOR_SNAPSHOT),
+            )
+            for appid in appids
+        }
 
     def complete_shadow_claim(self, **_kwargs: Any) -> str:
         time.sleep(self._transaction_latency_seconds)
@@ -152,6 +182,29 @@ class SyntheticWorkStore:
         raise AssertionError("The synthetic payload should not fail")
 
 
+class SyntheticPromoter:
+    """Model one promotion transaction; no real SQL or product writes."""
+
+    def __init__(self, latency_seconds: float, serialized_fraction: float):
+        self._latency_seconds = latency_seconds
+        self._serialized_fraction = serialized_fraction
+        self._lock = threading.Lock()
+
+    def promote(self, *, claim, **_kwargs):
+        if self._serialized_fraction:
+            with self._lock:
+                time.sleep(self._latency_seconds * self._serialized_fraction)
+        time.sleep(self._latency_seconds * (1 - self._serialized_fraction))
+        return PICSPromotionResult(
+            appid=claim.appid,
+            snapshot_id=claim.appid,
+            snapshot_changed=True,
+            event_count=0,
+            completed_through_change_number=claim.claimed_through_change_number,
+            next_work_state="completed",
+        )
+
+
 def _run_sample(
     *,
     batch_size: int,
@@ -160,6 +213,9 @@ def _run_sample(
     r2_latency_seconds: float,
     tiger_latency_seconds: float,
     steam_latency_seconds: float,
+    warm_durable: bool = False,
+    time_scale: float = 1.0,
+    serialized_tiger_fraction: float = 0.0,
 ) -> dict[str, Any]:
     live_count = min(batch_size, live_reserve)
     catchup_count = batch_size - live_count
@@ -168,25 +224,38 @@ def _run_sample(
         replace(_claim(live_count + index, "catchup"), priority=100)
         for index in range(catchup_count)
     ]
+    if warm_durable:
+        live_claims = [replace(c, stream_key="primary", work_mode="durable") for c in live_claims]
+        catchup_claims = [
+            replace(c, stream_key="primary", work_mode="durable") for c in catchup_claims
+        ]
     work_store = SyntheticWorkStore(
         live_claims,
         catchup_claims,
-        transaction_latency_seconds=tiger_latency_seconds,
+        transaction_latency_seconds=tiger_latency_seconds * time_scale,
+        warm=warm_durable,
     )
-    archive_store = SyntheticArchiveStore(r2_latency_seconds)
+    archive_store = SyntheticArchiveStore(r2_latency_seconds * time_scale)
     settings.pics_consumer_live_batch_size = live_count
     settings.pics_consumer_catchup_batch_size = catchup_count
     settings.pics_consumer_concurrency = workers
+    settings.pics_consumer_large_batches_enabled = batch_size > 200
     processor = DurablePICSProcessor(
-        work_mode="shadow",
-        stream_key="benchmark-shadow",
+        work_mode="durable" if warm_durable else "shadow",
+        stream_key="primary" if warm_durable else "benchmark-shadow",
         work_store=work_store,
+        promoter=(
+            SyntheticPromoter(tiger_latency_seconds * time_scale, serialized_tiger_fraction)
+            if warm_durable
+            else None
+        ),
         archive_store=archive_store,
         worker_id="benchmark-worker",
     )
-    stats = processor.process_once(SyntheticFetcher(steam_latency_seconds))
+    stats = processor.process_once(SyntheticFetcher(steam_latency_seconds * time_scale, time_scale))
+    assert stats.completed == batch_size and stats.retried == stats.dead_lettered == 0
     return {
-        "duration_seconds": stats.duration_seconds,
+        "duration_seconds": stats.duration_seconds / time_scale,
         "stats": stats,
         "live_count": live_count,
         "catchup_count": catchup_count,
@@ -209,7 +278,48 @@ def main() -> None:
         default=257_000,
         help="Rounded queue size used only for illustrative drain projections",
     )
+    parser.add_argument(
+        "--warm-durable",
+        action="store_true",
+        help="Exercise prior archive verification and fake durable promotion",
+    )
+    parser.add_argument(
+        "--time-scale",
+        type=float,
+        default=1.0,
+        help="Scale injected waits, divide observed duration by this factor",
+    )
+    parser.add_argument(
+        "--incoming-apps-per-hour",
+        type=float,
+        default=0,
+        help="Conservative arrivals used for net live drain, not measured by this tool",
+    )
+    parser.add_argument("--live-open", type=int, default=0)
+    parser.add_argument(
+        "--serialized-tiger-fraction",
+        type=float,
+        default=0,
+        help="Fraction of promotion time behind a shared lock (warm-durable only)",
+    )
     args = parser.parse_args()
+    if not 0 <= args.serialized_tiger_fraction <= 1:
+        parser.error("serialized-tiger-fraction must be between 0 and 1")
+    if args.serialized_tiger_fraction and not args.warm_durable:
+        parser.error("serialized-tiger-fraction requires warm-durable")
+    if not 0 < args.time_scale <= 1 or args.samples < 1:
+        parser.error("time-scale must be in (0,1] and samples must be positive")
+    if (
+        min(
+            args.r2_latency_ms,
+            args.tiger_latency_ms,
+            args.steam_latency_ms,
+            args.incoming_apps_per_hour,
+            args.live_open,
+        )
+        < 0
+    ):
+        parser.error("latencies and queue inputs cannot be negative")
 
     batch_sizes = [int(value) for value in args.batch_sizes.split(",")]
     worker_counts = [int(value) for value in args.workers.split(",")]
@@ -217,6 +327,7 @@ def main() -> None:
         "live": settings.pics_consumer_live_batch_size,
         "catchup": settings.pics_consumer_catchup_batch_size,
         "concurrency": settings.pics_consumer_concurrency,
+        "large_batches": settings.pics_consumer_large_batches_enabled,
     }
     rows: list[dict[str, Any]] = []
     try:
@@ -230,6 +341,9 @@ def main() -> None:
                         r2_latency_seconds=args.r2_latency_ms / 1000.0,
                         tiger_latency_seconds=args.tiger_latency_ms / 1000.0,
                         steam_latency_seconds=args.steam_latency_ms / 1000.0,
+                        warm_durable=args.warm_durable,
+                        time_scale=args.time_scale,
+                        serialized_tiger_fraction=args.serialized_tiger_fraction,
                     )
                     for _sample in range(args.samples)
                 ]
@@ -249,9 +363,21 @@ def main() -> None:
                     else None
                 )
                 stats = representative["stats"]
+                live_per_hour = representative["live_count"] * 3600 / governed_cycle_seconds
+                net_live_per_hour = live_per_hour - args.incoming_apps_per_hour
                 rows.append(
                     {
                         "batch_size": batch_size,
+                        "live_settlements_per_hour": round(live_per_hour, 2),
+                        "net_live_drain_per_hour": round(net_live_per_hour, 2),
+                        "projected_live_drain_hours": (
+                            round(args.live_open / net_live_per_hour, 2)
+                            if net_live_per_hour > 0
+                            else None
+                        ),
+                        "r2_reads": stats.r2_reads,
+                        "r2_writes": stats.r2_writes,
+                        "product_info_requests": stats.product_info_requests,
                         "live": representative["live_count"],
                         "catchup": catchup_count,
                         "workers": workers,
@@ -267,7 +393,7 @@ def main() -> None:
                             2,
                         ),
                         "steam_calls_per_hour": round(
-                            3600.0 / governed_cycle_seconds,
+                            stats.product_info_requests * 3600.0 / governed_cycle_seconds,
                             2,
                         ),
                         "heartbeat_transactions": stats.heartbeat_transactions,
@@ -296,6 +422,7 @@ def main() -> None:
         settings.pics_consumer_live_batch_size = original_settings["live"]
         settings.pics_consumer_catchup_batch_size = original_settings["catchup"]
         settings.pics_consumer_concurrency = original_settings["concurrency"]
+        settings.pics_consumer_large_batches_enabled = original_settings["large_batches"]
 
     print(
         json.dumps(
@@ -303,7 +430,11 @@ def main() -> None:
                 "kind": "synthetic-no-network",
                 "notes": [
                     "R2 and Tiger latencies are injected independently per app.",
-                    "Steam calls/hour includes the 215-second candidate cadence guard.",
+                    "Steam calls/hour counts every <=200-app chunk and includes pass cadence.",
+                    "Warm durable mode: fake SQL promotion, real validation and archive hashing.",
+                    "Scaled durations include Python overhead; these are capacity estimates only.",
+                    "Shared-lock time is injected; pool waits and workload overlap are unmodeled.",
+                    "Net drain assumes completion removes an item; newer revisions may requeue it.",
                     "Disconnect and lock-timeout rates require a shadow/canary observation.",
                 ],
                 "inputs": {
@@ -316,6 +447,11 @@ def main() -> None:
                     "steam_latency_ms": args.steam_latency_ms,
                     "product_info_min_interval_seconds": (args.product_info_min_interval_seconds),
                     "catchup_open": args.catchup_open,
+                    "live_open": args.live_open,
+                    "incoming_apps_per_hour": args.incoming_apps_per_hour,
+                    "time_scale": args.time_scale,
+                    "warm_durable": args.warm_durable,
+                    "serialized_tiger_fraction": args.serialized_tiger_fraction,
                 },
                 "rows": rows,
             },

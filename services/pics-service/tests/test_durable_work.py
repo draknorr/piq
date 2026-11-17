@@ -186,6 +186,7 @@ def make_reconciliation_claim():
 
 def test_processing_defaults_fail_closed():
     assert Settings.model_fields["pics_processing_enabled"].default is False
+    assert Settings.model_fields["pics_consumer_large_batches_enabled"].default is False
     assert Settings.model_fields["pics_consumer_concurrency"].default == 4
     assert Settings.model_fields["pics_product_info_min_interval_seconds"].default == 215
     assert Settings.model_fields["steam_heartbeat_interval"].default == 300
