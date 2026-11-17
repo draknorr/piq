@@ -24,6 +24,7 @@ from ..database.tiger_change_history import S3ArchiveStore
 from ..health.server import HealthServer
 from ..steam.client import PICSSteamClient
 from ..steam.pics import PICSFetcher
+from ..steam.request_scheduler import SteamCircuitOpenError, SteamRequestQueueFullError
 from .durable_processor import DurablePICSProcessor, PICSProcessingStats
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,32 @@ logger = logging.getLogger(__name__)
 # PostgreSQL aborts these transactions before the durable cursor can commit.
 # Retry the same cursor instead of consuming the process restart budget.
 RETRYABLE_TRANSACTION_ERRORS = (LockNotAvailable, DeadlockDetected, SerializationFailure)
+RETRYABLE_STEAM_ERRORS = (
+    TimeoutError,
+    ConnectionError,
+    SteamCircuitOpenError,
+    SteamRequestQueueFullError,
+)
+
+
+def _is_retryable_steam_fetch_error(error: BaseException) -> bool:
+    """Find a transient Steam failure beneath the fetcher's exception wrapper."""
+    seen: set[int] = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, RETRYABLE_STEAM_ERRORS):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class IncompletePICSChangeResponseError(RuntimeError):
     """Raised when Steam cannot provide a complete incremental change response."""
+
+
+class PICSChangeFetchError(RuntimeError):
+    """Raised before archive or cursor writes when a Steam change fetch fails."""
 
 
 class DurableChangeIntakeWorker:
@@ -142,8 +165,15 @@ class DurableChangeIntakeWorker:
         )
         logger.info("Starting durable PICS intake from change number %s", last_change)
 
-        if not self._steam.connect():
-            raise RuntimeError("Failed to connect to Steam")
+        try:
+            connected = self._steam.connect()
+        except Exception as error:
+            connected = False
+            logger.warning("Initial Steam connection failed: %s", error)
+        if not connected:
+            # The fetcher retries connection on subsequent passes. A transient
+            # Steam login failure must not consume Railway's finite restart budget.
+            logger.warning("Retrying Steam connection during intake")
 
         self._fetcher = PICSFetcher(
             self._steam,
@@ -199,7 +229,9 @@ class DurableChangeIntakeWorker:
                     )
                     if (
                         self._consecutive_poll_failures >= self.MAX_CONSECUTIVE_POLL_FAILURES
-                        and not isinstance(error, RETRYABLE_TRANSACTION_ERRORS)
+                        and not isinstance(
+                            error, RETRYABLE_TRANSACTION_ERRORS + (PICSChangeFetchError,)
+                        )
                     ):
                         self._update_health_status(last_change, forced_state="unhealthy")
                         raise RuntimeError(
@@ -285,7 +317,15 @@ class DurableChangeIntakeWorker:
 
         phase_started = time.perf_counter()
         try:
-            changes = self._fetcher.get_changes_since(last_change)
+            try:
+                changes = self._fetcher.get_changes_since(last_change)
+            except Exception as error:
+                # No archive or cursor transaction has started. Only transient
+                # Steam failures bypass the fatal threshold; malformed responses
+                # and programming errors still surface as unexpected failures.
+                if not self._steam.is_connected or _is_retryable_steam_fetch_error(error):
+                    raise PICSChangeFetchError(str(error)) from error
+                raise
         finally:
             phase_seconds["steam_change_poll"] = time.perf_counter() - phase_started
             phase_seconds["steam_change_poll_requests"] = int(
@@ -495,6 +535,10 @@ class DurableChangeIntakeWorker:
             self._last_processing_error = None
             return
         if self._processor is None or not self._processing_due():
+            return
+        if not self._steam.is_connected:
+            # Product requests share the same Steam session; retry after intake
+            # has re-established it instead of claiming work while disconnected.
             return
         if self._fetcher is None:
             raise RuntimeError("PICS fetcher is not initialized")

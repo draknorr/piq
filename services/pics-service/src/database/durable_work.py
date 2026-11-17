@@ -200,7 +200,7 @@ class TigerPICSDurableWorkStore:
         lanes = self._VALID_LANE_GROUPS.get(lane_group.strip().lower())
         if lanes is None:
             raise ValueError("lane_group must be live or catchup")
-        bounded_limit = max(0, min(int(limit), 500))
+        bounded_limit = max(0, min(int(limit), 1000))
         if bounded_limit == 0:
             return []
         bounded_lease_seconds = max(30, min(int(lease_seconds), 3600))
@@ -563,8 +563,8 @@ class TigerPICSDurableWorkStore:
         normalized_appids = sorted({int(appid) for appid in appids if int(appid) > 0})
         if not normalized_appids:
             return {}
-        if len(normalized_appids) > 500:
-            raise ValueError("At most 500 latest PICS snapshot pointers may be read")
+        if len(normalized_appids) > 1000:
+            raise ValueError("At most 1000 latest PICS snapshot pointers may be read")
 
         with self._connect() as connection:
             with connection.transaction():
@@ -586,7 +586,7 @@ class TigerPICSDurableWorkStore:
                           AND archive_key IS NOT NULL
                           AND archive_content_hash IS NOT NULL
                         ORDER BY appid, first_seen_at DESC, id DESC
-                        LIMIT 500
+                        LIMIT 1000
                         """,
                         (normalized_appids,),
                     )

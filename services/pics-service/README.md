@@ -238,6 +238,7 @@ stored provenance is the exact completed prefix of the same plan.
 | `PICS_INTAKE_LOCK_TIMEOUT_SECONDS`         | `10`                          | Upper bound for the stream/cursor lock                                                            |
 | `PICS_PROCESSING_ENABLED`                  | `false`                       | Independent fail-closed gate for leased payload processing                                        |
 | `PICS_CONSUMER_WORKER_ID`                  | generated                     | Optional stable worker identity; generated from host/process when unset                           |
+| `PICS_CONSUMER_LARGE_BATCHES_ENABLED` | `false` | Opt-in live-only passes up to 1,000 apps, chunked requests and pipelined promotion details; requires catch-up 0 and feeder disabled |
 | `PICS_CONSUMER_LIVE_BATCH_SIZE`            | `40`                          | Protected per-pass quota for `new` and `live` work                                                |
 | `PICS_CONSUMER_CATCHUP_BATCH_SIZE`         | `10`                          | Separate per-pass historical catch-up quota                                                       |
 | `PICS_SUCCESSOR_FEEDER_ENABLED`           | `false`                       | Opt-in bounded admission from an active, unpaused audited successor; one chunk per pass, open catch-up window capped at two chunks |
@@ -286,8 +287,21 @@ stored provenance is the exact completed prefix of the same plan.
 | `LOG_LEVEL`                                | `INFO`                        | Logging level                                                                                     |
 | `LOG_JSON`                                 | `true`                        | JSON log formatting                                                                               |
 
-The live plus catch-up consumer quotas must not exceed the existing
-200-app product-info batch cap.
+The live plus catch-up consumer quotas default to a combined 200-app cap.
+`PICS_CONSUMER_LARGE_BATCHES_ENABLED=true` permits a live-only pass of up to
+1,000 apps, requires catch-up quota `0` and the successor feeder disabled, and
+pipelines ordered relationship/evidence/sync statements inside each existing
+promotion transaction. Every Steam product-info request remains at most 200
+apps; token-required and anonymous chunks use the same session and governor.
+Concurrency remains capped at eight. The pass retains periodic lease renewal,
+archive-before-promotion, failure audits, and atomic readiness/acknowledgement.
+New intake revisions preserve an existing pending/retry eligibility time, so
+frequently updated apps keep their queue position and retry delay.
+
+The candidate configuration is `scripts/backlog-drain.env.example`. It is not
+automatically loaded and does not change production defaults or the deployment
+hold. See `backlog-drain-review.md` for evidence, capacity limits and a proposed
+post-approval canary. Historical reconciliation remains cancelled/paused.
 
 ## PICS Change-History Backfill
 
@@ -318,7 +332,7 @@ Useful controls:
 - `GET /health`
 - `GET /status`
 
-`/health` stays `200` while the worker is starting or transiently degraded, and returns `503` when the worker marks itself unhealthy after repeated change-poll failures or a fatal process error.
+`/health` stays `200` while the worker is starting or transiently degraded, and returns `503` when the worker marks itself unhealthy after repeated unexpected poll failures or a fatal process error. Check `/status` for a sustained Steam poll failure streak even when the HTTP health check is responsive.
 
 ## Tests
 
@@ -396,6 +410,15 @@ even when a caller requests forced recovery. Background reconnects return after
 three attempts; subsequent poll passes retry with the existing backoff. Finite
 attempt budgets do not reset at the tenth failure. Cooperative deadlines remain
 in place, but cannot interrupt every native I/O stall.
+
+A failed initial Steam login or change fetch now leaves the durable worker alive.
+The next poll retries with the existing capped backoff, retaining the committed
+cursor and allowing already connected processing to continue. Product work is
+not claimed while the Steam session is disconnected. Archive/persistence errors
+and other unexpected worker failures still use the existing fatal threshold.
+This prevents a temporary Steam outage from consuming Railway's finite restart
+budget; it does not recover missing source history. Forced-full responses still
+require the guarded, audited forward recovery path.
 
 `/status` computes liveness at read time and exposes `health_http_status` and
 `health_reason`. On a stale worker it reports `health_state=unhealthy`, preserving

@@ -155,8 +155,11 @@ def test_mixed_pass_retains_anonymous_request_count_when_token_group_resets_it(t
             return {8: make_payload(appid=8, missing_token=token_requests == 0)}
 
     processor = DurablePICSProcessor(
-        work_mode="shadow", stream_key="shadow-test", work_store=store,
-        archive_store=FakeArchiveStore(), worker_id="test-worker",
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=store,
+        archive_store=FakeArchiveStore(),
+        worker_id="test-worker",
     )
     stats = processor.process_once(MixedFetcher())
     assert stats.product_info_requests == 1 + token_requests
@@ -658,12 +661,23 @@ def test_unprocessed_leases_use_batched_barrier_heartbeats():
     assert work_store.latest_snapshot_calls == [[7, 8]]
 
 
+@pytest.mark.parametrize("claim_count,concurrency", [(8, 4), (1000, 8)])
 def test_blocking_downstream_work_is_bounded_and_does_not_starve_gevent(
     monkeypatch,
+    claim_count,
+    concurrency,
 ):
-    claims = [replace(make_claim(), id=100 + index, appid=1000 + index) for index in range(8)]
+    from src.config.settings import settings
+
+    if claim_count > 200:
+        monkeypatch.setattr(settings, "pics_consumer_large_batches_enabled", True)
+        monkeypatch.setattr(settings, "pics_consumer_live_batch_size", claim_count)
+        monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", 0)
+    claims = [
+        replace(make_claim(), id=100 + index, appid=1000 + index) for index in range(claim_count)
+    ]
     work_store = FakeWorkStore(claims[0])
-    work_store.claim_work = lambda **kwargs: (claims if kwargs["lane_group"] == "live" else [])
+    work_store.claim_work = lambda **kwargs: claims if kwargs["lane_group"] == "live" else []
     active = 0
     max_active = 0
     lock = threading.Lock()
@@ -685,7 +699,7 @@ def test_blocking_downstream_work_is_bounded_and_does_not_starve_gevent(
     fetcher.fetch_apps_batch = lambda appids: {appid: make_payload(appid=appid) for appid in appids}
     monkeypatch.setattr(
         "src.workers.durable_processor.settings.pics_consumer_concurrency",
-        4,
+        concurrency,
     )
     processor = DurablePICSProcessor(
         work_mode="shadow",
@@ -703,12 +717,12 @@ def test_blocking_downstream_work_is_bounded_and_does_not_starve_gevent(
     stats = processor.process_once(fetcher)
     ticker.join(timeout=1)
 
-    assert stats.completed == 8
-    assert 1 < max_active <= 4
+    assert stats.completed == claim_count
+    assert 1 < max_active <= concurrency
     assert gevent_ticks
     assert stats.heartbeat_transactions == 2
     assert stats.tiger_transactions_per_settlement is not None
-    assert stats.phase_latency_seconds["r2_write"]["count"] == 8
+    assert stats.phase_latency_seconds["r2_write"]["count"] == claim_count
 
 
 def test_capacity_deferral_does_not_dead_letter_exhausted_attempt(monkeypatch):
@@ -741,11 +755,21 @@ def test_capacity_deferral_does_not_dead_letter_exhausted_attempt(monkeypatch):
     assert not store.failed
 
 
-def test_periodic_lease_renewal_runs_while_steam_fetch_waits(monkeypatch):
+@pytest.mark.parametrize("claim_count", [1, 1000])
+def test_periodic_lease_renewal_runs_while_steam_fetch_waits(monkeypatch, claim_count):
     import src.workers.durable_processor as module
 
     claim = make_claim()
     store = FakeWorkStore(claim)
+    if claim_count > 200:
+        from src.config.settings import settings
+
+        monkeypatch.setattr(settings, "pics_consumer_large_batches_enabled", True)
+        monkeypatch.setattr(settings, "pics_consumer_live_batch_size", claim_count)
+        monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", 0)
+        monkeypatch.setattr(settings, "pics_consumer_concurrency", 8)
+        claims = [replace(claim, id=i + 1, appid=i + 1000) for i in range(claim_count)]
+        store.claim_work = lambda **kw: claims if kw["lane_group"] == "live" else []
     progress = []
     processor = DurablePICSProcessor(
         work_mode="shadow",
@@ -770,14 +794,88 @@ def test_periodic_lease_renewal_runs_while_steam_fetch_waits(monkeypatch):
         before = len(progress)
         gevent.sleep(0.055)
         progress_during_wait.append(len(progress) - before)
-        return {7: make_payload()}
+        return {appid: make_payload(appid=appid) for appid in appids}
 
     fetcher.fetch_apps_batch = slow_fetch
     stats = processor.process_once(fetcher)
-    assert stats.completed == 1
+    assert stats.completed == claim_count
     assert stats.heartbeat_transactions >= 4
     assert len(store.heartbeats) == stats.heartbeat_transactions
-    assert progress_during_wait == [0]  # renewal is not worker progress
+    assert progress_during_wait == [0] * (5 if claim_count > 200 else 1)
+    assert any(len(call["claims"]) == claim_count for call in store.heartbeats)
     observed = len(store.heartbeats)
     gevent.sleep(0.02)
     assert len(store.heartbeats) == observed
+
+
+@pytest.mark.parametrize("token_required", [False, True, None])
+@pytest.mark.parametrize("failed_chunk", [None, 1])
+def test_large_pass_chunks_requests_and_isolates_failed_chunk(
+    monkeypatch, token_required, failed_chunk
+):
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "pics_consumer_large_batches_enabled", True)
+    monkeypatch.setattr(settings, "pics_consumer_live_batch_size", 1000)
+    monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", 0)
+    monkeypatch.setattr(settings, "pics_consumer_concurrency", 8)
+    claims = [
+        replace(
+            make_claim(appid=1000 + i),
+            id=i + 1,
+            needs_token=bool(i % 2) if token_required is None else token_required,
+        )
+        for i in range(1000)
+    ]
+    store = FakeWorkStore(claims[0])
+    store.claim_work = lambda **kw: claims[: kw["limit"]] if kw["lane_group"] == "live" else []
+    requested = []
+
+    class Fetcher:
+        last_product_info_attempts = 1
+
+        def fetch_apps_batch(self, appids):
+            requested.append(appids)
+            assert len(appids) <= 200
+            if len(requested) - 1 == failed_chunk:
+                raise TimeoutError("injected chunk failure")
+            return {a: make_payload(appid=a) for a in appids}
+
+        fetch_token_required_apps = fetch_apps_batch
+
+    processor = DurablePICSProcessor(
+        work_mode="shadow",
+        stream_key="shadow-test",
+        work_store=store,
+        archive_store=FakeArchiveStore(),
+    )
+    stats = processor.process_once(Fetcher())
+    chunk_sizes = [200, 200, 100] * 2 if token_required is None else [200] * 5
+    assert [len(x) for x in requested] == chunk_sizes
+    assert sorted(a for chunk in requested for a in chunk) == [c.appid for c in claims]
+    assert stats.claimed == 1000
+    assert stats.completed == (1000 if failed_chunk is None else 800)
+    assert stats.retried == (0 if failed_chunk is None else 200)
+    assert stats.dead_lettered == 0
+    assert stats.product_info_requests == len(chunk_sizes)
+    assert len(store.completed) == stats.completed
+    assert len(store.failed) == stats.retried
+
+
+@pytest.mark.parametrize(
+    "catchup,feeder,live", [(1, False, 1000), (0, True, 1000), (0, False, 1001)]
+)
+def test_large_pass_rejects_unsafe_configuration(monkeypatch, catchup, feeder, live):
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "pics_consumer_large_batches_enabled", True)
+    monkeypatch.setattr(settings, "pics_consumer_live_batch_size", live)
+    monkeypatch.setattr(settings, "pics_consumer_catchup_batch_size", catchup)
+    monkeypatch.setattr(settings, "pics_successor_feeder_enabled", feeder)
+    with pytest.raises(ValueError):
+        DurablePICSProcessor(
+            work_mode="shadow",
+            stream_key="shadow-test",
+            work_store=FakeWorkStore(make_claim()),
+            archive_store=FakeArchiveStore(),
+        )

@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # runtime. Intake can be validated without enabling payload promotion.
     pics_processing_enabled: bool = False
     pics_consumer_worker_id: Optional[str] = None
+    # Review-only drain opt-in; defaults and production environment stay unchanged.
+    # Larger live passes are split into <=200-app governed Steam requests.
+    pics_consumer_large_batches_enabled: bool = False
     pics_consumer_live_batch_size: int = 40
     pics_consumer_catchup_batch_size: int = 10
     # Enable only for an audited active successor and approved catch-up canary.

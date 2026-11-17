@@ -1,0 +1,551 @@
+{
+  "kind": "pics-throughput-review-only",
+  "generated_at": "2026-11-17T22:48:18.187514+00:00",
+  "deployment_hold": true,
+  "production_mutations": false,
+  "base_commit": "c2dad939",
+  "held_railway_deployment": "2ade5128-28c0-4a80-95ec-caf2fa8d11b1",
+  "checks": {
+    "python": {
+      "passed": 310,
+      "skipped_opt_in_sql": 2
+    },
+    "local_postgres": {
+      "passed": 2,
+      "verified": [
+        "atomic recovery rollback and concurrent idempotence",
+        "exact source/head admission",
+        "eligibility and retry scheduling",
+        "active claimed version and token handling",
+        "pipeline output equivalence and server-error rollback",
+        "1000 real claims, pointers and lease heartbeats"
+      ]
+    },
+    "pnpm_build": "passed (10 tasks)",
+    "pnpm_check_types": "passed (13 tasks)",
+    "pnpm_lint": "passed (14 tasks; existing warnings)",
+    "ruff_changed_python": "passed",
+    "candidate_env_parse": "passed",
+    "git_diff_check": "passed"
+  },
+  "benchmarks": {
+    "warm_scaled": {
+      "inputs": {
+        "batch_sizes": [80, 1000],
+        "catchup_open": 257000,
+        "incoming_apps_per_hour": 9741.0,
+        "live_open": 97425,
+        "live_reserve": 1000,
+        "product_info_min_interval_seconds": 215.0,
+        "r2_latency_ms": 150.0,
+        "samples": 3,
+        "serialized_tiger_fraction": 0,
+        "steam_latency_ms": 1000.0,
+        "tiger_latency_ms": 900.0,
+        "time_scale": 0.03,
+        "warm_durable": true,
+        "workers": [3, 8]
+      },
+      "kind": "synthetic-no-network",
+      "notes": [
+        "R2 and Tiger latencies are injected independently per app.",
+        "Steam calls/hour counts every <=200-app chunk and includes pass cadence.",
+        "Warm durable mode: fake SQL promotion, real validation and archive hashing.",
+        "Scaled durations include Python overhead; these are capacity estimates only.",
+        "Shared-lock time is injected; pool waits and workload overlap are unmodeled.",
+        "Net drain assumes completion removes an item; newer revisions may requeue it.",
+        "Disconnect and lock-timeout rates require a shadow/canary observation."
+      ],
+      "rows": [
+        {
+          "batch_size": 80,
+          "candidate_heartbeat_row_updates": 160,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 3400,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.05,
+          "live": 80,
+          "live_settlements_per_hour": 1339.53,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": -8401.47,
+          "pass_p50_seconds": 44.727,
+          "pass_p95_seconds": 50.571,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 80,
+              "max": 0.007,
+              "p50": 0.006,
+              "p95": 0.006,
+              "total": 0.46
+            },
+            "r2_write": {
+              "count": 80,
+              "max": 0.006,
+              "p50": 0.006,
+              "p95": 0.006,
+              "total": 0.442
+            },
+            "tiger_promotion": {
+              "count": 80,
+              "max": 0.033,
+              "p50": 0.031,
+              "p95": 0.032,
+              "total": 2.468
+            },
+            "validation_extraction": {
+              "count": 80,
+              "max": 0.001,
+              "p50": 0.0,
+              "p95": 0.0,
+              "total": 0.01
+            }
+          },
+          "product_info_requests": 1,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": null,
+          "r2_reads": 80,
+          "r2_writes": 80,
+          "samples": 3,
+          "steam_calls_per_hour": 16.74,
+          "tiger_transactions_per_settlement": 1.05,
+          "unthrottled_settlements_per_minute": 94.92,
+          "workers": 3
+        },
+        {
+          "batch_size": 1000,
+          "candidate_heartbeat_row_updates": 2000,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 502500,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.004,
+          "live": 1000,
+          "live_settlements_per_hour": 7253.64,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": -2487.36,
+          "pass_p50_seconds": 495.404,
+          "pass_p95_seconds": 496.302,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 1000,
+              "max": 0.012,
+              "p50": 0.006,
+              "p95": 0.007,
+              "total": 6.101
+            },
+            "r2_write": {
+              "count": 1000,
+              "max": 0.009,
+              "p50": 0.006,
+              "p95": 0.006,
+              "total": 5.565
+            },
+            "tiger_promotion": {
+              "count": 1000,
+              "max": 0.036,
+              "p50": 0.031,
+              "p95": 0.032,
+              "total": 30.641
+            },
+            "validation_extraction": {
+              "count": 1000,
+              "max": 0.005,
+              "p50": 0.0,
+              "p95": 0.001,
+              "total": 0.29
+            }
+          },
+          "product_info_requests": 5,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": null,
+          "r2_reads": 1000,
+          "r2_writes": 1000,
+          "samples": 3,
+          "steam_calls_per_hour": 36.27,
+          "tiger_transactions_per_settlement": 1.004,
+          "unthrottled_settlements_per_minute": 120.89,
+          "workers": 3
+        },
+        {
+          "batch_size": 80,
+          "candidate_heartbeat_row_updates": 160,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 3400,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.05,
+          "live": 80,
+          "live_settlements_per_hour": 1339.53,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": -8401.47,
+          "pass_p50_seconds": 21.555,
+          "pass_p95_seconds": 21.847,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 80,
+              "max": 0.01,
+              "p50": 0.006,
+              "p95": 0.008,
+              "total": 0.505
+            },
+            "r2_write": {
+              "count": 80,
+              "max": 0.006,
+              "p50": 0.005,
+              "p95": 0.006,
+              "total": 0.43
+            },
+            "tiger_promotion": {
+              "count": 80,
+              "max": 0.036,
+              "p50": 0.031,
+              "p95": 0.035,
+              "total": 2.485
+            },
+            "validation_extraction": {
+              "count": 80,
+              "max": 0.001,
+              "p50": 0.0,
+              "p95": 0.001,
+              "total": 0.015
+            }
+          },
+          "product_info_requests": 1,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": null,
+          "r2_reads": 80,
+          "r2_writes": 80,
+          "samples": 3,
+          "steam_calls_per_hour": 16.74,
+          "tiger_transactions_per_settlement": 1.05,
+          "unthrottled_settlements_per_minute": 219.71,
+          "workers": 8
+        },
+        {
+          "batch_size": 1000,
+          "candidate_heartbeat_row_updates": 2000,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 502500,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.004,
+          "live": 1000,
+          "live_settlements_per_hour": 16744.19,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": 7003.19,
+          "pass_p50_seconds": 198.933,
+          "pass_p95_seconds": 199.076,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 1000,
+              "max": 0.013,
+              "p50": 0.006,
+              "p95": 0.009,
+              "total": 6.507
+            },
+            "r2_write": {
+              "count": 1000,
+              "max": 0.009,
+              "p50": 0.005,
+              "p95": 0.006,
+              "total": 5.394
+            },
+            "tiger_promotion": {
+              "count": 1000,
+              "max": 0.036,
+              "p50": 0.031,
+              "p95": 0.032,
+              "total": 30.799
+            },
+            "validation_extraction": {
+              "count": 1000,
+              "max": 0.004,
+              "p50": 0.0,
+              "p95": 0.001,
+              "total": 0.193
+            }
+          },
+          "product_info_requests": 5,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": 13.91,
+          "r2_reads": 1000,
+          "r2_writes": 1000,
+          "samples": 3,
+          "steam_calls_per_hour": 83.72,
+          "tiger_transactions_per_settlement": 1.004,
+          "unthrottled_settlements_per_minute": 301.39,
+          "workers": 8
+        }
+      ]
+    },
+    "warm_realtime": {
+      "inputs": {
+        "batch_sizes": [1000],
+        "catchup_open": 257000,
+        "incoming_apps_per_hour": 9741.0,
+        "live_open": 97425,
+        "live_reserve": 1000,
+        "product_info_min_interval_seconds": 215.0,
+        "r2_latency_ms": 150.0,
+        "samples": 1,
+        "serialized_tiger_fraction": 0,
+        "steam_latency_ms": 1000.0,
+        "tiger_latency_ms": 900.0,
+        "time_scale": 1.0,
+        "warm_durable": true,
+        "workers": [8]
+      },
+      "kind": "synthetic-no-network",
+      "notes": [
+        "R2 and Tiger latencies are injected independently per app.",
+        "Steam calls/hour counts every <=200-app chunk and includes pass cadence.",
+        "Warm durable mode: fake SQL promotion, real validation and archive hashing.",
+        "Scaled durations include Python overhead; these are capacity estimates only.",
+        "Shared-lock time is injected; pool waits and workload overlap are unmodeled.",
+        "Net drain assumes completion removes an item; newer revisions may requeue it.",
+        "Disconnect and lock-timeout rates require a shadow/canary observation."
+      ],
+      "rows": [
+        {
+          "batch_size": 1000,
+          "candidate_heartbeat_row_updates": 6000,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 6,
+          "legacy_heartbeat_row_updates_estimate": 502500,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.004,
+          "live": 1000,
+          "live_settlements_per_hour": 16744.19,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": 7003.19,
+          "pass_p50_seconds": 163.368,
+          "pass_p95_seconds": 163.368,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 1000,
+              "max": 0.164,
+              "p50": 0.155,
+              "p95": 0.159,
+              "total": 155.113
+            },
+            "r2_write": {
+              "count": 1000,
+              "max": 0.161,
+              "p50": 0.154,
+              "p95": 0.157,
+              "total": 153.964
+            },
+            "tiger_promotion": {
+              "count": 1000,
+              "max": 0.914,
+              "p50": 0.904,
+              "p95": 0.907,
+              "total": 904.107
+            },
+            "validation_extraction": {
+              "count": 1000,
+              "max": 0.007,
+              "p50": 0.0,
+              "p95": 0.001,
+              "total": 0.257
+            }
+          },
+          "product_info_requests": 5,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": 13.91,
+          "r2_reads": 1000,
+          "r2_writes": 1000,
+          "samples": 1,
+          "steam_calls_per_hour": 83.72,
+          "tiger_transactions_per_settlement": 1.008,
+          "unthrottled_settlements_per_minute": 367.27,
+          "workers": 8
+        }
+      ]
+    },
+    "double_tiger_latency": {
+      "inputs": {
+        "batch_sizes": [1000],
+        "catchup_open": 257000,
+        "incoming_apps_per_hour": 9741.0,
+        "live_open": 97425,
+        "live_reserve": 1000,
+        "product_info_min_interval_seconds": 215.0,
+        "r2_latency_ms": 150.0,
+        "samples": 3,
+        "serialized_tiger_fraction": 0,
+        "steam_latency_ms": 1000.0,
+        "tiger_latency_ms": 1800.0,
+        "time_scale": 0.03,
+        "warm_durable": true,
+        "workers": [8]
+      },
+      "kind": "synthetic-no-network",
+      "notes": [
+        "R2 and Tiger latencies are injected independently per app.",
+        "Steam calls/hour counts every <=200-app chunk and includes pass cadence.",
+        "Warm durable mode: fake SQL promotion, real validation and archive hashing.",
+        "Scaled durations include Python overhead; these are capacity estimates only.",
+        "Shared-lock time is injected; pool waits and workload overlap are unmodeled.",
+        "Net drain assumes completion removes an item; newer revisions may requeue it.",
+        "Disconnect and lock-timeout rates require a shadow/canary observation."
+      ],
+      "rows": [
+        {
+          "batch_size": 1000,
+          "candidate_heartbeat_row_updates": 2000,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 502500,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.004,
+          "live": 1000,
+          "live_settlements_per_hour": 11286.05,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": 1545.05,
+          "pass_p50_seconds": 317.269,
+          "pass_p95_seconds": 318.978,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 1000,
+              "max": 0.015,
+              "p50": 0.006,
+              "p95": 0.01,
+              "total": 6.958
+            },
+            "r2_write": {
+              "count": 1000,
+              "max": 0.011,
+              "p50": 0.005,
+              "p95": 0.007,
+              "total": 5.595
+            },
+            "tiger_promotion": {
+              "count": 1000,
+              "max": 0.064,
+              "p50": 0.058,
+              "p95": 0.062,
+              "total": 58.231
+            },
+            "validation_extraction": {
+              "count": 1000,
+              "max": 0.006,
+              "p50": 0.0,
+              "p95": 0.001,
+              "total": 0.21
+            }
+          },
+          "product_info_requests": 5,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": 63.06,
+          "r2_reads": 1000,
+          "r2_writes": 1000,
+          "samples": 3,
+          "steam_calls_per_hour": 56.43,
+          "tiger_transactions_per_settlement": 1.004,
+          "unthrottled_settlements_per_minute": 188.1,
+          "workers": 8
+        }
+      ]
+    },
+    "half_tiger_time_serialized": {
+      "inputs": {
+        "batch_sizes": [1000],
+        "catchup_open": 257000,
+        "incoming_apps_per_hour": 9741.0,
+        "live_open": 97425,
+        "live_reserve": 1000,
+        "product_info_min_interval_seconds": 215.0,
+        "r2_latency_ms": 150.0,
+        "samples": 1,
+        "serialized_tiger_fraction": 0.5,
+        "steam_latency_ms": 1000.0,
+        "tiger_latency_ms": 900.0,
+        "time_scale": 0.03,
+        "warm_durable": true,
+        "workers": [8]
+      },
+      "kind": "synthetic-no-network",
+      "notes": [
+        "R2 and Tiger latencies are injected independently per app.",
+        "Steam calls/hour counts every <=200-app chunk and includes pass cadence.",
+        "Warm durable mode: fake SQL promotion, real validation and archive hashing.",
+        "Scaled durations include Python overhead; these are capacity estimates only.",
+        "Shared-lock time is injected; pool waits and workload overlap are unmodeled.",
+        "Net drain assumes completion removes an item; newer revisions may requeue it.",
+        "Disconnect and lock-timeout rates require a shadow/canary observation."
+      ],
+      "rows": [
+        {
+          "batch_size": 1000,
+          "candidate_heartbeat_row_updates": 2000,
+          "catchup": 0,
+          "disconnects_per_hour": null,
+          "governed_catchup_settlements_per_minute": 0.0,
+          "heartbeat_transactions": 2,
+          "legacy_heartbeat_row_updates_estimate": 502500,
+          "legacy_tiger_transactions_per_settlement_estimate": 3.004,
+          "live": 1000,
+          "live_settlements_per_hour": 5385.12,
+          "lock_timeouts": null,
+          "net_live_drain_per_hour": -4355.88,
+          "pass_p50_seconds": 668.509,
+          "pass_p95_seconds": 668.509,
+          "phase_latency_seconds": {
+            "prior_r2_read": {
+              "count": 1000,
+              "max": 0.014,
+              "p50": 0.006,
+              "p95": 0.008,
+              "total": 6.359
+            },
+            "r2_write": {
+              "count": 1000,
+              "max": 0.008,
+              "p50": 0.005,
+              "p95": 0.006,
+              "total": 5.392
+            },
+            "tiger_promotion": {
+              "count": 1000,
+              "max": 0.155,
+              "p50": 0.088,
+              "p95": 0.144,
+              "total": 87.918
+            },
+            "validation_extraction": {
+              "count": 1000,
+              "max": 0.006,
+              "p50": 0.0,
+              "p95": 0.0,
+              "total": 0.174
+            }
+          },
+          "product_info_requests": 5,
+          "projected_catchup_drain_days": null,
+          "projected_live_drain_hours": null,
+          "r2_reads": 1000,
+          "r2_writes": 1000,
+          "samples": 1,
+          "steam_calls_per_hour": 26.93,
+          "tiger_transactions_per_settlement": 1.004,
+          "unthrottled_settlements_per_minute": 89.75,
+          "workers": 8
+        }
+      ]
+    }
+  },
+  "limits": [
+    "No production load test or capacity acceptance",
+    "Synthetic promotion does not run SQL or measure pipeline performance",
+    "Shared revision locking and descriptor alias failure remain unresolved",
+    "Prior resilience changes are inherited from the held PR145 branch"
+  ]
+}

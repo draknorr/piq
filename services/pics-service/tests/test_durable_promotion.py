@@ -1,5 +1,5 @@
 import json
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -284,6 +284,17 @@ class FakeConnection(AbstractContextManager):
         self.cursor_instance = cursor
         self.committed = False
         self.rolled_back = False
+        self.pipeline_calls = 0
+        self.pipeline_active = False
+
+    @contextmanager
+    def pipeline(self):
+        self.pipeline_calls += 1
+        self.pipeline_active = True
+        try:
+            yield
+        finally:
+            self.pipeline_active = False
 
     def __enter__(self):
         return self
@@ -319,7 +330,14 @@ def archive_pointer():
     )
 
 
-def test_promotion_commits_snapshot_latest_state_readiness_and_ack_together():
+@pytest.mark.parametrize("large_batches", [False, True])
+def test_promotion_commits_snapshot_latest_state_readiness_and_ack_together(
+    monkeypatch,
+    large_batches,
+):
+    monkeypatch.setattr(
+        "src.database.durable_promotion.settings.pics_consumer_large_batches_enabled", large_batches
+    )
     cursor = FakeCursor()
     promoter, connection = make_promoter(cursor)
 
@@ -356,6 +374,8 @@ def test_promotion_commits_snapshot_latest_state_readiness_and_ack_together():
     )
     assert "COALESCE(input.value, 'null'::jsonb)" in statements[evidence_index]
     assert snapshot_index < latest_index < evidence_index < readiness_index < acknowledgement_index
+    assert connection.pipeline_calls == int(large_batches)
+    assert not connection.pipeline_active
     assert result.snapshot_id == 100
     assert result.snapshot_changed is True
     assert result.next_work_state == "completed"
@@ -631,7 +651,11 @@ def test_pics_event_writes_resolve_the_shared_tiger_registry_version():
         "RETURNING state",
     ],
 )
-def test_every_promotion_failure_boundary_rolls_back(failure_boundary):
+@pytest.mark.parametrize("large_batches", [False, True])
+def test_every_promotion_failure_boundary_rolls_back(monkeypatch, failure_boundary, large_batches):
+    monkeypatch.setattr(
+        "src.database.durable_promotion.settings.pics_consumer_large_batches_enabled", large_batches
+    )
     cursor = FakeCursor(fail_on=failure_boundary)
     promoter, connection = make_promoter(cursor)
 
