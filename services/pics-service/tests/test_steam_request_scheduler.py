@@ -176,3 +176,28 @@ def test_deadline_bounds_waiting_for_the_shared_owner():
         assert not scheduler._slot.acquire(blocking=False)
     finally:
         scheduler._slot.release()
+
+
+def test_deadline_interrupts_real_sdk_socket_retry(monkeypatch):
+    import gevent
+    from steam.core.connection import TCPConnection
+
+    transport = TCPConnection()
+    attempts = []
+    monkeypatch.setattr(transport, "_new_socket", lambda: None)
+
+    def refused_connection(_address):
+        attempts.append(True)
+        gevent.sleep(0.03)
+        raise OSError("simulated CM refusal")
+
+    monkeypatch.setattr(transport, "_connect", refused_connection)
+
+    def sdk_retry():
+        for _ in range(3):
+            transport.connect(("unused", 27017))
+
+    scheduler = SteamRequestScheduler(SteamRequestPolicy(deadline_seconds=0.005))
+    with pytest.raises(SteamRequestDeadlineError):
+        scheduler.execute("pics_product_info", sdk_retry)
+    assert len(attempts) == 1

@@ -6,11 +6,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import gevent
-from steam.client import SteamClient
 from steam.enums import EResult
 
+from steam.client import SteamClient
+
 from ..config.settings import settings
-from .request_scheduler import SteamRequestPolicy, SteamRequestScheduler
+from .request_scheduler import (
+    SteamRequestDeadlineError,
+    SteamRequestPolicy,
+    SteamRequestScheduler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +69,7 @@ class PICSSteamClient:
         """Establish anonymous connection to Steam with heartbeat."""
         with gevent.Timeout(
             settings.steam_request_deadline_seconds,
-            TimeoutError("Steam connection exceeded its deadline"),
+            SteamRequestDeadlineError("Steam connection exceeded its deadline"),
         ):
             return self._connect_once()
 

@@ -187,3 +187,42 @@ def test_background_reconnect_returns_after_bounded_attempts(monkeypatch):
     monkeypatch.setattr(client, "reconnect", lambda **kwargs: calls.append(kwargs))
     client._auto_reconnect_handler()
     assert calls == [{"max_attempts": 3}]
+
+
+def test_connect_deadline_is_not_swallowed_by_sdk_socket_retry(monkeypatch):
+    import gevent
+    from steam.core.connection import TCPConnection
+    from steam.enums import EResult
+
+    transport = TCPConnection()
+    attempts = []
+    monkeypatch.setattr(transport, "_new_socket", lambda: None)
+
+    def refused_connection(_address):
+        attempts.append(True)
+        gevent.sleep(0.03)
+        raise OSError("simulated CM refusal")
+
+    monkeypatch.setattr(transport, "_connect", refused_connection)
+
+    class LoginClient:
+        def on(self, _event):
+            return lambda callback: callback
+
+        def anonymous_login(self):
+            # Use the real SDK Connection.connect exception handling. No network.
+            for _ in range(3):
+                transport.connect(("unused", 27017))
+            return EResult.Fail
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(client_module, "SteamClient", LoginClient)
+    monkeypatch.setattr(client_module.settings, "steam_request_deadline_seconds", 0.005)
+    client = PICSSteamClient()
+    assert client.connect() is False
+    assert len(attempts) == 1
+    assert "deadline" in client._last_reconnect_error
+    assert client._client is None
+    assert not client.is_connected
