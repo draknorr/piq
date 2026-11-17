@@ -25,8 +25,12 @@ class SteamCircuitOpenError(RuntimeError):
     """Steam requests are paused after repeated upstream failures."""
 
 
-class SteamRequestDeadlineError(TimeoutError):
-    """The entire queued request, including pacing and retries, timed out."""
+class SteamRequestDeadlineError(RuntimeError):
+    """The entire queued request, including pacing and retries, timed out.
+
+    Deliberately not OSError/TimeoutError: the Steam SDK treats those as
+    recoverable socket errors and can swallow our one-shot deadline signal.
+    """
 
 
 @dataclass(frozen=True)
