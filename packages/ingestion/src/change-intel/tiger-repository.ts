@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Pool, type QueryResultRow } from 'pg';
 import {
+  logger,
   CHANGE_EVENT_REGISTRY,
   CHANGE_EVENT_REGISTRY_VERSION,
   resolveChangeEventDefinition
@@ -1853,8 +1854,15 @@ export function getTigerChangeIntelRepository(): TigerChangeIntelRepository {
       application_name: 'publisheriq-change-intel-ingestion',
       connectionString: requireTigerConnectionString(),
       max: readNumber(process.env.CHANGE_INTEL_TIGER_POOL_MAX, DEFAULT_POOL_MAX),
+      connectionTimeoutMillis: 10_000,
       statement_timeout: readNumber(process.env.CHANGE_INTEL_TIGER_STATEMENT_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS)
     });
+    // Never log the PoolClient: it contains connection credentials.
+    const reportConnectionError = (error: Error): void => {
+      logger.error('Change-intel pool connection error', { error });
+    };
+    tigerPool.on('connect', (client) => client.on('error', reportConnectionError));
+    tigerPool.on('error', reportConnectionError);
   }
 
   if (!tigerRepository) {

@@ -8,8 +8,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { getServiceClient, getTigerWriter } from '@publisheriq/database';
-import { logger } from '@publisheriq/shared';
+import { pathToFileURL } from 'node:url';
+import { getServiceClient, getTigerWriter, shutdownTigerPool } from '@publisheriq/database';
+import {
+  logger,
+  isTransientDatabaseConnectionError,
+  runDatabaseWorker,
+  waitForWorkerDelay,
+} from '@publisheriq/shared';
 import {
   applyStorefrontTrailerManifests,
   fetchStorefrontAppDetails,
@@ -32,7 +38,10 @@ import {
   updateSyncJobRecord,
 } from '../change-intel/repository.js';
 import { readChangeIntelRuntimeConfig } from '../change-intel/runtime-config.js';
-import { getTigerChangeIntelRepository } from '../change-intel/tiger-repository.js';
+import {
+  getTigerChangeIntelRepository,
+  shutdownTigerChangeIntelRepository,
+} from '../change-intel/tiger-repository.js';
 import type { AppCaptureSource } from '../change-intel/types.js';
 import { upsertLatestStorefrontState } from '../change-intel/storefront-latest-state.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
@@ -273,6 +282,7 @@ async function processClaimedTagJobs(params: {
     claimedJobs.length
   );
   let batchError: string | null = null;
+  let databaseUnavailable = false;
   let batchResult = {
     attempts: 0,
     changed: 0,
@@ -296,6 +306,8 @@ async function processClaimedTagJobs(params: {
     });
   } catch (error) {
     batchError = error instanceof Error ? error.message : String(error);
+    databaseUnavailable = isTransientDatabaseConnectionError(error);
+    if (databaseUnavailable) throw error;
     await tiger.deferCaptureQueueItems(
       claimedJobs.map((job) => job.id),
       5 * 60,
@@ -307,7 +319,7 @@ async function processClaimedTagJobs(params: {
       error,
     });
   } finally {
-    if (syncJobId) {
+    if (syncJobId && !databaseUnavailable) {
       await updateSyncJobRecord(params.supabase, syncJobId, {
         status: batchError ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -343,6 +355,7 @@ async function processClaimedJobs(
   const completedJobIds: string[] = [];
   let failedCount = 0;
   let batchErrorMessage: string | null = null;
+  let databaseUnavailable = false;
 
   try {
     for (const claimedJob of claimedJobs) {
@@ -357,6 +370,7 @@ async function processClaimedJobs(
         );
         completedJobIds.push(claimedJob.id);
       } catch (error) {
+        if (isTransientDatabaseConnectionError(error)) throw error;
         failedCount += 1;
         const isTerminalNewsFailure = source === 'news' && isTerminalNewsCaptureError(error);
         const failureStatus =
@@ -398,6 +412,8 @@ async function processClaimedJobs(
     await completeCaptureQueueItems(supabase, completedJobIds, 'completed');
   } catch (error) {
     batchErrorMessage = error instanceof Error ? error.message : String(error);
+    databaseUnavailable = isTransientDatabaseConnectionError(error);
+    if (databaseUnavailable) throw error;
     log.error('Failed to finalize claimed change-intel batch', {
       workerId,
       source,
@@ -405,7 +421,7 @@ async function processClaimedJobs(
       error,
     });
   } finally {
-    if (syncJobId) {
+    if (syncJobId && !databaseUnavailable) {
       await updateSyncJobRecord(supabase, syncJobId, {
         status: batchErrorMessage ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -420,7 +436,7 @@ async function processClaimedJobs(
   return claimedJobs.length;
 }
 
-async function main(): Promise<void> {
+export async function runChangeIntelWorker(): Promise<void> {
   const workerId = process.env.WORKER_ID || randomUUID();
   const claimLimit = parseInt(process.env.CLAIM_LIMIT || '25', 10);
   const tagClaimLimit = readPositiveInteger(process.env.STOREFRONT_TAG_CLAIM_LIMIT, 25);
@@ -476,11 +492,14 @@ async function main(): Promise<void> {
     requestsPerSecond: 1_000 / tagOverlapIntervalMs,
     burst: 1,
   });
-  let tagBudgetDayStart = utcDayStartIso();
-  let tagAttemptsToday =
-    tagFeatureEnabled && shouldUseTigerPrimary()
-      ? await getTigerChangeIntelRepository().countStorefrontTagAttemptsSince(tagBudgetDayStart)
-      : 0;
+  let tagBudgetDayStart: string | null = shouldUseTigerPrimary() ? null : utcDayStartIso();
+  let tagAttemptsToday = 0;
+  const shutdown = new AbortController();
+  const stop = (): void => {
+    shutdown.abort();
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
   let idlePolls = 0;
   let lastStaleClaimSweepAt = 0;
   let catchupSeedBatches = 0;
@@ -496,7 +515,6 @@ async function main(): Promise<void> {
     if (now - storefrontSweepCheckedAt < 60_000) {
       return storefrontSweepActive;
     }
-    storefrontSweepCheckedAt = now;
     const pressure = await getTigerChangeIntelRepository().inspectStorefrontTrafficPressure({
       freshSweepAfterIso: new Date(
         now - readPositiveInteger(process.env.STOREFRONT_TAG_SWEEP_FRESH_MINUTES, 75) * 60_000
@@ -506,6 +524,7 @@ async function main(): Promise<void> {
       ).toISOString(),
       queueCountThreshold: readPositiveInteger(process.env.STOREFRONT_TAG_QUEUE_PRESSURE_COUNT, 50),
     });
+    storefrontSweepCheckedAt = now;
     if (pressure.active) {
       log.info('Storefront tag traffic-pressure guard is active', {
         ...pressure,
@@ -531,7 +550,7 @@ async function main(): Promise<void> {
       enabled: tagFeatureEnabled,
       claimLimit: tagClaimLimit,
       dailyRequestCap: tagDailyRequestCap,
-      attemptsToday: tagAttemptsToday,
+      attemptsToday: null, // Loaded successfully before any tag request.
       requestIntervalMs: tagRequestIntervalMs,
       overlapIntervalMs: tagOverlapIntervalMs,
       maxRetries: tagMaxRetries,
@@ -558,145 +577,171 @@ async function main(): Promise<void> {
     });
   }
 
-  while (true) {
-    let processedAny = false;
-
-    if (staleClaimAfterMs > 0 && Date.now() - lastStaleClaimSweepAt >= staleClaimSweepIntervalMs) {
-      lastStaleClaimSweepAt = Date.now();
-      try {
-        const requeued = await requeueStaleCaptureClaims(
-          supabase,
-          [...sources],
-          new Date(Date.now() - staleClaimAfterMs).toISOString(),
-          claimLimit * 10
+  try {
+    await runDatabaseWorker(async () => {
+      // Commit the budget date only after its read succeeds. An outage must never
+      // substitute zero for a persisted budget, including at the UTC day boundary.
+      const currentDayStart = utcDayStartIso();
+      if (tagFeatureEnabled && currentDayStart !== tagBudgetDayStart) {
+        tagAttemptsToday = await getTigerChangeIntelRepository().countStorefrontTagAttemptsSince(
+          currentDayStart
         );
-        if (requeued > 0) {
-          log.warn('Requeued stale change-intel claims', {
+        tagBudgetDayStart = currentDayStart;
+      }
+      let processedAny = false;
+
+      if (staleClaimAfterMs > 0 && Date.now() - lastStaleClaimSweepAt >= staleClaimSweepIntervalMs) {
+        lastStaleClaimSweepAt = Date.now();
+        try {
+          const requeued = await requeueStaleCaptureClaims(
+            supabase,
+            [...sources],
+            new Date(Date.now() - staleClaimAfterMs).toISOString(),
+            claimLimit * 10
+          );
+          if (requeued > 0) {
+            log.warn('Requeued stale change-intel claims', {
+              workerId,
+              sources,
+              requeued,
+              staleClaimAfterMs,
+            });
+          }
+        } catch (error) {
+          if (isTransientDatabaseConnectionError(error)) throw error;
+          log.error('Failed to requeue stale change-intel claims', {
             workerId,
             sources,
-            requeued,
-            staleClaimAfterMs,
+            error,
           });
         }
-      } catch (error) {
-        log.error('Failed to requeue stale change-intel claims', {
-          workerId,
-          sources,
-          error,
-        });
       }
-    }
 
-    for (const source of sources) {
-      try {
-        let claimed = 0;
-        if (source === 'storefront_tags') {
-          const previousSweepActive: boolean = storefrontSweepActive;
-          storefrontSweepActive = await inspectStorefrontSweep();
-          if (storefrontSweepActive !== previousSweepActive) {
-            log.info('Storefront tag overlap guard changed', {
-              storefrontSweepActive,
-              minimumPriority:
-                storefrontTagMinimumPriority(new Date(), process.env, storefrontSweepActive) ??
-                null,
-            });
+      for (const source of sources) {
+        if (shutdown.signal.aborted) return false;
+        try {
+          let claimed = 0;
+          if (source === 'storefront_tags') {
+            const previousSweepActive: boolean = storefrontSweepActive;
+            storefrontSweepActive = await inspectStorefrontSweep();
+            if (storefrontSweepActive !== previousSweepActive) {
+              log.info('Storefront tag overlap guard changed', {
+                storefrontSweepActive,
+                minimumPriority:
+                  storefrontTagMinimumPriority(new Date(), process.env, storefrontSweepActive) ??
+                  null,
+              });
+            }
+            const remainingBudget = Math.max(0, tagDailyRequestCap - tagAttemptsToday);
+            if (remainingBudget > 0) {
+              const tagResult = await processClaimedTagJobs({
+                claimLimit: Math.min(tagClaimLimit, remainingBudget),
+                maxRetries: tagMaxRetries,
+                overlapLimiter: overlapTagLimiter,
+                regularLimiter: regularTagLimiter,
+                storefrontSweepActive,
+                supabase,
+                workerId,
+              });
+              claimed = tagResult.claimed;
+              tagAttemptsToday += tagResult.attempts;
+            }
+          } else {
+            claimed = await processClaimedJobs(supabase, source, workerId, claimLimit);
           }
-          const currentDayStart = utcDayStartIso();
-          if (currentDayStart !== tagBudgetDayStart) {
-            tagBudgetDayStart = currentDayStart;
-            tagAttemptsToday =
-              await getTigerChangeIntelRepository().countStorefrontTagAttemptsSince(
-                tagBudgetDayStart
-              );
+          processedAny = processedAny || claimed > 0;
+        } catch (error) {
+          if (isTransientDatabaseConnectionError(error)) throw error;
+          log.error('Failed to process claimed change-intel jobs', {
+            workerId,
+            source,
+            error,
+          });
+        }
+      }
+
+      const canSeedHotNewsRefresh =
+        sources.includes('news') &&
+        (maxHotNewsSeedBatches === 0 || hotNewsSeedBatches < maxHotNewsSeedBatches);
+      const canSeedNewsCatchup =
+        sources.includes('news') &&
+        catchupSeedLimit > 0 &&
+        (maxCatchupSeedBatches === 0 || catchupSeedBatches < maxCatchupSeedBatches);
+
+      if (!processedAny && canSeedHotNewsRefresh) {
+        try {
+          const seeded = await seedHotNewsRefresh(supabase);
+          processedAny = seeded > 0;
+          if (seeded > 0) {
+            hotNewsSeedBatches += 1;
+            log.info('Seeded hot news refresh jobs', { seeded });
           }
-          const remainingBudget = Math.max(0, tagDailyRequestCap - tagAttemptsToday);
-          if (remainingBudget > 0) {
-            const tagResult = await processClaimedTagJobs({
-              claimLimit: Math.min(tagClaimLimit, remainingBudget),
-              maxRetries: tagMaxRetries,
-              overlapLimiter: overlapTagLimiter,
-              regularLimiter: regularTagLimiter,
-              storefrontSweepActive,
-              supabase,
-              workerId,
-            });
-            claimed = tagResult.claimed;
-            tagAttemptsToday += tagResult.attempts;
+        } catch (error) {
+          if (isTransientDatabaseConnectionError(error)) throw error;
+          log.error('Failed to seed hot news refresh jobs', {
+            workerId,
+            error,
+          });
+        }
+      }
+
+      if (!processedAny && canSeedNewsCatchup) {
+        try {
+          const seeded = await seedStaleNewsCatchup(supabase, catchupSeedLimit);
+          processedAny = seeded > 0;
+          if (seeded > 0) {
+            catchupSeedBatches += 1;
+            log.info('Seeded stale news catch-up jobs', { seeded });
           }
-        } else {
-          claimed = await processClaimedJobs(supabase, source, workerId, claimLimit);
+        } catch (error) {
+          if (isTransientDatabaseConnectionError(error)) throw error;
+          log.error('Failed to seed stale news catch-up jobs', {
+            workerId,
+            error,
+          });
         }
-        processedAny = processedAny || claimed > 0;
-      } catch (error) {
-        log.error('Failed to process claimed change-intel jobs', {
-          workerId,
-          source,
-          error,
-        });
       }
-    }
 
-    const canSeedHotNewsRefresh =
-      sources.includes('news') &&
-      (maxHotNewsSeedBatches === 0 || hotNewsSeedBatches < maxHotNewsSeedBatches);
-    const canSeedNewsCatchup =
-      sources.includes('news') &&
-      catchupSeedLimit > 0 &&
-      (maxCatchupSeedBatches === 0 || catchupSeedBatches < maxCatchupSeedBatches);
+      if (!processedAny) {
+        idlePolls += 1;
 
-    if (!processedAny && canSeedHotNewsRefresh) {
-      try {
-        const seeded = await seedHotNewsRefresh(supabase);
-        processedAny = seeded > 0;
-        if (seeded > 0) {
-          hotNewsSeedBatches += 1;
-          log.info('Seeded hot news refresh jobs', { seeded });
+        if (maxIdlePolls > 0 && idlePolls >= maxIdlePolls) {
+          log.info('Exiting change-intel worker after idle poll limit', {
+            idlePolls,
+            maxIdlePolls,
+            sources,
+          });
+          return false;
         }
-      } catch (error) {
-        log.error('Failed to seed hot news refresh jobs', {
-          workerId,
-          error,
-        });
-      }
-    }
 
-    if (!processedAny && canSeedNewsCatchup) {
-      try {
-        const seeded = await seedStaleNewsCatchup(supabase, catchupSeedLimit);
-        processedAny = seeded > 0;
-        if (seeded > 0) {
-          catchupSeedBatches += 1;
-          log.info('Seeded stale news catch-up jobs', { seeded });
-        }
-      } catch (error) {
-        log.error('Failed to seed stale news catch-up jobs', {
-          workerId,
-          error,
-        });
-      }
-    }
-
-    if (!processedAny) {
-      idlePolls += 1;
-
-      if (maxIdlePolls > 0 && idlePolls >= maxIdlePolls) {
-        log.info('Exiting change-intel worker after idle poll limit', {
-          idlePolls,
-          maxIdlePolls,
-          sources,
-        });
-        break;
+        await waitForWorkerDelay(pollIntervalMs, shutdown.signal);
+        return true;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      continue;
-    }
-
-    idlePolls = 0;
+      idlePolls = 0;
+      return true;
+    }, {
+      signal: shutdown.signal,
+      onUnavailable: (error, attempt, delayMs) => {
+        // A partial batch may have reserved budget before its connection failed.
+        tagBudgetDayStart = null;
+        storefrontSweepCheckedAt = 0;
+        log.warn('Change-intel database unavailable; pausing queue work', { error, attempt, delayMs, workerId });
+      },
+      onRecovered: (attempts) => {
+        log.info('Change-intel database recovered; queue work resumed', { attempts, workerId });
+      },
+    });
+  } finally {
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+    await Promise.all([shutdownTigerChangeIntelRepository(), shutdownTigerPool()]);
   }
 }
 
-main().catch((error) => {
-  log.error('Change-intel worker failed', { error });
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runChangeIntelWorker().catch((error) => {
+    log.error('Change-intel worker failed', { error });
+    process.exitCode = 1;
+  });
+}

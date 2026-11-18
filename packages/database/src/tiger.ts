@@ -29,11 +29,21 @@ export function getTigerPool(env: NodeJS.ProcessEnv = process.env): Pool {
       application_name: env.TIGER_APPLICATION_NAME ?? 'publisheriq-tiger-writer',
       connectionString: requireTigerPrimaryUrl(env),
       max: readNumber(env.TIGER_POOL_MAX, DEFAULT_POOL_MAX),
+      connectionTimeoutMillis: 10_000,
       statement_timeout: readNumber(
         env.TIGER_STATEMENT_TIMEOUT_MS,
         DEFAULT_STATEMENT_TIMEOUT_MS
       ),
     });
+    const reportConnectionError = (error: Error): void => {
+      console.error('Tiger writer pool connection error', {
+        code: (error as Error & { code?: string }).code,
+        message: error.message,
+      });
+    };
+    // Listen once per physical connection, including while checked out between queries.
+    tigerPool.on('connect', (client) => client.on('error', reportConnectionError));
+    tigerPool.on('error', reportConnectionError);
   }
 
   return tigerPool;
